@@ -75,3 +75,9 @@ it("reserves initial modal focus for the session-panel plugin iframe", () => {
     /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?preventOpenAutoFocus=\{true\}[\s\S]*?<PluginContributionHost[\s\S]*?autofocus=\{true\}/,
   );
 });
+
+it("preserves editor focus when a split-pane click originates inside an editor", () => {
+  expect(appSource).toMatch(
+    /event\.target instanceof Element && event\.target\.closest\("\[data-editor-tab\]"\)[\s\S]*?focusTerminal\(\);/,
+  );
+});

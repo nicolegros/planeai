@@ -1,5 +1,15 @@
 <script lang="ts">
   import { git } from "../lib/api";
+  import {
+    findReferences,
+    formatDocument,
+    jumpToDefinition,
+    languageServerExtensions,
+    LSPClient,
+  } from "@codemirror/lsp-client";
+  import { lintGutter, nextDiagnostic, openLintPanel, previousDiagnostic } from "@codemirror/lint";
+  import { TauriLspTransport, fileUri } from "../lib/lsp-transport";
+  import { renameLspSymbol } from "../lib/lsp-rename";
   import { onMount, onDestroy } from "svelte";
   import { EditorView, keymap } from "@codemirror/view";
   import { EditorState, Compartment, Prec } from "@codemirror/state";
@@ -18,17 +28,44 @@
   import { syntaxHighlighting } from "@codemirror/language";
   import { classHighlighter } from "@lezer/highlight";
   import { getSettings } from "../lib/settings.svelte";
-  import { MOD_LABEL } from "../lib/keyboard";
+  import { isPlatformMod, MOD_ENTER_HINT, MOD_LABEL } from "../lib/keyboard";
+  import { pty } from "../lib/api";
+  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { recordUserInput } from "../lib/session-orchestrator.svelte";
+  import {
+    addEditorFeedback,
+    beginEditorFeedbackSend,
+    clearEditorFeedback,
+    editEditorFeedback,
+    endEditorFeedbackSend,
+    getEditorFeedback,
+    getEditorFeedbackCount,
+    isEditorFeedbackSending,
+    removeEditorFeedback,
+    type EditorFeedback,
+    type EditorFeedbackSnapshot,
+  } from "../lib/editor-feedback.svelte";
+  import { createEditorFeedbackSnapshot } from "../lib/editor-feedback-selection";
+  import { serializeEditorFeedback } from "../lib/editor-feedback-serializer";
+
+  interface LspSupport {
+    client: LSPClient;
+    transport: TauriLspTransport;
+    documentUri: string;
+  }
 
   interface Buffer {
     path: string;
     content: string;
     modified: boolean;
     state: EditorState | null;
+    lsp: LspSupport | null;
   }
 
   interface Props {
     repoPath: string;
+    sessionId: string;
+    sessionExited?: boolean;
     visible: boolean;
     focused?: boolean;
     theme?: string;
@@ -39,7 +76,7 @@
     onModifiedChange?: (modified: boolean) => void;
   }
 
-  let { repoPath, visible, focused = false, theme = "vs-dark", initialFile, onClose, onFocusEditor, onFileChange, onModifiedChange }: Props = $props();
+  let { repoPath, sessionId, sessionExited = false, visible, focused = false, theme = "vs-dark", initialFile, onClose, onFocusEditor, onFileChange, onModifiedChange }: Props = $props();
 
   let buffers = $state<Buffer[]>([]);
   let activeIndex = $state(-1);
@@ -50,6 +87,15 @@
   let view: EditorView | null = null;
   let mounted = $state(false);
   let initialFileOpened = $state(false);
+  let hasSelection = $state(false);
+  let showFeedbackComposer = $state(false);
+  let showPendingFeedback = $state(false);
+  let feedbackText = $state("");
+  let feedbackSnapshot = $state<EditorFeedbackSnapshot | null>(null);
+  let editingFeedbackId = $state<string | null>(null);
+  let feedbackInputEl = $state<HTMLTextAreaElement>();
+  let lspStatus = $state<"unavailable" | "connecting" | "ready">("unavailable");
+  const sendingFeedback = $derived(isEditorFeedbackSending(sessionId));
 
   // Auto-open initialFile when provided
   $effect(() => {
@@ -65,8 +111,10 @@
   const editorLangCompartment = new Compartment();
 
   const activeBuffer = $derived(activeIndex >= 0 ? buffers[activeIndex] : null);
+  const pendingFeedback = $derived(getEditorFeedback(sessionId));
+  const pendingFeedbackCount = $derived(getEditorFeedbackCount(sessionId));
 
-  function createEditorState(content: string, filePath: string): EditorState {
+  function createEditorState(content: string, filePath: string, lsp: LspSupport | null): EditorState {
     const themeExt = isDarkTheme(theme) ? darkTheme : lightTheme;
     const { font_family, font_size } = getSettings().terminal;
     const useVim = getSettings().vim_mode ?? true;
@@ -89,6 +137,7 @@
           { key: "Mod-k", run: () => false },
           { key: "Mod-e", run: () => false },
           { key: "Mod-,", run: () => false },
+          { key: "Mod-Shift-c", run: () => { openFeedbackComposer(); return true; } },
         ])),
         ...(useVim ? [vim()] : []),
         basicSetup,
@@ -97,13 +146,17 @@
         editorThemeCompartment.of(themeExt),
         editorFontCompartment.of(fontExtension(font_family, font_size)),
         editorLangCompartment.of([]),
+        lintGutter(),
+        ...(lsp ? [lsp.client.plugin(lsp.documentUri, lsp.transport.languageId)] : []),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && activeBuffer) {
             if (!activeBuffer.modified) onModifiedChange?.(true);
             activeBuffer.modified = true;
           }
           if (update.selectionSet || update.docChanged) {
-            const pos = update.state.selection.main.head;
+            const selection = update.state.selection.main;
+            hasSelection = !selection.empty;
+            const pos = selection.head;
             const line = update.state.doc.lineAt(pos);
             cursorLine = line.number;
             cursorCol = pos - line.from + 1;
@@ -113,9 +166,32 @@
     });
   }
 
+  async function connectLsp(fullPath: string): Promise<LspSupport | null> {
+    lspStatus = "connecting";
+    try {
+      const transport = await TauriLspTransport.connect(repoPath, fullPath);
+      const client = new LSPClient({
+        rootUri: fileUri(repoPath),
+        extensions: languageServerExtensions(),
+      }).connect(transport);
+      await client.initializing;
+      lspStatus = "ready";
+      return { client, transport, documentUri: fileUri(fullPath) };
+    } catch (error) {
+      console.info("LSP unavailable for file:", error);
+      lspStatus = "unavailable";
+      return null;
+    }
+  }
+
   function setupView() {
     if (!editorContainer) return;
     return () => {};
+  }
+
+  function runEditorCommand(command: (view: EditorView) => boolean): void {
+    view?.focus();
+    if (view) command(view);
   }
 
   function registerCurrentView() {
@@ -127,6 +203,13 @@
       saveAndClose: async () => { await saveCurrentBuffer(); closeCurrentBuffer(true); },
       nextBuffer: () => nextBuffer(),
       prevBuffer: () => prevBuffer(),
+      definition: () => runEditorCommand(jumpToDefinition),
+      references: () => runEditorCommand(findReferences),
+      rename: () => runEditorCommand(renameLspSymbol),
+      format: () => runEditorCommand(formatDocument),
+      nextDiagnostic: () => runEditorCommand(nextDiagnostic),
+      previousDiagnostic: () => runEditorCommand(previousDiagnostic),
+      showDiagnostics: () => runEditorCommand(openLintPanel),
       onModeChange: (mode) => { vimMode = mode; },
     });
   }
@@ -159,8 +242,16 @@
       const content = await git.readFile(fullPath, repoPath);
       // Guard: component may have unmounted during async fetch
       if (!editorContainer || !mounted) return;
-      const state = createEditorState(content, filePath);
-      buffers.push({ path: filePath, content, modified: false, state });
+      const lsp = await connectLsp(fullPath);
+      if (!editorContainer || !mounted) {
+        if (lsp) {
+          lsp.client.disconnect();
+          await lsp.transport.close();
+        }
+        return;
+      }
+      const state = createEditorState(content, filePath, lsp);
+      buffers.push({ path: filePath, content, modified: false, state, lsp });
       switchToBuffer(buffers.length - 1);
     } catch (e) {
       console.error("Failed to open file:", e);
@@ -177,10 +268,12 @@
 
     activeIndex = index;
     const buf = buffers[index];
+    lspStatus = buf.lsp ? "ready" : "unavailable";
     onFileChange?.(buf.path.split("/").pop() || buf.path);
     onModifiedChange?.(buf.modified);
 
     if (buf.state) {
+      hasSelection = !buf.state.selection.main.empty;
       ensureView(buf.state);
       applyLanguage(buf.path);
       view?.focus();
@@ -213,12 +306,140 @@
     }
   }
 
+  async function closeLsp(buffer: Buffer) {
+    if (!buffer.lsp) return;
+    buffer.lsp.client.disconnect();
+    await buffer.lsp.transport.close();
+    buffer.lsp = null;
+  }
+
+  function openFeedbackComposer(): void {
+    if (sendingFeedback || showFeedbackComposer || !activeBuffer || !view) return;
+    const selection = view.state.selection.main;
+    const result = createEditorFeedbackSnapshot({
+      doc: view.state.doc,
+      from: selection.from,
+      to: selection.to,
+      filePath: activeBuffer.path,
+      language: detectLanguageFromPath(activeBuffer.path)?.name ?? "",
+      isUnsaved: activeBuffer.modified,
+    });
+    if ("error" in result) {
+      showSnackbar(
+        result.error === "empty"
+          ? "Select text before adding editor feedback."
+          : "Select at most 200 lines or 12 KiB of text for editor feedback.",
+        "error",
+      );
+      return;
+    }
+    feedbackSnapshot = result.snapshot;
+    feedbackText = "";
+    editingFeedbackId = null;
+    showFeedbackComposer = true;
+    requestAnimationFrame(() => feedbackInputEl?.focus());
+  }
+
+  function discardFeedbackDraft(): boolean {
+    if (!showFeedbackComposer || !feedbackText.trim()) { cancelFeedbackComposer(); return true; }
+    if (!window.confirm("Discard the unsaved editor feedback?")) return false;
+    cancelFeedbackComposer();
+    return true;
+  }
+
+  function openFeedbackEdit(feedback: EditorFeedback): void {
+    if (sendingFeedback) return;
+    if (showFeedbackComposer && editingFeedbackId === feedback.id) {
+      feedbackInputEl?.focus();
+      return;
+    }
+    if (showFeedbackComposer && !discardFeedbackDraft()) return;
+    feedbackSnapshot = null;
+    feedbackText = feedback.text;
+    editingFeedbackId = feedback.id;
+    showFeedbackComposer = true;
+    requestAnimationFrame(() => feedbackInputEl?.focus());
+  }
+
+  function cancelFeedbackComposer(): void {
+    showFeedbackComposer = false;
+    feedbackSnapshot = null;
+    feedbackText = "";
+    editingFeedbackId = null;
+  }
+
+  function submitFeedback(): void {
+    const text = feedbackText.trim();
+    if (!text || sendingFeedback) return;
+    if (editingFeedbackId) {
+      editEditorFeedback(sessionId, editingFeedbackId, text);
+    } else if (feedbackSnapshot) {
+      addEditorFeedback(sessionId, { ...feedbackSnapshot, text });
+      showPendingFeedback = true;
+      view?.dispatch({ selection: { anchor: view.state.selection.main.head } });
+    } else return;
+    cancelFeedbackComposer();
+  }
+
+  function handleFeedbackKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape") { event.preventDefault(); discardFeedbackDraft(); }
+    else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitFeedback(); }
+  }
+
+  async function sendFeedback(): Promise<void> {
+    if (pendingFeedback.length === 0 || sessionExited || sendingFeedback || showFeedbackComposer) return;
+    if (!beginEditorFeedbackSend(sessionId)) return;
+    try {
+      const bytes = Array.from(new TextEncoder().encode(serializeEditorFeedback(pendingFeedback)));
+      bytes.push(0x0d);
+      const delivered = await pty.write(sessionId, bytes);
+      if (!delivered) throw new Error("PTY session is not attached. Try again once it is ready.");
+      recordUserInput(sessionId);
+      const count = pendingFeedback.length;
+      clearEditorFeedback(sessionId);
+      showSnackbar(`Editor feedback sent (${count} note${count === 1 ? "" : "s"})`, "success");
+    } catch (error) {
+      showSnackbar(String(error).replace(/^Error: /, ""), "error");
+    } finally {
+      endEditorFeedbackSend(sessionId);
+    }
+  }
+
+  function isShortcutHandledByControl(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return false;
+    const editable = target.closest("[contenteditable]");
+    return Boolean(
+      target.closest("input, textarea, select, button, [role='dialog']")
+      || (editable && !editable.classList.contains("cm-content")),
+    );
+  }
+
+  function handleFeedbackShortcut(event: KeyboardEvent): void {
+    if (
+      !visible
+      || !focused
+      || event.defaultPrevented
+      || isShortcutHandledByControl(event.target)
+      || event.key !== "Enter"
+      || !isPlatformMod(event)
+      || pendingFeedback.length === 0
+      || sessionExited
+      || sendingFeedback
+      || showFeedbackComposer
+    ) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    void sendFeedback();
+  }
+
   function closeCurrentBuffer(force: boolean) {
     if (!activeBuffer) return;
     if (activeBuffer.modified && !force) {
       console.warn("Buffer has unsaved changes. Use :q! to force.");
       return;
     }
+    void closeLsp(activeBuffer);
     buffers.splice(activeIndex, 1);
     if (buffers.length === 0) {
       activeIndex = -1;
@@ -251,11 +472,13 @@
   }
 
   onMount(() => {
-    // Lazy setup on first visibility
+    window.addEventListener("keydown", handleFeedbackShortcut, true);
+    return () => window.removeEventListener("keydown", handleFeedbackShortcut, true);
   });
 
   onDestroy(() => {
     cleanupInterval?.();
+    for (const buffer of buffers) void closeLsp(buffer);
     if (view) {
       unregisterEditor(view);
       view.destroy();
@@ -297,7 +520,39 @@
   }
 </script>
 
-<div class="flex flex-col h-full w-full" class:hidden={!visible}>
+<div class="flex flex-col h-full w-full" class:hidden={!visible} data-editor-tab>
+  {#if showFeedbackComposer}
+    <div class="shrink-0 border-b border-border bg-chrome p-3">
+      <div class="mb-1.5 text-[10px] text-t3">
+        ● {editingFeedbackId ? "Edit editor feedback" : `Editor feedback · ${feedbackSnapshot?.filePath ?? ""} · ${feedbackSnapshot?.startLine === feedbackSnapshot?.endLine ? `line ${feedbackSnapshot?.startLine}` : `lines ${feedbackSnapshot?.startLine}–${feedbackSnapshot?.endLine}`}`}
+      </div>
+      <textarea bind:this={feedbackInputEl} bind:value={feedbackText} onkeydown={handleFeedbackKeydown} aria-label="Editor feedback comment" class="w-full resize-none rounded-lg border border-border-s bg-panel p-2 text-[12.5px] text-t1 focus:outline-none focus:ring-1 focus:ring-accent" rows="3" placeholder="Add a note… (Enter to submit, Esc to cancel)"></textarea>
+    </div>
+  {/if}
+
+  {#if pendingFeedbackCount > 0}
+    <div class="shrink-0 border-b border-border bg-chrome">
+      <button type="button" class="flex w-full items-center justify-between px-3 py-2 text-left text-[11px] text-t2 hover:bg-panel-hi hover:text-t1" onclick={() => (showPendingFeedback = !showPendingFeedback)} aria-expanded={showPendingFeedback}>
+        <span>Pending editor feedback ({pendingFeedbackCount})</span><span>{showPendingFeedback ? "−" : "+"}</span>
+      </button>
+      {#if showPendingFeedback}
+        <div class="max-h-40 overflow-y-auto border-t border-border">
+          {#each pendingFeedback as feedback (feedback.id)}
+            <div class="flex items-start gap-2 border-b border-border/50 px-3 py-2 last:border-b-0" role="group" aria-label="Pending editor feedback">
+              <button type="button" class="min-w-0 flex-1 text-left" onclick={() => openFeedbackEdit(feedback)}>
+                <span class="mr-2 font-mono text-[10px] text-t3">{feedback.filePath} L{feedback.startLine}{feedback.startLine === feedback.endLine ? "" : `–${feedback.endLine}`}{feedback.isUnsaved ? " · unsaved" : ""}</span>
+                <span class="block truncate font-mono text-[10px] text-t3">{feedback.selectedText.split("\n")[0]}</span>
+                <span class="whitespace-pre-wrap text-[12px] text-t1">{feedback.text}</span>
+              </button>
+              <button class="text-[11px] text-t3 hover:text-t1" onclick={() => openFeedbackEdit(feedback)} disabled={sendingFeedback} title="Edit note" aria-label="Edit editor feedback">✎</button>
+              <button class="text-[13px] text-t3 hover:text-t1" onclick={() => { if (!sendingFeedback) removeEditorFeedback(sessionId, feedback.id); }} disabled={sendingFeedback} title="Delete note" aria-label="Delete editor feedback">×</button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   <!-- Editor area -->
   <div bind:this={editorContainer} class="flex-1 min-w-0 relative overflow-hidden"></div>
 
@@ -319,6 +574,11 @@
         </span>
       </div>
       <div class="flex items-center gap-3">
+        <button type="button" class="rounded px-1.5 py-0.5 text-[10px] text-t2 hover:bg-panel hover:text-t1 disabled:cursor-not-allowed disabled:opacity-50" onclick={openFeedbackComposer} disabled={!hasSelection || sendingFeedback || showFeedbackComposer} title={`Comment selection (${MOD_LABEL}⇧C)`}>Comment</button>
+        {#if pendingFeedbackCount > 0}
+          <button type="button" class="rounded bg-accent-bg px-1.5 py-0.5 text-[10px] text-accent hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50" onclick={() => void sendFeedback()} disabled={sessionExited || sendingFeedback || showFeedbackComposer} title={sessionExited ? "Agent is not running" : showFeedbackComposer ? "Submit or cancel the open comment before sending feedback" : `Send feedback (${MOD_ENTER_HINT})`}>Send ({pendingFeedbackCount})</button>
+        {/if}
+        <span class={lspStatus === "ready" ? "text-green-500" : lspStatus === "connecting" ? "text-yellow-400" : "text-t3"}>LSP {lspStatus}</span>
         {#if buffers.length > 1}
           <span class="text-t3">[{activeIndex + 1}/{buffers.length}]</span>
         {/if}

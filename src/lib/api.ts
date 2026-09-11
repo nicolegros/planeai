@@ -71,7 +71,8 @@ export const projects = {
 };
 
 export const pty = {
-  write: (sessionId: string, data: number[]) => invoke("write_to_pty", { sessionId, data }),
+  write: (sessionId: string, data: number[]) =>
+    invoke<boolean>("write_to_pty", { sessionId, data }),
   attach: (sessionId: string, darkMode: boolean, onData: Channel<ArrayBuffer>) =>
     invoke("attach_session", { sessionId, darkMode, onData }),
   spawnTab: (
@@ -86,6 +87,19 @@ export const pty = {
   resume: (sessionId: string) => invoke("resume_pty", { sessionId }),
   closeTab: (sessionId: string, tabIndex: number) => invoke("close_tab", { sessionId, tabIndex }),
   incrementTabCount: (sessionId: string) => invoke("increment_tab_count", { sessionId }),
+};
+
+export interface LspConnection {
+  connection_id: string;
+  language_id: string;
+  profile_id: string;
+}
+
+export const lsp = {
+  connect: (repoPath: string, filePath: string, onMessage: Channel<string>) =>
+    invoke<LspConnection>("lsp_connect", { repoPath, filePath, onMessage }),
+  send: (connectionId: string, message: string) => invoke("lsp_send", { connectionId, message }),
+  disconnect: (connectionId: string) => invoke("lsp_disconnect", { connectionId }),
 };
 
 export const config = {

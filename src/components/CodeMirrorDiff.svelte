@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { EditorState, StateEffect, StateField, Text, type Extension } from "@codemirror/state";
   import { Decoration, EditorView, WidgetType, keymap, type DecorationSet } from "@codemirror/view";
   import {
@@ -370,7 +370,7 @@
     void fontFamily;
     void fontSize;
     if (!root) return;
-    loadLanguage();
+    untrack(loadLanguage);
   });
 
   $effect(() => {

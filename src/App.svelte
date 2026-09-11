@@ -1310,7 +1310,16 @@
         class:split-leaf-focused={leaf.id === splitTree.getFocusedLeafId() && hasMultiplePanes}
         role="group"
         aria-label="Split pane"
-        onclick={() => { splitTree.setFocusedLeaf(leaf.id); if (activeEntry) { const sid = ptyKeyToSessionId(activeEntry.ptyKey); selectWorkspaceSession(sid); } focusTerminal(); }}
+        onclick={(event) => {
+          splitTree.setFocusedLeaf(leaf.id);
+          if (activeEntry) {
+            const sid = ptyKeyToSessionId(activeEntry.ptyKey);
+            selectWorkspaceSession(sid);
+          }
+          if (!(event.target instanceof Element && event.target.closest("[data-editor-tab]"))) {
+            focusTerminal();
+          }
+        }}
       >
         {#if showLeafTabBar}
         <div class="flex items-stretch h-[38px] bg-chrome border-b border-border shrink-0">
@@ -1382,6 +1391,8 @@
                 {@const editorRepoPath = session.worktree_path ?? project.path}
                 <EditorTab
                   repoPath={editorRepoPath}
+                  sessionId={sessionId}
+                  sessionExited={session.status === "exited"}
                   visible={isActiveInLeaf && !activePluginId}
                   theme={isDark() ? "vs-dark" : "vs"}
                   initialFile={tabEntry.filePath}
