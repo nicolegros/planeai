@@ -34,7 +34,9 @@ const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(40 * 60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_RPC_FRAME_BYTES: u64 = 64 * 1024;
+const MAX_PLUGIN_SESSION_PROMPT_CHARS: usize = 100_000;
 const JIRA_PLUGIN_ID: &str = "jira";
+const GITHUB_PLUGIN_ID: &str = "github";
 const JIRA_BACKEND_ENTRYPOINT: &str = "planeai-plugin-jira";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -126,12 +128,26 @@ pub enum PluginHostCapability {
     ProjectsRead,
     #[serde(rename = "sessions.read")]
     SessionsRead,
+    #[serde(rename = "sessions.repository-context")]
+    SessionsRepositoryContext,
+    #[serde(rename = "sessions.prompt")]
+    SessionsPrompt,
+    #[serde(rename = "session-events")]
+    SessionEvents,
+    #[serde(rename = "sessions.actions")]
+    SessionActions,
+    #[serde(rename = "sessions.advisories")]
+    SessionAdvisories,
+    #[serde(rename = "sessions.complete")]
+    SessionsComplete,
     #[serde(rename = "tasks.read")]
     TasksRead,
     #[serde(rename = "task-events")]
     TaskEvents,
     #[serde(rename = "tasks.create")]
     TasksCreate,
+    #[serde(rename = "tasks.transition")]
+    TasksTransition,
     #[serde(rename = "tasks.update")]
     TasksUpdate,
     #[serde(rename = "storage")]
@@ -162,6 +178,10 @@ pub enum PluginUiPlacement {
     Preferences,
     #[serde(rename = "main-pane")]
     MainPane,
+    #[serde(rename = "session.panel")]
+    SessionPanel,
+    #[serde(rename = "titlebar")]
+    Titlebar,
     #[serde(rename = "interaction")]
     Interaction,
 }
@@ -302,15 +322,21 @@ fn validate_capabilities(
                 PluginHostCapability::Settings
                     | PluginHostCapability::ProjectsRead
                     | PluginHostCapability::SessionsRead
+                    | PluginHostCapability::SessionsRepositoryContext
+                    | PluginHostCapability::SessionsPrompt
+                    | PluginHostCapability::SessionEvents
+                    | PluginHostCapability::SessionActions
+                    | PluginHostCapability::SessionAdvisories
+                    | PluginHostCapability::SessionsComplete
                     | PluginHostCapability::TasksRead
                     | PluginHostCapability::TasksCreate
+                    | PluginHostCapability::TasksTransition
                     | PluginHostCapability::TaskEvents
             )
         })
     {
         return Err(
-            "local plugins may only request settings, projects.read, sessions.read, tasks.read, tasks.create, or task-events capabilities"
-                .to_string(),
+            "local plugins may only request documented local plugin capabilities".to_string(),
         );
     }
     Ok(())
@@ -346,11 +372,13 @@ fn validate_ui_contributions(
             &contribution.entrypoint,
             "UI contribution entrypoint",
         )?;
-        if !matches!(contribution.placement, PluginUiPlacement::MainPane)
-            && contribution.shortcut.is_some()
+        if !matches!(
+            contribution.placement,
+            PluginUiPlacement::MainPane | PluginUiPlacement::SessionPanel
+        ) && contribution.shortcut.is_some()
         {
             return Err(
-                "UI contribution shortcuts are only valid for main-pane contributions".to_string(),
+                "UI contribution shortcuts are only valid for main-pane or session-panel contributions".to_string(),
             );
         }
         if !contribution.placement.is_sidebar() && contribution.order.is_some() {
@@ -400,14 +428,6 @@ fn validate_shortcut(shortcut: &str) -> Result<(), String> {
         return Err(
             "UI contribution shortcut modifiers must be ordered Shift then Alt".to_string(),
         );
-    }
-    if matches!(
-        key,
-        "B" | "D" | "E" | "K" | "N" | "P" | "R" | "S" | "T" | "U" | "W"
-    ) {
-        return Err(format!(
-            "UI contribution shortcut {shortcut} is reserved by PlaneAI"
-        ));
     }
     Ok(())
 }
@@ -858,6 +878,59 @@ pub fn insert_local_inventory(
         .ok_or_else(|| "new local plugin inventory record was not found".to_string())
 }
 
+pub fn replace_local_inventory(
+    conn: &Connection,
+    manifest: &PluginManifest,
+    backend_entrypoint: &str,
+    content_hash: &str,
+    package_dir: &Path,
+    original_display_path: &str,
+) -> Result<PluginInventory, String> {
+    let existing = get_inventory(conn, &manifest.id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("plugin inventory entry not found: {}", manifest.id))?;
+    if existing.source_kind != PluginSourceKind::Local {
+        return Err(format!(
+            "plugin id is reserved by a bundled plugin: {}",
+            manifest.id
+        ));
+    }
+    manifest.validate()?;
+    validate_shortcut_collisions(conn, manifest)?;
+    let ui_contributions = serde_json::to_string(&manifest.effective_ui_contributions())
+        .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
+    let capabilities = serde_json::to_string(&manifest.capabilities)
+        .map_err(|error| format!("failed to serialize plugin capabilities: {error}"))?;
+    let background_service = serde_json::to_string(&manifest.background_service)
+        .map_err(|error| format!("failed to serialize plugin background service: {error}"))?;
+    conn.execute(
+        "UPDATE plugin_inventory SET
+            name = ?2, version = ?3, host_api_version = ?4, backend_entrypoint = ?5,
+            ui_contributions = ?6, capabilities = ?7, background_service = ?8,
+            installed_hash = ?9, installed_path = ?10, original_display_path = ?11,
+            enabled = 0, runtime_state = 'disabled', last_error = NULL, log_path = NULL,
+            updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?1 AND source_kind = 'local'",
+        params![
+            manifest.id,
+            manifest.name,
+            manifest.version,
+            manifest.host_api_version,
+            backend_entrypoint,
+            ui_contributions,
+            capabilities,
+            background_service,
+            content_hash,
+            package_dir.display().to_string(),
+            original_display_path,
+        ],
+    )
+    .map_err(|error| format!("failed to replace local plugin inventory: {error}"))?;
+    get_inventory(conn, &manifest.id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "replaced local plugin inventory record was not found".to_string())
+}
+
 pub fn list_inventory(conn: &Connection) -> rusqlite::Result<Vec<PluginInventory>> {
     let mut statement = conn.prepare(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
@@ -1035,6 +1108,7 @@ struct BackgroundWorker {
 }
 
 struct RuntimeProcess {
+    app: AppHandle,
     child: AsyncMutex<Child>,
     stdin: AsyncMutex<ChildStdin>,
     stdout: AsyncMutex<BufReader<ChildStdout>>,
@@ -1046,17 +1120,161 @@ struct RuntimeProcess {
     lifecycle_event_subscriptions: AsyncMutex<HashSet<String>>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionActionsRequest {
+    actions: Vec<PluginSessionAction>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct PluginSessionAction {
+    id: String,
+    label: String,
+    #[serde(default)]
+    providers: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum PluginSessionAdvisorySeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct PluginSessionAdvisory {
+    session_id: String,
+    message: String,
+    severity: PluginSessionAdvisorySeverity,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct PluginSessionCompletion {
+    session_id: String,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PluginSessionPrompt {
+    session_id: String,
+    text: String,
+}
+
+fn validate_plugin_session_actions(
+    request: SessionActionsRequest,
+) -> Result<Vec<PluginSessionAction>, String> {
+    if request.actions.len() > 32 {
+        return Err("plugin may register at most 32 session actions".to_string());
+    }
+    let mut ids = HashSet::new();
+    for action in &request.actions {
+        if action.id.is_empty()
+            || !action.id.chars().all(|character| {
+                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+            })
+        {
+            return Err(
+                "plugin session action id must contain lowercase letters, digits, or hyphens"
+                    .to_string(),
+            );
+        }
+        if !ids.insert(&action.id) {
+            return Err("plugin session action ids must be unique".to_string());
+        }
+        if action.label.trim().is_empty() || action.label.chars().count() > 80 {
+            return Err("plugin session action label must be 1 to 80 characters".to_string());
+        }
+        let mut providers = HashSet::new();
+        for provider in &action.providers {
+            if provider.trim().is_empty()
+                || provider.chars().count() > 80
+                || !providers.insert(provider)
+            {
+                return Err(
+                    "plugin session action providers must be unique nonempty strings".to_string(),
+                );
+            }
+        }
+    }
+    Ok(request.actions)
+}
+
+fn validate_plugin_session_advisory(
+    advisory: PluginSessionAdvisory,
+) -> Result<PluginSessionAdvisory, String> {
+    if advisory.session_id.trim().is_empty()
+        || advisory.message.trim().is_empty()
+        || advisory.message.chars().count() > 1_000
+    {
+        return Err("plugin session advisory requires a session_id and a message of at most 1000 characters".to_string());
+    }
+    Ok(advisory)
+}
+
+fn validate_plugin_session_prompt(
+    prompt: PluginSessionPrompt,
+) -> Result<PluginSessionPrompt, String> {
+    if prompt.session_id.trim().is_empty()
+        || prompt.text.trim().is_empty()
+        || prompt.text.chars().count() > MAX_PLUGIN_SESSION_PROMPT_CHARS
+    {
+        return Err(format!(
+            "plugin session prompt requires a session_id and nonempty text of at most {MAX_PLUGIN_SESSION_PROMPT_CHARS} characters"
+        ));
+    }
+    Ok(prompt)
+}
+
+fn dispatch_plugin_session_prompt(
+    capabilities: &HashSet<PluginHostCapability>,
+    params: Value,
+    send: impl FnOnce(&str, &str) -> Result<(), String>,
+) -> Result<Value, String> {
+    if !capabilities.contains(&PluginHostCapability::SessionsPrompt) {
+        return Err("plugin capability is not granted".to_string());
+    }
+    let prompt = serde_json::from_value(params)
+        .map_err(|error| format!("invalid plugin session prompt: {error}"))
+        .and_then(validate_plugin_session_prompt)?;
+    send(&prompt.session_id, &prompt.text)?;
+    Ok(serde_json::json!({ "delivered": true }))
+}
+
+fn validate_plugin_session_completion(
+    completion: PluginSessionCompletion,
+) -> Result<PluginSessionCompletion, String> {
+    if completion.session_id.trim().is_empty()
+        || completion
+            .message
+            .as_ref()
+            .is_some_and(|message| message.trim().is_empty() || message.chars().count() > 280)
+    {
+        return Err("plugin session completion requires a session_id and an optional nonempty message of at most 280 characters".to_string());
+    }
+    Ok(completion)
+}
+
 fn is_host_controlled_plugin_method(method: &str) -> bool {
     matches!(
         method,
-        "plugin.handshake" | "plugin.shutdown" | "plugin.taskLifecycle" | "$/cancelRequest"
+        "plugin.handshake"
+            | "plugin.shutdown"
+            | "plugin.taskLifecycle"
+            | "plugin.sessionLifecycle"
+            | "$/cancelRequest"
     )
 }
 
 fn request_timeout(method: &str) -> Duration {
     match method {
         "jira.syncNow" => JIRA_SYNC_RPC_TIMEOUT,
-        "plugin.taskLifecycle" => JIRA_LIFECYCLE_RPC_TIMEOUT,
+        "plugin.taskLifecycle" | "plugin.sessionLifecycle" => JIRA_LIFECYCLE_RPC_TIMEOUT,
         _ => RPC_TIMEOUT,
     }
 }
@@ -1209,14 +1427,96 @@ impl RuntimeProcess {
 
     async fn handle_plugin_request(&self, request: JsonRpcCallbackRequest) -> Result<(), String> {
         let JsonRpcCallbackRequest { id, method, params } = request;
-        let result = execute_host_task(
-            &self.plugin_id,
-            &self.capabilities,
-            &self.data_dir,
-            &method,
-            params,
-        )
-        .await;
+        let result = match method.as_str() {
+            "host.sessions.actions" => {
+                if !self
+                    .capabilities
+                    .contains(&PluginHostCapability::SessionActions)
+                {
+                    Err("plugin capability is not granted".to_string())
+                } else {
+                    serde_json::from_value(params)
+                        .map_err(|error| format!("invalid plugin session actions: {error}"))
+                        .and_then(validate_plugin_session_actions)
+                        .and_then(|actions| {
+                            self.app
+                                .emit(
+                                    "plugin-session-actions",
+                                    serde_json::json!({ "plugin_id": self.plugin_id, "actions": actions }),
+                                )
+                                .map_err(|error| {
+                                    format!("failed to emit plugin session actions: {error}")
+                                })
+                        })
+                        .map(|_| serde_json::json!({ "accepted": true }))
+                }
+            }
+            "host.sessions.advisory" => {
+                if !self
+                    .capabilities
+                    .contains(&PluginHostCapability::SessionAdvisories)
+                {
+                    Err("plugin capability is not granted".to_string())
+                } else {
+                    serde_json::from_value(params)
+                        .map_err(|error| format!("invalid plugin session advisory: {error}"))
+                        .and_then(validate_plugin_session_advisory)
+                        .and_then(|advisory| {
+                            self.app
+                                .emit(
+                                    "plugin-session-advisory",
+                                    serde_json::json!({ "plugin_id": self.plugin_id, "advisory": advisory }),
+                                )
+                                .map_err(|error| format!("failed to emit plugin advisory: {error}"))
+                        })
+                        .map(|_| serde_json::json!({ "accepted": true }))
+                }
+            }
+            "host.sessions.prompt" => {
+                let capabilities = self.capabilities.clone();
+                commands::blocking(move || {
+                    let conn = Connection::open(planeai_paths::db_path())
+                        .map_err(|error| error.to_string())?;
+                    let ops =
+                        crate::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
+                    dispatch_plugin_session_prompt(&capabilities, params, |session_id, text| {
+                        crate::session_ops::send_prompt(&conn, session_id, text, &ops).map(|_| ())
+                    })
+                })
+                .await
+            }
+            "host.sessions.complete" => {
+                if !self
+                    .capabilities
+                    .contains(&PluginHostCapability::SessionsComplete)
+                {
+                    Err("plugin capability is not granted".to_string())
+                } else {
+                    serde_json::from_value(params)
+                        .map_err(|error| format!("invalid plugin session completion: {error}"))
+                        .and_then(validate_plugin_session_completion)
+                        .and_then(|completion| {
+                            self.app
+                                .emit(
+                                    "plugin-session-completed",
+                                    serde_json::json!({ "plugin_id": self.plugin_id, "completion": completion }),
+                                )
+                                .map_err(|error| format!("failed to emit plugin completion: {error}"))
+                        })
+                        .map(|_| serde_json::json!({ "accepted": true }))
+                }
+            }
+            _ => {
+                execute_host_task(
+                    &self.plugin_id,
+                    &self.capabilities,
+                    &self.data_dir,
+                    &method,
+                    params,
+                )
+                .await
+            }
+        };
         let frame = encode_host_callback_response(id, result)?;
         let mut stdin = self.stdin.lock().await;
         stdin
@@ -1349,6 +1649,77 @@ fn replace_plugin_settings(data_dir: &Path, settings: Value) -> Result<Value, St
     Ok(settings)
 }
 
+fn settings_path(params: &Value) -> Result<Option<Vec<String>>, String> {
+    let Some(path) = params.get("path") else {
+        return Ok(None);
+    };
+    let path = path
+        .as_array()
+        .ok_or("settings path must be an array of object keys")?;
+    if path.is_empty() || path.len() > 8 {
+        return Err("settings path must contain between 1 and 8 object keys".to_string());
+    }
+    path.iter()
+        .map(|segment| {
+            segment
+                .as_str()
+                .filter(|segment| !segment.is_empty() && segment.len() <= 256)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    "settings path keys must be non-empty strings up to 256 bytes".to_string()
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn plugin_settings_at_path(settings: &Value, path: &[String]) -> Value {
+    path.iter()
+        .try_fold(settings, |current, segment| current.get(segment))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn merge_plugin_settings_patch(
+    target: &mut serde_json::Map<String, Value>,
+    patch: &serde_json::Map<String, Value>,
+) {
+    for (key, value) in patch {
+        if value.is_null() {
+            target.remove(key);
+        } else if let Some(value) = value.as_object() {
+            let target_value = target
+                .entry(key.clone())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if !target_value.is_object() {
+                *target_value = Value::Object(serde_json::Map::new());
+            }
+            merge_plugin_settings_patch(
+                target_value
+                    .as_object_mut()
+                    .expect("object target was initialized above"),
+                value,
+            );
+        } else {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+fn patch_plugin_settings(data_dir: &Path, patch: Value) -> Result<(), String> {
+    let patch = patch
+        .as_object()
+        .ok_or("plugin settings patch must be a JSON object")?;
+    let mut settings = read_plugin_settings(data_dir)?;
+    merge_plugin_settings_patch(
+        settings
+            .as_object_mut()
+            .expect("read_plugin_settings validates JSON objects"),
+        patch,
+    );
+    replace_plugin_settings(data_dir, settings).map(|_| ())
+}
+
 async fn execute_host_task(
     plugin_id: &str,
     capabilities: &HashSet<PluginHostCapability>,
@@ -1357,9 +1728,13 @@ async fn execute_host_task(
     params: Value,
 ) -> Result<Value, String> {
     let required = match method {
-        "host.settings.get" | "host.settings.replace" => PluginHostCapability::Settings,
+        "host.settings.get" | "host.settings.replace" | "host.settings.patch" => {
+            PluginHostCapability::Settings
+        }
         "host.projects.list" => PluginHostCapability::ProjectsRead,
         "host.sessions.list" => PluginHostCapability::SessionsRead,
+        "host.sessions.repositoryContext" => PluginHostCapability::SessionsRepositoryContext,
+        "host.sessions.transitionLinkedTask" => PluginHostCapability::TasksTransition,
         "host.tasks.read" | "host.task.get" => PluginHostCapability::TasksRead,
         "host.tasks.createChild" => PluginHostCapability::TasksCreate,
         "host.task.create" => PluginHostCapability::TasksCreate,
@@ -1424,21 +1799,91 @@ async fn execute_host_task(
         .await;
     }
 
+    if method == "host.sessions.repositoryContext" {
+        let session_id = params
+            .get("session_id")
+            .or_else(|| params.get("sessionId"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("repository context requires session_id")?
+            .to_string();
+        return commands::blocking(move || {
+            let path = planeai_paths::db_path();
+            let conn = Connection::open(path).map_err(|error| error.to_string())?;
+            let session = crate::db::get_session(&conn, &session_id)
+                .map_err(|error| error.to_string())?
+                .ok_or("session not found")?;
+            let project = crate::db::get_project(&conn, &session.project_id)
+                .map_err(|error| error.to_string())?
+                .ok_or("session project not found")?;
+            if project.hidden {
+                return Err("session project is hidden".to_string());
+            }
+            let working_tree_path = session
+                .worktree_path
+                .clone()
+                .unwrap_or(project.path.clone());
+            Ok(serde_json::json!({
+                "session_id": session.id,
+                "project_id": project.id,
+                "working_tree_path": working_tree_path,
+                "branch": session.branch,
+                "base_branch": session.base_branch,
+                "session_status": session.status,
+                "linked_task_key": session.task_key,
+            }))
+        })
+        .await;
+    }
+
+    if method == "host.sessions.transitionLinkedTask" {
+        let session_id = params
+            .get("session_id")
+            .or_else(|| params.get("sessionId"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("linked task transition requires session_id")?
+            .to_string();
+        let status = params
+            .get("status")
+            .and_then(Value::as_str)
+            .and_then(Status::parse)
+            .ok_or("linked task transition requires a valid status")?;
+        return commands::blocking(move || transition_linked_plugin_task(&session_id, status))
+            .await;
+    }
+
     if method == "host.tasks.createChild" {
         let plugin_id = plugin_id.to_string();
         return commands::blocking(move || create_plugin_child_task(&plugin_id, params)).await;
     }
 
-    if matches!(method, "host.settings.get" | "host.settings.replace") {
+    if matches!(
+        method,
+        "host.settings.get" | "host.settings.replace" | "host.settings.patch"
+    ) {
         let data_dir = data_dir.to_path_buf();
         let method = method.to_string();
         return commands::blocking(move || match method.as_str() {
-            "host.settings.get" => read_plugin_settings(&data_dir)
-                .map(|settings| serde_json::json!({ "settings": settings })),
+            "host.settings.get" => {
+                let path = settings_path(&params)?;
+                read_plugin_settings(&data_dir).map(|settings| {
+                    let settings = path
+                        .as_deref()
+                        .map(|path| plugin_settings_at_path(&settings, path))
+                        .unwrap_or(settings);
+                    serde_json::json!({ "settings": settings })
+                })
+            }
             "host.settings.replace" => {
                 let settings = params.get("settings").cloned().unwrap_or(params);
                 replace_plugin_settings(&data_dir, settings)
                     .map(|settings| serde_json::json!({ "settings": settings }))
+            }
+            "host.settings.patch" => {
+                let patch = params.get("patch").cloned().unwrap_or(params);
+                patch_plugin_settings(&data_dir, patch)
+                    .map(|()| serde_json::json!({ "updated": true }))
             }
             _ => unreachable!(),
         })
@@ -1574,6 +2019,40 @@ async fn execute_host_task(
         }
     })
     .await
+}
+
+fn transition_linked_plugin_task(session_id: &str, status: Status) -> Result<Value, String> {
+    let path = planeai_paths::db_path();
+    let conn = Connection::open(&path).map_err(|error| error.to_string())?;
+    let session = crate::db::get_session(&conn, session_id)
+        .map_err(|error| error.to_string())?
+        .ok_or("session not found")?;
+    let task_key = session.task_key.ok_or("session has no linked task")?;
+    let project = crate::db::get_project(&conn, &session.project_id)
+        .map_err(|error| error.to_string())?
+        .ok_or("session project not found")?;
+    if project.hidden {
+        return Err("session project is hidden".to_string());
+    }
+    let repo = SqliteRepository::open(
+        path.to_str().ok_or("invalid PlaneAI task database path")?,
+        &project.prefix,
+    )
+    .map_err(|error| error.to_string())?;
+    let (task, events) =
+        planeai_core::task_lifecycle::move_task_with_lifecycle(&repo, &task_key, status)
+            .map_err(|error| error.to_string())?;
+    if !events.is_empty() {
+        planeai::task_cli::notify_task_lifecycle(&TaskLifecycleBatch::new(
+            crate::task_lifecycle::TaskLifecycleOrigin::Ui,
+            project.id,
+            project.prefix,
+            events,
+        ));
+    }
+    serde_json::to_value(task)
+        .map(|task| serde_json::json!({ "task": task }))
+        .map_err(|error| error.to_string())
 }
 
 fn create_plugin_child_task(plugin_id: &str, params: Value) -> Result<Value, String> {
@@ -1735,6 +2214,14 @@ fn lifecycle_subscription_is_granted(
         && subscriptions.contains("task.lifecycle")
 }
 
+fn session_lifecycle_subscription_is_granted(
+    capabilities: &HashSet<PluginHostCapability>,
+    subscriptions: &HashSet<String>,
+) -> bool {
+    capabilities.contains(&PluginHostCapability::SessionEvents)
+        && subscriptions.contains("session.lifecycle")
+}
+
 impl PluginRuntimeSupervisor {
     async fn with_db<T, F>(&self, operation: F) -> Result<T, String>
     where
@@ -1877,16 +2364,51 @@ impl PluginRuntimeSupervisor {
         let hash = imported.content_hash.clone();
         let package_dir = imported.package_dir.clone();
         let original_path = imported.original_display_path.clone();
+        let existing = self.inventory(&manifest.id).await?;
+        let was_enabled = match existing.as_ref() {
+            Some(inventory) if inventory.source_kind != PluginSourceKind::Local => {
+                let error = format!("plugin id is reserved by a bundled plugin: {}", manifest.id);
+                if let Err(cleanup_error) =
+                    commands::blocking(move || imported.discard_if_newly_published()).await
+                {
+                    tracing::warn!(%cleanup_error, "failed to discard unreferenced local plugin package");
+                }
+                return Err(error);
+            }
+            Some(inventory) if inventory.installed_hash.as_deref() == Some(&hash) => {
+                return Ok(inventory.clone());
+            }
+            Some(inventory) => inventory.enabled,
+            None => false,
+        };
+        if existing
+            .as_ref()
+            .is_some_and(|inventory| inventory.state != PluginRuntimeState::Disabled)
+        {
+            self.disable_inner(&manifest.id).await?;
+        }
+        let replacing = existing.is_some();
         let inventory = self
             .with_db(move |conn| {
-                insert_local_inventory(
-                    conn,
-                    &manifest,
-                    &backend,
-                    &hash,
-                    &package_dir,
-                    &original_path,
-                )
+                if replacing {
+                    replace_local_inventory(
+                        conn,
+                        &manifest,
+                        &backend,
+                        &hash,
+                        &package_dir,
+                        &original_path,
+                    )
+                } else {
+                    insert_local_inventory(
+                        conn,
+                        &manifest,
+                        &backend,
+                        &hash,
+                        &package_dir,
+                        &original_path,
+                    )
+                }
             })
             .await;
         let inventory = match inventory {
@@ -1900,6 +2422,9 @@ impl PluginRuntimeSupervisor {
                 return Err(error);
             }
         };
+        if was_enabled {
+            return self.enable_inner(&inventory.id).await;
+        }
         self.emit_change(&inventory.id).await;
         Ok(inventory)
     }
@@ -2050,6 +2575,49 @@ impl PluginRuntimeSupervisor {
         });
     }
 
+    /// Deliver a committed session lifecycle event in the background. Delivery
+    /// is best-effort and requires both manifest capability and handshake opt-in.
+    pub fn dispatch_session_lifecycle(self: &Arc<Self>, event: Value) {
+        if self.shutting_down.load(Ordering::Acquire) {
+            tracing::warn!(
+                "skipped session lifecycle delivery while plugin runtime is shutting down"
+            );
+            return;
+        }
+        let supervisor = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            let processes = supervisor
+                .processes
+                .lock()
+                .await
+                .iter()
+                .map(|(plugin_id, process)| (plugin_id.clone(), process.clone()))
+                .collect::<Vec<_>>();
+            for (plugin_id, process) in processes {
+                let subscriptions = process.lifecycle_event_subscriptions.lock().await;
+                let subscribed = session_lifecycle_subscription_is_granted(
+                    &process.capabilities,
+                    &subscriptions,
+                );
+                drop(subscriptions);
+                if !subscribed {
+                    continue;
+                }
+                if let Err(error) = supervisor
+                    .call_internal(
+                        &plugin_id,
+                        "plugin.sessionLifecycle",
+                        serde_json::json!({ "event": event }),
+                        true,
+                    )
+                    .await
+                {
+                    tracing::warn!(plugin_id, %error, "session lifecycle delivery failed");
+                }
+            }
+        });
+    }
+
     pub async fn local_ui_source(
         &self,
         plugin_id: &str,
@@ -2092,17 +2660,28 @@ impl PluginRuntimeSupervisor {
                 return;
             }
         };
-        let migration_blocks_jira = self
-            .with_db(|conn| Ok(crate::jira_migration::blocks_plugin_start(conn)))
+        let (migration_blocks_jira, migration_blocks_github) = self
+            .with_db(|conn| {
+                Ok((
+                    crate::jira_migration::blocks_plugin_start(conn),
+                    crate::github_migration::blocks_plugin_start(conn),
+                ))
+            })
             .await
             .unwrap_or_else(|error| {
-                tracing::warn!(%error, "failed to read Jira migration fence; refusing Jira startup");
-                true
+                tracing::warn!(%error, "failed to read plugin migration fences; refusing protected plugin startup");
+                (true, true)
             });
         for plugin in enabled {
             if plugin.id == JIRA_PLUGIN_ID && migration_blocks_jira {
                 tracing::info!(
                     "Jira plugin remains disabled until explicit legacy migration completes"
+                );
+                continue;
+            }
+            if plugin.id == GITHUB_PLUGIN_ID && migration_blocks_github {
+                tracing::info!(
+                    "GitHub plugin remains disabled until explicit legacy migration completes"
                 );
                 continue;
             }
@@ -2233,6 +2812,13 @@ impl PluginRuntimeSupervisor {
         {
             return Err("Jira is waiting for explicit legacy migration. Use Migrate and enable Jira plugin in Plugins first.".to_string());
         }
+        if plugin_id == GITHUB_PLUGIN_ID
+            && self
+                .with_db(|conn| Ok(crate::github_migration::blocks_plugin_start(conn)))
+                .await?
+        {
+            return Err("GitHub migration is required before enabling the GitHub plugin. Migrate legacy GitHub pull-request mappings first.".to_string());
+        }
         self.enable_inner(plugin_id).await
     }
 
@@ -2284,6 +2870,7 @@ impl PluginRuntimeSupervisor {
         // must survive restarts under the same plugin namespace as local plugins.
         let state_path = Some(plugin_state_root(&self.app, &id).await?);
         let process = match spawn_runtime(
+            self.app.clone(),
             &binary,
             &log_path,
             state_path.as_deref(),
@@ -2340,12 +2927,16 @@ impl PluginRuntimeSupervisor {
         {
             let mut subscriptions = process.lifecycle_event_subscriptions.lock().await;
             *subscriptions = handshake.lifecycle_event_subscriptions;
-            if !process
-                .capabilities
-                .contains(&PluginHostCapability::TaskEvents)
-            {
-                subscriptions.clear();
-            }
+            subscriptions.retain(|subscription| {
+                (subscription == "task.lifecycle"
+                    && process
+                        .capabilities
+                        .contains(&PluginHostCapability::TaskEvents))
+                    || (subscription == "session.lifecycle"
+                        && process
+                            .capabilities
+                            .contains(&PluginHostCapability::SessionEvents))
+            });
         }
         tracing::info!(plugin_id = %handshake.plugin_id, version = %handshake.plugin_version, "plugin runtime handshake completed");
 
@@ -2679,6 +3270,7 @@ async fn plugin_log_path(app: &AppHandle, plugin_id: &str) -> Result<PathBuf, St
 }
 
 async fn spawn_runtime(
+    app: AppHandle,
     binary: &Path,
     log_path: &Path,
     state_root: Option<&Path>,
@@ -2715,6 +3307,7 @@ async fn spawn_runtime(
         .map(|root| root.join("data"))
         .ok_or("plugin runtime state root was not provided")?;
     Ok(RuntimeProcess {
+        app,
         child: AsyncMutex::new(child),
         stdin: AsyncMutex::new(stdin),
         stdout: AsyncMutex::new(BufReader::new(stdout)),
@@ -3024,6 +3617,11 @@ mod tests {
         let inventory = get_inventory(&conn, "sidebar-test").unwrap().unwrap();
         assert_eq!(inventory.ui_contributions, manifest.ui_contributions);
 
+        let mut titlebar = manifest.clone();
+        titlebar.ui_contributions[0].placement = PluginUiPlacement::Titlebar;
+        titlebar.ui_contributions[0].order = None;
+        assert!(titlebar.validate().is_ok());
+
         let mut invalid_shortcut = manifest.clone();
         invalid_shortcut.ui_contributions[0].shortcut = Some("Mod+L".into());
         assert!(invalid_shortcut
@@ -3103,7 +3701,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_local_plugin_ids_are_rejected_without_replacing_inventory() {
+    fn replacing_a_local_plugin_updates_its_package_metadata_without_deleting_inventory() {
         let conn = database();
         let manifest = PluginManifest {
             schema: "planeai.plugin.v1".into(),
@@ -3132,7 +3730,7 @@ mod tests {
             "/original/package",
         )
         .unwrap();
-        let error = insert_local_inventory(
+        let replacement = replace_local_inventory(
             &conn,
             &manifest,
             "bin/plugin",
@@ -3140,14 +3738,17 @@ mod tests {
             package.path(),
             "/different/package",
         )
-        .unwrap_err();
-        assert!(error.contains("already installed"));
-        let inventory = get_inventory(&conn, "fixture").unwrap().unwrap();
-        assert_eq!(inventory.installed_hash.as_deref(), Some("content-hash"));
+        .unwrap();
         assert_eq!(
-            inventory.original_display_path.as_deref(),
-            Some("/original/package")
+            replacement.installed_hash.as_deref(),
+            Some("different-hash")
         );
+        assert_eq!(
+            replacement.original_display_path.as_deref(),
+            Some("/different/package")
+        );
+        assert!(!replacement.enabled);
+        assert_eq!(replacement.state, PluginRuntimeState::Disabled);
         delete_local_inventory(&conn, "fixture").unwrap();
         assert!(get_inventory(&conn, "fixture").unwrap().is_none());
         assert!(delete_local_inventory(&conn, "jira")
@@ -3364,6 +3965,15 @@ mod tests {
             &HashSet::new(),
             &subscriptions
         ));
+        let session_subscriptions = HashSet::from(["session.lifecycle".to_string()]);
+        assert!(session_lifecycle_subscription_is_granted(
+            &HashSet::from([PluginHostCapability::SessionEvents]),
+            &session_subscriptions
+        ));
+        assert!(!session_lifecycle_subscription_is_granted(
+            &HashSet::new(),
+            &session_subscriptions
+        ));
         manifest
             .capabilities
             .push(PluginHostCapability::TasksCreate);
@@ -3450,6 +4060,96 @@ mod tests {
         .contains("not granted"));
     }
 
+    #[tokio::test]
+    async fn bounded_settings_callbacks_patch_large_documents_without_returning_them() {
+        let data = tempfile::TempDir::new().unwrap();
+        let capabilities = HashSet::from([PluginHostCapability::Settings]);
+        let legacy_mappings = (0..300)
+            .map(|index| {
+                (
+                    format!("session-{index}"),
+                    serde_json::json!({ "url": format!("https://github.com/example/repository/pull/{index}"), "note": "x".repeat(256) }),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        replace_plugin_settings(
+            data.path(),
+            serde_json::json!({
+                "github": {
+                    "version": 1,
+                    "pull_requests": legacy_mappings,
+                    "reconciliation": { "status": "idle", "checked": 0 },
+                },
+                "unrelated": { "retain": true },
+            }),
+        )
+        .unwrap();
+
+        let whole_document = execute_host_task(
+            "github",
+            &capabilities,
+            data.path(),
+            "host.settings.get",
+            Value::Null,
+        )
+        .await
+        .unwrap();
+        let frame =
+            encode_host_callback_response(Value::String("whole".into()), Ok(whole_document))
+                .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&frame).unwrap()["error"]["message"],
+            "host callback response exceeded the frame limit"
+        );
+
+        let reconciliation = execute_host_task(
+            "github",
+            &capabilities,
+            data.path(),
+            "host.settings.get",
+            serde_json::json!({ "path": ["github", "reconciliation"] }),
+        )
+        .await
+        .unwrap();
+        let frame = encode_host_callback_response(
+            Value::String("reconciliation".into()),
+            Ok(reconciliation.clone()),
+        )
+        .unwrap();
+        assert!(host_callback_response_fits(&frame));
+        assert_eq!(reconciliation["settings"]["status"], "idle");
+
+        let patched = execute_host_task(
+            "github",
+            &capabilities,
+            data.path(),
+            "host.settings.patch",
+            serde_json::json!({
+                "patch": {
+                    "github": {
+                        "pull_requests": {
+                            "active-session": { "url": "https://github.com/example/repository/pull/999", "state": "open" }
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        let frame =
+            encode_host_callback_response(Value::String("patch".into()), Ok(patched)).unwrap();
+        assert!(host_callback_response_fits(&frame));
+        assert_eq!(
+            read_plugin_settings(data.path()).unwrap()["unrelated"]["retain"],
+            true
+        );
+        assert_eq!(
+            read_plugin_settings(data.path()).unwrap()["github"]["pull_requests"]["active-session"]
+                ["state"],
+            "open"
+        );
+    }
+
     #[test]
     fn callback_response_frame_limit_includes_its_newline_terminator() {
         assert!(host_callback_response_fits(
@@ -3502,11 +4202,58 @@ mod tests {
             "plugin.handshake",
             "plugin.shutdown",
             "plugin.taskLifecycle",
+            "plugin.sessionLifecycle",
             "$/cancelRequest",
         ] {
             assert!(is_host_controlled_plugin_method(method), "{method}");
         }
         assert!(!is_host_controlled_plugin_method("fixture.status"));
+    }
+
+    #[test]
+    fn local_plugin_session_callback_payloads_are_strict_and_provider_aware() {
+        let actions = validate_plugin_session_actions(SessionActionsRequest {
+            actions: vec![
+                PluginSessionAction {
+                    id: "review".into(),
+                    label: "Open review".into(),
+                    providers: vec!["claude".into()],
+                },
+                PluginSessionAction {
+                    id: "sync".into(),
+                    label: "Sync".into(),
+                    providers: vec![],
+                },
+            ],
+        })
+        .unwrap();
+        assert_eq!(actions[0].providers, vec!["claude"]);
+        assert!(validate_plugin_session_actions(SessionActionsRequest {
+            actions: vec![
+                PluginSessionAction {
+                    id: "duplicate".into(),
+                    label: "One".into(),
+                    providers: vec![]
+                },
+                PluginSessionAction {
+                    id: "duplicate".into(),
+                    label: "Two".into(),
+                    providers: vec![]
+                },
+            ],
+        })
+        .is_err());
+        assert!(validate_plugin_session_advisory(PluginSessionAdvisory {
+            session_id: "session-1".into(),
+            message: "Needs attention".into(),
+            severity: PluginSessionAdvisorySeverity::Warning,
+        })
+        .is_ok());
+        assert!(validate_plugin_session_completion(PluginSessionCompletion {
+            session_id: "session-1".into(),
+            message: Some("Integration completed".into()),
+        })
+        .is_ok());
     }
 
     #[test]
@@ -3604,5 +4351,63 @@ mod placement_tests {
         assert!(PluginUiPlacement::SidebarNavigation.is_sidebar());
         assert!(!PluginUiPlacement::Preferences.is_sidebar());
         assert!(!PluginUiPlacement::MainPane.is_sidebar());
+    }
+}
+
+#[cfg(test)]
+mod session_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn local_plugins_may_request_the_session_prompt_capability() {
+        assert!(validate_capabilities(
+            PluginSourceKind::Local,
+            &[PluginHostCapability::SessionsPrompt],
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn session_prompt_payload_is_bounded_and_delivered_once() {
+        let sent = std::sync::Mutex::new(Vec::new());
+        let response = dispatch_plugin_session_prompt(
+            &HashSet::from([PluginHostCapability::SessionsPrompt]),
+            serde_json::json!({ "session_id": "session-123", "text": "Please fix the CI failure." }),
+            |session_id, text| {
+                sent.lock()
+                    .unwrap()
+                    .push((session_id.to_string(), text.to_string()));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(response, serde_json::json!({ "delivered": true }));
+        assert_eq!(
+            sent.into_inner().unwrap(),
+            vec![(
+                "session-123".to_string(),
+                "Please fix the CI failure.".to_string()
+            )]
+        );
+
+        for invalid in [
+            serde_json::json!({ "session_id": "", "text": "hello" }),
+            serde_json::json!({ "session_id": "session-123", "text": "   " }),
+            serde_json::json!({ "session_id": "session-123", "text": "x".repeat(MAX_PLUGIN_SESSION_PROMPT_CHARS + 1) }),
+        ] {
+            assert!(dispatch_plugin_session_prompt(
+                &HashSet::from([PluginHostCapability::SessionsPrompt]),
+                invalid,
+                |_, _| Ok(())
+            )
+            .is_err());
+        }
+        assert!(dispatch_plugin_session_prompt(
+            &HashSet::new(),
+            serde_json::json!({ "session_id": "session-123", "text": "should not send" }),
+            |_, _| panic!("ungranted plugins must not deliver a prompt"),
+        )
+        .unwrap_err()
+        .contains("not granted"));
     }
 }

@@ -3,7 +3,15 @@
   import { Bot, Terminal, GitCompare, FileCode, MessageSquare } from "@lucide/svelte";
   import { getCommentCount } from "../lib/pr-comments.svelte";
   import type { Tab } from "../lib/session-tabs.svelte";
+  import type { PluginInventory, PluginUiContribution } from "../lib/types";
+  import type { PluginSessionContext } from "../lib/plugin-sdk";
+  import PluginContributionHost from "./PluginContributionHost.svelte";
   import TabStrip from "./TabStrip.svelte";
+
+  interface TitlebarContribution {
+    plugin: PluginInventory;
+    contribution: PluginUiContribution;
+  }
 
   interface Props {
     projectName: string | null;
@@ -25,9 +33,12 @@
     onCreatePr?: () => void;
     onOpenCommand?: () => void;
     onTogglePrPanel?: () => void;
+    titlebarContributions?: TitlebarContribution[];
+    titlebarSession?: PluginSessionContext;
+    onOpenTitlebarContribution?: (pluginId: string, contributionId: string) => void;
   }
 
-  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, prState, ciStatus, hasChanges, sessionId, symphonyStatus, runningCount, activeProvider, onSelectTab, onCloseTab, onAddTab, onCreatePr, onOpenCommand, onTogglePrPanel }: Props = $props();
+  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, prState, ciStatus, hasChanges, sessionId, symphonyStatus, runningCount, activeProvider, onSelectTab, onCloseTab, onAddTab, onCreatePr, onOpenCommand, onTogglePrPanel, titlebarContributions = [], titlebarSession, onOpenTitlebarContribution }: Props = $props();
 
   const platformPadding = IS_MAC ? "pl-[72px]" : "pr-36";
 
@@ -65,9 +76,27 @@
       </span>
     {/if}
 
-    <!-- PR controls -->
+    <!-- Plugin-owned titlebar controls are declared in each plugin manifest. -->
+    {#each titlebarContributions as item (`${item.plugin.id}:${item.contribution.id}`)}
+      <div
+        class="h-[25px] shrink-0 overflow-hidden"
+        style="width: 88px; min-width: 0; max-width: 88px"
+        data-plugin-titlebar-entry={`${item.plugin.id}:${item.contribution.id}`}
+      >
+        <PluginContributionHost
+          plugin={item.plugin}
+          contribution={item.contribution}
+          session={titlebarSession}
+          onNavigate={onOpenTitlebarContribution ?? (() => {})}
+          onClose={() => {}}
+        />
+      </div>
+    {/each}
+
+    <!-- Legacy PR controls stay active during the plugin transition. -->
     {#if prUrl}
       <button
+        data-legacy-pr-control
         class="flex items-center gap-[7px] h-[25px] px-[9px] rounded-[7px] text-[11.5px] font-medium
           {isMerged ? 'bg-[rgba(188,140,255,0.18)] text-[#bc8cff]' : isDraft ? 'bg-panel-hi text-t2' : prState === 'closed' ? 'bg-status-exited/15 text-status-exited' : 'bg-[rgba(63,185,80,0.18)] text-status-running'}"
         onclick={onTogglePrPanel}
@@ -83,6 +112,7 @@
       </button>
     {:else if hasChanges && onCreatePr}
       <button
+        data-legacy-create-pr-control
         class="flex items-center gap-1.5 h-[25px] px-[10px] rounded-[7px] text-[11.5px] font-medium text-t2 border border-border hover:bg-panel-hi transition-colors"
         onclick={onCreatePr}
       >＋ Create PR</button>

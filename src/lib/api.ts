@@ -12,6 +12,7 @@ import type {
   PrStatus,
   CommitEntry,
   PluginInventory,
+  GithubMigrationStatus,
   JiraMigrationStatus,
   LoopRunSummary,
   LoopRunDetail,
@@ -258,6 +259,8 @@ export const plugins = {
   reload: (pluginId: string) => invoke<PluginInventory>("reload_plugin", { pluginId }),
   jiraMigrationStatus: () => invoke<JiraMigrationStatus>("jira_migration_status"),
   migrateLegacyJira: () => invoke<JiraMigrationStatus>("migrate_legacy_jira"),
+  githubMigrationStatus: () => invoke<GithubMigrationStatus>("github_migration_status"),
+  migrateLegacyGithub: () => invoke<GithubMigrationStatus>("migrate_legacy_github"),
   call: <T>(pluginId: string, method: string, params: unknown = null) =>
     invoke<T>("plugin_call", { pluginId, method, params }),
   hostCall: <T>(pluginId: string, method: string, params: unknown = null) =>

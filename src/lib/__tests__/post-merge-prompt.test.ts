@@ -235,3 +235,28 @@ describe("runDefault does not crash when session is already archived (PLA-248)",
     expect(onArchive).not.toHaveBeenCalled();
   });
 });
+
+describe("generic integration completion prompt", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    handleKeep();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps archive/destroy behavior while carrying a host-rendered integration message", () => {
+    showMergePrompt({
+      sessionId: "s1",
+      sessionName: "test",
+      taskKey: null,
+      message: "Deployment completed",
+      onArchive: vi.fn(() => Promise.resolve()),
+      onDestroy: vi.fn(() => Promise.resolve()),
+    });
+
+    expect(getPrompt()?.message).toBe("Deployment completed");
+    expect(getPrompt()?.sessionId).toBe("s1");
+  });
+});

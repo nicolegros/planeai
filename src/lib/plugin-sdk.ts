@@ -42,6 +42,7 @@ export interface PluginUiHost {
     open(pluginId: string, contributionId: string): void;
     close(): void;
     openPreferences(): void;
+    openExternal(url: string): void;
   };
   sidebar: {
     register(rows: PluginSidebarNavRow[]): () => void;
@@ -72,9 +73,21 @@ export interface PluginUiHost {
   };
 }
 
+export interface PluginSessionContext {
+  id: string;
+  projectId: string;
+  branch: string;
+  baseBranch: string | null;
+  status: "active" | "exited" | "archived";
+  provider: string | null;
+  taskKey: string | null;
+}
+
 export interface PluginUiContext {
   plugin: PluginInventory;
   contribution: PluginUiContribution;
+  /** Present only for a generic session.panel contribution. */
+  session?: PluginSessionContext;
   host: PluginUiHost;
 }
 

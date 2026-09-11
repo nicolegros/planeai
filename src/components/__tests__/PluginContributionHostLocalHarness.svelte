@@ -4,9 +4,11 @@
 
   interface Props {
     placement?: PluginUiContribution["placement"];
+    closeOnEscape?: boolean;
+    autofocus?: boolean;
   }
 
-  let { placement = "sidebar.section" }: Props = $props();
+  let { placement = "sidebar.section", closeOnEscape = false, autofocus = false }: Props = $props();
   let plugin = $state<PluginInventory>({
     id: "local-fixture",
     name: "Local Fixture",
@@ -34,4 +36,4 @@
   });
 </script>
 
-<PluginContributionHost {plugin} {contribution} onNavigate={() => {}} onClose={() => {}} />
+<PluginContributionHost {plugin} {contribution} onNavigate={() => {}} onClose={() => {}} {closeOnEscape} {autofocus} />

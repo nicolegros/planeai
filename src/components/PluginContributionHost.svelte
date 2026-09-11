@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { jiraDepartedInteractionEntrypoint, jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
   import { plugins, projects as projectsApi, tasks as tasksApi } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import { getAllTasks } from "../lib/task-store.svelte";
   import { openPluginModal, openProjectForm } from "../lib/plugin-modal-manager";
-  import type { PluginUiDisposer, PluginUiEntrypoint, PluginUiHost } from "../lib/plugin-sdk";
+  import type { PluginUiDisposer, PluginUiEntrypoint, PluginUiHost, PluginSessionContext } from "../lib/plugin-sdk";
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import { focusSidebar } from "../lib/focus.svelte";
   import type { PluginInventory, PluginUiContribution } from "../lib/types";
@@ -20,6 +21,8 @@
     onOpenPreferences?: () => void;
     onFailure?: (error: unknown) => void;
     autofocus?: boolean;
+    closeOnEscape?: boolean;
+    session?: PluginSessionContext;
   }
 
   type LocalPluginFrameMessage = {
@@ -30,6 +33,7 @@
     action?: string;
     pluginId?: string;
     contributionId?: string;
+    url?: string;
     registrationId?: string;
     rows?: Array<{ id?: unknown }>;
     rowId?: string;
@@ -40,9 +44,10 @@
     shiftKey?: boolean;
     kind?: "success" | "error";
     message?: string;
+    height?: number;
   };
 
-  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false }: Props = $props();
+  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session }: Props = $props();
   let container = $state<HTMLElement>();
   let disposer: PluginUiDisposer | null = null;
   let generation = 0;
@@ -137,9 +142,10 @@
   }
 
   function retry(): void {
+    const sessionContext = session;
     if (!container) return;
     const version = ++generation;
-    void mountContribution(container, version);
+    void mountContribution(container, version, sessionContext);
   }
 
   function showLoadFailure(root: ShadowRoot, error: unknown): void {
@@ -154,19 +160,24 @@
     if (contribution.placement.startsWith("sidebar.")) onFailure(error);
   }
 
-  function createLocalPluginFrame(root: ShadowRoot): PluginUiDisposer {
+  function createLocalPluginFrame(root: ShadowRoot, sessionContext?: PluginSessionContext): PluginUiDisposer {
+    const isTitlebar = contribution.placement === "titlebar";
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
     frame.className =
-      contribution.placement === "interaction" || contribution.placement === "main-pane"
+      contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
         ? "block h-full w-full border-0"
         : "block w-full border-0";
     frame.style.display = "block";
-    frame.style.width = "100%";
+    frame.style.width = isTitlebar ? "88px" : "100%";
     frame.style.border = "0";
-    if (contribution.placement === "interaction" || contribution.placement === "main-pane") {
+    if (isTitlebar) frame.style.backgroundColor = "transparent";
+    if (contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "titlebar") {
       frame.style.height = "100%";
+    } else if (contribution.placement === "session.panel") {
+      frame.style.height = "360px";
+      frame.style.outline = "none";
     }
     if (contribution.placement.startsWith("sidebar.")) {
       frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : "160px";
@@ -178,17 +189,48 @@
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'">
       <style id="planeai-plugin-theme">${localPluginThemeCss()}</style>
       <style id="planeai-plugin-base">${localPluginBaseCss}</style>
+      ${isTitlebar ? '<style id="planeai-plugin-titlebar">html,body{background:transparent}</style>' : ""}
       <script>
         let cleanup = null;
         let nextRequestId = 0;
         const pending = new Map();
         const registrations = new Map();
         const send = (message) => parent.postMessage(message, "*");
+        let sessionPanelContentObserver = null;
+        let contentHeightPending = false;
+        const reportSessionPanelContentHeight = () => {
+          if (contentHeightPending || !document.body) return;
+          contentHeightPending = true;
+          requestAnimationFrame(() => {
+            contentHeightPending = false;
+            const height = Math.max(
+              document.body.scrollHeight,
+              ...Array.from(document.body.children).map((child) => child.scrollHeight),
+            );
+            if (height > 0) send({ type: "content-height", height });
+          });
+        };
+        const observeSessionPanelContent = (contribution) => {
+          if (contribution?.placement !== "session.panel" || !document.body) return;
+          sessionPanelContentObserver?.disconnect();
+          sessionPanelContentObserver = new MutationObserver(reportSessionPanelContentHeight);
+          sessionPanelContentObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+          reportSessionPanelContentHeight();
+        };
         const request = (type, payload = {}) => new Promise((resolve, reject) => {
           const requestId = ++nextRequestId;
           pending.set(requestId, { resolve, reject });
           send({ type, requestId, ...payload });
         });
+        const closeOnEscape = ${closeOnEscape};
+        const forwardEscapeToHost = (event) => {
+          if (closeOnEscape && event.key === "Escape" && !event.defaultPrevented && !event.altKey && !event.ctrlKey && !event.metaKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            send({ type: "navigation", action: "close" });
+          }
+        };
+        addEventListener("keydown", forwardEscapeToHost);
         let sidebarKeydownRoutingEnabled = false;
         const sidebarNavigationKeys = new Set([
           "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "j", "k", "h", "l", "a", "r", "E", "e", "o", "R", "d", "s",
@@ -232,6 +274,7 @@
             open: (pluginId, contributionId) => send({ type: "navigation", action: "open", pluginId, contributionId }),
             close: () => send({ type: "navigation", action: "close" }),
             openPreferences: () => send({ type: "navigation", action: "preferences" }),
+            openExternal: (url) => send({ type: "navigation", action: "external", url }),
           },
           sidebar: {
             register: (rows) => {
@@ -283,6 +326,9 @@
           if (message.type === "dispose") {
             if (typeof cleanup === "function") cleanup();
             cleanup = null;
+            sessionPanelContentObserver?.disconnect();
+            sessionPanelContentObserver = null;
+            removeEventListener("keydown", forwardEscapeToHost);
             return;
           }
           if (message.type !== "init") return;
@@ -293,7 +339,8 @@
             URL.revokeObjectURL(url);
             const entrypoint = module.default || module.pluginEntrypoint;
             if (!entrypoint || typeof entrypoint.mount !== "function") throw new Error("local UI bundle must default-export a PluginUiEntrypoint");
-            cleanup = entrypoint.mount(document.body, { plugin: message.plugin, contribution: message.contribution, host });
+            cleanup = entrypoint.mount(document.body, { plugin: message.plugin, contribution: message.contribution, session: message.session, host });
+            observeSessionPanelContent(message.contribution);
             send({ type: "mounted" });
           } catch (error) {
             send({ type: "load-error", message: String(error) });
@@ -301,6 +348,11 @@
         });
       </scr${"ipt"}>`;
 
+    const focusFrame = (): void => {
+      requestAnimationFrame(() => {
+        if (frame.isConnected) frame.focus();
+      });
+    };
     const refreshTheme = (): void => {
       frame.contentWindow?.postMessage({ type: "theme", css: localPluginThemeCss() }, "*");
     };
@@ -333,6 +385,10 @@
       if (event.source !== frame.contentWindow) return;
       const message = event.data;
       if (!message || typeof message.type !== "string") return;
+      if (message.type === "mounted") {
+        if (autofocus) focusFrame();
+        return;
+      }
       if (message.type === "call" && typeof message.method === "string") {
         void callPlugin(message.method, message.params)
           .then((value) => respond(message.requestId, true, value))
@@ -369,11 +425,22 @@
           .dataChanged(plugin.id)
           .then((value) => respond(message.requestId, true, value))
           .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "content-height" && contribution.placement === "session.panel" && typeof message.height === "number" && Number.isFinite(message.height)) {
+        frame.style.height = `${Math.min(Math.max(Math.ceil(message.height), 1), 10_000)}px`;
       } else if (message.type === "navigation") {
         if (message.action === "open" && message.pluginId && message.contributionId) {
           onNavigate(message.pluginId, message.contributionId);
         } else if (message.action === "close") onClose();
         else if (message.action === "preferences") onOpenPreferences();
+        else if (message.action === "external" && typeof message.url === "string") {
+          try {
+            const url = new URL(message.url);
+            if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("only http(s) URLs are supported");
+            void openUrl(url.toString()).catch((error) => showSnackbar(`Failed to open URL: ${String(error)}`));
+          } catch (error) {
+            showSnackbar(`Invalid plugin URL: ${String(error)}`);
+          }
+        }
       } else if (message.type === "notify" && typeof message.message === "string") {
         const notification = message.message.trim();
         if (notification) showSnackbar(notification, message.kind ?? "error");
@@ -413,9 +480,10 @@
       void plugins
         .localUiSource(plugin.id, contribution.id)
         .then((source) => {
-          const context = JSON.parse(JSON.stringify({ plugin, contribution })) as {
+          const context = JSON.parse(JSON.stringify({ plugin, contribution, session: sessionContext })) as {
             plugin: PluginInventory;
             contribution: PluginUiContribution;
+            session?: PluginSessionContext;
           };
           frame.contentWindow?.postMessage({ type: "init", source, ...context }, "*");
         })
@@ -425,6 +493,7 @@
     window.addEventListener("message", onMessage);
     frame.addEventListener("load", initialise, { once: true });
     root.replaceChildren(frame);
+    if (autofocus) focusFrame();
     return () => {
       if (refreshLocalPluginTheme === refreshTheme) refreshLocalPluginTheme = null;
       window.removeEventListener("message", onMessage);
@@ -435,7 +504,7 @@
     };
   }
 
-  async function mountContribution(target: HTMLElement, version: number): Promise<void> {
+  async function mountContribution(target: HTMLElement, version: number, sessionContext?: PluginSessionContext): Promise<void> {
     disposeCurrent();
     const root = target.shadowRoot ?? target.attachShadow({ mode: "open" });
     if (plugin.state !== "running") {
@@ -444,7 +513,7 @@
     }
     try {
       if (plugin.source_kind !== "builtin") {
-        const cleanup = createLocalPluginFrame(root);
+        const cleanup = createLocalPluginFrame(root, sessionContext);
         if (version !== generation) {
           cleanup();
           return;
@@ -479,7 +548,20 @@
             return plugins.updateSettings<T>(plugin.id, settings);
           },
         },
-        navigation: { open: onNavigate, close: onClose, openPreferences: onOpenPreferences },
+        navigation: {
+          open: onNavigate,
+          close: onClose,
+          openPreferences: onOpenPreferences,
+          openExternal: (url) => {
+            try {
+              const parsed = new URL(url);
+              if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("only http(s) URLs are supported");
+              void openUrl(parsed.toString()).catch((error) => showSnackbar(`Failed to open URL: ${String(error)}`));
+            } catch (error) {
+              showSnackbar(`Invalid plugin URL: ${String(error)}`);
+            }
+          },
+        },
         sidebar: {
           register: (rows) => registerPluginSidebarContribution(`${plugin.id}:${contribution.id}`, rows),
           select: (rowId) => {
@@ -525,7 +607,7 @@
         openModal: openPluginModal,
         openProjectForm,
       };
-      const cleanup = entrypoint.mount(root, { plugin, contribution, host });
+      const cleanup = entrypoint.mount(root, { plugin, contribution, session: sessionContext, host });
       if (typeof cleanup !== "function") {
         throw new Error("plugin UI entrypoint mount must return a disposer function");
       }
@@ -542,9 +624,10 @@
   }
 
   $effect(() => {
+    const sessionContext = session;
     if (!container) return;
     const version = ++generation;
-    void mountContribution(container, version);
+    void mountContribution(container, version, sessionContext);
     return () => {
       if (generation === version) generation += 1;
       disposeCurrent();
@@ -564,7 +647,7 @@
     const refreshTheme = (): void => refreshLocalPluginTheme?.();
     window.addEventListener("planeai-theme-changed", refreshTheme);
     void listen<string>("plugin-data-changed", (event) => {
-      if (event.payload !== plugin.id || !["sidebar.section", "interaction"].includes(contribution.placement)) return;
+      if (event.payload !== plugin.id || !["sidebar.section", "interaction", "session.panel"].includes(contribution.placement)) return;
       if (plugin.source_kind === "builtin" && dataChangeListeners.size > 0) {
         notify(dataChangeListeners);
       } else {
@@ -598,7 +681,7 @@
       ? plugin.source_kind === "builtin"
         ? "pointer-events-none"
         : "h-full w-full pointer-events-auto"
-      : contribution.placement === "main-pane"
+      : contribution.placement === "main-pane" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
         ? "h-full w-full"
         : "w-full"
   }

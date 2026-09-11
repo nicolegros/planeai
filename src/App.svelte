@@ -9,6 +9,7 @@
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
   import { installKeyboardRouter, matchChord, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT } from "./lib/keyboard";
+  import { findPluginShortcut } from "./lib/plugin-shortcuts";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { computeSidebarSessionOrder, isLoopId, parseLoopId } from "./lib/sidebar-session-order";
@@ -42,10 +43,10 @@
   import LoopForm from "./components/LoopForm.svelte";
   import LoopDashboard from "./components/LoopDashboard.svelte";
   import PluginContributionHost from "./components/PluginContributionHost.svelte";
-  import type { PluginInventory, PluginUiContribution } from "./lib/types";
+  import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
-  import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
+  import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { getTabs, getActiveTabIndex, addTab } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, touchMru } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
@@ -74,10 +75,13 @@
   let activePluginId = $state<string | null>(null);
   let activeContributionId = $state<string | null>(null);
   let pluginInventory = $state<import("./lib/types").PluginInventory[]>([]);
+  let pluginSessionActions = $state<PluginSessionAction[]>([]);
 
   // PR form state
   let showPrForm = $state(false);
   let showPrPanel = $state(false);
+  let modalPluginId = $state<string | null>(null);
+  let modalContributionId = $state<string | null>(null);
   let prTitle = $state("");
   let prBody = $state("");
   let prBaseBranch = $state("");
@@ -212,9 +216,20 @@
   const symphonyStatus = $derived(orchestrator.getSymphonyStatus());
   const zone = $derived(getActiveZone());
   const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
+  const activePluginSessionContext = $derived(activeSession ? {
+    id: activeSession.id,
+    projectId: activeSession.project_id,
+    branch: activeSession.branch,
+    baseBranch: activeSession.base_branch,
+    status: activeSession.status,
+    provider: activeSession.provider,
+    taskKey: activeSession.task_key,
+  } : undefined);
   const activeLoopId = $derived(loopStore.getActiveLoopId());
   const activePlugin = $derived(pluginInventory.find((plugin) => plugin.id === activePluginId) ?? null);
   const activeContribution = $derived(activePlugin?.ui_contributions.find((contribution) => contribution.id === activeContributionId) ?? null);
+  const modalPlugin = $derived(pluginInventory.find((plugin) => plugin.id === modalPluginId) ?? null);
+  const modalContribution = $derived(modalPlugin?.ui_contributions.find((contribution) => contribution.id === modalContributionId) ?? null);
   const comparePluginContribution = (left: { plugin: PluginInventory; contribution: PluginUiContribution }, right: { plugin: PluginInventory; contribution: PluginUiContribution }) =>
     (left.contribution.order ?? 0) - (right.contribution.order ?? 0) || left.plugin.name.localeCompare(right.plugin.name) || left.plugin.id.localeCompare(right.plugin.id) || left.contribution.id.localeCompare(right.contribution.id);
   const sidebarPluginContributions = $derived(
@@ -227,6 +242,21 @@
       plugin.ui_contributions.filter((contribution) => contribution.placement === "main-pane").map((contribution) => ({ plugin, contribution })),
     ).sort(comparePluginContribution),
   );
+  const sessionPanelCommands = $derived(
+    activeSession
+      ? pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+          plugin.ui_contributions.filter((contribution) => contribution.placement === "session.panel").map((contribution) => ({ plugin, contribution })),
+        ).sort(comparePluginContribution)
+      : [],
+  );
+  const titlebarContributions = $derived(
+    activeSession
+      ? pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+          plugin.ui_contributions.filter((contribution) => contribution.placement === "titlebar").map((contribution) => ({ plugin, contribution })),
+        ).sort(comparePluginContribution)
+      : [],
+  );
+  const pluginCommands = $derived([...mainPaneCommands, ...sessionPanelCommands]);
   const interactionPluginContributions = $derived(
     pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
       plugin.ui_contributions.filter((contribution) => contribution.placement === "interaction").map((contribution) => ({ plugin, contribution })),
@@ -809,6 +839,26 @@
     activeContributionId = null;
   }
 
+  function closePluginContributionModal(): void {
+    modalPluginId = null;
+    modalContributionId = null;
+    tick().then(() => refocusTerminal());
+  }
+
+  function openPluginContributionModal(pluginId: string, contributionId: string): void {
+    const plugin = pluginInventory.find((candidate) => candidate.id === pluginId && candidate.state === "running");
+    const contribution = plugin?.ui_contributions.find((candidate) =>
+      candidate.id === contributionId && candidate.placement === "session.panel",
+    );
+    if (!plugin || !contribution || !activeSession) {
+      showSnackbar("Plugin contribution is unavailable for the selected session");
+      return;
+    }
+    leavePluginWorkspace();
+    modalPluginId = pluginId;
+    modalContributionId = contributionId;
+  }
+
   function focusPluginInteraction(): boolean {
     const interaction = document.querySelector<HTMLElement>("[data-plugin-interaction-host] [data-plugin-ui-contribution]");
     if (!interaction) return false;
@@ -820,11 +870,49 @@
     if (activePluginId === pluginId) leavePluginWorkspace();
   }
 
+  async function runPluginSessionAction(session: Session, action: PluginSessionAction): Promise<void> {
+    try {
+      await pluginsApi.call(action.plugin_id, "plugin.sessionAction", {
+        action_id: action.id,
+        session_id: session.id,
+      });
+    } catch (error) {
+      showSnackbar(`Integration action failed: ${String(error)}`);
+    }
+  }
+
+  function showIntegrationCompletionPrompt(session: Session, message: string): void {
+    showMergePrompt({
+      sessionId: session.id,
+      sessionName: session.name || session.branch,
+      taskKey: session.task_key,
+      message,
+      onArchive: (id) => {
+        const found = sessions.find((candidate) => candidate.id === id);
+        return found ? orchestrator.archiveSession(found) : Promise.resolve();
+      },
+      onDestroy: (id) => {
+        const found = sessions.find((candidate) => candidate.id === id);
+        return found ? orchestrator.deleteSession(found) : Promise.resolve();
+      },
+      onTaskDone: session.task_key
+        ? async (id) => {
+            const found = sessions.find((candidate) => candidate.id === id);
+            if (!found?.task_key) return;
+            const project = projects.find((candidate) => candidate.id === found.project_id);
+            if (project) await taskStore.moveTask(found.task_key, "done", project.path);
+          }
+        : undefined,
+    });
+  }
+
   function openPluginContribution(pluginId: string, contributionId: string): void {
     const plugin = pluginInventory.find((candidate) => candidate.id === pluginId && candidate.state === "running");
-    const contribution = plugin?.ui_contributions.find((candidate) => candidate.id === contributionId && candidate.placement === "main-pane");
-    if (!plugin || !contribution) {
-      showSnackbar("Plugin main-pane contribution is unavailable");
+    const contribution = plugin?.ui_contributions.find((candidate) =>
+      candidate.id === contributionId && ["main-pane", "session.panel"].includes(candidate.placement),
+    );
+    if (!plugin || !contribution || (contribution.placement === "session.panel" && !activeSession)) {
+      showSnackbar("Plugin contribution is unavailable for the selected session");
       return;
     }
     if (activePluginId === pluginId && activeContributionId === contributionId) return;
@@ -884,19 +972,50 @@
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
     const unlistenPluginRuntime = listen<import("./lib/types").PluginInventory>("plugin-runtime-changed", (event) => {
       pluginInventory = pluginInventory.filter((plugin) => plugin.id !== event.payload.id).concat(event.payload);
-      if (event.payload.state !== "running") invalidatePluginPage(event.payload.id);
+      if (event.payload.state !== "running") {
+        pluginSessionActions = pluginSessionActions.filter((action) => action.plugin_id !== event.payload.id);
+        invalidatePluginPage(event.payload.id);
+      }
+    });
+    const unlistenPluginActions = listen<{ plugin_id: string; actions: PluginSessionAction[] }>("plugin-session-actions", (event) => {
+      const { plugin_id: pluginId, actions } = event.payload;
+      if (!pluginInventory.some((plugin) => plugin.id === pluginId)) return;
+      pluginSessionActions = pluginSessionActions
+        .filter((action) => action.plugin_id !== pluginId)
+        .concat(actions.map((action) => ({ ...action, plugin_id: pluginId })));
+    });
+    const unlistenPluginAdvisory = listen<{ plugin_id: string; advisory: PluginSessionAdvisory }>("plugin-session-advisory", (event) => {
+      const { plugin_id: pluginId, advisory } = event.payload;
+      if (!sessions.some((session) => session.id === advisory.session_id)) return;
+      const pluginName = pluginInventory.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
+      showSnackbar(`${pluginName}: ${advisory.message}`, advisory.severity);
+    });
+    const unlistenPluginCompletion = listen<{ plugin_id: string; completion: PluginSessionCompletion }>("plugin-session-completed", (event) => {
+      const session = sessions.find((candidate) => candidate.id === event.payload.completion.session_id);
+      if (!session) return;
+      const pluginName = pluginInventory.find((plugin) => plugin.id === event.payload.plugin_id)?.name ?? event.payload.plugin_id;
+      showIntegrationCompletionPrompt(session, event.payload.completion.message ?? `${pluginName} completed`);
     });
 
     initUpdateListener();
     const onPluginShortcut = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !isPlatformMod(event) || matchChord(event)) return;
-      const key = /^Key[A-Z]$/.test(event.code) ? event.code.slice(3) : event.key.toUpperCase();
-      const parts = ["Mod", ...(event.shiftKey ? ["Shift"] : []), ...(event.altKey ? ["Alt"] : []), key];
-      const shortcut = parts.join("+");
-      const target = mainPaneCommands.find(({ contribution }) => contribution.shortcut === shortcut);
-      if (target) { event.preventDefault(); openPluginContribution(target.plugin.id, target.contribution.id); }
+      if (event.defaultPrevented) return;
+      const target = findPluginShortcut(event, sessionPanelCommands, mainPaneCommands);
+      if (!target) return;
+      event.preventDefault();
+      if (target.contribution.placement === "session.panel") {
+        if (modalPluginId === target.plugin.id && modalContributionId === target.contribution.id) {
+          closePluginContributionModal();
+          return;
+        }
+        showPrPanel = false;
+        showPrForm = false;
+        openPluginContributionModal(target.plugin.id, target.contribution.id);
+        return;
+      }
+      openPluginContribution(target.plugin.id, target.contribution.id);
     };
-    window.addEventListener("keydown", onPluginShortcut);
+    window.addEventListener("keydown", onPluginShortcut, true);
 
     notify.isInstalled().then((installed) => { if (!installed) showHookPrompt = true; });
     sessionLogs.isEnabled().then((enabled) => { logViewerEnabled = enabled; });
@@ -922,7 +1041,7 @@
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
           if (navCycle.isCycling()) navCycle.cancel();
-          showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; showPrForm = false; showPrPanel = false; showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
+          showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; showPrForm = false; showPrPanel = false; closePluginContributionModal(); showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
@@ -966,7 +1085,7 @@
         }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
-      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !modalPluginId && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
       () => {
         const leaf = splitTree.getFocusedLeaf();
         return getActiveZone() === "editor" && !!leaf && splitTree.getActiveTabEntry(leaf)?.type === "editor";
@@ -1026,7 +1145,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { window.removeEventListener("keydown", onPluginShortcut); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { window.removeEventListener("keydown", onPluginShortcut, true); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -1053,6 +1172,9 @@
     }}
     onAddTab={() => orchestrator.handleNewTab()}
     onCreatePr={openPrForm}
+    {titlebarContributions}
+    titlebarSession={activePluginSessionContext}
+    onOpenTitlebarContribution={openPluginContributionModal}
     onOpenCommand={() => { commandMenuFileMode = false; commandMenuOpen = true; }}
     onTogglePrPanel={togglePrPanel}
     {symphonyStatus}
@@ -1084,6 +1206,8 @@
         selectedLoopId={activeLoopId}
         onToggleDiff={toggleDiffInTree}
         pluginContributions={sidebarPluginContributions}
+        pluginSessionActions={pluginSessionActions}
+        onPluginSessionAction={runPluginSessionAction}
         onPluginNavigate={openPluginContribution}
         onPluginClose={leavePluginWorkspace}
       />
@@ -1169,7 +1293,7 @@
       onSplitVertical={() => handleSplitAction("split_vertical")}
       onSplitHorizontal={() => handleSplitAction("split_horizontal")}
       onCloseSplit={() => handleSplitAction("close_split")}
-      pluginCommands={mainPaneCommands}
+      pluginCommands={pluginCommands}
       onOpenPluginContribution={openPluginContribution}
     />
 
@@ -1228,7 +1352,7 @@
                 <Terminal
                   sessionId={tabEntry.ptyKey}
                   visible={isActiveInLeaf && !activeLoopId && !activePluginId}
-                  focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
+                  focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel && !modalPluginId}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
                   onAttached={() => { if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
@@ -1308,7 +1432,7 @@
           <span class="text-sm font-medium text-t1">{activePlugin ? `${activePlugin.name} · ${activeContribution?.label ?? "Contribution"}` : "Plugin"}</span>
         </div>
         {#if activePlugin && activeContribution}
-          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} autofocus /></div>
+          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} session={activeContribution.placement === "session.panel" ? activePluginSessionContext : undefined} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} autofocus /></div>
         {:else}
           <div class="flex min-h-0 flex-1 items-center justify-center text-sm text-t3">Plugin contribution is no longer available.</div>
         {/if}
@@ -1563,6 +1687,32 @@
   </FormDialog>
 {/if}
 
+{#if modalPlugin && modalContribution && activePluginSessionContext}
+  <FormDialog
+    title={modalContribution.label}
+    class="min-h-[min(360px,85vh)]"
+    preventEscapeClose={false}
+    preventOpenAutoFocus={true}
+    onClose={closePluginContributionModal}
+  >
+    <div>
+      <PluginContributionHost
+        plugin={modalPlugin}
+        contribution={modalContribution}
+        session={activePluginSessionContext}
+        onNavigate={(pluginId, contributionId) => {
+          closePluginContributionModal();
+          openPluginContribution(pluginId, contributionId);
+        }}
+        onClose={closePluginContributionModal}
+        onOpenPreferences={openPreferences}
+        closeOnEscape={true}
+        autofocus={true}
+      />
+    </div>
+  </FormDialog>
+{/if}
+
 {#if showPrPanel && activeSession?.pr_url}
   <FormDialog title="Pull Request" onClose={() => { showPrPanel = false; tick().then(() => refocusTerminal()); }}>
     <PrPanel
@@ -1578,9 +1728,9 @@
 {#if getSnackbarMessage()}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="fixed bottom-4 left-4 z-[100] max-w-lg cursor-pointer rounded-lg {getSnackbarType() === 'error' ? 'bg-red-600' : 'bg-green-600'} px-4 py-3 shadow-lg" onclick={() => { navigator.clipboard.writeText(getSnackbarMessage()!); dismissSnackbar(); }} title="Click to copy and dismiss">
+  <div class="fixed bottom-4 left-4 z-[100] max-w-lg cursor-pointer rounded-lg {getSnackbarType() === 'error' ? 'bg-red-600' : getSnackbarType() === 'warning' ? 'bg-amber-600' : getSnackbarType() === 'info' ? 'bg-blue-600' : 'bg-green-600'} px-4 py-3 shadow-lg" onclick={() => { navigator.clipboard.writeText(getSnackbarMessage()!); dismissSnackbar(); }} title="Click to copy and dismiss">
     <p class="text-sm text-white font-mono break-all">{getSnackbarMessage()}</p>
-    <p class="text-xs {getSnackbarType() === 'error' ? 'text-red-200' : 'text-green-200'} mt-1">Click to dismiss</p>
+    <p class="text-xs {getSnackbarType() === 'error' ? 'text-red-200' : getSnackbarType() === 'warning' ? 'text-amber-100' : getSnackbarType() === 'info' ? 'text-blue-100' : 'text-green-200'} mt-1">Click to dismiss</p>
   </div>
 {/if}
 

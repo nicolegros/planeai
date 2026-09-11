@@ -10,6 +10,7 @@ mod daemon_client;
 mod db;
 mod file_explorer;
 mod git;
+mod github_migration;
 mod jira_migration;
 mod logging;
 mod lsp;
@@ -144,6 +145,8 @@ fn main() {
             let (cfg, _warnings) = config::load(&config_dir);
             jira_migration::initialize(&conn, &cfg)
                 .expect("failed to initialize Jira migration state");
+            github_migration::initialize(&conn, &app_dir)
+                .expect("failed to initialize GitHub migration state");
             if std::env::var("PLANEAI_SESSION_LOG_DIR").is_err() {
                 if let Some(ref dir) = cfg.session_log_dir {
                     std::env::set_var("PLANEAI_SESSION_LOG_DIR", dir);
@@ -415,6 +418,8 @@ fn main() {
             plugin_data_changed,
             jira_migration_status,
             migrate_legacy_jira,
+            github_migration_status,
+            migrate_legacy_github,
             enable_plugin,
             disable_plugin,
             reload_plugin,

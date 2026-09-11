@@ -1,6 +1,8 @@
 use tauri::State;
 
+use crate::commands::sessions::lifecycle::session_lifecycle_event;
 use crate::db;
+use crate::plugins::PluginRuntimeHandle;
 use crate::state::{ConfigState, DbState, NotifyHandle};
 
 use super::helpers::provider_has_hook;
@@ -95,14 +97,25 @@ pub fn restore_session(
     state: State<DbState>,
     notify: State<NotifyHandle>,
     config_state: State<ConfigState>,
+    runtime: State<PluginRuntimeHandle>,
     id: String,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let previous = db::get_session(&conn, &id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
 
     // Restart relaunches the agent process and sets status to active
     let ops = crate::session_restart::real_restart_ops();
     let session = crate::session_restart::restart(&conn, &id, &cfg, &ops)?;
+    runtime
+        .0
+        .dispatch_session_lifecycle(session_lifecycle_event(
+            &session,
+            &previous.status,
+            "active",
+        ));
 
     // Register in NotifyState when restoring
     let project_name = db::get_project(&conn, &session.project_id)
@@ -139,9 +152,26 @@ pub fn acknowledge_session(session_id: String, notify: State<NotifyHandle>) {
 }
 
 #[tauri::command]
-pub fn mark_exited(session_id: String, db_state: State<DbState>) -> Result<(), String> {
+pub fn mark_exited(
+    session_id: String,
+    db_state: State<DbState>,
+    runtime: State<PluginRuntimeHandle>,
+) -> Result<(), String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    db::mark_session_exited(&conn, &session_id).map_err(|e| e.to_string())
+    let previous = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+    db::mark_session_exited(&conn, &session_id).map_err(|e| e.to_string())?;
+    if previous.status != "exited" {
+        runtime
+            .0
+            .dispatch_session_lifecycle(session_lifecycle_event(
+                &previous,
+                &previous.status,
+                "exited",
+            ));
+    }
+    Ok(())
 }
 
 #[tauri::command]

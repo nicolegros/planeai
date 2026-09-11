@@ -10,16 +10,18 @@
     children: Snippet;
     class?: string;
     preventEscapeClose?: boolean;
+    preventOpenAutoFocus?: boolean;
   }
 
-  let { open, onOpenChange, title, description, children, class: className = "", preventEscapeClose = false }: Props = $props();
+  let { open, onOpenChange, title, description, children, class: className = "", preventEscapeClose = false, preventOpenAutoFocus = false }: Props = $props();
 </script>
 
 <Dialog.Root {open} {onOpenChange}>
   <Dialog.Portal>
     <Dialog.Content
-      class="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 max-h-[85vh] flex flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-lg {className}"
+      class="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 max-h-[85vh] flex flex-col overflow-hidden outline-none rounded-lg border border-border bg-panel shadow-lg {className}"
       onEscapeKeydown={(e) => { if (preventEscapeClose) e.preventDefault(); }}
+      onOpenAutoFocus={(e) => { if (preventOpenAutoFocus) e.preventDefault(); }}
       onInteractOutside={(e) => { if (preventEscapeClose) e.preventDefault(); }}
     >
       {#if title}

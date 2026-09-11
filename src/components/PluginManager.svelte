@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { plugins } from "../lib/api";
-  import type { JiraMigrationStatus, PluginInventory } from "../lib/types";
+  import type { GithubMigrationStatus, JiraMigrationStatus, PluginInventory } from "../lib/types";
   import { Button, Dialog } from "./ui";
 
   let { onInventoryChange = (_inventory: PluginInventory[]) => {} }: {
@@ -10,6 +11,7 @@
   } = $props();
   let inventory = $state<PluginInventory[]>([]);
   let jiraMigration = $state<JiraMigrationStatus | null>(null);
+  let githubMigration = $state<GithubMigrationStatus | null>(null);
   let busyId = $state<string | null>(null);
   let installing = $state(false);
   let loadError = $state<string | null>(null);
@@ -17,17 +19,24 @@
 
   async function refresh() {
     try {
-      const [nextInventory, migration] = await Promise.all([
+      const [nextInventory, jiraStatus, githubStatus] = await Promise.all([
         plugins.list(),
         plugins.jiraMigrationStatus(),
+        plugins.githubMigrationStatus(),
       ]);
       inventory = nextInventory;
-      jiraMigration = migration;
+      jiraMigration = jiraStatus;
+      githubMigration = githubStatus;
       onInventoryChange(inventory);
       loadError = null;
     } catch (error) {
       loadError = String(error);
     }
+  }
+
+  function migrationBlocksEnable(pluginId: string): boolean {
+    const migration = pluginId === "jira" ? jiraMigration : pluginId === "github" ? githubMigration : null;
+    return migration !== null && migration.state !== "not_needed" && migration.state !== "completed";
   }
 
   async function installLocal() {
@@ -89,8 +98,28 @@
     }
   }
 
+  async function migrateLegacyGithub() {
+    busyId = "github";
+    try {
+      githubMigration = await plugins.migrateLegacyGithub();
+      await refresh();
+    } catch (error) {
+      loadError = String(error);
+      await refresh();
+    } finally {
+      busyId = null;
+    }
+  }
 
-  onMount(() => { void refresh(); });
+  onMount(() => {
+    const unlistenGithubMigration = listen<GithubMigrationStatus>("github-migration-changed", (event) => {
+      githubMigration = event.payload;
+    });
+    void refresh();
+    return () => {
+      void unlistenGithubMigration.then((unlisten) => unlisten());
+    };
+  });
 </script>
 
 <section class="space-y-3">
@@ -107,6 +136,32 @@
 
   {#if loadError}
     <p class="rounded border border-status-exited/30 bg-status-exited/10 p-3 text-xs text-status-exited">{loadError}</p>
+  {/if}
+
+  {#if githubMigration && githubMigration.state !== "not_needed"}
+    <section class="rounded border border-status-review/30 bg-status-review/10 p-3 space-y-2" aria-live="polite">
+      <div>
+        <h3 class="text-xs font-medium text-t1">Migrate existing GitHub pull request state</h3>
+        <p class="mt-1 text-xs text-t2">{githubMigration.message}</p>
+        <p class="mt-1 text-[11px] text-t3">Migration imports URL-backed legacy pull request mappings. State-only legacy values are safely skipped because the GitHub plugin requires a pull request URL.</p>
+        <p class="mt-1 text-[11px] text-t3">Migration does not install or enable the local GitHub plugin. After it completes, install the local package and enable it normally.</p>
+      </div>
+      {#if githubMigration.error}
+        <p class="text-xs text-status-exited break-words">{githubMigration.error}</p>
+      {/if}
+      {#if githubMigration.skipped_state_only > 0}
+        <p class="text-xs text-t3">Skipped {githubMigration.skipped_state_only} state-only legacy {githubMigration.skipped_state_only === 1 ? "entry" : "entries"}.</p>
+      {/if}
+      {#if githubMigration.can_migrate}
+        <Button type="button" disabled={busyId === "github"} onclick={() => void migrateLegacyGithub()}>
+          {busyId === "github" ? "Migrating…" : githubMigration.state === "failed" ? "Retry GitHub migration" : "Migrate GitHub pull request state"}
+        </Button>
+      {:else if githubMigration.state === "importing"}
+        <p class="text-xs text-t3">Migration is fenced until its current operation finishes or the app is restarted.</p>
+      {:else if githubMigration.state === "completed"}
+        <p class="text-xs text-t3">Migration is complete. Install the local GitHub plugin, then enable it normally.</p>
+      {/if}
+    </section>
   {/if}
 
   {#each inventory as plugin (plugin.id)}
@@ -153,7 +208,7 @@
         <p class="text-xs text-t3">Contributions: {plugin.ui_contributions.map((contribution) => `${contribution.label} (${contribution.placement})`).join(", ")}</p>
       {/if}
       <div class="flex flex-wrap gap-2">
-        {#if (plugin.state === "disabled" || plugin.state === "error") && !(plugin.id === "jira" && jiraMigration && jiraMigration.state !== "not_needed" && jiraMigration.state !== "completed")}
+        {#if (plugin.state === "disabled" || plugin.state === "error") && !migrationBlocksEnable(plugin.id)}
           <Button type="button" disabled={busyId === plugin.id} onclick={() => void run(plugin.id, "enable")}>
             {busyId === plugin.id ? "Starting…" : "Enable"}
           </Button>
@@ -163,7 +218,7 @@
           </Button>
           <Button type="button" disabled={busyId === plugin.id} onclick={() => void run(plugin.id, "disable")}>Disable</Button>
         {:else}
-          <span class="text-xs text-t3">{plugin.state === "starting" ? "Starting plugin…" : "Stopping plugin…"}</span>
+          <span class="text-xs text-t3">{migrationBlocksEnable(plugin.id) ? "Migration required before enabling this plugin." : plugin.state === "starting" ? "Starting plugin…" : "Stopping plugin…"}</span>
         {/if}
         {#if plugin.source_kind === "local"}
           <button

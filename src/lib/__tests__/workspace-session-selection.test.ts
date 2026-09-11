@@ -25,11 +25,54 @@ describe("workspace session selection", () => {
       /\{#if activePluginId\}\s*<div class="flex h-full flex-col bg-main">[\s\S]*?<div class="min-h-0 flex-1">\s*<PluginContributionHost/,
     );
   });
+
+  it("derives running titlebar contributions independently from session-panel commands", () => {
+    expect(appSource).toMatch(
+      /const titlebarContributions = \$derived\([\s\S]*?contribution\.placement === "titlebar"/,
+    );
+    expect(appSource).toMatch(
+      /<Titlebar[\s\S]*?\{titlebarContributions\}[\s\S]*?titlebarSession=\{activePluginSessionContext\}[\s\S]*?onOpenTitlebarContribution=\{openPluginContributionModal\}/,
+    );
+  });
+
+  it("routes an active session-panel plugin shortcut before the legacy PR fallback", () => {
+    expect(appSource).toMatch(
+      /findPluginShortcut\(event, sessionPanelCommands, mainPaneCommands\)/,
+    );
+    expect(appSource).toMatch(
+      /window\.addEventListener\("keydown", onPluginShortcut, true\)/,
+    );
+    expect(appSource).toMatch(
+      /target\.contribution\.placement === "session\.panel"[\s\S]*?showPrPanel = false;[\s\S]*?openPluginContributionModal\(target\.plugin\.id, target\.contribution\.id\)/,
+    );
+  });
+
+  it("opens only a titlebar navigation target session panel in the generic modal", () => {
+    expect(appSource).toMatch(
+      /function openPluginContributionModal\(pluginId: string, contributionId: string\): void \{[\s\S]*?candidate\.placement === "session\.panel"[\s\S]*?modalPluginId = pluginId;/,
+    );
+    expect(appSource).toMatch(
+      /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?title=\{modalContribution\.label\}[\s\S]*?preventEscapeClose=\{false\}[\s\S]*?<PluginContributionHost[\s\S]*?session=\{activePluginSessionContext\}[\s\S]*?closeOnEscape=\{true\}/,
+    );
+  });
 });
 
 it("ignores a previous terminal's focus event after a session switch", () => {
   expect(appSource).toMatch(
     /onFocused=\{\(event\) => \{\s*if \(event\.type === "focusin" && sessionId !== activeSessionId\) return;/,
+  );
+});
+
+it("allows a session-panel modal to use its contribution's reported content height", () => {
+  expect(appSource).not.toContain('class="h-[min(78vh,720px)]"');
+  expect(appSource).toMatch(
+    /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?title=\{modalContribution\.label\}[\s\S]*?class="min-h-\[min\(360px,85vh\)\]"[\s\S]*?preventEscapeClose=\{false\}[\s\S]*?<div>\s*<PluginContributionHost/,
+  );
+});
+
+it("reserves initial modal focus for the session-panel plugin iframe", () => {
+  expect(appSource).toMatch(
+    /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?preventOpenAutoFocus=\{true\}[\s\S]*?<PluginContributionHost[\s\S]*?autofocus=\{true\}/,
   );
 });
 
