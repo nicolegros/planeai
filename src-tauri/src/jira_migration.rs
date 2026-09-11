@@ -972,6 +972,7 @@ mod tests {
                     }
                 })),
             }),
+            language_servers: None,
         }
     }
 
