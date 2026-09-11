@@ -14,7 +14,7 @@
   import { loadTheme } from "../lib/theme-loader";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { Select, Input, Button, Dialog } from "./ui";
-  import { Palette, Bot, ListTodo, Settings, RefreshCw, Puzzle } from "@lucide/svelte";
+  import { Palette, Bot, ListTodo, Settings, RefreshCw, Puzzle, Code } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
   import type { PluginInventory, PluginUiContribution } from "../lib/types";
   import PluginManager from "./PluginManager.svelte";
@@ -298,7 +298,7 @@
 
 <div class="h-screen flex flex-col overflow-hidden bg-panel">
   <nav class="flex justify-center gap-1 border-b border-border px-8 pt-4">
-    {#each [{name: "Appearance", icon: Palette}, {name: "Models", icon: Bot}, {name: "Task Management", icon: ListTodo}, {name: "Plugins", icon: Puzzle}, {name: "More", icon: Settings}] as tab (tab.name)}
+    {#each [{name: "Appearance", icon: Palette}, {name: "Models", icon: Bot}, {name: "Task Management", icon: ListTodo}, {name: "Plugins", icon: Puzzle}, {name: "Editor", icon: Code}, {name: "More", icon: Settings}] as tab (tab.name)}
       <button
         class="flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium transition-colors border-b-2 -mb-px {activeTab === tab.name ? 'border-accent text-accent' : 'border-transparent text-t3 hover:text-t1'}"
         onclick={() => activeTab = tab.name}
@@ -629,6 +629,61 @@
     </section>
     {/if}
 
+    {#if activeTab === "Editor"}
+    <section class="space-y-3">
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Language Server Settings</h2>
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm text-t1">Enable code intelligence</p>
+          <p class="text-xs text-t3">Starts trusted servers automatically for supported files. PlaneAI never installs a server or runs repository-provided commands.</p>
+        </div>
+        <button
+          class="w-10 h-5 rounded-full transition-colors {lspEnabled ? 'bg-accent' : 'bg-panel-hi'}"
+          onclick={() => setLspEnabled(!lspEnabled)}
+          role="switch"
+          aria-checked={lspEnabled}
+          aria-label="Toggle language servers"
+        >
+          <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {lspEnabled ? 'translate-x-5' : 'translate-x-0.5'}"></span>
+        </button>
+      </div>
+      <p class="text-xs text-t2">Built in: TypeScript/JavaScript/JSON, Rust, Python, Go, and C/C++. Custom profiles are trusted commands from your PlaneAI config only.</p>
+      <div class="rounded-lg border border-border divide-y divide-border">
+        <div class="flex items-center justify-between gap-3 p-3">
+          <div>
+            <p class="text-sm text-t1">Custom profiles</p>
+            <p class="text-xs text-t3">Override built-in discovery for file extensions. Changes apply to newly opened editor files.</p>
+          </div>
+          <Button type="button" onclick={() => openLanguageServerProfile()}>Add profile</Button>
+        </div>
+        {#if languageServerProfiles.length === 0}
+          <p class="p-3 text-xs text-t3">No custom profiles configured.</p>
+        {:else}
+          {#each languageServerProfiles as profile (profile.id)}
+            <div class="flex items-center gap-3 p-3">
+              <button
+                class="w-9 h-5 shrink-0 rounded-full transition-colors {profile.enabled !== false ? 'bg-accent' : 'bg-panel-hi'}"
+                onclick={() => setLanguageServerProfileEnabled(profile.id, profile.enabled === false)}
+                role="switch"
+                aria-checked={profile.enabled !== false}
+                aria-label={`Toggle ${profile.id} language server`}
+              ><span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {profile.enabled !== false ? 'translate-x-4' : 'translate-x-0.5'}"></span></button>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-medium text-t1">{profile.id}</p>
+                <p class="truncate font-mono text-[11px] text-t3">{profile.command}{profile.args?.length ? ` ${profile.args.join(" ")}` : ""}</p>
+                <p class="text-[11px] text-t3">{profile.language_id} · {(profile.extensions ?? []).map((extension) => `.${extension}`).join(", ")}</p>
+              </div>
+              <div class="flex shrink-0 gap-2">
+                <button class="text-xs text-t2 hover:text-accent" onclick={() => openLanguageServerProfile(profile)}>Edit</button>
+                <button class="text-xs text-red-500 hover:text-red-700" onclick={() => removeLanguageServerProfile(profile.id)}>Remove</button>
+              </div>
+            </div>
+          {/each}
+        {/if}
+      </div>
+    </section>
+    {/if}
+
     {#if activeTab === "More"}
     <section class="space-y-3">
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Config File</h2>
@@ -681,59 +736,6 @@
         >
           <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {vimEnabled ? 'translate-x-5' : 'translate-x-0.5'}"></span>
         </button>
-      </div>
-    </section>
-
-    <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Language Servers</h2>
-      <div class="flex items-center justify-between">
-        <div>
-          <p class="text-sm text-t1">Enable code intelligence</p>
-          <p class="text-xs text-t3">Starts trusted servers automatically for supported files. PlaneAI never installs a server or runs repository-provided commands.</p>
-        </div>
-        <button
-          class="w-10 h-5 rounded-full transition-colors {lspEnabled ? 'bg-accent' : 'bg-panel-hi'}"
-          onclick={() => setLspEnabled(!lspEnabled)}
-          role="switch"
-          aria-checked={lspEnabled}
-          aria-label="Toggle language servers"
-        >
-          <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {lspEnabled ? 'translate-x-5' : 'translate-x-0.5'}"></span>
-        </button>
-      </div>
-      <p class="text-xs text-t2">Built in: TypeScript/JavaScript/JSON, Rust, Python, Go, and C/C++. Custom profiles are trusted commands from your PlaneAI config only.</p>
-      <div class="rounded-lg border border-border divide-y divide-border">
-        <div class="flex items-center justify-between gap-3 p-3">
-          <div>
-            <p class="text-sm text-t1">Custom profiles</p>
-            <p class="text-xs text-t3">Override built-in discovery for file extensions. Changes apply to newly opened editor files.</p>
-          </div>
-          <Button type="button" onclick={() => openLanguageServerProfile()}>Add profile</Button>
-        </div>
-        {#if languageServerProfiles.length === 0}
-          <p class="p-3 text-xs text-t3">No custom profiles configured.</p>
-        {:else}
-          {#each languageServerProfiles as profile (profile.id)}
-            <div class="flex items-center gap-3 p-3">
-              <button
-                class="w-9 h-5 shrink-0 rounded-full transition-colors {profile.enabled !== false ? 'bg-accent' : 'bg-panel-hi'}"
-                onclick={() => setLanguageServerProfileEnabled(profile.id, profile.enabled === false)}
-                role="switch"
-                aria-checked={profile.enabled !== false}
-                aria-label={`Toggle ${profile.id} language server`}
-              ><span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {profile.enabled !== false ? 'translate-x-4' : 'translate-x-0.5'}"></span></button>
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-sm font-medium text-t1">{profile.id}</p>
-                <p class="truncate font-mono text-[11px] text-t3">{profile.command}{profile.args.length ? ` ${profile.args.join(" ")}` : ""}</p>
-                <p class="text-[11px] text-t3">{profile.language_id} · {profile.extensions.map((extension) => `.${extension}`).join(", ")}</p>
-              </div>
-              <div class="flex shrink-0 gap-2">
-                <button class="text-xs text-t2 hover:text-accent" onclick={() => openLanguageServerProfile(profile)}>Edit</button>
-                <button class="text-xs text-red-500 hover:text-red-700" onclick={() => removeLanguageServerProfile(profile.id)}>Remove</button>
-              </div>
-            </div>
-          {/each}
-        {/if}
       </div>
     </section>
 

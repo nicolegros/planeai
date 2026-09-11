@@ -60,4 +60,21 @@ describe("language-server profiles", () => {
       enabled: true,
     });
   });
+
+  it("accepts profiles whose empty arrays were omitted during serialization", () => {
+    expect(languageServerProfileDraft({
+      id: "local-rust-analyzer",
+      language_id: "rust",
+      extensions: ["rs"],
+      command: "rust-analyzer",
+    })).toEqual({
+      id: "local-rust-analyzer",
+      languageId: "rust",
+      extensions: "rs",
+      command: "rust-analyzer",
+      args: "",
+      enabled: true,
+    });
+  });
+
 });

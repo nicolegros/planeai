@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
+import type { AppConfig } from "../../lib/settings.svelte";
 
 const mocks = vi.hoisted(() => ({
   updateSettings: vi.fn(),
@@ -61,7 +62,7 @@ describe("PreferencesPage language servers", () => {
     const component = mount(PreferencesPage, { target });
     await tick();
 
-    Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.trim() === "More")?.click();
+    Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.trim() === "Editor")?.click();
     await tick();
     Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.trim() === "Add profile")?.click();
     await tick();
@@ -88,6 +89,30 @@ describe("PreferencesPage language servers", () => {
         }],
       },
     });
+
+    unmount(component);
+  });
+
+  it("renders a saved profile whose empty args were omitted during serialization", async () => {
+    const config = mocks.config as AppConfig;
+    config.language_servers = {
+      profiles: [{
+        id: "local-rust-analyzer",
+        language_id: "rust",
+        extensions: ["rs"],
+        command: "rust-analyzer",
+      }],
+    };
+    const target = document.body.appendChild(document.createElement("div"));
+    const component = mount(PreferencesPage, { target });
+    await tick();
+
+    Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.trim() === "Editor")?.click();
+    await tick();
+
+    expect(document.body.textContent).toContain("Language Server Settings");
+    expect(document.body.textContent).toContain("local-rust-analyzer");
+    expect(document.body.textContent).toContain("rust-analyzer");
 
     unmount(component);
   });

@@ -30,9 +30,9 @@ export function languageServerProfileDraft(
   return {
     id: profile.id,
     languageId: profile.language_id,
-    extensions: profile.extensions.join(", "),
+    extensions: (profile.extensions ?? []).join(", "),
     command: profile.command,
-    args: profile.args.join("\n"),
+    args: (profile.args ?? []).join("\n"),
     enabled: profile.enabled !== false,
   };
 }

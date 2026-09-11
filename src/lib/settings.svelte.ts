@@ -43,9 +43,10 @@ export interface TaskManager {
 export interface LanguageServerProfile {
   id: string;
   language_id: string;
-  extensions: string[];
+  // Empty arrays are omitted by the Rust config serializer.
+  extensions?: string[];
   command: string;
-  args: string[];
+  args?: string[];
   enabled?: boolean | null;
 }
 
