@@ -14,6 +14,28 @@ pub use branch::*;
 pub use commits::*;
 pub use diff::*;
 
+/// Context for running git commands. When `wsl` is set, commands run inside
+/// the specified WSL distro via `wsl.exe`.
+#[derive(Debug, Clone, Default)]
+pub struct GitContext {
+    /// When set, git commands run inside this WSL distro.
+    pub wsl_distro: Option<String>,
+}
+
+impl GitContext {
+    /// Create a context for running git natively (no WSL).
+    pub fn native() -> Self {
+        Self { wsl_distro: None }
+    }
+
+    /// Create a context for running git inside a WSL distro.
+    pub fn wsl(distro: &str) -> Self {
+        Self {
+            wsl_distro: Some(distro.to_string()),
+        }
+    }
+}
+
 /// Create a `git` Command with CREATE_NO_WINDOW on Windows and an augmented
 /// PATH that includes conventional developer directories (e.g. /opt/homebrew/bin,
 /// ~/.local/bin) so git can be found when launched from a GUI app.
@@ -22,6 +44,59 @@ fn git_cmd() -> Command {
     no_window(&mut cmd);
     cmd.env("PATH", augmented_path(&[]));
     cmd
+}
+
+/// Create a `git` Command that respects the given context.
+///
+/// When `ctx.wsl_distro` is set (Windows only), the command becomes:
+/// `wsl.exe -d <distro> -- git <args...>`
+///
+/// On non-Windows, the WSL context is ignored and a native git command is returned.
+pub fn git_cmd_in(ctx: &GitContext) -> Command {
+    match &ctx.wsl_distro {
+        #[cfg(windows)]
+        Some(distro) => {
+            let mut cmd = Command::new("wsl.exe");
+            cmd.args(["-d", distro, "--", "git"]);
+            no_window(&mut cmd);
+            cmd
+        }
+        #[cfg(not(windows))]
+        Some(_) => git_cmd(), // WSL not applicable on non-Windows
+        None => git_cmd(),
+    }
+}
+
+/// Run a git command inside a specific directory with WSL context.
+///
+/// When WSL is active, `cwd` should be a Linux path (e.g. `/home/user/project`).
+/// The `--cd` flag is NOT used here — instead, `current_dir` is set on the command.
+/// For WSL, this means `wsl.exe` inherits the CWD, and git operates relative to it.
+///
+/// For WSL paths: callers should use `wsl.exe -d <distro> --cd <linux_path> -- git ...`
+/// which we handle by setting cwd on the wrapping command for non-WSL,
+/// and for WSL by inserting `--cd` before the `--` separator.
+pub fn git_cmd_in_dir(ctx: &GitContext, cwd: &str) -> Command {
+    match &ctx.wsl_distro {
+        #[cfg(windows)]
+        Some(distro) => {
+            let mut cmd = Command::new("wsl.exe");
+            cmd.args(["-d", distro, "--cd", cwd, "--", "git"]);
+            no_window(&mut cmd);
+            cmd
+        }
+        #[cfg(not(windows))]
+        Some(_) => {
+            let mut cmd = git_cmd();
+            cmd.current_dir(cwd);
+            cmd
+        }
+        None => {
+            let mut cmd = git_cmd();
+            cmd.current_dir(cwd);
+            cmd
+        }
+    }
 }
 
 pub fn detect_language(file_path: &str) -> String {

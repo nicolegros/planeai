@@ -1,13 +1,17 @@
 use std::collections::HashSet;
 
-use super::git_cmd;
+use super::{git_cmd_in_dir, GitContext};
 
 /// List local and remote branches for a git repo at the given path.
 /// Remote-only branches are prefixed with "remote:" to distinguish them.
 pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
-    let output = git_cmd()
+    list_branches_in(repo_path, &GitContext::native())
+}
+
+/// List branches with explicit git context (supports WSL).
+pub fn list_branches_in(repo_path: &str, ctx: &GitContext) -> Result<Vec<String>, String> {
+    let output = git_cmd_in_dir(ctx, repo_path)
         .args(["branch", "--all", "--format=%(refname:short) %(refname)"])
-        .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
 
@@ -47,8 +51,19 @@ pub fn checkout_branch(
     create: bool,
     start_point: Option<&str>,
 ) -> Result<(), String> {
+    checkout_branch_in(repo_path, branch, create, start_point, &GitContext::native())
+}
+
+/// Checkout branch with explicit git context (supports WSL).
+pub fn checkout_branch_in(
+    repo_path: &str,
+    branch: &str,
+    create: bool,
+    start_point: Option<&str>,
+    ctx: &GitContext,
+) -> Result<(), String> {
     let resolved_start = start_point
-        .map(|s| resolve_base_branch(repo_path, s))
+        .map(|s| resolve_base_branch_in(repo_path, s, ctx))
         .transpose()?;
     let mut args = if create {
         vec!["checkout", "-b", branch]
@@ -61,9 +76,8 @@ pub fn checkout_branch(
         }
     }
 
-    let output = git_cmd()
+    let output = git_cmd_in_dir(ctx, repo_path)
         .args(&args)
-        .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
 
@@ -80,8 +94,19 @@ pub fn worktree_add(
     new_branch: &str,
     base_branch: &str,
 ) -> Result<(), String> {
-    let resolved = resolve_base_branch(repo_path, base_branch)?;
-    let output = git_cmd()
+    worktree_add_in(repo_path, worktree_path, new_branch, base_branch, &GitContext::native())
+}
+
+/// Create a git worktree with explicit git context (supports WSL).
+pub fn worktree_add_in(
+    repo_path: &str,
+    worktree_path: &str,
+    new_branch: &str,
+    base_branch: &str,
+    ctx: &GitContext,
+) -> Result<(), String> {
+    let resolved = resolve_base_branch_in(repo_path, base_branch, ctx)?;
+    let output = git_cmd_in_dir(ctx, repo_path)
         .args([
             "worktree",
             "add",
@@ -90,7 +115,6 @@ pub fn worktree_add(
             worktree_path,
             &resolved,
         ])
-        .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
 
@@ -105,11 +129,15 @@ pub fn worktree_add(
 /// Falls back to the local branch name if origin fetch fails.
 /// Accepts an optional "remote:" prefix for backward compatibility (stripped before use).
 pub fn resolve_base_branch(repo_path: &str, base: &str) -> Result<String, String> {
+    resolve_base_branch_in(repo_path, base, &GitContext::native())
+}
+
+/// Resolve base branch with explicit git context (supports WSL).
+pub fn resolve_base_branch_in(repo_path: &str, base: &str, ctx: &GitContext) -> Result<String, String> {
     let name = base.strip_prefix("remote:").unwrap_or(base);
 
-    let output = git_cmd()
+    let output = git_cmd_in_dir(ctx, repo_path)
         .args(["fetch", "origin", name])
-        .current_dir(repo_path)
         .output();
 
     match output {
@@ -131,9 +159,13 @@ pub fn resolve_base_branch(repo_path: &str, base: &str) -> Result<String, String
 
 /// Remove a git worktree forcefully.
 pub fn worktree_remove(repo_path: &str, worktree_path: &str) -> Result<(), String> {
-    let output = git_cmd()
+    worktree_remove_in(repo_path, worktree_path, &GitContext::native())
+}
+
+/// Remove a git worktree with explicit git context (supports WSL).
+pub fn worktree_remove_in(repo_path: &str, worktree_path: &str, ctx: &GitContext) -> Result<(), String> {
+    let output = git_cmd_in_dir(ctx, repo_path)
         .args(["worktree", "remove", "--force", worktree_path])
-        .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
 
@@ -149,9 +181,13 @@ pub fn worktree_remove(repo_path: &str, worktree_path: &str) -> Result<(), Strin
 /// Detect the default branch of a repo (main, master, etc.).
 /// Checks local branches for common names.
 pub fn detect_default_branch(repo_path: &str) -> Result<String, String> {
-    let output = git_cmd()
+    detect_default_branch_in(repo_path, &GitContext::native())
+}
+
+/// Detect default branch with explicit git context (supports WSL).
+pub fn detect_default_branch_in(repo_path: &str, ctx: &GitContext) -> Result<String, String> {
+    let output = git_cmd_in_dir(ctx, repo_path)
         .args(["branch", "--format=%(refname:short)"])
-        .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
 
@@ -172,9 +208,13 @@ pub fn detect_default_branch(repo_path: &str) -> Result<String, String> {
 /// Find the worktree path where a given branch is checked out.
 /// Returns None if the branch is not checked out in any worktree.
 pub fn find_worktree_for_branch(repo_path: &str, branch: &str) -> Option<String> {
-    let output = git_cmd()
+    find_worktree_for_branch_in(repo_path, branch, &GitContext::native())
+}
+
+/// Find worktree for branch with explicit git context (supports WSL).
+pub fn find_worktree_for_branch_in(repo_path: &str, branch: &str, ctx: &GitContext) -> Option<String> {
+    let output = git_cmd_in_dir(ctx, repo_path)
         .args(["worktree", "list", "--porcelain"])
-        .current_dir(repo_path)
         .output()
         .ok()?;
 
