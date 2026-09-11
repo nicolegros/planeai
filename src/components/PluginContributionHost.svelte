@@ -44,6 +44,7 @@
     shiftKey?: boolean;
     kind?: "success" | "error";
     message?: string;
+    height?: number;
   };
 
   let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session }: Props = $props();
@@ -160,6 +161,7 @@
   }
 
   function createLocalPluginFrame(root: ShadowRoot, sessionContext?: PluginSessionContext): PluginUiDisposer {
+    const isTitlebar = contribution.placement === "titlebar";
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
@@ -168,10 +170,14 @@
         ? "block h-full w-full border-0"
         : "block w-full border-0";
     frame.style.display = "block";
-    frame.style.width = "100%";
+    frame.style.width = isTitlebar ? "88px" : "100%";
     frame.style.border = "0";
-    if (contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.panel" || contribution.placement === "titlebar") {
+    if (isTitlebar) frame.style.backgroundColor = "transparent";
+    if (contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "titlebar") {
       frame.style.height = "100%";
+    } else if (contribution.placement === "session.panel") {
+      frame.style.height = "360px";
+      frame.style.outline = "none";
     }
     if (contribution.placement.startsWith("sidebar.")) {
       frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : "160px";
@@ -183,12 +189,34 @@
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'">
       <style id="planeai-plugin-theme">${localPluginThemeCss()}</style>
       <style id="planeai-plugin-base">${localPluginBaseCss}</style>
+      ${isTitlebar ? '<style id="planeai-plugin-titlebar">html,body{background:transparent}</style>' : ""}
       <script>
         let cleanup = null;
         let nextRequestId = 0;
         const pending = new Map();
         const registrations = new Map();
         const send = (message) => parent.postMessage(message, "*");
+        let sessionPanelContentObserver = null;
+        let contentHeightPending = false;
+        const reportSessionPanelContentHeight = () => {
+          if (contentHeightPending || !document.body) return;
+          contentHeightPending = true;
+          requestAnimationFrame(() => {
+            contentHeightPending = false;
+            const height = Math.max(
+              document.body.scrollHeight,
+              ...Array.from(document.body.children).map((child) => child.scrollHeight),
+            );
+            if (height > 0) send({ type: "content-height", height });
+          });
+        };
+        const observeSessionPanelContent = (contribution) => {
+          if (contribution?.placement !== "session.panel" || !document.body) return;
+          sessionPanelContentObserver?.disconnect();
+          sessionPanelContentObserver = new MutationObserver(reportSessionPanelContentHeight);
+          sessionPanelContentObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+          reportSessionPanelContentHeight();
+        };
         const request = (type, payload = {}) => new Promise((resolve, reject) => {
           const requestId = ++nextRequestId;
           pending.set(requestId, { resolve, reject });
@@ -298,6 +326,8 @@
           if (message.type === "dispose") {
             if (typeof cleanup === "function") cleanup();
             cleanup = null;
+            sessionPanelContentObserver?.disconnect();
+            sessionPanelContentObserver = null;
             removeEventListener("keydown", forwardEscapeToHost);
             return;
           }
@@ -310,6 +340,7 @@
             const entrypoint = module.default || module.pluginEntrypoint;
             if (!entrypoint || typeof entrypoint.mount !== "function") throw new Error("local UI bundle must default-export a PluginUiEntrypoint");
             cleanup = entrypoint.mount(document.body, { plugin: message.plugin, contribution: message.contribution, session: message.session, host });
+            observeSessionPanelContent(message.contribution);
             send({ type: "mounted" });
           } catch (error) {
             send({ type: "load-error", message: String(error) });
@@ -317,6 +348,11 @@
         });
       </scr${"ipt"}>`;
 
+    const focusFrame = (): void => {
+      requestAnimationFrame(() => {
+        if (frame.isConnected) frame.focus();
+      });
+    };
     const refreshTheme = (): void => {
       frame.contentWindow?.postMessage({ type: "theme", css: localPluginThemeCss() }, "*");
     };
@@ -349,6 +385,10 @@
       if (event.source !== frame.contentWindow) return;
       const message = event.data;
       if (!message || typeof message.type !== "string") return;
+      if (message.type === "mounted") {
+        if (autofocus) focusFrame();
+        return;
+      }
       if (message.type === "call" && typeof message.method === "string") {
         void callPlugin(message.method, message.params)
           .then((value) => respond(message.requestId, true, value))
@@ -385,6 +425,8 @@
           .dataChanged(plugin.id)
           .then((value) => respond(message.requestId, true, value))
           .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "content-height" && contribution.placement === "session.panel" && typeof message.height === "number" && Number.isFinite(message.height)) {
+        frame.style.height = `${Math.min(Math.max(Math.ceil(message.height), 1), 10_000)}px`;
       } else if (message.type === "navigation") {
         if (message.action === "open" && message.pluginId && message.contributionId) {
           onNavigate(message.pluginId, message.contributionId);
@@ -451,7 +493,7 @@
     window.addEventListener("message", onMessage);
     frame.addEventListener("load", initialise, { once: true });
     root.replaceChildren(frame);
-    if (autofocus) queueMicrotask(() => frame.focus());
+    if (autofocus) focusFrame();
     return () => {
       if (refreshLocalPluginTheme === refreshTheme) refreshLocalPluginTheme = null;
       window.removeEventListener("message", onMessage);

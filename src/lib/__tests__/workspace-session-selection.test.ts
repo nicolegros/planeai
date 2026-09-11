@@ -62,3 +62,16 @@ it("ignores a previous terminal's focus event after a session switch", () => {
     /onFocused=\{\(event\) => \{\s*if \(event\.type === "focusin" && sessionId !== activeSessionId\) return;/,
   );
 });
+
+it("allows a session-panel modal to use its contribution's reported content height", () => {
+  expect(appSource).not.toContain('class="h-[min(78vh,720px)]"');
+  expect(appSource).toMatch(
+    /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?title=\{modalContribution\.label\}[\s\S]*?class="min-h-\[min\(360px,85vh\)\]"[\s\S]*?preventEscapeClose=\{false\}[\s\S]*?<div>\s*<PluginContributionHost/,
+  );
+});
+
+it("reserves initial modal focus for the session-panel plugin iframe", () => {
+  expect(appSource).toMatch(
+    /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?preventOpenAutoFocus=\{true\}[\s\S]*?<PluginContributionHost[\s\S]*?autofocus=\{true\}/,
+  );
+});

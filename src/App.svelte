@@ -1679,11 +1679,12 @@
 {#if modalPlugin && modalContribution && activePluginSessionContext}
   <FormDialog
     title={modalContribution.label}
-    class="h-[min(78vh,720px)]"
+    class="min-h-[min(360px,85vh)]"
     preventEscapeClose={false}
+    preventOpenAutoFocus={true}
     onClose={closePluginContributionModal}
   >
-    <div class="h-full min-h-0">
+    <div>
       <PluginContributionHost
         plugin={modalPlugin}
         contribution={modalContribution}

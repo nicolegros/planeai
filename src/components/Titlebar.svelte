@@ -79,7 +79,8 @@
     <!-- Plugin-owned titlebar controls are declared in each plugin manifest. -->
     {#each titlebarContributions as item (`${item.plugin.id}:${item.contribution.id}`)}
       <div
-        class="h-[25px] min-w-[88px] shrink-0"
+        class="h-[25px] shrink-0 overflow-hidden"
+        style="width: 88px; min-width: 0; max-width: 88px"
         data-plugin-titlebar-entry={`${item.plugin.id}:${item.contribution.id}`}
       >
         <PluginContributionHost
