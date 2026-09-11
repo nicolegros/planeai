@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
-use planeai_pty::{LocalPtyConfig, LocalPtySession, PtyEvent, PtyEventSink};
+use planeai_pty::{LocalPtyConfig, LocalPtySession, PtyEvent, PtyEventSink, WslSpawnConfig};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter};
 
@@ -81,6 +81,9 @@ impl PlaneaiPtyBackend {
     /// `env` is the complete set of env vars to set on the PTY process.
     /// Callers should use `prepare_session()` to build the canonical env (PATH, TERM, etc.)
     /// and add any UI-specific vars (COLORFGBG, PLANEAI_SOCKET) before calling.
+    ///
+    /// `wsl` is an optional WSL spawn config. When set on Windows, the command spawns
+    /// inside the specified WSL distro via `wsl.exe`.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         session_id: &str,
@@ -91,6 +94,7 @@ impl PlaneaiPtyBackend {
         on_data: Channel<Response>,
         cancelled: Arc<AtomicBool>,
         observer: Arc<dyn OutputObserver>,
+        wsl: Option<WslSpawnConfig>,
     ) -> Result<Self, String> {
         let full_command = command.to_string();
 
@@ -147,6 +151,7 @@ impl PlaneaiPtyBackend {
             env,
             cols: 80,
             rows: 24,
+            wsl,
             ..Default::default()
         };
 

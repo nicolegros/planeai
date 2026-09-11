@@ -44,9 +44,22 @@ pub fn spawn_tab(
 
     let pty_key = format!("{}:{}", session_id, tab_index);
 
+    // Check if WSL mode is active — if so, use WSL login shell instead.
+    let wsl_config = {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        cfg.wsl.clone().filter(|w| w.enabled)
+    };
+
+    let (shell_cmd, effective_shell) = if wsl_config.is_some() {
+        // In WSL mode, the shell command is "bash -l" inside the distro.
+        ("bash -l".to_string(), "bash".to_string())
+    } else {
+        let cmd = format!("{} -l", shell);
+        (cmd, shell.clone())
+    };
+
     // Build canonical env (augmented PATH, TERM, COLORFGBG, PLANEAI_SOCKET, etc.)
     // via prepare_session() — same for both backends.
-    let shell_cmd = format!("{} -l", shell);
     let env = {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         let extra_path_dirs = cfg.resolved_extra_path_dirs();
@@ -71,16 +84,27 @@ pub fn spawn_tab(
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect();
-            crate::daemon::spawn_session(&pty_key, &shell, &["-l"], &cwd, Some(&env_ref))?;
+            crate::daemon::spawn_session(&pty_key, &effective_shell, &["-l"], &cwd, Some(&env_ref))?;
         }
         let socket_path = planeai_ipc::daemon_socket_path();
         pty::PtyTarget::Daemon {
             session_id: pty_key.clone(),
             socket_path,
         }
+    } else if let Some(ref wsl) = wsl_config {
+        // WSL mode: spawn login shell inside the distro
+        let distro = wsl
+            .distro
+            .clone()
+            .unwrap_or_else(|| "".to_string());
+        pty::PtyTarget::WslShell {
+            command: shell_cmd.clone(),
+            distro,
+            cwd: cwd.clone(),
+        }
     } else {
         pty::PtyTarget::Shell {
-            command: shell_cmd,
+            command: shell_cmd.clone(),
             cwd: cwd.clone(),
         }
     };

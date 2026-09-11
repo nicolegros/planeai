@@ -66,9 +66,19 @@ pub fn attach_session(
             config::restart_command_for_provider(provider_def)
         };
 
-        let target = pty::PtyTarget::Shell {
-            command: cmd.clone(),
-            cwd,
+        let wsl_config = cfg.wsl.clone().filter(|w| w.enabled);
+        let target = if let Some(ref wsl) = wsl_config {
+            let distro = wsl.distro.clone().unwrap_or_default();
+            pty::PtyTarget::WslShell {
+                command: cmd.clone(),
+                distro,
+                cwd,
+            }
+        } else {
+            pty::PtyTarget::Shell {
+                command: cmd.clone(),
+                cwd,
+            }
         };
         (target, Some(cmd))
     };
