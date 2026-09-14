@@ -71,6 +71,32 @@ The `daemon` backend is experimental. It provides session persistence across app
 tmux is not supported on Windows. The `local` backend is used automatically on Windows regardless of this setting.
 :::
 
+## File Editor
+
+PlaneAI opens files using one global editor setting, available in **Preferences → Editor**. With no `editor` section, PlaneAI uses its built-in editor.
+
+```jsonc
+{
+  // "embedded" (default), "terminal", or "external"
+  "editor": {
+    "mode": "external",
+    "command": "code",
+    "args": ["--reuse-window", "--goto", "{file}"],
+  },
+}
+```
+
+For `terminal` and `external` modes, `command` is an executable resolved with PlaneAI's augmented `PATH`; `args` is an array, not a shell string. Each argument may use:
+
+- `{file}` — required for non-embedded modes; the absolute file path.
+- `{project}` — the active session's working directory: its worktree when one exists, otherwise the project root.
+
+The built-in presets are VS Code (`code --reuse-window --goto {file}`), Cursor (`cursor --reuse-window --goto {file}`), Vim, and Neovim. You can freely edit preset values.
+
+`terminal` opens each file in a fresh PlaneAI shell tab and retains the tab after the editor exits. Shell-tab persistence follows the session backend: daemon tabs persist; local and tmux shell tabs are ephemeral. `external` launches the configured application asynchronously with the active worktree as its working directory and leaves PlaneAI focused. Launch failures are shown in the app.
+
+Existing embedded buffers are not reconciled when the global setting changes; an external editor may therefore open the last saved-on-disk version of a file.
+
 ## Language Servers
 
 PlaneAI can start configured language servers for supported editor files. Built-in discovery covers TypeScript/JavaScript/JSON, Rust, Python, Go, and C/C++. Add custom trusted profiles in **Preferences → More → Language Servers** when a server lives outside the standard PATH or needs specific arguments.

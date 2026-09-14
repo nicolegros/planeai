@@ -1,4 +1,6 @@
 export interface Tab {
+  /** Stable UI identity when numeric operation indices are not unique. */
+  id?: string;
   index: number;
   label: string;
   icon?: string;

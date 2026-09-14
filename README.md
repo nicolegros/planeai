@@ -48,7 +48,7 @@ Download the latest release for your platform:
 
 ## Configuration
 
-planeai is configured via `~/.config/planeai/config.json`. See the full [configuration docs](./docs/configuration.md) for providers, templates, lifecycle hooks, and auto-dispatch.
+planeai is configured via `~/.config/planeai/config.json`. See the full [configuration docs](./docs/configuration.md) for providers, file editor selection (embedded, terminal, or external), templates, lifecycle hooks, and auto-dispatch.
 
 Themes are plain CSS files in `~/.config/planeai/themes/`. See the [theming guide](./docs/theming.md) for creating custom themes.
 

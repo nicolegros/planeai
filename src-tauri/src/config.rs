@@ -42,6 +42,30 @@ pub struct LanguageServerProfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EditorConfig {
+    #[serde(default = "default_editor_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+}
+
+const INVALID_EDITOR_MODE: &str = "__invalid__";
+
+fn default_editor_mode() -> String {
+    "embedded".to_string()
+}
+
+fn invalid_editor_config() -> EditorConfig {
+    EditorConfig {
+        mode: INVALID_EDITOR_MODE.to_string(),
+        command: String::new(),
+        args: Vec::new(),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub appearance: Appearance,
     pub terminal: Terminal,
@@ -89,6 +113,8 @@ pub struct Config {
     pub integrations: Option<IntegrationsConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_servers: Option<LanguageServerSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option<EditorConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -313,6 +339,7 @@ impl Default for Config {
             sound_enabled: Some(true),
             integrations: None,
             language_servers: None,
+            editor: None,
         }
     }
 }
@@ -448,19 +475,36 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         let mut user_val: serde_json::Value = match serde_json::from_reader(stripped) {
             Ok(v) => v,
             Err(e) => {
-                return (
-                    Config::default(),
-                    vec![format!("Failed to parse config.json: {e}")],
-                );
+                let config = Config {
+                    editor: Some(invalid_editor_config()),
+                    ..Config::default()
+                };
+                return (config, vec![format!("Failed to parse config.json: {e}")]);
             }
         };
         // Migrate legacy task_managers → task_management
         migrate_legacy_task_managers(&mut user_val);
         let default_val = serde_json::to_value(Config::default()).unwrap();
         let merged = merge_top_level(default_val, user_val);
-        let mut config: Config = serde_json::from_value(merged).unwrap();
+        let mut config: Config = match serde_json::from_value(merged) {
+            Ok(config) => config,
+            Err(error) => {
+                let config = Config {
+                    editor: Some(invalid_editor_config()),
+                    ..Config::default()
+                };
+                return (
+                    config,
+                    vec![format!("Failed to deserialize config.json: {error}")],
+                );
+            }
+        };
         backfill_provider_defaults(&mut config);
         let migrated = migrate_autonomous_prompt_template(&mut config);
+        if let Err(error) = validate(&config) {
+            config.editor = Some(invalid_editor_config());
+            return (config, vec![format!("Invalid config.json: {error}")]);
+        }
         if migrated {
             // Persist the migration so the file reflects the new structure
             save(config_dir, &config).ok();
@@ -589,3 +633,27 @@ fn merge_top_level(base: serde_json::Value, overlay: serde_json::Value) -> serde
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;
+
+/// Validate editor settings supplied by Preferences or manually edited config.
+pub fn validate_editor_config(editor: &EditorConfig) -> Result<(), String> {
+    match editor.mode.as_str() {
+        "embedded" => Ok(()),
+        "terminal" | "external" => {
+            if editor.command.trim().is_empty() {
+                return Err("Editor executable is required".to_string());
+            }
+            if !editor.args.iter().any(|arg| arg.contains("{file}")) {
+                return Err("Editor arguments must include {file}".to_string());
+            }
+            Ok(())
+        }
+        _ => Err(format!("Unknown editor mode: {}", editor.mode)),
+    }
+}
+
+pub fn validate(config: &Config) -> Result<(), String> {
+    if let Some(editor) = &config.editor {
+        validate_editor_config(editor)?;
+    }
+    Ok(())
+}

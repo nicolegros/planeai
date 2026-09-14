@@ -3,7 +3,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { listen } from "@tauri-apps/api/event";
-  import { sessions as sessionsApi, pr as prApi, pty, notify, sessionLogs } from "./lib/api";
+  import { sessions as sessionsApi, pr as prApi, pty, notify, sessionLogs, editor as editorApi } from "./lib/api";
   import type { Session, Project } from "./lib/types";
   import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
   import * as projectStore from "./lib/project-store.svelte";
@@ -14,6 +14,7 @@
   import { computeSidebarSessionOrder, isLoopId, parseLoopId } from "./lib/sidebar-session-order";
   import { isTerminal, isActive as isLoopActive } from "./lib/loop-status";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
+  import { openFileWithConfiguredEditor } from "./lib/file-editor";
   import { createFormKeyboardController } from "./lib/form-keyboard.svelte";
   import { loadTheme } from "./lib/theme-loader";
   import { startPolling as startCiPolling, getCiChecks, classifyCheck } from "./lib/ci-checks.svelte";
@@ -46,7 +47,8 @@
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
-  import { getTabs, getActiveTabIndex, addTab } from "./lib/session-tabs.svelte";
+  import { getTabs, getActiveTabIndex, addTab, removeTab } from "./lib/session-tabs.svelte";
+  import { deliverPendingTerminalEditor, queueTerminalEditor, rollbackPendingTerminalEditor } from "./lib/terminal-editor";
   import { isMounted as poolIsMounted, touchMru } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
@@ -74,6 +76,7 @@
   let activePluginId = $state<string | null>(null);
   let activeContributionId = $state<string | null>(null);
   let pluginInventory = $state<import("./lib/types").PluginInventory[]>([]);
+  const pendingShellCommands = new Map<string, string>();
 
   // PR form state
   let showPrForm = $state(false);
@@ -264,9 +267,9 @@
     }
     // Fallback to session-tabs store (before tree is initialized)
     const shellTabs = getTabs(activeSessionId).map(t => t.index === 0 ? { ...t, label: activeSession?.provider || getSettings().default_provider || "Agent" } : t);
-    const extra: { index: number; label: string; icon?: string; modified?: boolean }[] = [];
-    if (diffTabOpen[activeSessionId]) extra.push({ index: -1, label: diffFileName[activeSessionId] || "Diff", icon: "git-compare" });
-    if (editorTabOpen[activeSessionId]) extra.push({ index: -2, label: editorFileName[activeSessionId] || "Editor", icon: "file", modified: editorModified[activeSessionId] || false });
+    const extra: import("./lib/session-tabs.svelte").Tab[] = [];
+    if (diffTabOpen[activeSessionId]) extra.push({ id: `${activeSessionId}:diff`, index: -1, label: diffFileName[activeSessionId] || "Diff", icon: "git-compare" });
+    if (editorTabOpen[activeSessionId]) extra.push({ id: `${activeSessionId}:editor`, index: -2, label: editorFileName[activeSessionId] || "Editor", icon: "file", modified: editorModified[activeSessionId] || false });
     return [...shellTabs, ...extra];
   });
 
@@ -276,10 +279,13 @@
   const titlebarActiveTabIdx = $derived.by(() => {
     const tree = splitTree.getTree();
     if (tree?.type === "leaf") {
-      const idx = tree.tabs.findIndex((t) => t.ptyKey === tree.activeTab);
-      return idx >= 0 ? idx : 0;
+      return getLeafTabInfo(tree).find((tab) => tab.id === tree.activeTab)?.index ?? 0;
     }
     return orchestrator.getUnifiedActiveIndex();
+  });
+  const titlebarActiveTabId = $derived.by(() => {
+    const tree = splitTree.getTree();
+    return tree?.type === "leaf" ? tree.activeTab : undefined;
   });
 
   // Initialize tree when sessions first load (single leaf with all session IDs)
@@ -495,14 +501,24 @@
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
   }
 
-  // Get tab info for a leaf — returns Tab[] compatible with TabStrip
+  // Get tab info for a leaf — preserve persistent shell indices for TabStrip callbacks.
   function getLeafTabInfo(leaf: LeafNode): import("./lib/session-tabs.svelte").Tab[] {
-    return leaf.tabs.map((tabEntry, i) => ({
-      index: i,
+    return leaf.tabs.map((tabEntry, visualIndex) => ({
+      id: tabEntry.ptyKey,
+      index: tabIndexForEntry(tabEntry, visualIndex),
       label: tabEntry.label,
       icon: tabEntry.icon,
       customTitle: tabEntry.customTitle,
     }));
+  }
+
+  function tabIndexForEntry(tabEntry: import("./lib/split-tree.svelte").TabEntry, fallback: number): number {
+    if (tabEntry.type === "agent") return 0;
+    if (tabEntry.type === "diff") return -1;
+    if (tabEntry.type === "editor") return -2;
+    const separator = tabEntry.ptyKey.lastIndexOf(":");
+    const index = Number.parseInt(tabEntry.ptyKey.slice(separator + 1), 10);
+    return separator === -1 || Number.isNaN(index) ? fallback : index;
   }
 
   /** Extract the session ID from a pty key (strips ":tabIndex" suffix if present) */
@@ -613,12 +629,21 @@
       return;
     }
 
-    // Shell tabs — remove from tree + close backend PTY
-    splitTree.removeSessionFromLeaf(activeEntry.ptyKey);
-    const colonIdx = activeEntry.ptyKey.indexOf(":");
+    closeShellTabInTree(activeEntry.ptyKey);
+  }
+
+  /** Close a shell tab using its PTY key rather than a visual tab position. */
+  function closeShellTabInTree(ptyKey: string): void {
+    if (pendingShellCommands.has(ptyKey)) {
+      showSnackbar("Terminal editor is still starting", "error");
+      return;
+    }
+
+    splitTree.removeSessionFromLeaf(ptyKey);
+    const colonIdx = ptyKey.lastIndexOf(":");
     if (colonIdx !== -1) {
-      const sessionId = activeEntry.ptyKey.slice(0, colonIdx);
-      const tabIndex = parseInt(activeEntry.ptyKey.slice(colonIdx + 1), 10);
+      const sessionId = ptyKey.slice(0, colonIdx);
+      const tabIndex = parseInt(ptyKey.slice(colonIdx + 1), 10);
       if (!isNaN(tabIndex)) orchestrator.closeShellTab(sessionId, tabIndex);
     }
     tick().then(() => refocusTerminal());
@@ -673,16 +698,60 @@
     splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
   }
 
-  /** Open a file in an editor tab. If already open, focus it. */
-  function openFileInTree(sessionId: string, filePath: string): void {
-    // Reject traversal paths (.. as path segment)
-    if (filePath.split(/[/\\]/).includes("..")) return;
-    const editorPtyKey = `${sessionId}:editor:${filePath}`;
+  async function runPendingShellCommand(ptyKey: string): Promise<void> {
+    try {
+      const result = await deliverPendingTerminalEditor({
+        ptyKey,
+        pendingCommands: pendingShellCommands,
+        write: pty.write,
+      });
+      if (result === "unavailable") await handleShellAttachError(ptyKey, "Terminal editor is unavailable");
+    } catch (error) {
+      await handleShellAttachError(ptyKey, error);
+    }
+  }
 
-    // If already open, focus it
+  async function openTerminalEditorInTree(sessionId: string, filePath: string): Promise<void> {
+    try {
+      const opened = await queueTerminalEditor({
+        sessionId,
+        filePath,
+        getTerminalCommand: editorApi.getTerminalCommand,
+        getFocusedLeafId: splitTree.getFocusedLeafId,
+        addTab,
+        removeTab,
+        incrementTabCount: pty.incrementTabCount,
+        addShellTab: (leafId, ptyKey, label) => {
+          splitTree.addSessionToLeaf(leafId, { ptyKey, label, icon: "terminal", type: "shell" });
+        },
+        pendingCommands: pendingShellCommands,
+      });
+      if (opened) tick().then(() => requestAnimationFrame(() => refocusTerminal()));
+    } catch (error) {
+      showSnackbar(`Failed to open terminal editor: ${error}`, "error");
+    }
+  }
+
+  async function handleShellAttachError(ptyKey: string, error: unknown): Promise<void> {
+    try {
+      const rolledBack = await rollbackPendingTerminalEditor({
+        ptyKey,
+        pendingCommands: pendingShellCommands,
+        removeTab,
+        closeTab: pty.closeTab,
+      });
+      if (rolledBack) splitTree.removeSessionFromLeaf(ptyKey);
+    } catch (rollbackError) {
+      console.warn("Failed to clean up terminal editor tab", rollbackError);
+    }
+    showSnackbar(`Failed to open terminal editor: ${error}`, "error");
+  }
+
+  /** Open a file in PlaneAI's embedded editor. */
+  function openEmbeddedFileInTree(sessionId: string, filePath: string): void {
+    const editorPtyKey = `${sessionId}:editor:${filePath}`;
     if (splitTree.focusTab(editorPtyKey)) return;
 
-    // Add editor tab to focused leaf
     const focusedLeafId = splitTree.getFocusedLeafId();
     if (!focusedLeafId) return;
     const fileName = filePath.split("/").pop() ?? filePath;
@@ -694,6 +763,23 @@
       filePath,
     };
     splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
+  }
+
+  /** Open a file with the globally configured editor. */
+  async function openFileInTree(sessionId: string, filePath: string): Promise<void> {
+    if (filePath.split(/[/\\]/).includes("..")) return;
+    const result = await openFileWithConfiguredEditor(getSettings().editor, {
+      openEmbedded: () => openEmbeddedFileInTree(sessionId, filePath),
+      openTerminal: () => openTerminalEditorInTree(sessionId, filePath),
+      openExternal: async () => {
+        try {
+          await editorApi.openExternal(sessionId, filePath);
+        } catch (error) {
+          showSnackbar(`Failed to open external editor: ${error}`, "error");
+        }
+      },
+    });
+    if (result === "invalid") showSnackbar("Editor configuration has an unknown mode", "error");
   }
 
   // Sync the focused leaf's active session to the orchestrator
@@ -1042,14 +1128,18 @@
     sessionId={activeSessionId}
     tabs={hasMultiplePanes ? [] : titlebarTabs}
     activeTabIndex={titlebarActiveTabIdx}
+    activeTabId={titlebarActiveTabId}
     runningCount={sessions.filter(s => s.status === 'active').length}
     activeProvider={activeSession?.provider ?? null}
-    onSelectTab={(i) => { leavePluginWorkspace(); loopStore.setActiveLoopId(null); const tree = splitTree.getTree(); if (tree?.type === "leaf" && tree.tabs[i]) splitTree.setLeafActiveTab(tree.id, tree.tabs[i].ptyKey); else orchestrator.selectUnifiedTab(i); }}
+    onSelectTab={(i, tabId) => { leavePluginWorkspace(); loopStore.setActiveLoopId(null); const tree = splitTree.getTree(); if (tree?.type === "leaf") { const entry = tree.tabs.find((candidate) => candidate.ptyKey === tabId) ?? tree.tabs.find((candidate, visualIndex) => tabIndexForEntry(candidate, visualIndex) === i); if (entry) splitTree.setLeafActiveTab(tree.id, entry.ptyKey); } else orchestrator.selectUnifiedTab(i); }}
     onCloseTab={(i) => {
       if (!activeSessionId) return;
       if (i === -1) orchestrator.closeDiffTab(activeSessionId);
       else if (i === -2) orchestrator.closeEditorTab(activeSessionId);
-      else { orchestrator.closeShellTab(activeSessionId, i); }
+      else {
+        const tab = titlebarTabs.find((entry) => entry.index === i);
+        if (tab) closeShellTabInTree(`${activeSessionId}:${tab.index}`);
+      }
     }}
     onAddTab={() => orchestrator.handleNewTab()}
     onCreatePr={openPrForm}
@@ -1179,7 +1269,7 @@
     {#snippet splitLeafSnippet(leaf: LeafNode)}
       {@const leafTabs = getLeafTabInfo(leaf)}
       {@const activeEntry = splitTree.getActiveTabEntry(leaf)}
-      {@const activeTabIdx = leaf.tabs.findIndex((t) => t.ptyKey === leaf.activeTab)}
+      {@const activeTabIdx = leafTabs.find((tab) => leaf.tabs.find((entry, visualIndex) => tabIndexForEntry(entry, visualIndex) === tab.index)?.ptyKey === leaf.activeTab)?.index ?? 0}
       {@const showLeafTabBar = hasMultiplePanes}
       <div
         class="split-leaf {hasMultiplePanes ? '' : 'split-leaf-single'}"
@@ -1202,14 +1292,15 @@
           <TabStrip
             tabs={leafTabs}
             activeTabIndex={activeTabIdx >= 0 ? activeTabIdx : 0}
+            activeTabId={leaf.activeTab}
             focused={leaf.id === splitTree.getFocusedLeafId()}
             showAddButton={true}
             showCloseButton={hasMultiplePanes}
             draggable={hasMultiplePanes}
-            onSelectTab={(i) => { splitTree.setFocusedLeaf(leaf.id); if (leaf.tabs[i]) splitTree.setLeafActiveTab(leaf.id, leaf.tabs[i].ptyKey); }}
+            onSelectTab={(i, tabId) => { splitTree.setFocusedLeaf(leaf.id); const entry = leaf.tabs.find((tab) => tab.ptyKey === tabId) ?? leaf.tabs.find((tab, visualIndex) => tabIndexForEntry(tab, visualIndex) === i); if (entry) splitTree.setLeafActiveTab(leaf.id, entry.ptyKey); }}
             onAddTab={() => { splitTree.setFocusedLeaf(leaf.id); splitNewTab(); }}
             onClose={() => splitTree.closeSplit(leaf.id)}
-            onTabDragStart={(e, tabIndex) => handleTabDragStart(e, leaf.tabs[tabIndex]?.ptyKey ?? "", leaf.id)}
+            onTabDragStart={(e, tabIndex, tabId) => handleTabDragStart(e, tabId ?? leaf.tabs.find((tab, visualIndex) => tabIndexForEntry(tab, visualIndex) === tabIndex)?.ptyKey ?? "", leaf.id)}
             onTabDrop={(e, insertIndex) => handleTabDrop(e, leaf.id, insertIndex)}
             onTabDragOver={handleTabDragOver}
           />
@@ -1231,7 +1322,15 @@
                   focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
-                  onAttached={() => { if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
+                  onAttached={() => {
+                    if (tabEntry.type === "shell") void runPendingShellCommand(tabEntry.ptyKey);
+                    if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active");
+                    if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal();
+                  }}
+                  onAttachError={(error) => {
+                    if (tabEntry.type === "shell") void handleShellAttachError(tabEntry.ptyKey, error);
+                    else showSnackbar(String(error));
+                  }}
                   onFocused={(event) => {
                     if (event.type === "focusin" && sessionId !== activeSessionId) return;
                     splitTree.setFocusedLeaf(leaf.id);

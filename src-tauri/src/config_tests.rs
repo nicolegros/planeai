@@ -62,6 +62,7 @@ fn load_reads_existing_config_file() {
         sound_enabled: Some(true),
         integrations: None,
         language_servers: None,
+        editor: None,
     };
 
     let json = serde_json::to_string_pretty(&custom).unwrap();
@@ -103,7 +104,10 @@ fn load_returns_defaults_with_warning_on_invalid_json() {
 
     let (config, warnings) = load(config_dir);
 
-    assert_eq!(config, Config::default());
+    assert_eq!(
+        config.editor.as_ref().map(|editor| editor.mode.as_str()),
+        Some("__invalid__")
+    );
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("parse"));
 }
@@ -606,4 +610,102 @@ fn config_with_legacy_jira_payload_deserializes() {
     let source = &jira["sources"]["myapp"];
     assert_eq!(source["writeback"]["on_start"], "In Progress");
     assert_eq!(source["writeback"]["comment"], true);
+}
+
+#[test]
+fn editor_defaults_to_embedded_when_omitted() {
+    let config = Config::default();
+    assert_eq!(config.editor, None);
+
+    let parsed: Config = serde_json::from_str(
+        r#"{"appearance":{"mode":"system"},"terminal":{"font_family":"Menlo","font_size":14},"providers":{},"default_provider":"kiro"}"#,
+    )
+    .unwrap();
+    assert_eq!(parsed.editor, None);
+}
+
+#[test]
+fn editor_settings_round_trip_through_config_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path();
+    let config = Config {
+        editor: Some(EditorConfig {
+            mode: "external".to_string(),
+            command: "code".to_string(),
+            args: vec!["--goto".to_string(), "{file}".to_string()],
+        }),
+        ..Config::default()
+    };
+
+    save(config_dir, &config).unwrap();
+    let (loaded, warnings) = load(config_dir);
+    assert!(warnings.is_empty());
+    assert_eq!(loaded.editor, config.editor);
+    assert!(validate(&loaded).is_ok());
+}
+
+#[test]
+fn editor_validation_rejects_invalid_non_embedded_settings() {
+    let config = Config {
+        editor: Some(EditorConfig {
+            mode: "terminal".to_string(),
+            command: "nvim".to_string(),
+            args: vec![],
+        }),
+        ..Config::default()
+    };
+    assert_eq!(
+        validate(&config),
+        Err("Editor arguments must include {file}".to_string())
+    );
+}
+
+#[test]
+fn load_returns_defaults_with_warning_for_malformed_editor_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path();
+    fs::write(config_dir.join("config.json"), r#"{ "editor": "code" }"#).unwrap();
+
+    let (config, warnings) = load(config_dir);
+
+    assert_eq!(
+        config.editor.as_ref().map(|editor| editor.mode.as_str()),
+        Some("__invalid__")
+    );
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Failed to deserialize config.json"));
+}
+
+#[test]
+fn load_marks_editor_invalid_when_a_non_editor_field_is_malformed() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path();
+    fs::write(
+        config_dir.join("config.json"),
+        r#"{ "terminal": { "font_size": "large" } }"#,
+    )
+    .unwrap();
+
+    let (config, warnings) = load(config_dir);
+
+    assert_eq!(
+        config.editor.as_ref().map(|editor| editor.mode.as_str()),
+        Some("__invalid__")
+    );
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Failed to deserialize config.json"));
+}
+#[test]
+fn refresh_rejects_invalid_editor_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path();
+    fs::write(
+        config_dir.join("config.json"),
+        r#"{ "editor": { "mode": "terminal", "command": "", "args": [] } }"#,
+    )
+    .unwrap();
+
+    let error = refresh(config_dir).unwrap_err();
+
+    assert!(error.contains("Editor executable is required"));
 }

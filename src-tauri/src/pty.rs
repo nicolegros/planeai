@@ -140,6 +140,17 @@ impl PtyManager {
             return self.attach_daemon(&sid, socket_path, app, on_data);
         }
 
+        // A shell terminal can remount when its split leaf changes. Rebind its
+        // output channel instead of killing and recreating the running local PTY.
+        if matches!(&target, PtyTarget::Shell { .. }) {
+            let sessions = self.sessions.read().map_err(|e| e.to_string())?;
+            if let Some(existing) = sessions.get(session_id) {
+                if existing.rebind_output(on_data.clone()) {
+                    return Ok(());
+                }
+            }
+        }
+
         let (command, cwd) = match target {
             PtyTarget::Shell { command, cwd } => (command, cwd),
             PtyTarget::TmuxAttach { tmux_name } => {

@@ -57,6 +57,12 @@ export interface LanguageServerSettings {
   format_on_save?: boolean | null;
 }
 
+export interface EditorSettings {
+  mode: "embedded" | "terminal" | "external";
+  command: string;
+  args: string[];
+}
+
 export interface AppConfig {
   appearance: {
     mode: AppearanceMode;
@@ -82,6 +88,7 @@ export interface AppConfig {
   sound_enabled?: boolean | null;
   post_merge_action?: "archive" | "destroy" | "keep" | null;
   language_servers?: LanguageServerSettings | null;
+  editor?: EditorSettings | null;
 }
 
 let config = $state<AppConfig>({

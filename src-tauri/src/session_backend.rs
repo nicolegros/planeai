@@ -1,3 +1,4 @@
+use tauri::ipc::{Channel, Response};
 use tokio::sync::oneshot;
 
 pub enum WriteAck {
@@ -21,5 +22,10 @@ pub trait SessionBackend: Send + Sync {
     fn resize(&self, rows: u16, cols: u16) -> Result<(), String>;
     fn pause(&self) -> Result<(), String>;
     fn resume(&self) -> Result<(), String>;
+    /// Replace the frontend output channel without restarting the PTY.
+    /// Only local PTY backends support this; other backends are reattached normally.
+    fn rebind_output(&self, _on_data: Channel<Response>) -> bool {
+        false
+    }
     fn detach(&self);
 }

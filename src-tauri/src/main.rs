@@ -328,6 +328,8 @@ fn main() {
             list_files,
             read_file,
             write_file,
+            get_terminal_editor_command,
+            open_external_editor,
             list_monospace_fonts,
             get_config,
             lsp_connect,
