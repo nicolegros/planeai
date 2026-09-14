@@ -1,10 +1,11 @@
 use tauri::State;
 
+use crate::cleanup;
+use crate::commands::sessions::lifecycle::session_lifecycle_event;
 use crate::db;
 use crate::git;
+use crate::plugins::PluginRuntimeHandle;
 use crate::state::{DbState, ProjectOperationState, PtyState};
-#[cfg(not(windows))]
-use crate::tmux;
 use crate::util::expand_tilde;
 
 fn resolve_project_path(path: &str) -> Result<String, String> {
@@ -87,9 +88,25 @@ pub fn list_archived_projects(state: State<DbState>) -> Result<Vec<db::Project>,
 }
 
 #[tauri::command]
-pub fn archive_project(state: State<DbState>, id: String) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::archive_project(&conn, &id).map_err(|e| e.to_string())
+pub fn archive_project(
+    state: State<DbState>,
+    runtime: State<PluginRuntimeHandle>,
+    id: String,
+) -> Result<(), String> {
+    let lifecycle_events = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let sessions = db::get_project_sessions(&conn, &id).map_err(|e| e.to_string())?;
+        db::archive_project(&conn, &id).map_err(|e| e.to_string())?;
+        sessions
+            .into_iter()
+            .filter(|session| session.status != "archived")
+            .map(|session| session_lifecycle_event(&session, &session.status, "archived"))
+            .collect::<Vec<_>>()
+    };
+    for event in lifecycle_events {
+        runtime.0.dispatch_session_lifecycle(event);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -165,30 +182,80 @@ pub fn set_project_auto_mode(
 }
 
 #[tauri::command]
-pub fn delete_project(
-    state: State<DbState>,
-    pty_state: State<PtyState>,
+pub async fn delete_project(
+    state: State<'_, DbState>,
+    pty_state: State<'_, PtyState>,
+    runtime: State<'_, PluginRuntimeHandle>,
+    operations: State<'_, ProjectOperationState>,
     id: String,
 ) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let sessions = db::get_project_sessions(&conn, &id).map_err(|e| e.to_string())?;
-    let project = db::get_project(&conn, &id).map_err(|e| e.to_string())?;
+    // Serialize deletion with launches and PTY attaches for this project. The guard
+    // remains held through teardown so a local-backend process cannot appear after
+    // the initial PTY detach.
+    let operation_lock = operations.lock_for(&id);
+    let _operation_guard = operation_lock.lock_owned().await;
+
+    let (sessions, project_path, owned_worktrees) = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let sessions = db::get_project_sessions(&conn, &id).map_err(|e| e.to_string())?;
+        let project_path = db::get_project(&conn, &id)
+            .map_err(|e| e.to_string())?
+            .map(|project| project.path);
+        let owned_worktrees = sessions
+            .iter()
+            .map(|session| db::session_owns_worktree(&conn, &session.id).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        (sessions, project_path, owned_worktrees)
+    };
+
+    // PtyState is main-thread-only; detach before moving process and filesystem
+    // teardown to the blocking worker.
     for session in &sessions {
         pty_state.0.detach(&session.id);
-        if session.backend == "tmux" {
-            #[cfg(not(windows))]
-            if let Some(ref tn) = session.tmux_name {
-                let _ = tmux::kill_session(tn);
-            }
-        }
-        if let Some(ref wt_path) = session.worktree_path {
-            if db::session_owns_worktree(&conn, &session.id).unwrap_or(false) {
-                if let Some(ref proj) = project {
-                    let _ = git::worktree_remove(&proj.path, wt_path);
-                }
-                let _ = std::fs::remove_dir_all(wt_path);
-            }
-        }
     }
-    db::delete_project(&conn, &id).map_err(|e| e.to_string())
+
+    let teardown_sessions = sessions.clone();
+    crate::commands::blocking(move || {
+        for (session, owns_worktree) in teardown_sessions.iter().zip(owned_worktrees) {
+            let kill_errors = cleanup::kill_backend(
+                &session.backend,
+                session.tmux_name.as_deref(),
+                Some(&session.id),
+                session.tab_count,
+                &cleanup::real_kill_ops(),
+            );
+            if !kill_errors.is_empty() {
+                tracing::warn!(session_id = %session.id, ?kill_errors, "failed to fully stop backend while deleting project");
+            }
+            if owns_worktree {
+                if let (Some(project_path), Some(worktree_path)) =
+                    (project_path.as_deref(), session.worktree_path.as_deref())
+                {
+                    let _ = git::worktree_remove(project_path, worktree_path);
+                    let _ = std::fs::remove_dir_all(worktree_path);
+                }
+            }
+        }
+        Ok(())
+    })
+    .await?;
+
+    let lifecycle_events = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        for session in &sessions {
+            if session.status != "destroyed" {
+                db::destroy_session(&conn, &session.id).map_err(|e| e.to_string())?;
+            }
+        }
+        db::delete_project(&conn, &id).map_err(|e| e.to_string())?;
+        sessions
+            .iter()
+            .filter(|session| session.status != "destroyed")
+            .map(|session| session_lifecycle_event(session, &session.status, "destroyed"))
+            .collect::<Vec<_>>()
+    };
+    for event in lifecycle_events {
+        runtime.0.dispatch_session_lifecycle(event);
+    }
+    Ok(())
 }

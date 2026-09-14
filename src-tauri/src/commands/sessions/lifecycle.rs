@@ -66,13 +66,15 @@ pub fn archive_session(
         .ok_or("session not found")?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
     crate::session_ops::archive(&conn, &id, &Some(cfg), &cleanup::real_kill_ops())?;
-    runtime
-        .0
-        .dispatch_session_lifecycle(session_lifecycle_event(
-            &session,
-            &session.status,
-            "archived",
-        ));
+    if session.status != "archived" {
+        runtime
+            .0
+            .dispatch_session_lifecycle(session_lifecycle_event(
+                &session,
+                &session.status,
+                "archived",
+            ));
+    }
     Ok(())
 }
 
@@ -94,13 +96,15 @@ pub async fn destroy_session(
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
 
     let result = crate::session_ops::destroy(&conn, &id, &Some(cfg), &cleanup::real_ops())?;
-    runtime
-        .0
-        .dispatch_session_lifecycle(session_lifecycle_event(
-            &session,
-            &session.status,
-            "destroyed",
-        ));
+    if session.status != "destroyed" {
+        runtime
+            .0
+            .dispatch_session_lifecycle(session_lifecycle_event(
+                &session,
+                &session.status,
+                "destroyed",
+            ));
+    }
 
     if !result.cleanup_errors.is_empty() {
         let msg = result.cleanup_errors.join("; ");

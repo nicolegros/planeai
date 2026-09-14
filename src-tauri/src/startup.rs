@@ -3,9 +3,11 @@ use tauri::{Emitter, Manager};
 
 use crate::commands::pr::poll_pr_for_session;
 use crate::commands::sessions::helpers::provider_has_hook;
+use crate::commands::sessions::lifecycle::session_lifecycle_event;
 use crate::config;
 use crate::db;
 use crate::notify::SharedNotifyState;
+use crate::plugins::PluginRuntimeHandle;
 use crate::state::{ConfigState, DbState};
 
 /// Revive sessions on startup: recreate dead tmux sessions.
@@ -148,9 +150,30 @@ pub fn start_daemon_event_listener(app_handle: &tauri::AppHandle) {
             match event {
                 Ok(Some(evt)) if evt.event == "exited" => {
                     tracing::info!(session_id = %evt.session_id, "daemon session exited");
-                    let db = app.state::<DbState>();
-                    if let Ok(conn) = db.0.lock() {
-                        let _ = db::mark_session_exited(&conn, &evt.session_id);
+                    let lifecycle_event = {
+                        let db = app.state::<DbState>();
+                        let Ok(conn) = db.0.lock() else {
+                            continue;
+                        };
+                        match db::get_session(&conn, &evt.session_id) {
+                            Ok(Some(session)) if session.status == "active" => {
+                                if db::mark_session_exited(&conn, &evt.session_id).is_ok() {
+                                    Some(session_lifecycle_event(&session, "active", "exited"))
+                                } else {
+                                    None
+                                }
+                            }
+                            Ok(_) => None,
+                            Err(error) => {
+                                tracing::warn!(session_id = %evt.session_id, %error, "failed to read daemon session before exit transition");
+                                None
+                            }
+                        }
+                    };
+                    if let Some(event) = lifecycle_event {
+                        app.state::<PluginRuntimeHandle>()
+                            .0
+                            .dispatch_session_lifecycle(event);
                     }
                     let _ = app.emit(
                         "pty-exited",

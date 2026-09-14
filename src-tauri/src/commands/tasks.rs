@@ -304,19 +304,7 @@ pub async fn move_task_item(
                 // Archive sessions linked to this task
                 let conn = db.lock().map_err(|e| e.to_string())?;
                 archived_sessions =
-                    planeai_core::services::SessionService::list_by_task_key(&conn, &key)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|session| session.status != "archived")
-                        .map(|session| {
-                            db::get_session(&conn, &session.id)
-                                .map_err(|error| error.to_string())?
-                                .ok_or(
-                                    "session disappeared before it could be archived".to_string(),
-                                )
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                crate::session_ops::archive_sessions_for_task(&conn, &key, &Some(cfg));
+                    crate::session_ops::archive_sessions_for_task(&conn, &key, &Some(cfg));
             }
 
             Ok((archived_sessions, events))

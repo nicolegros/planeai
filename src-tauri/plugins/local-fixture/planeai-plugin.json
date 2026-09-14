@@ -19,7 +19,8 @@
     "sessions.read",
     "tasks.read",
     "tasks.create",
-    "task-events"
+    "task-events",
+    "session-events"
   ],
   "ui_contributions": [
     { "id": "fixture", "label": "Fixture", "placement": "main-pane", "entrypoint": "ui/entry.js" }

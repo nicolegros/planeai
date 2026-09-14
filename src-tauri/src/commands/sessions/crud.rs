@@ -162,7 +162,7 @@ pub fn mark_exited(
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
     db::mark_session_exited(&conn, &session_id).map_err(|e| e.to_string())?;
-    if previous.status != "exited" {
+    if previous.status == "active" {
         runtime
             .0
             .dispatch_session_lifecycle(session_lifecycle_event(

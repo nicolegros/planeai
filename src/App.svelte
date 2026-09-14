@@ -79,6 +79,7 @@
   let pluginInventory = $state<import("./lib/types").PluginInventory[]>([]);
   const pendingShellCommands = new Map<string, string>();
   let pluginSessionActions = $state<PluginSessionAction[]>([]);
+  let pluginSessionActionsRevision = 0;
 
   // PR form state
   let showPrForm = $state(false);
@@ -913,6 +914,11 @@
   async function refreshPlugins(): Promise<boolean> {
     try {
       pluginInventory = await pluginsApi.list();
+      const actionRevision = pluginSessionActionsRevision;
+      const actions = await pluginsApi.listSessionActions();
+      if (actionRevision === pluginSessionActionsRevision) {
+        pluginSessionActions = actions;
+      }
       return true;
     } catch (error) {
       console.warn("Failed to load plugin inventory", error);
@@ -1047,7 +1053,6 @@
     });
     orchestrator.loadSessions();
     loadSettings().then(() => loadTheme());
-    void refreshPlugins();
 
     const cleanupEvents = orchestrator.startEventListeners();
     const cleanupSymphony = orchestrator.startSymphonyPolling();
@@ -1057,6 +1062,7 @@
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
     const unlistenPluginRuntime = listen<import("./lib/types").PluginInventory>("plugin-runtime-changed", (event) => {
+      pluginSessionActionsRevision += 1;
       pluginInventory = pluginInventory.filter((plugin) => plugin.id !== event.payload.id).concat(event.payload);
       if (event.payload.state !== "running") {
         pluginSessionActions = pluginSessionActions.filter((action) => action.plugin_id !== event.payload.id);
@@ -1064,6 +1070,7 @@
       }
     });
     const unlistenPluginActions = listen<{ plugin_id: string; actions: PluginSessionAction[] }>("plugin-session-actions", (event) => {
+      pluginSessionActionsRevision += 1;
       const { plugin_id: pluginId, actions } = event.payload;
       if (!pluginInventory.some((plugin) => plugin.id === pluginId)) return;
       pluginSessionActions = pluginSessionActions
@@ -1092,6 +1099,9 @@
       }
     });
     const onPluginShortcut = (event: KeyboardEvent) => {
+      // This capture listener runs before the host router. Defer plugin routing
+      // until propagation completes so a built-in shortcut always wins.
+      queueMicrotask(() => {
       if (event.defaultPrevented) return;
       const target = findPluginShortcut(event, sessionPanelCommands, mainPaneCommands);
       if (!target) return;
@@ -1107,8 +1117,24 @@
         return;
       }
       openPluginContribution(target.plugin.id, target.contribution.id);
+      });
     };
     window.addEventListener("keydown", onPluginShortcut, true);
+    let pluginListenersDisposed = false;
+    const pluginListenerReady = Promise.all([
+      unlistenPluginRuntime,
+      unlistenPluginActions,
+      unlistenPluginAdvisory,
+      unlistenPluginCompletion,
+    ]);
+    void pluginListenerReady
+      .then(() => {
+        if (!pluginListenersDisposed) void refreshPlugins();
+      })
+      .catch((error) => {
+        console.warn("Failed to register plugin event listeners", error);
+        if (!pluginListenersDisposed) void refreshPlugins();
+      });
 
     notify.isInstalled().then((installed) => { if (!installed) showHookPrompt = true; });
     sessionLogs.isEnabled().then((enabled) => { logViewerEnabled = enabled; });
@@ -1238,7 +1264,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { window.removeEventListener("keydown", onPluginShortcut, true); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 

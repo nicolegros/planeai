@@ -258,6 +258,7 @@ export const symphony = {
 
 export const plugins = {
   list: () => invoke<PluginInventory[]>("list_plugins"),
+  listSessionActions: () => invoke<import("./types").PluginSessionAction[]>("list_plugin_session_actions"),
   installLocal: (sourcePath: string) =>
     invoke<PluginInventory>("install_local_plugin", { sourcePath }),
   removeLocal: (pluginId: string) => invoke("remove_local_plugin", { pluginId }),

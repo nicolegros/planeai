@@ -187,12 +187,17 @@ pub fn status(conn: &Connection) -> Result<GithubMigrationStatus, String> {
 }
 
 pub fn blocks_plugin_start(conn: &Connection) -> bool {
-    read_record(conn).ok().flatten().is_some_and(|record| {
-        !matches!(
+    match read_record(conn) {
+        Ok(Some(record)) => !matches!(
             record.state,
             GithubMigrationState::Completed | GithubMigrationState::NotNeeded
-        )
-    })
+        ),
+        Ok(None) => false,
+        Err(error) => {
+            tracing::warn!(%error, "failed to read migration ledger; refusing protected plugin startup");
+            true
+        }
+    }
 }
 
 /// Performs filesystem work only. The caller must execute it off Tauri's main thread.

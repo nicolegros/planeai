@@ -258,12 +258,17 @@ pub fn status(conn: &Connection, config: &Config) -> Result<JiraMigrationStatus,
 }
 
 pub fn blocks_plugin_start(conn: &Connection) -> bool {
-    read_record(conn).ok().flatten().is_some_and(|record| {
-        !matches!(
+    match read_record(conn) {
+        Ok(Some(record)) => !matches!(
             record.state,
             JiraMigrationState::Completed | JiraMigrationState::NotNeeded
-        )
-    })
+        ),
+        Ok(None) => false,
+        Err(error) => {
+            tracing::warn!(%error, "failed to read migration ledger; refusing protected plugin startup");
+            true
+        }
+    }
 }
 
 /// Performs only synchronous filesystem/SQLite work. The caller must run this

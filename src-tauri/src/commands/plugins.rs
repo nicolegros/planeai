@@ -13,6 +13,13 @@ pub async fn list_plugins(
 }
 
 #[tauri::command]
+pub async fn list_plugin_session_actions(
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<Vec<crate::plugins::RegisteredPluginSessionAction>, String> {
+    Ok(runtime.0.session_actions().await)
+}
+
+#[tauri::command]
 pub async fn install_local_plugin(
     source_path: String,
     runtime: State<'_, PluginRuntimeHandle>,

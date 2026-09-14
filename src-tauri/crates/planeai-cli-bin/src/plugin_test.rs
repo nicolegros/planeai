@@ -69,6 +69,10 @@ pub fn run(package: &Path, scenario: Option<&Path>) -> Result<()> {
         )?;
         request_id += 1;
     }
+    if session_lifecycle_delivery_is_granted(&capabilities, &subscriptions) {
+        process.call(request_id, "plugin.sessionLifecycle", json!({ "event": { "type": "status_changed", "session_id": "planeai-cli-plugin-test", "project_id": "plugin-test", "branch": "plugin-test", "linked_task_key": Value::Null, "previous_status": "active", "status": "exited" } }))?;
+        request_id += 1;
+    }
     let shutdown_deadline = Instant::now() + SHUTDOWN_TIMEOUT;
     process.call_before_deadline(
         request_id,
@@ -150,7 +154,11 @@ fn parse_scenario_line(line: &str) -> Result<ScenarioRequest> {
 fn is_host_controlled_method(method: &str) -> bool {
     matches!(
         method,
-        "plugin.handshake" | "plugin.shutdown" | "plugin.taskLifecycle" | "$/cancelRequest"
+        "plugin.handshake"
+            | "plugin.shutdown"
+            | "plugin.taskLifecycle"
+            | "plugin.sessionLifecycle"
+            | "$/cancelRequest"
     )
 }
 
@@ -183,6 +191,18 @@ fn lifecycle_delivery_is_granted(capabilities: &[String], subscriptions: &[Strin
         && subscriptions
             .iter()
             .any(|subscription| subscription == "task.lifecycle")
+}
+
+fn session_lifecycle_delivery_is_granted(
+    capabilities: &[String],
+    subscriptions: &[String],
+) -> bool {
+    capabilities
+        .iter()
+        .any(|capability| capability == "session-events")
+        && subscriptions
+            .iter()
+            .any(|subscription| subscription == "session.lifecycle")
 }
 
 fn read_manifest(package: &Path) -> Result<Value> {

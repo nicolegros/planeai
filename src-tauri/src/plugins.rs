@@ -11,7 +11,7 @@ use planeai_tasks::sqlite::SqliteRepository;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex as AsyncMutex, Notify};
@@ -1138,6 +1138,7 @@ struct RuntimeProcess {
     data_dir: PathBuf,
     capabilities: HashSet<PluginHostCapability>,
     lifecycle_event_subscriptions: AsyncMutex<HashSet<String>>,
+    session_actions: AsyncMutex<Vec<PluginSessionAction>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1148,11 +1149,19 @@ struct SessionActionsRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct PluginSessionAction {
-    id: String,
-    label: String,
+pub struct PluginSessionAction {
+    pub id: String,
+    pub label: String,
     #[serde(default)]
-    providers: Vec<String>,
+    pub providers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RegisteredPluginSessionAction {
+    pub plugin_id: String,
+    pub id: String,
+    pub label: String,
+    pub providers: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -1455,20 +1464,19 @@ impl RuntimeProcess {
                 {
                     Err("plugin capability is not granted".to_string())
                 } else {
-                    serde_json::from_value(params)
+                    let actions = serde_json::from_value(params)
                         .map_err(|error| format!("invalid plugin session actions: {error}"))
-                        .and_then(validate_plugin_session_actions)
-                        .and_then(|actions| {
-                            self.app
-                                .emit(
-                                    "plugin-session-actions",
-                                    serde_json::json!({ "plugin_id": self.plugin_id, "actions": actions }),
-                                )
-                                .map_err(|error| {
-                                    format!("failed to emit plugin session actions: {error}")
-                                })
-                        })
-                        .map(|_| serde_json::json!({ "accepted": true }))
+                        .and_then(validate_plugin_session_actions)?;
+                    *self.session_actions.lock().await = actions.clone();
+                    self.app
+                        .emit(
+                            "plugin-session-actions",
+                            serde_json::json!({ "plugin_id": self.plugin_id, "actions": actions }),
+                        )
+                        .map_err(|error| {
+                            format!("failed to emit plugin session actions: {error}")
+                        })?;
+                    Ok(serde_json::json!({ "accepted": true }))
                 }
             }
             "host.sessions.advisory" => {
@@ -1527,14 +1535,45 @@ impl RuntimeProcess {
                 }
             }
             _ => {
-                execute_host_task(
+                let result = execute_host_task(
                     &self.plugin_id,
                     &self.capabilities,
                     &self.data_dir,
                     &method,
                     params,
                 )
-                .await
+                .await;
+                if method == "host.sessions.transitionLinkedTask" {
+                    if let Ok(value) = &result {
+                        if let Some(sessions) =
+                            value.get("archived_sessions").and_then(Value::as_array)
+                        {
+                            let runtime = self.app.state::<PluginRuntimeHandle>();
+                            let pty_state = self.app.state::<crate::state::PtyState>();
+                            let mut archived_any_session = false;
+                            for session in sessions {
+                                if let Ok(session) =
+                                    serde_json::from_value::<crate::db::Session>(session.clone())
+                                {
+                                    pty_state.0.detach(&session.id);
+                                    runtime.0.dispatch_session_lifecycle(
+                                        crate::commands::sessions::lifecycle::session_lifecycle_event(&session, &session.status, "archived"),
+                                    );
+                                    archived_any_session = true;
+                                }
+                            }
+                            if archived_any_session {
+                                let _ = self.app.emit("sessions-changed", ());
+                            }
+                        }
+                    }
+                }
+                result.map(|mut value| {
+                    if let Some(object) = value.as_object_mut() {
+                        object.remove("archived_sessions");
+                    }
+                    value
+                })
             }
         };
         let frame = encode_host_callback_response(id, result)?;
@@ -2070,8 +2109,13 @@ fn transition_linked_plugin_task(session_id: &str, status: Status) -> Result<Val
             events,
         ));
     }
+    let archived_sessions = if status == Status::Done {
+        crate::session_ops::archive_sessions_for_task(&conn, &task_key, &None)
+    } else {
+        Vec::new()
+    };
     serde_json::to_value(task)
-        .map(|task| serde_json::json!({ "task": task }))
+        .map(|task| serde_json::json!({ "task": task, "archived_sessions": archived_sessions }))
         .map_err(|error| error.to_string())
 }
 
@@ -2314,6 +2358,37 @@ impl PluginRuntimeSupervisor {
         }
     }
 
+    /// Return the current sidecar-registered session actions. Registrations are
+    /// retained by each running runtime process so the frontend can resync after
+    /// its event listener and inventory load complete.
+    pub async fn session_actions(&self) -> Vec<RegisteredPluginSessionAction> {
+        let processes = self
+            .processes
+            .lock()
+            .await
+            .iter()
+            .map(|(plugin_id, process)| (plugin_id.clone(), process.clone()))
+            .collect::<Vec<_>>();
+        let mut actions = Vec::new();
+        for (plugin_id, process) in processes {
+            actions.extend(
+                process
+                    .session_actions
+                    .lock()
+                    .await
+                    .iter()
+                    .cloned()
+                    .map(|action| RegisteredPluginSessionAction {
+                        plugin_id: plugin_id.clone(),
+                        id: action.id,
+                        label: action.label,
+                        providers: action.providers,
+                    }),
+            );
+        }
+        actions
+    }
+
     pub async fn list(&self) -> Result<Vec<PluginInventory>, String> {
         self.with_db(|conn| list_inventory(conn).map_err(|e| e.to_string()))
             .await
@@ -2443,6 +2518,7 @@ impl PluginRuntimeSupervisor {
             }
         };
         if was_enabled {
+            self.ensure_plugin_migration_ready(&inventory.id).await?;
             return self.enable_inner(&inventory.id).await;
         }
         self.emit_change(&inventory.id).await;
@@ -2623,17 +2699,21 @@ impl PluginRuntimeSupervisor {
                 if !subscribed {
                     continue;
                 }
-                if let Err(error) = supervisor
-                    .call_internal(
-                        &plugin_id,
-                        "plugin.sessionLifecycle",
-                        serde_json::json!({ "event": event }),
-                        true,
-                    )
-                    .await
-                {
-                    tracing::warn!(plugin_id, %error, "session lifecycle delivery failed");
-                }
+                let supervisor = Arc::clone(&supervisor);
+                let event = event.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = supervisor
+                        .call_internal(
+                            &plugin_id,
+                            "plugin.sessionLifecycle",
+                            serde_json::json!({ "event": event }),
+                            true,
+                        )
+                        .await
+                    {
+                        tracing::warn!(plugin_id, %error, "session lifecycle delivery failed");
+                    }
+                });
             }
         });
     }
@@ -2764,6 +2844,10 @@ impl PluginRuntimeSupervisor {
     async fn restore_after_failed_update_inner(&self, plugin_ids: &[String]) {
         self.shutting_down.store(false, Ordering::Release);
         for plugin_id in plugin_ids {
+            if let Err(error) = self.ensure_plugin_migration_ready(plugin_id).await {
+                tracing::warn!(plugin_id, %error, "skipped protected plugin restore after update failure");
+                continue;
+            }
             if let Err(error) = self.enable_inner(plugin_id).await {
                 tracing::warn!(plugin_id, %error, "failed to restore plugin runtime after update install failure");
             }
@@ -2820,25 +2904,34 @@ impl PluginRuntimeSupervisor {
         Ok(())
     }
 
+    async fn ensure_plugin_migration_ready(&self, plugin_id: &str) -> Result<(), String> {
+        let blocked = match plugin_id {
+            JIRA_PLUGIN_ID => {
+                self.with_db(|conn| Ok(crate::jira_migration::blocks_plugin_start(conn)))
+                    .await?
+            }
+            GITHUB_PLUGIN_ID => {
+                self.with_db(|conn| Ok(crate::github_migration::blocks_plugin_start(conn)))
+                    .await?
+            }
+            _ => false,
+        };
+        if !blocked {
+            return Ok(());
+        }
+        Err(match plugin_id {
+            JIRA_PLUGIN_ID => "Jira is waiting for explicit legacy migration. Use Migrate and enable Jira plugin in Plugins first.",
+            GITHUB_PLUGIN_ID => "GitHub migration is required before enabling the GitHub plugin. Migrate legacy GitHub pull-request mappings first.",
+            _ => unreachable!(),
+        }.to_string())
+    }
+
     pub async fn enable(&self, plugin_id: &str) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
         if self.shutting_down.load(Ordering::Acquire) {
             return Err("plugin runtime is shutting down".to_string());
         }
-        if plugin_id == JIRA_PLUGIN_ID
-            && self
-                .with_db(|conn| Ok(crate::jira_migration::blocks_plugin_start(conn)))
-                .await?
-        {
-            return Err("Jira is waiting for explicit legacy migration. Use Migrate and enable Jira plugin in Plugins first.".to_string());
-        }
-        if plugin_id == GITHUB_PLUGIN_ID
-            && self
-                .with_db(|conn| Ok(crate::github_migration::blocks_plugin_start(conn)))
-                .await?
-        {
-            return Err("GitHub migration is required before enabling the GitHub plugin. Migrate legacy GitHub pull-request mappings first.".to_string());
-        }
+        self.ensure_plugin_migration_ready(plugin_id).await?;
         self.enable_inner(plugin_id).await
     }
 
@@ -3040,13 +3133,7 @@ impl PluginRuntimeSupervisor {
         if self.shutting_down.load(Ordering::Acquire) {
             return Err("plugin runtime is shutting down".to_string());
         }
-        if plugin_id == JIRA_PLUGIN_ID
-            && self
-                .with_db(|conn| Ok(crate::jira_migration::blocks_plugin_start(conn)))
-                .await?
-        {
-            return Err("Jira is waiting for explicit legacy migration. Use Migrate and enable Jira plugin in Plugins first.".to_string());
-        }
+        self.ensure_plugin_migration_ready(plugin_id).await?;
         self.disable_inner(plugin_id).await?;
         self.enable_inner(plugin_id).await
     }
@@ -3337,6 +3424,7 @@ async fn spawn_runtime(
         data_dir,
         capabilities,
         lifecycle_event_subscriptions: AsyncMutex::new(HashSet::new()),
+        session_actions: AsyncMutex::new(Vec::new()),
     })
 }
 
