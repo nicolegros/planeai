@@ -25,10 +25,11 @@
     skipAttach?: boolean;
     onUserInput?: () => void;
     onAttached?: () => void;
+    onAttachError?: (error: unknown) => void;
     onFocused?: (event: PointerEvent | FocusEvent) => void;
   }
 
-  let { sessionId, visible, focused, exited = false, skipAttach = false, onUserInput, onAttached, onFocused }: Props = $props();
+  let { sessionId, visible, focused, exited = false, skipAttach = false, onUserInput, onAttached, onAttachError, onFocused }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let term: Terminal;
@@ -289,7 +290,8 @@
         const { rows, cols } = term;
         pty.resize(sessionId, rows, cols);
       }).catch((e) => {
-        showSnackbar(String(e));
+        if (onAttachError) onAttachError(e);
+        else showSnackbar(String(e));
       });
     } else if (!exited) {
       // Attach immediately in onMount to avoid $effect double-fire
@@ -299,7 +301,8 @@
         const { rows, cols } = term;
         pty.resize(sessionId, rows, cols);
       }).catch((e) => {
-        showSnackbar(String(e));
+        if (onAttachError) onAttachError(e);
+        else showSnackbar(String(e));
       });
     }
 

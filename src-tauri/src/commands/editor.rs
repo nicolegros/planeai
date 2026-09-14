@@ -19,10 +19,9 @@ fn resolve_file_path(project_path: &str, file_path: &str) -> Result<String, Stri
     if file.as_os_str().is_empty() {
         return Err("File path is required".to_string());
     }
-    if !file.is_absolute()
-        && file
-            .components()
-            .any(|component| component == Component::ParentDir)
+    if file
+        .components()
+        .any(|component| component == Component::ParentDir)
     {
         return Err("File path must not contain '..'".to_string());
     }
@@ -32,7 +31,14 @@ fn resolve_file_path(project_path: &str, file_path: &str) -> Result<String, Stri
     } else {
         PathBuf::from(project_path).join(file)
     };
-    Ok(target.to_string_lossy().into_owned())
+    let canonical_project = std::fs::canonicalize(project_path)
+        .map_err(|error| format!("Cannot resolve project path: {error}"))?;
+    let canonical_target = std::fs::canonicalize(target)
+        .map_err(|error| format!("Cannot resolve file path: {error}"))?;
+    if !canonical_target.starts_with(&canonical_project) {
+        return Err("File path is outside the project".to_string());
+    }
+    Ok(canonical_target.to_string_lossy().into_owned())
 }
 
 fn resolve_editor_launch(
@@ -84,13 +90,13 @@ async fn session_project_path(
     .await
 }
 
-fn configured_launch(
-    config: &Config,
+async fn configured_launch(
+    config: Config,
     project_path: String,
-    file_path: &str,
-    mode: &str,
+    file_path: String,
+    mode: &'static str,
 ) -> Result<ResolvedEditorLaunch, String> {
-    resolve_editor_launch(config, project_path, file_path, mode)
+    super::blocking(move || resolve_editor_launch(&config, project_path, &file_path, mode)).await
 }
 
 #[cfg(not(windows))]
@@ -106,7 +112,7 @@ fn terminal_quote(value: &str) -> String {
         .replace('|', "^|")
         .replace('<', "^<")
         .replace('>', "^>")
-        .replace('%', "%%")
+        .replace('%', "^%")
         .replace('"', "\\\"");
     format!("\"{escaped}\"")
 }
@@ -127,7 +133,7 @@ pub async fn get_terminal_editor_command(
 ) -> Result<String, String> {
     let config = config_state.0.lock().map_err(|e| e.to_string())?.clone();
     let project_path = session_project_path(session_id, db_state).await?;
-    let launch = configured_launch(&config, project_path, &file_path, "terminal")?;
+    let launch = configured_launch(config, project_path, file_path, "terminal").await?;
     Ok(terminal_command(&launch))
 }
 
@@ -141,7 +147,7 @@ pub async fn open_external_editor(
     let config = config_state.0.lock().map_err(|e| e.to_string())?.clone();
     let extra_path_dirs = config.resolved_extra_path_dirs();
     let project_path = session_project_path(session_id, db_state).await?;
-    let launch = configured_launch(&config, project_path, &file_path, "external")?;
+    let launch = configured_launch(config, project_path, file_path, "external").await?;
 
     let mut command = tokio::process::Command::new(&launch.command);
     command
@@ -192,6 +198,17 @@ mod tests {
 
     #[test]
     fn expands_file_and_project_placeholders() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("repo");
+        let source = project.join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        let file = source.join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let project_path = project.to_string_lossy().into_owned();
+        let file_path = std::fs::canonicalize(&file)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         let config = Config {
             editor: Some(editor(
                 "external",
@@ -201,13 +218,46 @@ mod tests {
             ..Config::default()
         };
         let launch =
-            resolve_editor_launch(&config, "/work/repo".to_string(), "src/main.rs", "external")
+            resolve_editor_launch(&config, project_path.clone(), "src/main.rs", "external")
                 .unwrap();
 
-        assert_eq!(launch.file_path, "/work/repo/src/main.rs");
+        assert_eq!(launch.file_path, file_path);
         assert_eq!(
             launch.args,
-            vec!["--goto", "/work/repo/src/main.rs", "/work/repo"]
+            vec!["--goto", file_path.as_str(), project_path.as_str()]
+        );
+    }
+
+    #[test]
+    fn rejects_absolute_files_outside_the_project() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("repo");
+        let outside = temp.path().join("secret.rs");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(&outside, "secret").unwrap();
+
+        assert_eq!(
+            resolve_file_path(&project.to_string_lossy(), &outside.to_string_lossy()),
+            Err("File path is outside the project".to_string())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinks_that_escape_the_project() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("repo");
+        let outside = temp.path().join("secret.rs");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(&outside, "secret").unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("linked.rs")).unwrap();
+
+        assert_eq!(
+            resolve_file_path(
+                &project.to_string_lossy(),
+                &project.join("linked.rs").to_string_lossy()
+            ),
+            Err("File path is outside the project".to_string())
         );
     }
 

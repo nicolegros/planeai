@@ -8,7 +8,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use chrono::Utc;
 use planeai_pty::{LocalPtyConfig, LocalPtySession, PtyEvent, PtyEventSink};
@@ -21,7 +21,7 @@ use crate::session_backend::{SessionBackend, WriteAck};
 /// Forwards planeai-pty events to the Tauri frontend via the existing output channel.
 pub struct TauriPtySink {
     session_id: String,
-    on_data: Channel<Response>,
+    on_data: Arc<RwLock<Option<Channel<Response>>>>,
     app: AppHandle,
     cancelled: Arc<AtomicBool>,
     observer: Arc<dyn OutputObserver>,
@@ -37,7 +37,7 @@ impl TauriPtySink {
     ) -> Self {
         Self {
             session_id,
-            on_data,
+            on_data: Arc::new(RwLock::new(Some(on_data))),
             app,
             cancelled,
             observer,
@@ -50,9 +50,13 @@ impl PtyEventSink for TauriPtySink {
         match event {
             PtyEvent::Output { bytes, .. } => {
                 self.observer.on_output(&self.session_id, bytes.len());
-                self.on_data
-                    .send(Response::new(bytes))
-                    .map_err(|e| anyhow::anyhow!("channel send failed: {e}"))?;
+                let mut on_data = self.on_data.write().unwrap();
+                if let Some(channel) = on_data.as_ref() {
+                    if let Err(error) = channel.send(Response::new(bytes)) {
+                        tracing::debug!(session_id = %self.session_id, "frontend PTY channel closed: {error}");
+                        *on_data = None;
+                    }
+                }
             }
             PtyEvent::Exit { .. } => {
                 if !self.cancelled.load(Ordering::Acquire) {
@@ -73,6 +77,7 @@ impl PtyEventSink for TauriPtySink {
 /// SessionBackend implementation backed by planeai-pty's LocalPtySession.
 pub struct PlaneaiPtyBackend {
     session: LocalPtySession,
+    tauri_sink: Arc<TauriPtySink>,
 }
 
 impl PlaneaiPtyBackend {
@@ -94,7 +99,7 @@ impl PlaneaiPtyBackend {
     ) -> Result<Self, String> {
         let full_command = command.to_string();
 
-        let tauri_sink: Arc<dyn PtyEventSink> = Arc::new(TauriPtySink::new(
+        let tauri_sink = Arc::new(TauriPtySink::new(
             session_id.to_string(),
             on_data,
             app,
@@ -132,12 +137,15 @@ impl PlaneaiPtyBackend {
                         tracing::warn!("failed to write session metadata: {e}");
                     }
                     let tracking_sink = TrackingLogSink::new(log_sink, meta_path, meta);
-                    Arc::new(TeeSink::new(tauri_sink, vec![Arc::new(tracking_sink)]))
+                    Arc::new(TeeSink::new(
+                        tauri_sink.clone(),
+                        vec![Arc::new(tracking_sink)],
+                    ))
                 }
-                None => tauri_sink,
+                None => tauri_sink.clone(),
             }
         } else {
-            tauri_sink
+            tauri_sink.clone()
         };
 
         let config = LocalPtyConfig {
@@ -152,7 +160,14 @@ impl PlaneaiPtyBackend {
 
         let session =
             LocalPtySession::spawn(config, sink).map_err(|e| format!("planeai-pty spawn: {e}"))?;
-        Ok(Self { session })
+        Ok(Self {
+            session,
+            tauri_sink,
+        })
+    }
+
+    fn replace_output_channel(&self, on_data: Channel<Response>) {
+        *self.tauri_sink.on_data.write().unwrap() = Some(on_data);
     }
 }
 
@@ -176,6 +191,14 @@ impl SessionBackend for PlaneaiPtyBackend {
     fn resume(&self) -> Result<(), String> {
         self.session.resume();
         Ok(())
+    }
+
+    fn rebind_output(&self, on_data: Channel<Response>) -> bool {
+        if self.session.has_exited() {
+            return false;
+        }
+        self.replace_output_channel(on_data);
+        true
     }
 
     fn detach(&self) {

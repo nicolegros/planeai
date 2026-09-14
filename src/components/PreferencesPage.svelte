@@ -234,6 +234,8 @@
   async function refreshConfig() {
     try {
       await refreshSettings();
+      editorConfigDraft = editorDraft(getSettings().editor);
+      editorConfigError = "";
       showSnackbar("Config reloaded from disk", "success");
     } catch (e) {
       showSnackbar(`Failed to refresh config: ${e}`, "error");
@@ -664,6 +666,7 @@
           <button
             class="rounded-md px-3 py-2 text-sm font-medium transition-colors {editorConfigDraft.mode === option.value ? 'bg-accent text-on-accent' : 'bg-panel-hi text-t1 hover:bg-panel-hi'}"
             onclick={() => setEditorMode(option.value as EditorMode)}
+            aria-pressed={editorConfigDraft.mode === option.value}
           >{option.label}</button>
         {/each}
       </div>
@@ -684,7 +687,7 @@
           </div>
         </div>
       {/if}
-      {#if editorConfigError}<p class="text-xs text-red-500" role="alert">{editorConfigError}</p>{/if}
+      {#if editorConfigError}<p class="text-xs text-status-exited" role="alert">{editorConfigError}</p>{/if}
       <Button type="button" onclick={saveEditorSettings}>Save editor settings</Button>
     </section>
 

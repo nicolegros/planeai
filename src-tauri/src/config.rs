@@ -51,8 +51,18 @@ pub struct EditorConfig {
     pub args: Vec<String>,
 }
 
+const INVALID_EDITOR_MODE: &str = "__invalid__";
+
 fn default_editor_mode() -> String {
     "embedded".to_string()
+}
+
+fn invalid_editor_config() -> EditorConfig {
+    EditorConfig {
+        mode: INVALID_EDITOR_MODE.to_string(),
+        command: String::new(),
+        args: Vec::new(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -465,19 +475,36 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         let mut user_val: serde_json::Value = match serde_json::from_reader(stripped) {
             Ok(v) => v,
             Err(e) => {
-                return (
-                    Config::default(),
-                    vec![format!("Failed to parse config.json: {e}")],
-                );
+                let config = Config {
+                    editor: Some(invalid_editor_config()),
+                    ..Config::default()
+                };
+                return (config, vec![format!("Failed to parse config.json: {e}")]);
             }
         };
         // Migrate legacy task_managers → task_management
         migrate_legacy_task_managers(&mut user_val);
         let default_val = serde_json::to_value(Config::default()).unwrap();
         let merged = merge_top_level(default_val, user_val);
-        let mut config: Config = serde_json::from_value(merged).unwrap();
+        let mut config: Config = match serde_json::from_value(merged) {
+            Ok(config) => config,
+            Err(error) => {
+                let config = Config {
+                    editor: Some(invalid_editor_config()),
+                    ..Config::default()
+                };
+                return (
+                    config,
+                    vec![format!("Failed to deserialize config.json: {error}")],
+                );
+            }
+        };
         backfill_provider_defaults(&mut config);
         let migrated = migrate_autonomous_prompt_template(&mut config);
+        if let Err(error) = validate(&config) {
+            config.editor = Some(invalid_editor_config());
+            return (config, vec![format!("Invalid config.json: {error}")]);
+        }
         if migrated {
             // Persist the migration so the file reflects the new structure
             save(config_dir, &config).ok();

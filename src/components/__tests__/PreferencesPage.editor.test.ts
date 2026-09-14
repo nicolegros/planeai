@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
     providers: { kiro: { command: "kiro-cli chat", yolo_flag: null } },
     default_provider: "kiro",
+    editor: null as { mode: string; command: string; args: string[] } | null,
   },
 }));
 
@@ -53,6 +54,7 @@ function clickButton(label: string) {
 
 afterEach(() => {
   mocks.updateSettings.mockClear();
+  mocks.config.editor = null;
   document.body.replaceChildren();
 });
 
@@ -97,4 +99,57 @@ describe("PreferencesPage editor", () => {
     expect(document.body.textContent).toContain("Editor executable is required.");
     unmount(component);
   });
+});
+
+it("resets the editor draft when configuration is refreshed from disk", async () => {
+  const refreshSettings = await import("../../lib/settings.svelte").then(
+    (settings) => settings.refreshSettings as ReturnType<typeof vi.fn>,
+  );
+  refreshSettings.mockImplementation(async () => {
+    mocks.config.editor = { mode: "terminal", command: "nvim", args: ["{file}"] };
+  });
+
+  const target = document.body.appendChild(document.createElement("div"));
+  const component = mount(PreferencesPage, { target });
+  await tick();
+  clickButton("Editor");
+  await tick();
+  clickButton("External app");
+  await tick();
+  clickButton("VS Code");
+  await tick();
+  clickButton("More");
+  await tick();
+  clickButton("Refresh");
+  await tick();
+  clickButton("Editor");
+  await tick();
+  clickButton("Save editor settings");
+  await tick();
+
+  expect(mocks.updateSettings).toHaveBeenCalledWith({
+    editor: { mode: "terminal", command: "nvim", args: ["{file}"] },
+  });
+  unmount(component);
+});
+
+it("exposes the selected file editor mode to assistive technology", async () => {
+  const target = document.body.appendChild(document.createElement("div"));
+  const component = mount(PreferencesPage, { target });
+  await tick();
+  clickButton("Editor");
+  await tick();
+
+  const embedded = Array.from(document.querySelectorAll("button")).find(
+    (candidate) => candidate.textContent?.trim() === "Embedded",
+  );
+  expect(embedded?.getAttribute("aria-pressed")).toBe("true");
+  clickButton("External app");
+  await tick();
+  expect(embedded?.getAttribute("aria-pressed")).toBe("false");
+  const external = Array.from(document.querySelectorAll("button")).find(
+    (candidate) => candidate.textContent?.trim() === "External app",
+  );
+  expect(external?.getAttribute("aria-pressed")).toBe("true");
+  unmount(component);
 });

@@ -104,7 +104,10 @@ fn load_returns_defaults_with_warning_on_invalid_json() {
 
     let (config, warnings) = load(config_dir);
 
-    assert_eq!(config, Config::default());
+    assert_eq!(
+        config.editor.as_ref().map(|editor| editor.mode.as_str()),
+        Some("__invalid__")
+    );
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("parse"));
 }
@@ -655,4 +658,54 @@ fn editor_validation_rejects_invalid_non_embedded_settings() {
         validate(&config),
         Err("Editor arguments must include {file}".to_string())
     );
+}
+
+#[test]
+fn load_returns_defaults_with_warning_for_malformed_editor_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path();
+    fs::write(config_dir.join("config.json"), r#"{ "editor": "code" }"#).unwrap();
+
+    let (config, warnings) = load(config_dir);
+
+    assert_eq!(
+        config.editor.as_ref().map(|editor| editor.mode.as_str()),
+        Some("__invalid__")
+    );
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Failed to deserialize config.json"));
+}
+
+#[test]
+fn load_marks_editor_invalid_when_a_non_editor_field_is_malformed() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path();
+    fs::write(
+        config_dir.join("config.json"),
+        r#"{ "terminal": { "font_size": "large" } }"#,
+    )
+    .unwrap();
+
+    let (config, warnings) = load(config_dir);
+
+    assert_eq!(
+        config.editor.as_ref().map(|editor| editor.mode.as_str()),
+        Some("__invalid__")
+    );
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Failed to deserialize config.json"));
+}
+#[test]
+fn refresh_rejects_invalid_editor_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path();
+    fs::write(
+        config_dir.join("config.json"),
+        r#"{ "editor": { "mode": "terminal", "command": "", "args": [] } }"#,
+    )
+    .unwrap();
+
+    let error = refresh(config_dir).unwrap_err();
+
+    assert!(error.contains("Editor executable is required"));
 }

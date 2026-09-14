@@ -18,11 +18,18 @@ fn shell_args() -> &'static [&'static str] {
 }
 
 fn shell_command(shell: &str) -> String {
-    let args = shell_args();
-    if args.is_empty() {
-        shell.to_string()
-    } else {
-        format!("{shell} {}", args.join(" "))
+    #[cfg(windows)]
+    {
+        return format!("\"{}\"", shell.replace('"', "\\\""));
+    }
+    #[cfg(not(windows))]
+    {
+        let args = shell_args();
+        if args.is_empty() {
+            shell.to_string()
+        } else {
+            format!("{shell} {}", args.join(" "))
+        }
     }
 }
 
@@ -166,6 +173,10 @@ mod tests {
     #[test]
     fn does_not_pass_a_login_flag_to_cmd() {
         assert!(shell_args().is_empty());
-        assert_eq!(shell_command("cmd.exe"), "cmd.exe");
+        assert_eq!(shell_command("cmd.exe"), "\"cmd.exe\"");
+        assert_eq!(
+            shell_command(r"C:\Program Files\Git\bin\bash.exe"),
+            r#""C:\Program Files\Git\bin\bash.exe""#
+        );
     }
 }

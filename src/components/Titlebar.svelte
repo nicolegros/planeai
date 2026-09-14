@@ -11,6 +11,7 @@
     sidebarVisible: boolean;
     tabs: Tab[];
     activeTabIndex: number;
+    activeTabId?: string;
     prUrl: string | null;
     prState: string | null;
     ciStatus: "passing" | "failing" | "pending" | null;
@@ -19,7 +20,7 @@
     symphonyStatus: { active: boolean; slots_used: number; max_concurrent: number } | null;
     runningCount: number;
     activeProvider: string | null;
-    onSelectTab: (index: number) => void;
+    onSelectTab: (index: number, tabId?: string) => void;
     onCloseTab: (index: number) => void;
     onAddTab: () => void;
     onCreatePr?: () => void;
@@ -27,7 +28,7 @@
     onTogglePrPanel?: () => void;
   }
 
-  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, prState, ciStatus, hasChanges, sessionId, symphonyStatus, runningCount, activeProvider, onSelectTab, onCloseTab, onAddTab, onCreatePr, onOpenCommand, onTogglePrPanel }: Props = $props();
+  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, activeTabId, prUrl, prState, ciStatus, hasChanges, sessionId, symphonyStatus, runningCount, activeProvider, onSelectTab, onCloseTab, onAddTab, onCreatePr, onOpenCommand, onTogglePrPanel }: Props = $props();
 
   const platformPadding = IS_MAC ? "pl-[72px]" : "pr-36";
 
@@ -54,7 +55,7 @@
   {/if}
 
   <!-- Inline tabs -->
-  <TabStrip {tabs} {activeTabIndex} onSelectTab={onSelectTab} onAddTab={onAddTab} />
+  <TabStrip {tabs} {activeTabIndex} {activeTabId} onSelectTab={onSelectTab} onAddTab={onAddTab} />
 
   <!-- Right cluster -->
   <div class="ml-auto flex items-center gap-3 shrink-0">
