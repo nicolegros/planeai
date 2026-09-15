@@ -14,7 +14,7 @@
   } from "../lib/language-server-profile";
   import { loadTheme } from "../lib/theme-loader";
   import { showSnackbar } from "../lib/snackbar.svelte";
-  import { checkForUpdates, getSettingsUpdateState, resetManualUpdateState, setInstalling } from "../lib/updater.svelte";
+  import { checkForUpdates, getSettingsUpdateState, initUpdateListener, resetManualUpdateState, setInstalling, setLaunchUpdateAvailable } from "../lib/updater.svelte";
   import { Select, Input, Button, Dialog } from "./ui";
   import { Palette, Bot, ListTodo, Settings, RefreshCw, Puzzle, Code } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
@@ -115,6 +115,13 @@
 
   onMount(async () => {
     window.addEventListener("keydown", handleKeydown, true);
+    await initUpdateListener();
+    try {
+      const update = await updater.getPending();
+      if (update) setLaunchUpdateAvailable(update);
+    } catch (error) {
+      console.warn("Failed to load pending update:", error);
+    }
     await loadSettings();
     editorConfigDraft = editorDraft(config.editor);
     pluginInventory = await plugins.list();
@@ -902,7 +909,7 @@
             <p class="text-sm text-t1">PlaneAI v{appVersion}</p>
           {:else if appVersionError}
             <p class="text-sm text-t1">Unable to determine PlaneAI version</p>
-            <p class="text-xs text-red-500 break-words">{appVersionError}</p>
+            <p class="text-xs text-status-exited break-words" role="alert">{appVersionError}</p>
           {:else}
             <p class="text-sm text-t1">PlaneAI version</p>
             <p class="text-xs text-t3">Loading installed version…</p>
@@ -913,9 +920,9 @@
           {:else if appUpdateState.installing}
             <p class="text-xs text-t3">Downloading and installing{appUpdateState.updateAvailable ? ` v${appUpdateState.updateAvailable.version}` : ""}…</p>
           {:else if installUpdateError}
-            <p class="text-xs text-red-500 whitespace-pre-wrap break-words" role="alert">{installUpdateError}</p>
+            <p class="text-xs text-status-exited whitespace-pre-wrap break-words" role="alert">{installUpdateError}</p>
           {:else if appUpdateState.checkError}
-            <p class="text-xs text-red-500 whitespace-pre-wrap break-words" role="alert">{appUpdateState.checkError}</p>
+            <p class="text-xs text-status-exited whitespace-pre-wrap break-words" role="alert">{appUpdateState.checkError}</p>
           {:else if appUpdateState.updateAvailable}
             <p class="text-xs text-t3">Update available: v{appUpdateState.updateAvailable.version}</p>
           {:else if appUpdateState.upToDate}

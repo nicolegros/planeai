@@ -720,7 +720,13 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE plugin_inventory
          SET ui_contributions = (
-             SELECT json_group_array(json_set(value, '$.placement', 'main-pane'))
+             SELECT json_group_array(
+                 CASE
+                     WHEN json_extract(value, '$.placement') = 'session.panel'
+                         THEN json_set(value, '$.placement', 'main-pane')
+                     ELSE json(value)
+                 END
+             )
              FROM json_each(plugin_inventory.ui_contributions)
          )
          WHERE json_valid(ui_contributions)
@@ -2965,7 +2971,7 @@ mod tests {
         let conn = database();
         conn.execute(
             "UPDATE plugin_inventory SET ui_contributions = ?1 WHERE id = 'jira'",
-            [r#"[{"id":"legacy-panel","label":"Legacy panel","placement":"session.panel","entrypoint":"ui/panel.js","order":null,"shortcut":null}]"#],
+            [r#"[{"id":"legacy-panel","label":"Legacy panel","placement":"session.panel","entrypoint":"ui/panel.js","order":null,"shortcut":null},{"id":"preferences","label":"Preferences","placement":"preferences","entrypoint":"ui/preferences.js","order":null,"shortcut":null}]"#],
         )
         .unwrap();
 
@@ -2976,6 +2982,10 @@ mod tests {
         assert_eq!(
             inventory.ui_contributions[0].placement,
             PluginUiPlacement::MainPane
+        );
+        assert_eq!(
+            inventory.ui_contributions[1].placement,
+            PluginUiPlacement::Preferences
         );
     }
     #[test]

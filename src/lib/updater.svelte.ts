@@ -9,9 +9,11 @@ let launchUpdateAvailable = $state<UpdateInfo | null>(null);
 let manualUpdateAvailable = $state<UpdateInfo | null>(null);
 let manualCheckStatus = $state<ManualCheckStatus>("idle");
 let manualCheckError = $state<string | null>(null);
+let manualCheckGeneration = 0;
 let installing = $state(false);
 let dismissed = $state(false);
 let initialized = false;
+let listenerRegistration: Promise<void> | null = null;
 
 export function getUpdateState() {
   return { updateAvailable: launchUpdateAvailable, installing, dismissed };
@@ -29,14 +31,20 @@ export function getSettingsUpdateState() {
   };
 }
 
+export function setLaunchUpdateAvailable(update: UpdateInfo | null) {
+  launchUpdateAvailable = update;
+}
+
 export async function checkForUpdates(): Promise<void> {
   if (manualCheckStatus === "checking") return;
 
+  const generation = ++manualCheckGeneration;
   manualCheckStatus = "checking";
   manualCheckError = null;
   manualUpdateAvailable = null;
   try {
     const update = await updater.check();
+    if (generation !== manualCheckGeneration) return;
     if (update) {
       manualUpdateAvailable = update;
       manualCheckStatus = "available";
@@ -44,6 +52,7 @@ export async function checkForUpdates(): Promise<void> {
       manualCheckStatus = "up_to_date";
     }
   } catch (error) {
+    if (generation !== manualCheckGeneration) return;
     manualCheckError = String(error);
     manualCheckStatus = "error";
   }
@@ -51,6 +60,7 @@ export async function checkForUpdates(): Promise<void> {
 
 /** Clear transient Settings feedback when the Settings window closes. */
 export function resetManualUpdateState() {
+  manualCheckGeneration += 1;
   manualUpdateAvailable = null;
   manualCheckStatus = "idle";
   manualCheckError = null;
@@ -64,13 +74,24 @@ export function setInstalling(value: boolean) {
   installing = value;
 }
 
-// Initialize the listener (call once at app startup)
-export function initUpdateListener() {
-  if (initialized) return;
-  initialized = true;
-  listen<UpdateInfo>("update-available", (event) => {
-    launchUpdateAvailable = event.payload;
-  });
+// Initialize the listener (call once per webview)
+export function initUpdateListener(): Promise<void> {
+  if (initialized) return Promise.resolve();
+  if (listenerRegistration) return listenerRegistration;
+
+  listenerRegistration = listen<UpdateInfo>("update-available", (event) => {
+    setLaunchUpdateAvailable(event.payload);
+  })
+    .then(() => {
+      initialized = true;
+    })
+    .catch((error) => {
+      console.warn("Failed to listen for update availability:", error);
+    })
+    .finally(() => {
+      listenerRegistration = null;
+    });
+  return listenerRegistration;
 }
 
 /** Focus coordination — component registers its focus function */
@@ -91,8 +112,10 @@ export function _resetForTests() {
   manualUpdateAvailable = null;
   manualCheckStatus = "idle";
   manualCheckError = null;
+  manualCheckGeneration = 0;
   installing = false;
   dismissed = false;
   initialized = false;
+  listenerRegistration = null;
   focusFn = null;
 }

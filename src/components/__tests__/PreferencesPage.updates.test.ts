@@ -3,6 +3,7 @@ import { mount, tick, unmount } from "svelte";
 
 const mocks = vi.hoisted(() => ({
   check: vi.fn(),
+  getPending: vi.fn(),
   getVersion: vi.fn(),
   install: vi.fn(),
   updateSettings: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
     ...actual,
     updater: {
       getVersion: mocks.getVersion,
+      getPending: mocks.getPending,
       check: mocks.check,
       install: mocks.install,
     },
@@ -49,6 +51,10 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: vi.
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: vi.fn() }));
 
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
 import PreferencesPage from "../PreferencesPage.svelte";
 import { _resetForTests } from "../../lib/updater.svelte";
 
@@ -63,6 +69,7 @@ function clickButton(label: string) {
 afterEach(() => {
   _resetForTests();
   mocks.check.mockReset();
+  mocks.getPending.mockReset();
   mocks.getVersion.mockReset();
   mocks.install.mockReset();
   document.body.replaceChildren();
@@ -71,6 +78,7 @@ afterEach(() => {
 describe("PreferencesPage app updates", () => {
   it("checks for updates and installs a manually discovered release from More", async () => {
     mocks.getVersion.mockResolvedValue("1.80.0");
+    mocks.getPending.mockResolvedValue(null);
     mocks.check.mockResolvedValue({ version: "1.81.0", body: null });
     mocks.install.mockResolvedValue(undefined);
 
@@ -82,7 +90,9 @@ describe("PreferencesPage app updates", () => {
 
     clickButton("More");
     await tick();
-    expect(document.body.textContent).toContain("PlaneAI v1.80.0");
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("PlaneAI v1.80.0");
+    });
 
     clickButton("Check for updates");
     await Promise.resolve();
@@ -95,6 +105,32 @@ describe("PreferencesPage app updates", () => {
     await tick();
     expect(mocks.install).toHaveBeenCalledOnce();
     expect(document.body.textContent).toContain("Downloading and installing v1.81.0");
+
+    unmount(component);
+  });
+
+  it("shows a launch-discovered update retained by the backend", async () => {
+    mocks.getVersion.mockResolvedValue("1.80.0");
+    mocks.getPending.mockResolvedValue({ version: "1.81.0", body: null });
+
+    const target = document.body.appendChild(document.createElement("div"));
+    const component = mount(PreferencesPage, { target });
+    await tick();
+    await Promise.resolve();
+    await tick();
+
+    clickButton("More");
+    await tick();
+
+    await vi.waitFor(() => {
+      expect(mocks.getPending).toHaveBeenCalledOnce();
+      expect(document.body.textContent).toContain("Update available: v1.81.0");
+    });
+    expect(
+      Array.from(document.querySelectorAll("button")).some(
+        (button) => button.textContent?.trim() === "Install & Restart",
+      ),
+    ).toBe(true);
 
     unmount(component);
   });

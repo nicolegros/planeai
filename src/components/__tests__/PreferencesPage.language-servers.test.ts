@@ -4,6 +4,10 @@ import type { AppConfig } from "../../lib/settings.svelte";
 
 const mocks = vi.hoisted(() => ({
   updateSettings: vi.fn(),
+  updater: {
+    getVersion: vi.fn(() => Promise.resolve("1.80.0")),
+    getPending: vi.fn(() => Promise.resolve(null)),
+  },
   config: {
     appearance: { mode: "system" as const, theme: "default" },
     terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
@@ -27,6 +31,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
       installCli: vi.fn(),
       getLogDir: vi.fn(() => Promise.resolve("/tmp")),
     },
+    updater: mocks.updater,
     plugins: { ...actual.plugins, list: vi.fn(() => Promise.resolve([])) },
   };
 });
@@ -35,6 +40,9 @@ vi.mock("../../lib/settings.svelte", () => ({
   getSettings: () => mocks.config,
   updateSettings: mocks.updateSettings,
   refreshSettings: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 vi.mock("../../lib/theme-loader", () => ({ loadTheme: vi.fn() }));
 vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
@@ -62,9 +70,13 @@ describe("PreferencesPage language servers", () => {
     const component = mount(PreferencesPage, { target });
     await tick();
 
-    Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.trim() === "Editor")?.click();
+    Array.from(document.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Editor")
+      ?.click();
     await tick();
-    Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.trim() === "Add profile")?.click();
+    Array.from(document.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Add profile")
+      ?.click();
     await tick();
 
     setInput("#lsp-profile-id", "local-rust-analyzer");
@@ -73,20 +85,24 @@ describe("PreferencesPage language servers", () => {
     setInput("#lsp-profile-command", "/opt/tools/rust-analyzer");
     setInput("#lsp-profile-args", "--stdio\n--config\ncheck.command=clippy");
 
-    Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.trim() === "Save profile")?.click();
+    Array.from(document.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Save profile")
+      ?.click();
     await tick();
 
     expect(mocks.updateSettings).toHaveBeenCalledWith({
       language_servers: {
         enabled: true,
-        profiles: [{
-          id: "local-rust-analyzer",
-          language_id: "rust",
-          extensions: ["rs", "rsi"],
-          command: "/opt/tools/rust-analyzer",
-          args: ["--stdio", "--config", "check.command=clippy"],
-          enabled: true,
-        }],
+        profiles: [
+          {
+            id: "local-rust-analyzer",
+            language_id: "rust",
+            extensions: ["rs", "rsi"],
+            command: "/opt/tools/rust-analyzer",
+            args: ["--stdio", "--config", "check.command=clippy"],
+            enabled: true,
+          },
+        ],
       },
     });
 
@@ -96,18 +112,22 @@ describe("PreferencesPage language servers", () => {
   it("renders a saved profile whose empty args were omitted during serialization", async () => {
     const config = mocks.config as AppConfig;
     config.language_servers = {
-      profiles: [{
-        id: "local-rust-analyzer",
-        language_id: "rust",
-        extensions: ["rs"],
-        command: "rust-analyzer",
-      }],
+      profiles: [
+        {
+          id: "local-rust-analyzer",
+          language_id: "rust",
+          extensions: ["rs"],
+          command: "rust-analyzer",
+        },
+      ],
     };
     const target = document.body.appendChild(document.createElement("div"));
     const component = mount(PreferencesPage, { target });
     await tick();
 
-    Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.trim() === "Editor")?.click();
+    Array.from(document.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Editor")
+      ?.click();
     await tick();
 
     expect(document.body.textContent).toContain("Language Server Settings");

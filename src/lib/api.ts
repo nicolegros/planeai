@@ -342,6 +342,7 @@ export interface AppUpdateInfo {
 
 export const updater = {
   getVersion: () => invoke<string>("get_app_version"),
+  getPending: () => invoke<AppUpdateInfo | null>("get_pending_update"),
   check: () => invoke<AppUpdateInfo | null>("check_for_update"),
   install: () => invoke<void>("install_update"),
 };
