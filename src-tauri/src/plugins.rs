@@ -717,6 +717,20 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+    conn.execute(
+        "UPDATE plugin_inventory
+         SET ui_contributions = (
+             SELECT json_group_array(json_set(value, '$.placement', 'main-pane'))
+             FROM json_each(plugin_inventory.ui_contributions)
+         )
+         WHERE json_valid(ui_contributions)
+           AND EXISTS (
+               SELECT 1
+               FROM json_each(plugin_inventory.ui_contributions)
+               WHERE json_extract(value, '$.placement') = 'session.panel'
+           )",
+        [],
+    )?;
     Ok(())
 }
 
@@ -2946,6 +2960,24 @@ mod tests {
         assert!(inventory.background_service.is_none());
     }
 
+    #[test]
+    fn migration_converts_legacy_session_panel_to_a_main_pane_contribution() {
+        let conn = database();
+        conn.execute(
+            "UPDATE plugin_inventory SET ui_contributions = ?1 WHERE id = 'jira'",
+            [r#"[{"id":"legacy-panel","label":"Legacy panel","placement":"session.panel","entrypoint":"ui/panel.js","order":null,"shortcut":null}]"#],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let inventory = get_inventory(&conn, "jira").unwrap().unwrap();
+        assert_eq!(inventory.ui_contributions[0].id, "legacy-panel");
+        assert_eq!(
+            inventory.ui_contributions[0].placement,
+            PluginUiPlacement::MainPane
+        );
+    }
     #[test]
     fn bundled_jira_manifest_is_valid_and_disabled_by_default() {
         let manifest = bundled_manifests().unwrap().pop().unwrap();

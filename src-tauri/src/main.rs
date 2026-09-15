@@ -428,6 +428,8 @@ fn main() {
             tick_loop,
             stop_loop,
             delete_loop,
+            updater::get_app_version,
+            updater::check_for_update,
             updater::install_update,
         ])
         .build(tauri::generate_context!())

@@ -4,7 +4,7 @@ use tauri_plugin_updater::UpdaterExt;
 use crate::plugins::PluginRuntimeHandle;
 
 #[derive(Clone, serde::Serialize)]
-struct UpdateAvailablePayload {
+pub struct UpdateInfo {
     version: String,
     body: Option<String>,
 }
@@ -18,21 +18,33 @@ pub fn check_for_updates(app: &AppHandle) {
     });
 }
 
-async fn do_check(app: &AppHandle) -> anyhow::Result<()> {
+async fn lookup_update(app: &AppHandle) -> anyhow::Result<Option<UpdateInfo>> {
     let updater = app.updater()?.check().await?;
-    if let Some(update) = updater {
-        tracing::info!("update available: {}", update.version);
-        let _ = app.emit(
-            "update-available",
-            UpdateAvailablePayload {
-                version: update.version.clone(),
-                body: update.body.clone(),
-            },
-        );
-    } else {
-        tracing::info!("app is up to date");
+    Ok(updater.map(|update| UpdateInfo {
+        version: update.version.clone(),
+        body: update.body.clone(),
+    }))
+}
+
+async fn do_check(app: &AppHandle) -> anyhow::Result<()> {
+    match lookup_update(app).await? {
+        Some(update) => {
+            tracing::info!("update available: {}", update.version);
+            let _ = app.emit("update-available", update);
+        }
+        None => tracing::info!("app is up to date"),
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn get_app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
+pub async fn check_for_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    lookup_update(&app).await.map_err(|error| error.to_string())
 }
 
 #[tauri::command]

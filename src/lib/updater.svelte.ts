@@ -1,17 +1,59 @@
 import { listen } from "@tauri-apps/api/event";
+import { updater, type AppUpdateInfo } from "./api";
 
-interface UpdatePayload {
-  version: string;
-  body: string | null;
-}
+export type UpdateInfo = AppUpdateInfo;
 
-let updateAvailable = $state<UpdatePayload | null>(null);
+type ManualCheckStatus = "idle" | "checking" | "available" | "up_to_date" | "error";
+
+let launchUpdateAvailable = $state<UpdateInfo | null>(null);
+let manualUpdateAvailable = $state<UpdateInfo | null>(null);
+let manualCheckStatus = $state<ManualCheckStatus>("idle");
+let manualCheckError = $state<string | null>(null);
 let installing = $state(false);
 let dismissed = $state(false);
 let initialized = false;
 
 export function getUpdateState() {
-  return { updateAvailable, installing, dismissed };
+  return { updateAvailable: launchUpdateAvailable, installing, dismissed };
+}
+
+/** State used by Settings. A manual check never drives the launch toast. */
+export function getSettingsUpdateState() {
+  return {
+    updateAvailable:
+      manualCheckStatus === "available" ? manualUpdateAvailable : launchUpdateAvailable,
+    checking: manualCheckStatus === "checking",
+    upToDate: manualCheckStatus === "up_to_date",
+    checkError: manualCheckError,
+    installing,
+  };
+}
+
+export async function checkForUpdates(): Promise<void> {
+  if (manualCheckStatus === "checking") return;
+
+  manualCheckStatus = "checking";
+  manualCheckError = null;
+  manualUpdateAvailable = null;
+  try {
+    const update = await updater.check();
+    if (update) {
+      manualUpdateAvailable = update;
+      manualCheckStatus = "available";
+    } else {
+      manualCheckStatus = "up_to_date";
+    }
+  } catch (error) {
+    manualCheckError = String(error);
+    manualCheckStatus = "error";
+  }
+}
+
+/** Clear transient Settings feedback when the Settings window closes. */
+export function resetManualUpdateState() {
+  manualUpdateAvailable = null;
+  manualCheckStatus = "idle";
+  manualCheckError = null;
 }
 
 export function dismissUpdate() {
@@ -26,8 +68,8 @@ export function setInstalling(value: boolean) {
 export function initUpdateListener() {
   if (initialized) return;
   initialized = true;
-  listen<UpdatePayload>("update-available", (event) => {
-    updateAvailable = event.payload;
+  listen<UpdateInfo>("update-available", (event) => {
+    launchUpdateAvailable = event.payload;
   });
 }
 
@@ -41,4 +83,16 @@ export function unregisterUpdateFocus() {
 }
 export function focusUpdateToast() {
   focusFn?.();
+}
+
+/** Test-only reset for module-level reactive state. */
+export function _resetForTests() {
+  launchUpdateAvailable = null;
+  manualUpdateAvailable = null;
+  manualCheckStatus = "idle";
+  manualCheckError = null;
+  installing = false;
+  dismissed = false;
+  initialized = false;
+  focusFn = null;
 }

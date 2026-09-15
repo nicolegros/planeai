@@ -335,6 +335,13 @@ export const loops = {
   delete: (loopId: string) => invoke<string[]>("delete_loop", { loopId }),
 };
 
+export interface AppUpdateInfo {
+  version: string;
+  body: string | null;
+}
+
 export const updater = {
+  getVersion: () => invoke<string>("get_app_version"),
+  check: () => invoke<AppUpdateInfo | null>("check_for_update"),
   install: () => invoke<void>("install_update"),
 };
