@@ -1,7 +1,8 @@
 <script lang="ts">
   import { projects as projectsApi } from "../lib/api";
   import { listen } from "@tauri-apps/api/event";
-  import type { TaskItem, Session, Project, PluginInventory, PluginUiContribution } from "../lib/types";
+  import type { TaskItem, Session, Project, PluginInventory, PluginSessionAction, PluginUiContribution } from "../lib/types";
+  import { pluginSessionActionsForProvider } from "../lib/plugin-session-actions";
   import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
@@ -48,11 +49,13 @@
     onToggleDiff?: () => void;
     selectedLoopId?: string | null;
     pluginContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
+    pluginSessionActions?: PluginSessionAction[];
+    onPluginSessionAction?: (session: Session, action: PluginSessionAction) => void;
     onPluginNavigate?: (pluginId: string, contributionId: string) => void;
     onPluginClose?: () => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], onPluginNavigate, onPluginClose }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
   function pluginContributionKey(item: { plugin: PluginInventory; contribution: PluginUiContribution }): string {
@@ -920,19 +923,30 @@
     x={contextMenu.x}
     y={contextMenu.y}
     onClose={() => (contextMenu = null)}
-    items={menuSession.status === 'exited'
-      ? [
-          { label: "Restart", onSelect: () => onRestartSession(menuSession) },
-          { label: "Rename", onSelect: () => startRename(menuSession) },
-          { label: "Archive", onSelect: () => fadeOutThenAct(menuSession.id, () => onArchiveSession(menuSession)) },
-          { label: "Delete", danger: true, onSelect: () => fadeOutThenAct(menuSession.id, () => onDeleteSession(menuSession)) },
-        ]
-      : [
-          { label: "Review", onSelect: () => { onSelectSession(menuSession.id); onToggleDiff?.(); } },
-          { label: "Rename", onSelect: () => startRename(menuSession) },
-          { label: "Archive", onSelect: () => fadeOutThenAct(menuSession.id, () => onArchiveSession(menuSession)) },
-          { label: "Delete", danger: true, onSelect: () => fadeOutThenAct(menuSession.id, () => onDeleteSession(menuSession)) },
-        ]}
+    items={[
+      ...(pluginSessionActionsForProvider(pluginSessionActions, menuSession.provider).length > 0
+        ? [{
+            label: "Integration actions",
+            children: pluginSessionActionsForProvider(pluginSessionActions, menuSession.provider).map((action) => ({
+              label: action.label,
+              onSelect: () => onPluginSessionAction?.(menuSession, action),
+            })),
+          }]
+        : []),
+      ...(menuSession.status === 'exited'
+        ? [
+            { label: "Restart", onSelect: () => onRestartSession(menuSession) },
+            { label: "Rename", onSelect: () => startRename(menuSession) },
+            { label: "Archive", onSelect: () => fadeOutThenAct(menuSession.id, () => onArchiveSession(menuSession)) },
+            { label: "Delete", danger: true, onSelect: () => fadeOutThenAct(menuSession.id, () => onDeleteSession(menuSession)) },
+          ]
+        : [
+            { label: "Review", onSelect: () => { onSelectSession(menuSession.id); onToggleDiff?.(); } },
+            { label: "Rename", onSelect: () => startRename(menuSession) },
+            { label: "Archive", onSelect: () => fadeOutThenAct(menuSession.id, () => onArchiveSession(menuSession)) },
+            { label: "Delete", danger: true, onSelect: () => fadeOutThenAct(menuSession.id, () => onDeleteSession(menuSession)) },
+          ]),
+    ]}
   />
 {/if}
 

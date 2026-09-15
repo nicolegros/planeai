@@ -11,6 +11,8 @@ export interface MergePrompt {
   sessionId: string;
   sessionName: string;
   taskKey: string | null;
+  /** Host-rendered completion heading; defaults to the existing PR wording. */
+  message: string;
   onArchive: (id: string) => Promise<void>;
   onDestroy: (id: string) => Promise<void>;
   onTaskDone: ((id: string) => Promise<void>) | null;
@@ -20,6 +22,8 @@ export interface MergePromptOptions {
   sessionId: string;
   sessionName: string;
   taskKey: string | null;
+  /** A generic completion heading, rendered by the host. */
+  message?: string;
   onArchive: (id: string) => Promise<void>;
   onDestroy: (id: string) => Promise<void>;
   onTaskDone?: (id: string) => Promise<void>;
@@ -46,6 +50,7 @@ export function showMergePrompt(options: MergePromptOptions): void {
     sessionId: options.sessionId,
     sessionName: options.sessionName,
     taskKey: options.taskKey,
+    message: options.message?.trim() || "PR merged",
     onArchive: options.onArchive,
     onDestroy: options.onDestroy,
     onTaskDone: options.onTaskDone ?? null,

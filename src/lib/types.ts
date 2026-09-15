@@ -84,6 +84,8 @@ export type PluginUiPlacement =
   | "sidebar.footer"
   | "preferences"
   | "main-pane"
+  | "session.panel"
+  | "titlebar"
   | "interaction";
 
 export interface PluginUiContribution {
@@ -93,6 +95,28 @@ export interface PluginUiContribution {
   entrypoint: string;
   order: number | null;
   shortcut: string | null;
+}
+
+/** A sidecar-registered action rendered in a host session context menu. */
+export interface PluginSessionAction {
+  plugin_id: string;
+  id: string;
+  label: string;
+  /** Empty means all providers; otherwise the action is shown only for these provider IDs. */
+  providers: string[];
+}
+
+export type PluginSessionAdvisorySeverity = "info" | "warning" | "error";
+
+export interface PluginSessionAdvisory {
+  session_id: string;
+  message: string;
+  severity: PluginSessionAdvisorySeverity;
+}
+
+export interface PluginSessionCompletion {
+  session_id: string;
+  message: string | null;
 }
 
 export interface PluginInventory {
@@ -119,6 +143,18 @@ export interface PluginInventory {
 }
 
 export type JiraMigrationState = "not_needed" | "available" | "importing" | "failed" | "completed";
+export type GithubMigrationState = JiraMigrationState;
+
+export interface GithubMigrationStatus {
+  state: GithubMigrationState;
+  legacy_detected: boolean;
+  can_migrate: boolean;
+  message: string;
+  error: string | null;
+  imported_pull_requests: number;
+  skipped_state_only: number;
+  snapshot_path: string | null;
+}
 
 export interface JiraMigrationStatus {
   state: JiraMigrationState;

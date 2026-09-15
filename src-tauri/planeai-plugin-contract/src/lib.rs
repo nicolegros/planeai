@@ -32,8 +32,15 @@ const LOCAL_CAPABILITIES: &[&str] = &[
     "settings",
     "projects.read",
     "sessions.read",
+    "sessions.repository-context",
+    "sessions.prompt",
+    "session-events",
+    "sessions.actions",
+    "sessions.advisories",
+    "sessions.complete",
     "tasks.read",
     "tasks.create",
+    "tasks.transition",
     "task-events",
 ];
 const BACKGROUND_SERVICE_FIELDS: &[&str] = &["method", "interval_setting", "default_interval_ms"];
@@ -44,6 +51,8 @@ const UI_PLACEMENTS: &[&str] = &[
     "sidebar.footer",
     "preferences",
     "main-pane",
+    "session.panel",
+    "titlebar",
     "interaction",
 ];
 
@@ -124,9 +133,7 @@ fn validate_capabilities(object: &Map<String, Value>) -> Result<()> {
             .as_str()
             .ok_or_else(|| anyhow!("plugin manifest capabilities must contain strings"))?;
         if !LOCAL_CAPABILITIES.contains(&capability) {
-            bail!(
-                "local plugins may only request settings, tasks.read, or task-events capabilities"
-            );
+            bail!("local plugins may only request documented local plugin capabilities");
         }
         if !seen.insert(capability) {
             bail!("plugin manifest declares duplicate capabilities");
@@ -196,8 +203,8 @@ fn validate_ui_contributions(object: &Map<String, Value>, plugin_id: &str) -> Re
             Some(Value::String(value)) => Some(value.as_str()),
             Some(_) => bail!("UI contribution shortcut must be a string"),
         };
-        if placement != "main-pane" && shortcut.is_some() {
-            bail!("UI contribution shortcuts are only valid for main-pane contributions");
+        if !matches!(placement, "main-pane" | "session.panel") && shortcut.is_some() {
+            bail!("UI contribution shortcuts are only valid for main-pane or session-panel contributions");
         }
         if !placement.starts_with("sidebar.") && has_order {
             bail!("UI contribution order is only valid for sidebar contributions");
@@ -254,12 +261,6 @@ fn validate_shortcut(shortcut: &str) -> Result<()> {
     if canonical != shortcut {
         bail!("UI contribution shortcut modifiers must be ordered Shift then Alt");
     }
-    if matches!(
-        key,
-        "B" | "D" | "E" | "K" | "N" | "P" | "R" | "S" | "T" | "U" | "W"
-    ) {
-        bail!("UI contribution shortcut {shortcut} is reserved by PlaneAI");
-    }
     Ok(())
 }
 
@@ -283,4 +284,65 @@ fn required_string<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| anyhow!("plugin manifest {field} must be a nonempty string"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn manifest() -> Value {
+        json!({
+            "schema": "planeai.plugin.v1",
+            "id": "integration",
+            "name": "Integration",
+            "version": "0.1.0",
+            "host_api_version": "planeai.plugin-host.v1",
+            "source_kind": "local",
+            "backend_entrypoints": { "macos-arm64": "bin/plugin" },
+            "capabilities": [
+                "sessions.repository-context",
+                "sessions.prompt",
+                "session-events",
+                "sessions.actions",
+                "sessions.advisories",
+                "sessions.complete",
+                "tasks.transition"
+            ],
+            "ui_contributions": [{
+                "id": "panel",
+                "label": "Integration",
+                "placement": "session.panel",
+                "entrypoint": "ui/entry.js"
+            }]
+        })
+    }
+
+    #[test]
+    fn accepts_session_panel_and_repository_context_capability() {
+        assert_eq!(
+            validate_local_manifest(&manifest(), "macos-arm64").unwrap(),
+            "bin/plugin"
+        );
+    }
+
+    #[test]
+    fn accepts_compact_titlebar_contributions() {
+        let mut manifest = manifest();
+        manifest["ui_contributions"][0]["placement"] = json!("titlebar");
+        assert_eq!(
+            validate_local_manifest(&manifest, "macos-arm64").unwrap(),
+            "bin/plugin"
+        );
+    }
+
+    #[test]
+    fn session_panel_can_claim_a_global_shortcut() {
+        let mut manifest = manifest();
+        manifest["ui_contributions"][0]["shortcut"] = json!("Mod+Shift+P");
+        assert_eq!(
+            validate_local_manifest(&manifest, "macos-arm64").unwrap(),
+            "bin/plugin"
+        );
+    }
 }

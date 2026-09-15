@@ -1,25 +1,41 @@
 use tauri::ipc::Channel;
 use tauri::State;
 
+use crate::commands::sessions::lifecycle::session_lifecycle_event;
 use crate::config;
 use crate::db;
+use crate::plugins::PluginRuntimeHandle;
 use crate::pty;
-use crate::state::{ConfigState, DbState, NotifyHandle, PtyState};
+use crate::state::{ConfigState, DbState, NotifyHandle, ProjectOperationState, PtyState};
 
 use super::helpers::{build_local_env, provider_has_hook};
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn attach_session(
+pub async fn attach_session(
     session_id: String,
     dark_mode: Option<bool>,
     on_data: Channel<tauri::ipc::Response>,
-    db_state: State<DbState>,
-    config_state: State<ConfigState>,
-    state: State<PtyState>,
-    notify: State<NotifyHandle>,
+    db_state: State<'_, DbState>,
+    config_state: State<'_, ConfigState>,
+    state: State<'_, PtyState>,
+    notify: State<'_, NotifyHandle>,
+    runtime: State<'_, PluginRuntimeHandle>,
+    operations: State<'_, ProjectOperationState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    let project_id = {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        db::get_session(&conn, &session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?
+            .project_id
+    };
+    let operation_lock = operations.lock_for(&project_id);
+    let _operation_guard = operation_lock.lock_owned().await;
+
+    // Re-read while the per-project operation guard is held: a deletion that wins
+    // the race removes the session before an attach can create a new local process.
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let session = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
@@ -27,7 +43,10 @@ pub fn attach_session(
 
     // Resolve pty_target and agent_command based on backend type
     let (pty_target, resolved_agent_command) = if session.backend == "tmux" {
-        let tmux_name = session.tmux_name.ok_or("tmux session has no tmux_name")?;
+        let tmux_name = session
+            .tmux_name
+            .clone()
+            .ok_or("tmux session has no tmux_name")?;
         (pty::PtyTarget::TmuxAttach { tmux_name }, None)
     } else if session.backend == "daemon" {
         let socket_path = planeai_ipc::daemon_socket_path();
@@ -136,6 +155,9 @@ pub fn attach_session(
 
     if session.status == "exited" {
         db::restore_session(&conn, &session_id).map_err(|e| e.to_string())?;
+        runtime
+            .0
+            .dispatch_session_lifecycle(session_lifecycle_event(&session, "exited", "active"));
     }
 
     Ok(())

@@ -13,6 +13,13 @@ pub async fn list_plugins(
 }
 
 #[tauri::command]
+pub async fn list_plugin_session_actions(
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<Vec<crate::plugins::RegisteredPluginSessionAction>, String> {
+    Ok(runtime.0.session_actions().await)
+}
+
+#[tauri::command]
 pub async fn install_local_plugin(
     source_path: String,
     runtime: State<'_, PluginRuntimeHandle>,
@@ -104,6 +111,42 @@ pub async fn reload_plugin(
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<PluginInventory, String> {
     runtime.0.reload(&plugin_id).await
+}
+
+#[tauri::command]
+pub async fn github_migration_status(
+    app: AppHandle,
+    db: State<'_, DbState>,
+) -> Result<crate::github_migration::GithubMigrationStatus, String> {
+    let db = db.0.clone();
+    let status = crate::commands::blocking(move || {
+        let conn = db.lock().map_err(|error| error.to_string())?;
+        crate::github_migration::status(&conn)
+    })
+    .await?;
+    app.emit("github-migration-changed", &status)
+        .map_err(|error| format!("failed to emit GitHub migration update: {error}"))?;
+    Ok(status)
+}
+
+#[tauri::command]
+pub async fn migrate_legacy_github(
+    app: AppHandle,
+    db: State<'_, DbState>,
+) -> Result<crate::github_migration::GithubMigrationStatus, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("failed to resolve PlaneAI app data directory: {error}"))?;
+    let db = db.0.clone();
+    let status = crate::commands::blocking(move || {
+        let conn = db.lock().map_err(|error| error.to_string())?;
+        crate::github_migration::import(&conn, &app_data_dir)
+    })
+    .await?;
+    app.emit("github-migration-changed", &status)
+        .map_err(|error| format!("failed to emit GitHub migration update: {error}"))?;
+    Ok(status)
 }
 
 #[tauri::command]

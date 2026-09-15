@@ -204,7 +204,7 @@ fn dispatch(request: &Value) -> (Value, bool) {
                         "plugin_name": PLUGIN_NAME,
                         "plugin_version": PLUGIN_VERSION,
                         "host_api_version": HOST_API_VERSION,
-                        "lifecycle_event_subscriptions": ["task.lifecycle"],
+                        "lifecycle_event_subscriptions": ["task.lifecycle", "session.lifecycle"],
                     }),
                 )
             }
@@ -225,6 +225,7 @@ fn dispatch(request: &Value) -> (Value, bool) {
             );
             success(id, json!({ "received": true }))
         }
+        "plugin.sessionLifecycle" => success(id, json!({ "received": true })),
         "plugin.shutdown" => success(id, json!({ "stopping": true })),
         _ => error(id, -32601, "method not found"),
     };
@@ -261,7 +262,7 @@ mod tests {
         assert_eq!(response["result"]["host_api_version"], HOST_API_VERSION);
         assert_eq!(
             response["result"]["lifecycle_event_subscriptions"],
-            json!(["task.lifecycle"])
+            json!(["task.lifecycle", "session.lifecycle"])
         );
     }
 

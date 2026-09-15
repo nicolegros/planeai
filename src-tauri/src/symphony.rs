@@ -13,7 +13,9 @@ use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::SqliteRepository;
 
+use crate::commands::sessions::lifecycle::session_lifecycle_event;
 use crate::config::{self, Config};
+use crate::plugins::PluginRuntimeHandle;
 
 // ─── SymphonyState (managed as Tauri state) ───
 
@@ -206,12 +208,21 @@ impl Backend for TauriBackend {
         if let Some(tmux_name) = &session.tmux_name {
             let _ = crate::tmux::kill_session(tmux_name);
         }
-        let conn = self.db.lock().map_err(|e| e.to_string())?;
-        conn.execute(
-            "UPDATE sessions SET status = 'exited' WHERE id = ?1",
-            params![session.id],
-        )
-        .map_err(|e| e.to_string())?;
+        let lifecycle_event = {
+            let conn = self.db.lock().map_err(|e| e.to_string())?;
+            let previous = crate::db::get_session(&conn, &session.id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("session {} not found", session.id))?;
+            crate::db::mark_session_exited(&conn, &session.id).map_err(|e| e.to_string())?;
+            (previous.status == "active")
+                .then(|| session_lifecycle_event(&previous, "active", "exited"))
+        };
+        if let Some(event) = lifecycle_event {
+            self.app_handle
+                .state::<PluginRuntimeHandle>()
+                .0
+                .dispatch_session_lifecycle(event);
+        }
         Ok(())
     }
 
