@@ -3,7 +3,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { listen } from "@tauri-apps/api/event";
-  import { sessions as sessionsApi, pr as prApi, pty, notify, sessionLogs, editor as editorApi } from "./lib/api";
+  import { sessions as sessionsApi, pr as prApi, pty, notify, sessionLogs, editor as editorApi, updater } from "./lib/api";
   import type { Session, Project } from "./lib/types";
   import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
   import * as projectStore from "./lib/project-store.svelte";
@@ -52,7 +52,7 @@
   import { isMounted as poolIsMounted, touchMru } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
-  import { initUpdateListener, focusUpdateToast, getUpdateState } from "./lib/updater.svelte";
+  import { initUpdateListener, focusUpdateToast, getUpdateState, setLaunchUpdateAvailable } from "./lib/updater.svelte";
   import SplitContainer from "./components/SplitContainer.svelte";
   import TabStrip from "./components/TabStrip.svelte";
   import * as splitTree from "./lib/split-tree.svelte";
@@ -973,7 +973,14 @@
       if (event.payload.state !== "running") invalidatePluginPage(event.payload.id);
     });
 
-    initUpdateListener();
+    void initUpdateListener().then(async () => {
+      try {
+        const update = await updater.getPending();
+        if (update) setLaunchUpdateAvailable(update);
+      } catch (error) {
+        console.warn("Failed to load pending update:", error);
+      }
+    });
     const onPluginShortcut = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !isPlatformMod(event) || matchChord(event)) return;
       const key = /^Key[A-Z]$/.test(event.code) ? event.code.slice(3) : event.key.toUpperCase();

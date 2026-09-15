@@ -3,6 +3,10 @@ import { mount, tick, unmount } from "svelte";
 
 const mocks = vi.hoisted(() => ({
   updateSettings: vi.fn(),
+  updater: {
+    getVersion: vi.fn(() => Promise.resolve("1.80.0")),
+    getPending: vi.fn(() => Promise.resolve(null)),
+  },
   config: {
     appearance: { mode: "system" as const, theme: "default" },
     terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
@@ -27,6 +31,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
       installCli: vi.fn(),
       getLogDir: vi.fn(() => Promise.resolve("/tmp")),
     },
+    updater: mocks.updater,
     plugins: { ...actual.plugins, list: vi.fn(() => Promise.resolve([])) },
   };
 });
@@ -35,6 +40,9 @@ vi.mock("../../lib/settings.svelte", () => ({
   getSettings: () => mocks.config,
   updateSettings: mocks.updateSettings,
   refreshSettings: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 vi.mock("../../lib/theme-loader", () => ({ loadTheme: vi.fn() }));
 vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));

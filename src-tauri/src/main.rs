@@ -238,6 +238,7 @@ fn main() {
             let db_arc = Arc::new(Mutex::new(conn));
             app.manage(DbState(db_arc.clone()));
             app.manage(ProjectOperationState::default());
+            app.manage(updater::UpdateAvailabilityState::default());
             app.manage(plugins::PluginRuntimeHandle::new(
                 db_arc.clone(),
                 app.handle().clone(),
@@ -428,6 +429,9 @@ fn main() {
             tick_loop,
             stop_loop,
             delete_loop,
+            updater::get_app_version,
+            updater::get_pending_update,
+            updater::check_for_update,
             updater::install_update,
         ])
         .build(tauri::generate_context!())

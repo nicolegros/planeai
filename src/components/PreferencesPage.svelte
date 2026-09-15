@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { preferences, plugins } from "../lib/api";
+  import { preferences, plugins, updater } from "../lib/api";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open } from "@tauri-apps/plugin-dialog";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -14,6 +14,7 @@
   } from "../lib/language-server-profile";
   import { loadTheme } from "../lib/theme-loader";
   import { showSnackbar } from "../lib/snackbar.svelte";
+  import { checkForUpdates, getSettingsUpdateState, initUpdateListener, resetManualUpdateState, setInstalling, setLaunchUpdateAvailable } from "../lib/updater.svelte";
   import { Select, Input, Button, Dialog } from "./ui";
   import { Palette, Bot, ListTodo, Settings, RefreshCw, Puzzle, Code } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
@@ -42,6 +43,27 @@
   let staleWorktrees = $state<{ session_name: string; worktree_path: string; branch: string }[]>([]);
   let showCleanupDialog = $state(false);
   let cleanupMessage = $state("");
+  let appVersion = $state<string | null>(null);
+  let appVersionError = $state<string | null>(null);
+  let installUpdateError = $state<string | null>(null);
+  const appUpdateState = $derived(getSettingsUpdateState());
+
+  async function checkForAppUpdates() {
+    installUpdateError = null;
+    await checkForUpdates();
+  }
+
+  async function installAppUpdate() {
+    if (appUpdateState.installing) return;
+    installUpdateError = null;
+    setInstalling(true);
+    try {
+      await updater.install();
+    } catch (error) {
+      installUpdateError = String(error);
+      setInstalling(false);
+    }
+  }
 
   async function triggerCleanupPreview() {
     cleanupMessage = "";
@@ -93,6 +115,13 @@
 
   onMount(async () => {
     window.addEventListener("keydown", handleKeydown, true);
+    await initUpdateListener();
+    try {
+      const update = await updater.getPending();
+      if (update) setLaunchUpdateAvailable(update);
+    } catch (error) {
+      console.warn("Failed to load pending update:", error);
+    }
     await loadSettings();
     editorConfigDraft = editorDraft(config.editor);
     pluginInventory = await plugins.list();
@@ -109,10 +138,19 @@
     preferences.checkCliInstalled().then((installed) => {
       cliInstalled = installed;
     });
+    updater.getVersion().then(
+      (version) => {
+        appVersion = version;
+      },
+      (error) => {
+        appVersionError = String(error);
+      },
+    );
   });
 
   onDestroy(() => {
     window.removeEventListener("keydown", handleKeydown, true);
+    resetManualUpdateState();
   });
 
   const backendValue = $derived(config.session_backend ?? "auto");
@@ -862,9 +900,56 @@
       <p class="text-xs text-t3">Default directory for the project file picker and path pre-fill.</p>
     </section>
 
-    <!-- CLI -->
+    <!-- App Updates -->
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Worktree Cleanup</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">App Updates</h2>
+      <div class="flex items-center justify-between gap-4">
+        <div class="min-w-0">
+          {#if appVersion}
+            <p class="text-sm text-t1">PlaneAI v{appVersion}</p>
+          {:else if appVersionError}
+            <p class="text-sm text-t1">Unable to determine PlaneAI version</p>
+            <p class="text-xs text-status-exited break-words" role="alert">{appVersionError}</p>
+          {:else}
+            <p class="text-sm text-t1">PlaneAI version</p>
+            <p class="text-xs text-t3">Loading installed version…</p>
+          {/if}
+
+          {#if appUpdateState.checking}
+            <p class="text-xs text-t3">Checking for updates…</p>
+          {:else if appUpdateState.installing}
+            <p class="text-xs text-t3">Downloading and installing{appUpdateState.updateAvailable ? ` v${appUpdateState.updateAvailable.version}` : ""}…</p>
+          {:else if installUpdateError}
+            <p class="text-xs text-status-exited whitespace-pre-wrap break-words" role="alert">{installUpdateError}</p>
+          {:else if appUpdateState.checkError}
+            <p class="text-xs text-status-exited whitespace-pre-wrap break-words" role="alert">{appUpdateState.checkError}</p>
+          {:else if appUpdateState.updateAvailable}
+            <p class="text-xs text-t3">Update available: v{appUpdateState.updateAvailable.version}</p>
+          {:else if appUpdateState.upToDate}
+            <p class="text-xs text-t3">You’re up to date{appVersion ? ` (v${appVersion})` : ""}.</p>
+          {:else}
+            <p class="text-xs text-t3">Check for the latest PlaneAI release.</p>
+          {/if}
+        </div>
+
+        {#if appUpdateState.installing}
+          <Button type="button" disabled>Installing…</Button>
+        {:else if appUpdateState.updateAvailable && !appUpdateState.checkError}
+          <Button type="button" onclick={installAppUpdate}>Install &amp; Restart</Button>
+        {:else if appUpdateState.checking}
+          <Button type="button" disabled>Checking…</Button>
+        {:else if appUpdateState.checkError}
+          <Button type="button" onclick={checkForAppUpdates}>Retry</Button>
+        {:else if appUpdateState.upToDate}
+          <Button type="button" onclick={checkForAppUpdates}>Check again</Button>
+        {:else}
+          <Button type="button" onclick={checkForAppUpdates}>Check for updates</Button>
+        {/if}
+      </div>
+    </section>
+
+    <!-- Worktree Cleanup -->
+    <section class="space-y-3">
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-t1">Remove stale worktrees</p>

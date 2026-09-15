@@ -1,12 +1,22 @@
-use tauri::{AppHandle, Emitter, State};
+use std::sync::Mutex;
+
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::UpdaterExt;
 
 use crate::plugins::PluginRuntimeHandle;
 
 #[derive(Clone, serde::Serialize)]
-struct UpdateAvailablePayload {
+pub struct UpdateInfo {
     version: String,
     body: Option<String>,
+}
+
+pub struct UpdateAvailabilityState(Mutex<Option<UpdateInfo>>);
+
+impl Default for UpdateAvailabilityState {
+    fn default() -> Self {
+        Self(Mutex::new(None))
+    }
 }
 
 pub fn check_for_updates(app: &AppHandle) {
@@ -18,21 +28,52 @@ pub fn check_for_updates(app: &AppHandle) {
     });
 }
 
-async fn do_check(app: &AppHandle) -> anyhow::Result<()> {
+async fn lookup_update(app: &AppHandle) -> anyhow::Result<Option<UpdateInfo>> {
     let updater = app.updater()?.check().await?;
-    if let Some(update) = updater {
+    Ok(updater.map(|update| UpdateInfo {
+        version: update.version.clone(),
+        body: update.body.clone(),
+    }))
+}
+
+async fn do_check(app: &AppHandle) -> anyhow::Result<()> {
+    let update = lookup_update(app).await?;
+    let update_state = app.state::<UpdateAvailabilityState>();
+    let mut availability = update_state
+        .0
+        .lock()
+        .map_err(|_| anyhow::anyhow!("update availability state lock poisoned"))?;
+    *availability = update.clone();
+    drop(availability);
+
+    if let Some(update) = update {
         tracing::info!("update available: {}", update.version);
-        let _ = app.emit(
-            "update-available",
-            UpdateAvailablePayload {
-                version: update.version.clone(),
-                body: update.body.clone(),
-            },
-        );
+        let _ = app.emit("update-available", update);
     } else {
         tracing::info!("app is up to date");
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn get_app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
+pub async fn get_pending_update(
+    availability: State<'_, UpdateAvailabilityState>,
+) -> Result<Option<UpdateInfo>, String> {
+    availability
+        .0
+        .lock()
+        .map(|update| update.clone())
+        .map_err(|_| "update availability state lock poisoned".to_string())
+}
+
+#[tauri::command]
+pub async fn check_for_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    lookup_update(&app).await.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
