@@ -46,7 +46,6 @@ vi.mock("../../lib/session-orchestrator.svelte", () => ({
     {
       id: "sess-1",
       task_key: "TASK-1",
-      pr_url: null,
       project_id: "proj-1",
       name: "Session 1",
       branch: "main",
@@ -58,7 +57,6 @@ vi.mock("../../lib/session-orchestrator.svelte", () => ({
       provider: null,
       tab_count: 1,
       base_branch: null,
-      pr_state: null,
     },
   ],
   getActiveSessionId: () => "sess-1",
@@ -143,11 +141,7 @@ describe("TaskPanel flatTaskIndex lookup", () => {
 });
 
 describe("TaskPanel move-to-done archives session", () => {
-  let onArchiveSession: (session: {
-    id: string;
-    task_key: string | null;
-    pr_url: string | null;
-  }) => void;
+  let onArchiveSession: (session: { id: string; task_key: string | null }) => void;
   let target: HTMLElement;
 
   beforeEach(() => {

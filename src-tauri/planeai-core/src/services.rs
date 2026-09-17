@@ -766,20 +766,6 @@ impl SessionService {
         Ok(())
     }
 
-    /// Update PR state.
-    pub fn update_pr_state(
-        conn: &Connection,
-        session_id: &str,
-        pr_url: &str,
-        pr_state: &str,
-    ) -> SqlResult<()> {
-        conn.execute(
-            "UPDATE sessions SET pr_url = ?1, pr_state = ?2 WHERE id = ?3",
-            params![pr_url, pr_state, session_id],
-        )?;
-        Ok(())
-    }
-
     /// Check if there's an active checkout (non-worktree) session for a project.
     pub fn has_active_checkout(conn: &Connection, project_id: &str) -> SqlResult<bool> {
         let count: i64 = conn.query_row(

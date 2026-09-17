@@ -8,8 +8,6 @@ import type {
   DirEntry,
   ChangedFile,
   FileDiff,
-  CiCheck,
-  PrStatus,
   CommitEntry,
   PluginInventory,
   GithubMigrationStatus,
@@ -219,32 +217,6 @@ export const git = {
     invoke<string>("read_file", { filePath, repoPath }),
   writeFile: (filePath: string, content: string, repoPath: string) =>
     invoke("write_file", { filePath, content, repoPath }),
-  fetchPrUrl: (sessionId: string) => invoke<string | null>("fetch_pr_url", { sessionId }),
-};
-
-export const pr = {
-  create: (sessionId: string, title: string, body: string, baseBranch: string, draft: boolean) =>
-    invoke<string>("create_pr", { sessionId, title, body, baseBranch, draft }),
-  fetchPrUrl: (sessionId: string) => invoke<string | null>("fetch_pr_url", { sessionId }),
-  generateDefaults: (sessionId: string) =>
-    invoke<{ title: string; body: string; base_branch: string }>("generate_pr_defaults", {
-      sessionId,
-    }),
-  getCiChecks: (sessionId: string) => invoke<CiCheck[]>("get_ci_checks", { sessionId }),
-  getPrComments: (sessionId: string) => invoke<number>("get_pr_comments", { sessionId }),
-  getMergeConflictStatus: (sessionId: string) =>
-    invoke<boolean>("get_merge_conflict_status", { sessionId }),
-  getPrStatus: (sessionId: string) => invoke<PrStatus>("get_pr_status", { sessionId }),
-  getAllowedStrategies: (sessionId: string) =>
-    invoke<string[]>("get_allowed_merge_strategies", { sessionId }),
-  merge: (sessionId: string, strategy: string) => invoke("merge_pr", { sessionId, strategy }),
-  markReady: (sessionId: string) => invoke("mark_pr_ready", { sessionId }),
-  getMergeState: (sessionId: string) =>
-    invoke<{ blocked: boolean; reasons: string[]; settingsUrl: string | null }>("get_merge_state", {
-      sessionId,
-    }),
-  getCiFailureLogs: (sessionId: string) => invoke<string>("get_ci_failure_logs", { sessionId }),
-  linkPrUrl: (sessionId: string, url: string) => invoke<string>("link_pr_url", { sessionId, url }),
 };
 
 export const notify = {
@@ -258,7 +230,8 @@ export const symphony = {
 
 export const plugins = {
   list: () => invoke<PluginInventory[]>("list_plugins"),
-  listSessionActions: () => invoke<import("./types").PluginSessionAction[]>("list_plugin_session_actions"),
+  listSessionActions: () =>
+    invoke<import("./types").PluginSessionAction[]>("list_plugin_session_actions"),
   installLocal: (sourcePath: string) =>
     invoke<PluginInventory>("install_local_plugin", { sourcePath }),
   removeLocal: (pluginId: string) => invoke("remove_local_plugin", { pluginId }),

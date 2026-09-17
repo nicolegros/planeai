@@ -50,7 +50,6 @@ fn load_reads_existing_config_file() {
         vim_mode: None,
         task_management: None,
         projects_base_path: None,
-        pr_status: None,
         hide_done_tasks: None,
         hide_empty_projects: None,
         daemon_scrollback_bytes: None,
@@ -493,21 +492,6 @@ fn config_dir_isolates_dev_bundle_on_windows() {
 fn normalize_base_path_strips_trailing_slash() {
     let result = normalize_base_path("/Users/testuser/Developer/");
     assert_eq!(result, "/Users/testuser/Developer");
-}
-
-#[test]
-fn pr_status_round_trips_through_config() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = Config {
-        pr_status: Some("gh pr view {branch} --json url,state".to_string()),
-        ..Config::default()
-    };
-
-    save(dir.path(), &config).unwrap();
-    let (loaded, warnings) = load(dir.path());
-
-    assert_eq!(loaded.pr_status, config.pr_status);
-    assert!(warnings.is_empty());
 }
 
 #[test]

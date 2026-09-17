@@ -8,7 +8,6 @@
   import { getSettings } from "../lib/settings.svelte";
   import { shouldHideProject, isLoopId, parseLoopId } from "../lib/sidebar-session-order";
   import { projectContextMenuItems } from "../lib/project-context-menu";
-  import { openUrl } from "@tauri-apps/plugin-opener";
   import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare, Play, Square } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
@@ -18,8 +17,6 @@
   import { showSnackbar } from "../lib/snackbar.svelte";
   import TaskPanel from "./TaskPanel.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
-  import { getCiStatus } from "../lib/ci-checks.svelte";
-  import { getCommentCount } from "../lib/pr-comments.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import * as loopStore from "../lib/loop-store.svelte";
@@ -532,14 +529,12 @@
       else if (action.type === "delete") fadeOutThenAct(session.id, () => onDeleteSession(session));
       else if (action.type === "rename") startRename(session);
       else if (action.type === "restart") onRestartSession(session);
-      else if (action.type === "open_pr") { if (session.pr_url) openUrl(session.pr_url); }
       else if (action.type === "review") { onSelectSession(session.id); onToggleDiff?.(); }
     } else if (current.type === "task") {
       const task = current.task;
       if (action.type === "select" || action.type === "start_session") handleTaskClick(task, current.projectPath);
       else if (action.type === "edit") taskPanelRef?.openEdit(task);
       else if (action.type === "status") moveTask(task.key, action.status);
-      else if (action.type === "open_pr") { const linked = sessionForTask(task.key); if (linked?.pr_url) openUrl(linked.pr_url); }
       else if (action.type === "review") { const linked = sessionForTask(task.key); if (linked) { onSelectSession(linked.id); onToggleDiff?.(); } }
       else if (action.type === "archive") { const linked = sessionForTask(task.key); if (linked) fadeOutThenAct(linked.id, () => onArchiveSession(linked)); }
       else if (action.type === "delete") { const linked = sessionForTask(task.key); if (linked) onDeleteSession(linked); }
@@ -563,25 +558,6 @@
 
 <svelte:window onkeydown={handleKeydown} onfocus={onWindowFocus} />
 
-{#snippet ciBadge(id: string)}
-  {@const ci = getCiStatus(id)}
-  {#if ci === 'passing'}
-    <CheckCircle2 class="size-3 text-status-running" title="CI passing" />
-  {:else if ci === 'failing'}
-    <XCircle class="size-3 text-status-exited" title="CI failing" />
-  {:else if ci === 'running'}
-    <span class="size-2 rounded-full bg-amber-500" style="animation:pulse-dot 1.6s ease-in-out infinite" title="CI running"></span>
-  {/if}
-{/snippet}
-
-{#snippet commentBadge(id: string)}
-  {@const count = getCommentCount(id)}
-  {#if count > 0}
-    <span class="flex items-center gap-0.5 text-[10px] text-t3" title="{count} comment{count !== 1 ? 's' : ''}">
-      <MessageSquare class="size-3" />{count}
-    </span>
-  {/if}
-{/snippet}
 
 <aside
   class="relative shrink-0 flex flex-col border-r bg-sidebar {zone === 'sidebar' ? 'border-accent' : 'border-border'}"
@@ -793,8 +769,6 @@
                         {:else if agentStates[session.id] === 'Busy'}
                           <LoaderCircle class="size-3 animate-spin text-t2" />
                         {/if}
-                        {@render ciBadge(session.id)}
-                        {@render commentBadge(session.id)}
                       </span>
                     </button>
                     </div>
@@ -854,8 +828,6 @@
                               {:else if linked.status === 'exited'}
                                 <span class="font-mono text-[9px] text-t3 bg-panel-hi rounded px-[5px] py-[1px]">exited</span>
                               {/if}
-                              {@render ciBadge(linked.id)}
-                              {@render commentBadge(linked.id)}
                             </span>
                           {/if}
                         </button>

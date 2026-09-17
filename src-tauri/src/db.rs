@@ -236,14 +236,6 @@ pub fn get_project_sessions(conn: &Connection, project_id: &str) -> Result<Vec<S
     Ok(records.into_iter().map(record_to_session).collect())
 }
 
-pub fn get_project_prefix(conn: &Connection, project_id: &str) -> String {
-    get_project(conn, project_id)
-        .ok()
-        .flatten()
-        .map(|p| p.prefix)
-        .unwrap_or_default()
-}
-
 // Session CRUD — thin wrappers over planeai_core::services::SessionService
 
 pub fn create_session(
@@ -413,10 +405,6 @@ pub fn session_owns_worktree(conn: &Connection, id: &str) -> Result<bool> {
         params![id],
         |row| row.get(0),
     )
-}
-
-pub fn update_pr_state(conn: &Connection, id: &str, pr_url: &str, pr_state: &str) -> Result<()> {
-    planeai_core::services::SessionService::update_pr_state(conn, id, pr_url, pr_state)
 }
 
 pub fn mark_attached(conn: &Connection, id: &str) -> Result<()> {
@@ -1155,140 +1143,5 @@ mod tests {
         assert_eq!(pos_c, Some(0));
         assert_eq!(pos_a, None);
         assert_eq!(pos_b, None);
-    }
-
-    #[test]
-    fn test_pr_state_round_trips_through_update_and_get() {
-        let conn = setup();
-        let proj = create_project(&conn, "test", "/tmp/test").unwrap();
-        let session =
-            create_session(&conn, &proj.id, "feat", "tmux-1", "feat/pr-test", None).unwrap();
-
-        // Initially null
-        let s = get_session(&conn, &session.id).unwrap().unwrap();
-        assert_eq!(s.pr_url, None);
-        assert_eq!(s.pr_state, None);
-
-        // Update
-        update_pr_state(
-            &conn,
-            &session.id,
-            "https://github.com/org/repo/pull/42",
-            "open",
-        )
-        .unwrap();
-
-        let s = get_session(&conn, &session.id).unwrap().unwrap();
-        assert_eq!(
-            s.pr_url.as_deref(),
-            Some("https://github.com/org/repo/pull/42")
-        );
-        assert_eq!(s.pr_state.as_deref(), Some("open"));
-
-        // Update again (state transition)
-        update_pr_state(
-            &conn,
-            &session.id,
-            "https://github.com/org/repo/pull/42",
-            "merged",
-        )
-        .unwrap();
-        let s = get_session(&conn, &session.id).unwrap().unwrap();
-        assert_eq!(s.pr_state.as_deref(), Some("merged"));
-    }
-
-    #[test]
-    fn test_list_sessions_excludes_done_task_sessions() {
-        let conn = setup();
-        // Run task migrations so the tasks table exists
-        planeai_tasks::sqlite::migrate(&conn).unwrap();
-
-        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-
-        // Session with no task_key — should always appear
-        let s1 = create_session_with_id(
-            &conn, "s1", &p.id, "no task", None, "main", None, None, "daemon", false, None, None,
-            None,
-        )
-        .unwrap();
-
-        // Active session linked to a done task — should still appear (active sessions always visible)
-        let s2 = create_session_with_id(
-            &conn,
-            "s2",
-            &p.id,
-            "done task active",
-            None,
-            "feat-a",
-            None,
-            None,
-            "daemon",
-            false,
-            Some("MYA-1"),
-            None,
-            None,
-        )
-        .unwrap();
-
-        // Exited session linked to a done task — should be excluded
-        let s3 = create_session_with_id(
-            &conn,
-            "s3",
-            &p.id,
-            "done task exited",
-            None,
-            "feat-c",
-            None,
-            None,
-            "daemon",
-            false,
-            Some("MYA-1"),
-            None,
-            None,
-        )
-        .unwrap();
-        mark_session_exited(&conn, &s3.id).unwrap();
-
-        // Session linked to an in_progress task — should appear
-        let s4 = create_session_with_id(
-            &conn,
-            "s4",
-            &p.id,
-            "active task",
-            None,
-            "feat-b",
-            None,
-            None,
-            "daemon",
-            false,
-            Some("MYA-2"),
-            None,
-            None,
-        )
-        .unwrap();
-
-        // Insert tasks
-        conn.execute(
-            "INSERT INTO task_projects (prefix, next_seq) VALUES ('MYA', 3)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at) VALUES ('MYA-1', 'MYA', 'Done task', 'done', '2024-01-01', '2024-01-01')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at) VALUES ('MYA-2', 'MYA', 'Active task', 'in_progress', '2024-01-01', '2024-01-01')",
-            [],
-        )
-        .unwrap();
-
-        let sessions = list_sessions(&conn).unwrap();
-        let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
-        assert!(ids.contains(&s1.id.as_str()));
-        assert!(ids.contains(&s2.id.as_str())); // active session with done task — visible
-        assert!(!ids.contains(&s3.id.as_str())); // exited session with done task — excluded
-        assert!(ids.contains(&s4.id.as_str()));
     }
 }

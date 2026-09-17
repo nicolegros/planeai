@@ -27,8 +27,6 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     tab_count: 1,
     base_branch: null,
     task_key: null,
-    pr_url: null,
-    pr_state: null,
     ...overrides,
   };
 }

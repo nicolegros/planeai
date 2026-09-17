@@ -80,8 +80,6 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projects_base_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pr_status: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_done_tasks: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_empty_projects: Option<bool>,
@@ -209,10 +207,6 @@ pub struct TaskManager {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_complete: Option<LifecycleHook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub on_pr_open: Option<LifecycleHook>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub on_pr_merge: Option<LifecycleHook>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_dispatch: Option<AutoDispatchConfig>,
 }
 
@@ -327,7 +321,6 @@ impl Default for Config {
             vim_mode: None,
             task_management: None,
             projects_base_path: None,
-            pr_status: None,
             hide_done_tasks: None,
             hide_empty_projects: None,
             daemon_scrollback_bytes: None,
@@ -443,8 +436,6 @@ fn migrate_autonomous_prompt_template(config: &mut Config) -> bool {
             on_notify: None,
             on_restart: None,
             on_complete: None,
-            on_pr_open: None,
-            on_pr_merge: None,
             auto_dispatch: None,
         });
         let ad = tm.auto_dispatch.get_or_insert(AutoDispatchConfig {

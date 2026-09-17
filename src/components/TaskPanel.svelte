@@ -4,7 +4,6 @@
   import { focusTerminal, getActiveZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
-  import { openUrl } from "@tauri-apps/plugin-opener";
   import { Button, ContextMenu } from "./ui";
   import TaskForm from "./TaskForm.svelte";
   import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle } from "@lucide/svelte";
@@ -15,7 +14,7 @@
   interface Props {
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectSession: (id: string) => void;
-    onArchiveSession?: (session: Pick<Session, "id" | "task_key" | "pr_url">) => void | Promise<void>;
+    onArchiveSession?: (session: Pick<Session, "id" | "task_key">) => void | Promise<void>;
     onSessionsChanged?: () => void;
     onSessionCreated?: (session: Session) => void;
     disableKeyboard?: boolean;
@@ -76,7 +75,7 @@
     collapsedSections = { ...collapsedSections, [key]: !collapsedSections[key] };
   }
 
-  function sessionForTask(key: string): Pick<Session, "id" | "task_key" | "pr_url"> | undefined {
+  function sessionForTask(key: string): Pick<Session, "id" | "task_key"> | undefined {
     return sessions.find((s) => s.task_key === key);
   }
 
@@ -216,9 +215,6 @@
       moveTask(task.key, action.status);
     } else if (action.type === "edit") {
       openEdit(task);
-    } else if (action.type === "open_pr") {
-      const linked = sessionForTask(task.key);
-      if (linked?.pr_url) openUrl(linked.pr_url);
     }
   }
 </script>

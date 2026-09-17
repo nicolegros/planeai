@@ -65,18 +65,6 @@
     ]},
   ];
 
-  const prPanelShortcuts = { section: "PR Panel", items: [
-    { keys: `${MOD_LABEL}⇧P`, description: "Open PR panel / Create PR" },
-    { keys: `o`, description: "Open PR in browser" },
-    { keys: `m`, description: "Merge" },
-    { keys: `s`, description: "Cycle merge strategy" },
-    { keys: `r`, description: "Refresh CI checks" },
-    { keys: `R`, description: "Mark as ready (draft)" },
-    { keys: `f`, description: "Send failures to agent" },
-    { keys: `1–9`, description: "Open CI check in browser" },
-    { keys: `Esc`, description: "Close panel" },
-  ]};
-
   const sidebarShortcuts = { section: "Sidebar Navigation", items: [
     { keys: `j / ↓`, description: "Next item" },
     { keys: `k / ↑`, description: "Previous item" },
@@ -87,7 +75,6 @@
     { keys: `E`, description: "Rename" },
     { keys: `e`, description: "Edit task" },
     { keys: `R`, description: "Restart" },
-    { keys: `o`, description: "Open PR" },
     { keys: `st`, description: "Status → Todo" },
     { keys: `sp`, description: "Status → In Progress" },
     { keys: `sr`, description: "Status → In Review" },
@@ -124,7 +111,7 @@
       ? [sidebarShortcuts, ...shortcuts]
       : getActiveZone() === "editor"
         ? [editorShortcuts, ...shortcuts]
-        : [reviewShortcuts, prPanelShortcuts, ...shortcuts]
+        : [reviewShortcuts, ...shortcuts]
   );
 
   const filteredShortcuts = $derived(

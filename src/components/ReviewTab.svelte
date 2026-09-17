@@ -13,7 +13,6 @@
   import { serializeComments } from "../lib/review-serializer";
   import { getActiveSession, recordUserInput } from "../lib/session-orchestrator.svelte";
   import Button from "./ui/Button.svelte";
-  import { hasConflicts } from "../lib/ci-checks.svelte";
   import BranchCompareForm from "./BranchCompareForm.svelte";
   import { getComparison, setComparison, formatComparison } from "../lib/diff-comparison.svelte";
   import { ensureSession, getViewedFiles, setFileViewed, setFileUnviewed, isFileViewed, invalidateViewedFiles, getViewedVersion } from "../lib/diff-viewed.svelte";
@@ -69,8 +68,7 @@
   let viewedVersion = $derived(getViewedVersion(sessionId));
   let totalCount = $derived(getTotalCommentCount(sessionId));
   let sessionExited = $derived(getActiveSession()?.status === "exited");
-  let conflicted = $derived(hasConflicts(sessionId));
-  let contentTop = $derived(conflicted ? 76 : 42);
+  const contentTop = 42;
   let activeFile = $derived(files[selectedIndex] ?? null);
   let activeTextDiff = $derived(activeDiff?.kind === "text" ? activeDiff : null);
   let currentFileComments = $derived(getComments(sessionId).filter((comment) => comment.filePath === activeFile?.path));
@@ -593,9 +591,6 @@
       {/if}
     </div>
 
-    {#if conflicted}
-      <div class="absolute left-0 right-0 top-[42px] z-10 flex items-center gap-2 border-b border-[rgba(234,179,8,0.3)] bg-[rgba(234,179,8,0.12)] px-4 py-2"><AlertTriangle class="size-4 shrink-0 text-[#eab308]" /><span class="text-[12.5px] font-medium text-[#eab308]">This PR has merge conflicts</span></div>
-    {/if}
 
     {#if showCompareForm}
       <BranchCompareForm {repoPath} {baseBranch} currentBase={effectiveBase} currentHead={effectiveHead} onConfirm={(baseRef, headRef) => {

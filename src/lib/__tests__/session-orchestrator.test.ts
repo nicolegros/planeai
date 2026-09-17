@@ -40,10 +40,6 @@ vi.mock("../api", () => ({
     acknowledge: vi.fn(() => Promise.resolve()),
     saveMruOrder: vi.fn(() => Promise.resolve()),
   },
-  pr: {
-    getCiChecks: vi.fn(() => Promise.resolve([])),
-    getPrComments: vi.fn(() => Promise.resolve(0)),
-  },
   pty: { closeTab: vi.fn(() => Promise.resolve()) },
   symphony: { getStatus: vi.fn(() => Promise.resolve("null")) },
   tasks: { fireNotifyHook: vi.fn(() => Promise.resolve()) },
@@ -107,8 +103,6 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     tab_count: 1,
     base_branch: null,
     task_key: null,
-    pr_url: null,
-    pr_state: null,
     ...overrides,
   };
 }

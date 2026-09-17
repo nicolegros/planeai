@@ -38,7 +38,6 @@ vi.mock("../../lib/api", () => ({
     updateSettings,
     dataChanged,
   },
-  pr: { getPrStatus: vi.fn(), getPrComments: vi.fn() },
 }));
 
 vi.mock("../../lib/snackbar.svelte", () => ({
@@ -202,10 +201,12 @@ describe("PluginContributionHost", () => {
       return next!;
     });
     expect(frame.style.height).toBe("360px");
-    window.dispatchEvent(new MessageEvent("message", {
-      source: frame.contentWindow,
-      data: { type: "content-height", height: 384.2 },
-    }));
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "content-height", height: 384.2 },
+      }),
+    );
     expect(frame.style.height).toBe("385px");
   });
 

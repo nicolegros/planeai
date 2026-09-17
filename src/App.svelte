@@ -3,7 +3,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { listen } from "@tauri-apps/api/event";
-  import { sessions as sessionsApi, pr as prApi, pty, notify, sessionLogs, editor as editorApi, updater } from "./lib/api";
+  import { sessions as sessionsApi, pty, notify, sessionLogs, editor as editorApi, updater } from "./lib/api";
   import type { Session, Project } from "./lib/types";
   import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
   import * as projectStore from "./lib/project-store.svelte";
@@ -16,10 +16,7 @@
   import { isTerminal, isActive as isLoopActive } from "./lib/loop-status";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { openFileWithConfiguredEditor } from "./lib/file-editor";
-  import { createFormKeyboardController } from "./lib/form-keyboard.svelte";
   import { loadTheme } from "./lib/theme-loader";
-  import { startPolling as startCiPolling, getCiChecks, classifyCheck } from "./lib/ci-checks.svelte";
-  import { startPolling as startPrCommentPolling } from "./lib/pr-comments.svelte";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
@@ -37,9 +34,7 @@
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
   import SharedDialog from "./components/ui/Dialog.svelte";
   import FormDialog from "./components/ui/FormDialog.svelte";
-  import { Input, Label, Button, Checkbox } from "./components/ui";
   import LogViewer from "./components/LogViewer.svelte";
-  import PrPanel from "./components/PrPanel.svelte";
   import PostMergePrompt from "./components/PostMergePrompt.svelte";
   import LoopForm from "./components/LoopForm.svelte";
   import LoopDashboard from "./components/LoopDashboard.svelte";
@@ -81,120 +76,8 @@
   let pluginSessionActions = $state<PluginSessionAction[]>([]);
   let pluginSessionActionsRevision = 0;
 
-  // PR form state
-  let showPrForm = $state(false);
-  let showPrPanel = $state(false);
   let modalPluginId = $state<string | null>(null);
   let modalContributionId = $state<string | null>(null);
-  let prTitle = $state("");
-  let prBody = $state("");
-  let prBaseBranch = $state("");
-  let prDraft = $state(false);
-  let prSubmitting = $state(false);
-  let prError = $state("");
-  let prFormWrapper = $state<HTMLDivElement | null>(null);
-  let prLinkUrl = $state("");
-  let prShowLinkField = $state(false);
-  let prLinking = $state(false);
-  let prRefreshing = $state(false);
-
-  const prFk = createFormKeyboardController(
-    () => [
-      { key: "t", ref: () => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-title'] input") ?? null },
-      { key: "b", ref: () => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-body'] textarea") ?? null },
-      { key: "a", ref: () => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-base'] input") ?? null },
-      { key: "d", toggle: () => { prDraft = !prDraft; } },
-      { key: "r", toggle: () => { if (!prShowLinkField) refreshPr(); } },
-    ],
-    { wrapper: () => prFormWrapper, onDismiss: () => { showPrForm = false; tick().then(() => refocusTerminal()); } },
-  );
-
-  $effect(() => { if (showPrForm && prFormWrapper) prFormWrapper.focus(); });
-
-  function togglePrPanel() {
-    const s = sessions.find(x => x.id === activeSessionId);
-    if (s?.pr_url) { showPrPanel = !showPrPanel; if (!showPrPanel) tick().then(() => refocusTerminal()); }
-    else if (activeSessionId) { openPrForm(); }
-  }
-
-  async function openPrForm() {
-    if (!activeSessionId) return;
-    prError = "";
-    prSubmitting = false;
-    prShowLinkField = false;
-    prLinkUrl = "";
-    prLinking = false;
-    prRefreshing = false;
-    try {
-      const defaults = await prApi.generateDefaults(activeSessionId);
-      prTitle = defaults.title;
-      prBody = defaults.body;
-      prBaseBranch = defaults.base_branch;
-      prDraft = false;
-      showPrForm = true;
-    } catch (e: any) {
-      showSnackbar(e.toString());
-    }
-  }
-
-  async function submitPr() {
-    if (prSubmitting || !activeSessionId) return;
-    prSubmitting = true;
-    prError = "";
-    try {
-      const url = await prApi.create(activeSessionId, prTitle, prBody, prBaseBranch, prDraft);
-      showPrForm = false;
-      showSnackbar(`PR created: ${url}`, "success");
-      await orchestrator.loadSessions();
-    } catch (e: any) {
-      prError = e.toString();
-    } finally {
-      prSubmitting = false;
-    }
-  }
-
-  async function refreshPr() {
-    if (prRefreshing || !activeSessionId) return;
-    prRefreshing = true;
-    prError = "";
-    try {
-      const result = await prApi.fetchPrUrl(activeSessionId);
-      // If result is a real PR URL (contains /pull/), it was found
-      if (result && result.includes("/pull/")) {
-        showPrForm = false;
-        showPrPanel = true;
-        showSnackbar("PR linked", "success");
-        await orchestrator.loadSessions();
-      } else {
-        // No PR found — show the paste field and autofocus it
-        prShowLinkField = true;
-        tick().then(() => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-link'] input")?.focus());
-      }
-    } catch (e: any) {
-      prError = e.toString();
-      prShowLinkField = true;
-      tick().then(() => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-link'] input")?.focus());
-    } finally {
-      prRefreshing = false;
-    }
-  }
-
-  async function linkPr() {
-    if (prLinking || !activeSessionId || !prLinkUrl.trim()) return;
-    prLinking = true;
-    prError = "";
-    try {
-      await prApi.linkPrUrl(activeSessionId, prLinkUrl.trim());
-      showPrForm = false;
-      showPrPanel = true;
-      showSnackbar("PR linked", "success");
-      await orchestrator.loadSessions();
-    } catch (e: any) {
-      prError = e.toString();
-    } finally {
-      prLinking = false;
-    }
-  }
 
   let logViewerEnabled = $state(false);
   let sessionToDelete = $state<Session | null>(null);
@@ -268,14 +151,6 @@
   );
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
-  const ciStatus = $derived.by(() => {
-    if (!activeSessionId) return null;
-    const checks = getCiChecks(activeSessionId);
-    if (checks.length === 0) return null;
-    if (checks.some((c) => classifyCheck(c) === "fail")) return "failing" as const;
-    if (checks.every((c) => classifyCheck(c) !== "pending")) return "passing" as const;
-    return "pending" as const;
-  });
 
   // Session IDs in sidebar display order (includes loop:<id> entries)
   const sidebarSessionOrder = $derived(computeSidebarSessionOrder(
@@ -1056,8 +931,6 @@
 
     const cleanupEvents = orchestrator.startEventListeners();
     const cleanupSymphony = orchestrator.startSymphonyPolling();
-    const cleanupCi = startCiPolling(orchestrator.getSessions());
-    const cleanupPrComments = startPrCommentPolling(orchestrator.getSessions());
     const cleanupLoopListener = loopStore.startLoopEventListener(() => projectStore.getProjects().map((p) => p.id));
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
@@ -1111,8 +984,6 @@
           closePluginContributionModal();
           return;
         }
-        showPrPanel = false;
-        showPrForm = false;
         openPluginContributionModal(target.plugin.id, target.contribution.id);
         return;
       }
@@ -1160,7 +1031,7 @@
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
           if (navCycle.isCycling()) navCycle.cancel();
-          showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; showPrForm = false; showPrPanel = false; closePluginContributionModal(); showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
+          showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; closePluginContributionModal(); showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
@@ -1193,7 +1064,6 @@
         else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskStore.refresh(projects.map((p) => p.path)); }
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
-        else if (action.type === "toggle_pr_panel") { togglePrPanel(); }
         else if (action.type === "focus_merge_prompt") {
           if (getPrompt()) focusMergePrompt();
           else {
@@ -1204,7 +1074,7 @@
         }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
-      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !modalPluginId && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !modalPluginId && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
       () => {
         const leaf = splitTree.getFocusedLeaf();
         return getActiveZone() === "editor" && !!leaf && splitTree.getActiveTabEntry(leaf)?.type === "editor";
@@ -1264,7 +1134,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -1273,10 +1143,6 @@
     projectName={activeProjectName}
     sessionName={activeSessionName}
     {sidebarVisible}
-    prUrl={sessions.find(s => s.id === activeSessionId)?.pr_url ?? null}
-    prState={sessions.find(s => s.id === activeSessionId)?.pr_state ?? null}
-    {ciStatus}
-    hasChanges={!!activeSessionId}
     sessionId={activeSessionId}
     tabs={hasMultiplePanes ? [] : titlebarTabs}
     activeTabIndex={titlebarActiveTabIdx}
@@ -1294,12 +1160,10 @@
       }
     }}
     onAddTab={() => orchestrator.handleNewTab()}
-    onCreatePr={openPrForm}
     {titlebarContributions}
     titlebarSession={activePluginSessionContext}
     onOpenTitlebarContribution={openPluginContributionModal}
     onOpenCommand={() => { commandMenuFileMode = false; commandMenuOpen = true; }}
-    onTogglePrPanel={togglePrPanel}
     {symphonyStatus}
   />
 
@@ -1412,8 +1276,7 @@
       onToggleDiff={() => toggleDiffInTree()}
       onOpenFile={(path) => { if (activeSessionId) openFileInTree(activeSessionId, path); }}
       onOpenLogViewer={logViewerEnabled ? () => { showLogViewer = true; } : undefined}
-      onCreatePr={openPrForm}
-      onSplitVertical={() => handleSplitAction("split_vertical")}
+        onSplitVertical={() => handleSplitAction("split_vertical")}
       onSplitHorizontal={() => handleSplitAction("split_horizontal")}
       onCloseSplit={() => handleSplitAction("close_split")}
       pluginCommands={pluginCommands}
@@ -1476,7 +1339,7 @@
                 <Terminal
                   sessionId={tabEntry.ptyKey}
                   visible={isActiveInLeaf && !activeLoopId && !activePluginId}
-                  focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel && !modalPluginId}
+                  focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !modalPluginId}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
                   onAttached={() => {
@@ -1759,66 +1622,6 @@
   </div>
 </main>
 
-{#if showPrForm}
-  <FormDialog title="Create Pull Request" onClose={() => { showPrForm = false; tick().then(() => refocusTerminal()); }}>
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <div bind:this={prFormWrapper} tabindex="-1" onkeydown={prFk.handleKeydown} onfocusin={prFk.handleFocusin} class="outline-none px-5 pb-5" data-form-keyboard>
-      <form class="space-y-3" onsubmit={(e) => { e.preventDefault(); submitPr(); }} onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submitPr(); } }}>
-        <div class="space-y-1" data-field="pr-title">
-          <Label>Title <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">T</span></Label>
-          <Input bind:value={prTitle} />
-        </div>
-        <div class="space-y-1" data-field="pr-body">
-          <Label>Body <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">B</span></Label>
-          <textarea bind:value={prBody} rows="10" class="w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 resize-y focus:outline-none focus:ring-1 focus:ring-accent font-mono text-xs"></textarea>
-        </div>
-        <div class="space-y-1" data-field="pr-base">
-          <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">A</span></Label>
-          <Input bind:value={prBaseBranch} />
-        </div>
-        <div class="flex items-center gap-4">
-          <Checkbox id="pr-draft" label="Draft PR" bind:checked={prDraft} tabindex={-1} />
-          <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">D</span>
-        </div>
-        <div class="border-t border-border pt-2 space-y-2">
-          <button type="button" class="text-xs text-t3 hover:text-accent transition-colors" disabled={prRefreshing} onclick={() => refreshPr()}>
-            {prRefreshing ? "Checking…" : "PR already exists? Refresh"} <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">R</span>
-          </button>
-          {#if prShowLinkField}
-            <div class="flex gap-2 items-center" data-field="pr-link">
-              <Input bind:value={prLinkUrl} placeholder="https://github.com/owner/repo/pull/123" aria-label="PR URL" />
-              <Button type="button" variant="primary" disabled={prLinking || !prLinkUrl.trim()} onclick={() => linkPr()}>
-                {prLinking ? "Linking…" : "Link"}
-              </Button>
-            </div>
-          {/if}
-        </div>
-        {#if prError}
-          <p class="text-xs text-status-exited">{prError}</p>
-        {/if}
-        <div class="flex items-center justify-between pt-2 border-t border-border">
-          <div class="flex items-center gap-2">
-            {#if prFk.mode === "insert"}
-              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent font-medium">INSERT</span>
-              <span class="text-[10px] text-t3">esc → normal mode</span>
-            {:else}
-              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-panel-hi text-t2 font-medium">NORMAL</span>
-              <span class="text-[10px] text-t3">press a key to focus field</span>
-            {/if}
-          </div>
-          <div class="flex gap-2">
-            <Button type="button" onclick={() => { showPrForm = false; tick().then(() => refocusTerminal()); }}>Cancel</Button>
-            <Button type="submit" variant="primary" disabled={prSubmitting || !prTitle.trim()}>
-              {prSubmitting ? "Creating…" : "Create"} <span class="ml-1 font-mono text-[10px] opacity-60">{MOD_ENTER_HINT}</span>
-            </Button>
-          </div>
-        </div>
-      </form>
-    </div>
-  </FormDialog>
-{/if}
-
 {#if modalPlugin && modalContribution && activePluginSessionContext}
   <FormDialog
     title={modalContribution.label}
@@ -1842,18 +1645,6 @@
         autofocus={true}
       />
     </div>
-  </FormDialog>
-{/if}
-
-{#if showPrPanel && activeSession?.pr_url}
-  <FormDialog title="Pull Request" onClose={() => { showPrPanel = false; tick().then(() => refocusTerminal()); }}>
-    <PrPanel
-      sessionId={activeSession.id}
-      prUrl={activeSession.pr_url!}
-      prState={activeSession.pr_state ?? null}
-      sessionName={activeSession.name}
-      onClose={() => { showPrPanel = false; tick().then(() => refocusTerminal()); }}
-    />
   </FormDialog>
 {/if}
 

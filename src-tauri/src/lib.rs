@@ -16,7 +16,6 @@ pub mod session_ops;
 pub mod session_restart;
 pub mod stale_detection;
 pub mod task_cli;
-pub mod template;
 #[cfg(not(windows))]
 pub mod tmux;
 pub mod util;

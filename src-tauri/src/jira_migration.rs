@@ -954,7 +954,6 @@ mod tests {
             vim_mode: None,
             task_management: None,
             projects_base_path: None,
-            pr_status: None,
             hide_done_tasks: None,
             hide_empty_projects: None,
             daemon_scrollback_bytes: None,

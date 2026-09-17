@@ -35,8 +35,6 @@ export interface TaskManager {
   on_notify?: LifecycleHook | null;
   on_restart?: LifecycleHook | null;
   on_complete?: LifecycleHook | null;
-  on_pr_open?: LifecycleHook | null;
-  on_pr_merge?: LifecycleHook | null;
   auto_dispatch?: AutoDispatchConfig | null;
 }
 
@@ -79,7 +77,6 @@ export interface AppConfig {
   vim_mode?: boolean | null;
   task_management?: TaskManager | null;
   projects_base_path?: string | null;
-  pr_status?: string | null;
   hide_done_tasks?: boolean | null;
   hide_empty_projects?: boolean | null;
   scrollback_lines?: number | null;

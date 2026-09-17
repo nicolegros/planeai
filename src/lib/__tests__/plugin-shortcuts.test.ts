@@ -59,17 +59,37 @@ function key(overrides: Partial<KeyboardEvent>): KeyboardEvent {
 }
 
 describe("findPluginShortcut", () => {
-  it("selects a session-panel plugin for Mod+Shift+P before a legacy action can run", () => {
-    expect(findPluginShortcut(key({ key: "p", code: "KeyP", [modKey]: true, shiftKey: true }), [sessionPanel], [])).toBe(sessionPanel);
+  it("selects a session-panel plugin for its declared Mod+Shift+P shortcut", () => {
+    expect(
+      findPluginShortcut(
+        key({ key: "p", code: "KeyP", [modKey]: true, shiftKey: true }),
+        [sessionPanel],
+        [],
+      ),
+    ).toBe(sessionPanel);
   });
 
   it("gives a selected-session panel precedence over a main-pane shortcut", () => {
-    expect(findPluginShortcut(key({ key: "p", code: "KeyP", [modKey]: true, shiftKey: true }), [sessionPanel], [mainPane])).toBe(sessionPanel);
+    expect(
+      findPluginShortcut(
+        key({ key: "p", code: "KeyP", [modKey]: true, shiftKey: true }),
+        [sessionPanel],
+        [mainPane],
+      ),
+    ).toBe(sessionPanel);
   });
 
   it("does not treat unmodified or mixed-control chords as declared plugin shortcuts", () => {
-    expect(findPluginShortcut(key({ key: "p", code: "KeyP", shiftKey: true }), [sessionPanel], [])).toBeNull();
+    expect(
+      findPluginShortcut(key({ key: "p", code: "KeyP", shiftKey: true }), [sessionPanel], []),
+    ).toBeNull();
     const otherModifier = IS_MAC ? "ctrlKey" : "metaKey";
-    expect(findPluginShortcut(key({ key: "p", code: "KeyP", [modKey]: true, [otherModifier]: true }), [sessionPanel], [])).toBeNull();
+    expect(
+      findPluginShortcut(
+        key({ key: "p", code: "KeyP", [modKey]: true, [otherModifier]: true }),
+        [sessionPanel],
+        [],
+      ),
+    ).toBeNull();
   });
 });

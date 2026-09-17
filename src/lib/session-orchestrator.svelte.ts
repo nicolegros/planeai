@@ -5,11 +5,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sessions as sessionsApi, symphony, tasks } from "./api";
-import {
-  getCiStatus as _getCiStatus,
-  updateSessions as updateCiSessions,
-} from "./ci-checks.svelte";
-import { updateSessions as updatePrCommentSessions } from "./pr-comments.svelte";
 import type { Session } from "./types";
 import { initSession, getTabCount, destroySession as destroyTabState } from "./session-tabs.svelte";
 import {
@@ -24,11 +19,9 @@ import { clearComments } from "./review-comments.svelte";
 import { clearEditorFeedback } from "./editor-feedback.svelte";
 import { destroySession as destroyViewedState } from "./diff-viewed.svelte";
 import { showSnackbar } from "./snackbar.svelte";
-import { showMergePrompt, dismissForSession } from "./post-merge-prompt.svelte";
+import { dismissForSession } from "./post-merge-prompt.svelte";
 import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
-import { getProjects } from "./project-store.svelte";
-import { moveTask } from "./task-store.svelte";
 import { getCycleState } from "./tab-switcher.svelte";
 import {
   cleanup as tabLayoutCleanup,
@@ -128,10 +121,6 @@ export function clearReviewReady(sessionId: string): void {
   reviewReady = rest;
 }
 
-export function getCiStatus(sessionId: string): "passing" | "failing" | "running" | null {
-  return _getCiStatus(sessionId);
-}
-
 export function toggleDiff(): void {
   _toggleDiff();
   if (activeSessionId) clearReviewReady(activeSessionId);
@@ -142,8 +131,6 @@ export function toggleDiff(): void {
 export async function loadSessions(): Promise<void> {
   const loadedSessions = await sessionsApi.list();
   sessions = loadedSessions;
-  updateCiSessions(sessions);
-  updatePrCommentSessions(sessions);
   for (const s of sessions) {
     if (getTabCount(s.id) === 0) initSession(s.id, s.tab_count);
   }
@@ -285,9 +272,7 @@ export function startEventListeners(): () => void {
         if (getSettings().sound_enabled !== false) {
           playTaskComplete();
         }
-        tasks.fireNotifyHook(event.payload.session_id).catch((err) => {
-          if (err && typeof err === "string" && err.startsWith("pr_status:")) showSnackbar(err);
-        });
+        tasks.fireNotifyHook(event.payload.session_id).catch(() => {});
         // Auto-open review tab when agent finishes
         const sid = event.payload.session_id;
         const session = sessions.find((s) => s.id === sid);
@@ -353,38 +338,6 @@ export function startEventListeners(): () => void {
         timestamp: Date.now(),
       });
       touchMru(event.payload);
-    }),
-  );
-
-  // PR merged — show post-merge prompt
-  unlisteners.push(
-    listen<{ session_id: string }>("pr-merged", (event) => {
-      const s = sessions.find((x) => x.id === event.payload.session_id);
-      if (s) {
-        showMergePrompt({
-          sessionId: s.id,
-          sessionName: s.name || s.branch,
-          taskKey: s.task_key,
-          onArchive: (id) => {
-            const found = sessions.find((x) => x.id === id);
-            if (found) return archiveSession(found);
-            return Promise.resolve();
-          },
-          onDestroy: (id) => {
-            const found = sessions.find((x) => x.id === id);
-            if (found) return deleteSession(found);
-            return Promise.resolve();
-          },
-          onTaskDone: s.task_key
-            ? async (id) => {
-                const sess = sessions.find((x) => x.id === id);
-                if (!sess?.task_key) return;
-                const proj = getProjects().find((p) => p.id === sess.project_id);
-                if (proj) await moveTask(sess.task_key, "done", proj.path);
-              }
-            : undefined,
-        });
-      }
     }),
   );
 

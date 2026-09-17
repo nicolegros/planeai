@@ -120,8 +120,6 @@ Hooks run shell commands at task state transitions. Configure them in **Preferen
 | `on_complete` | The agent signals it's done (session archived or deleted) |
 | `on_notify`   | The agent signals idle (needs attention)                  |
 | `on_restart`  | A failed task's session is restarted                      |
-| `on_pr_open`  | A pull request is opened for the session's branch         |
-| `on_pr_merge` | The pull request is merged                                |
 
 Hooks run in the working directory of the task's git worktree. They support the same `{{template}}` syntax as other planeai templates (see [Configuration](/planeai/guides/configuration/)).
 

@@ -328,31 +328,6 @@ fn archived_destroyed_filtering_consistent() {
 }
 
 #[test]
-fn pr_state_persists_via_shared_service() {
-    let conn = test_db();
-    let p = ProjectService::ensure_project(&conn, "/tmp/proj").unwrap();
-    SessionService::create(
-        &conn,
-        &CreateSessionParams {
-            id: "s1".to_string(),
-            project_id: p.id.clone(),
-            backend: "daemon".to_string(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-
-    SessionService::update_pr_state(&conn, "s1", "https://github.com/org/repo/pull/1", "open")
-        .unwrap();
-    let s = SessionService::get(&conn, "s1").unwrap().unwrap();
-    assert_eq!(
-        s.pr_url.as_deref(),
-        Some("https://github.com/org/repo/pull/1")
-    );
-    assert_eq!(s.pr_state.as_deref(), Some("open"));
-}
-
-#[test]
 fn project_archive_cascades_to_sessions() {
     let conn = test_db();
     let p = ProjectService::create(&conn, "myapp", "/tmp/myapp").unwrap();

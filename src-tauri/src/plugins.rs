@@ -1848,8 +1848,6 @@ async fn execute_host_task(
                         "backend": session.backend,
                         "tab_count": session.tab_count,
                         "task_key": session.task_key,
-                        "pr_url": session.pr_url,
-                        "pr_state": session.pr_state,
                     })
                 })
                 .collect::<Vec<_>>();
