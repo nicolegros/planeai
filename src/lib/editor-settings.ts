@@ -12,7 +12,11 @@ export const EDITOR_PRESETS: readonly EditorPreset[] = [
   { label: "VS Code", command: "code", args: ["--reuse-window", "--goto", "{file}"] },
   { label: "Cursor", command: "cursor", args: ["--reuse-window", "--goto", "{file}"] },
   { label: "Vim", command: "vim", args: ["{file}"] },
-  { label: "Neovim", command: "nvim", args: ["{file}"] },
+  {
+    label: "Neovim",
+    command: "nvim",
+    args: ["--cmd", "let g:planeai_session_id = '{session_id}'", "{file}"],
+  },
 ];
 
 export function editorMode(editor: EditorSettings | null | undefined): EditorMode | null {

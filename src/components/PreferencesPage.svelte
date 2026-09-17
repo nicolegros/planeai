@@ -688,7 +688,7 @@
     {#if activeTab === "Editor"}
     <section class="space-y-3">
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">File Editor</h2>
-      <p class="text-xs text-t3">Choose how PlaneAI opens project files. Terminal and external commands receive absolute <code>{"{file}"}</code> and active-worktree <code>{"{project}"}</code> placeholders.</p>
+      <p class="text-xs text-t3">Choose how PlaneAI opens project files. Terminal and external commands receive absolute <code>{"{file}"}</code>, active-worktree <code>{"{project}"}</code>, and PlaneAI session <code>{"{session_id}"}</code> placeholders.</p>
       <div class="flex flex-wrap gap-2">
         {#each [{ value: "embedded", label: "Embedded" }, { value: "terminal", label: "Terminal command" }, { value: "external", label: "External app" }] as option (option.value)}
           <button

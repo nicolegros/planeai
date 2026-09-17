@@ -90,8 +90,21 @@ For `terminal` and `external` modes, `command` is an executable resolved with Pl
 
 - `{file}` — required for non-embedded modes; the absolute file path.
 - `{project}` — the active session's working directory: its worktree when one exists, otherwise the project root.
+- `{session_id}` — the PlaneAI session ID for the file being opened.
 
-The built-in presets are VS Code (`code --reuse-window --goto {file}`), Cursor (`cursor --reuse-window --goto {file}`), Vim, and Neovim. You can freely edit preset values.
+The built-in presets are VS Code (`code --reuse-window --goto {file}`), Cursor (`cursor --reuse-window --goto {file}`), Vim, and Neovim. You can freely edit preset values. The Neovim preset passes the session ID to [`planeai.nvim`](https://github.com/nicolegros/planeai.nvim) through `g:planeai_session_id`; install that plugin to select code and send queued feedback to the launching PlaneAI session.
+
+For a custom Neovim configuration, use the same arguments as the built-in preset:
+
+```jsonc
+{
+  "editor": {
+    "mode": "terminal",
+    "command": "nvim",
+    "args": ["--cmd", "let g:planeai_session_id = '{session_id}'", "{file}"],
+  },
+}
+```
 
 `terminal` opens each file in a fresh PlaneAI shell tab and retains the tab after the editor exits. Shell-tab persistence follows the session backend: daemon tabs persist; local and tmux shell tabs are ephemeral. `external` launches the configured application asynchronously with the active worktree as its working directory and leaves PlaneAI focused. Launch failures are shown in the app.
 

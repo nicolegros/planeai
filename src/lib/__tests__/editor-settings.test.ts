@@ -39,4 +39,11 @@ describe("editor settings", () => {
       validateEditorSettings({ mode: "terminal", command: "nvim", args: ["{file}"] }),
     ).toBeNull();
   });
+  it("passes the PlaneAI session ID to the Neovim plugin preset", () => {
+    expect(EDITOR_PRESETS.find((preset) => preset.label === "Neovim")).toEqual({
+      label: "Neovim",
+      command: "nvim",
+      args: ["--cmd", "let g:planeai_session_id = '{session_id}'", "{file}"],
+    });
+  });
 });
