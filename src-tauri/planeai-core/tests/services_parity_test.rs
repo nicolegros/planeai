@@ -200,6 +200,62 @@ fn mru_ordering_matches_production_semantics() {
 }
 
 #[test]
+fn list_active_excludes_exited_sessions_for_done_tasks() {
+    let conn = test_db();
+    planeai_tasks::sqlite::migrate(&conn).unwrap();
+    let project = ProjectService::ensure_project(&conn, "/tmp/proj").unwrap();
+
+    for (id, task_key) in [
+        ("no-task", None),
+        ("active-done", Some("PLA-1")),
+        ("exited-done", Some("PLA-1")),
+        ("active-in-progress", Some("PLA-2")),
+        ("exited-no-task", None),
+        ("exited-in-progress", Some("PLA-2")),
+    ] {
+        SessionService::create(
+            &conn,
+            &CreateSessionParams {
+                id: id.to_string(),
+                project_id: project.id.clone(),
+                backend: "daemon".to_string(),
+                task_key: task_key.map(str::to_string),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    for id in ["exited-done", "exited-no-task", "exited-in-progress"] {
+        SessionService::mark_exited(&conn, id).unwrap();
+    }
+
+    conn.execute(
+        "INSERT INTO task_projects (prefix, next_seq) VALUES ('PLA', 3)",
+        [],
+    )
+    .unwrap();
+    for (key, status) in [("PLA-1", "done"), ("PLA-2", "in_progress")] {
+        conn.execute(
+            "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at)              VALUES (?1, 'PLA', ?1, ?2, '2024-01-01', '2024-01-01')",
+            rusqlite::params![key, status],
+        )
+        .unwrap();
+    }
+
+    let ids: Vec<_> = SessionService::list_active(&conn)
+        .unwrap()
+        .into_iter()
+        .map(|session| session.id)
+        .collect();
+    assert!(ids.contains(&"no-task".to_string()));
+    assert!(ids.contains(&"active-done".to_string()));
+    assert!(!ids.contains(&"exited-done".to_string()));
+    assert!(ids.contains(&"active-in-progress".to_string()));
+    assert!(ids.contains(&"exited-no-task".to_string()));
+    assert!(ids.contains(&"exited-in-progress".to_string()));
+}
+
+#[test]
 fn null_mru_sorts_last_by_created_at() {
     let conn = test_db();
     let p = ProjectService::ensure_project(&conn, "/tmp/proj").unwrap();
