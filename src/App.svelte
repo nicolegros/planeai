@@ -516,7 +516,7 @@
   }
 
   /** Close the active tab in the focused split leaf. */
-  function splitCloseTab(): void {
+  async function splitCloseTab(): Promise<void> {
     const leaf = splitTree.getFocusedLeaf();
     if (!leaf || leaf.tabs.length === 0) return;
 
@@ -540,24 +540,32 @@
       return;
     }
 
-    closeShellTabInTree(activeEntry.ptyKey);
+    await closeShellTabInTree(activeEntry.ptyKey);
   }
 
   /** Close a shell tab using its PTY key rather than a visual tab position. */
-  function closeShellTabInTree(ptyKey: string): void {
+  async function closeShellTabInTree(ptyKey: string): Promise<void> {
     if (pendingShellCommands.has(ptyKey)) {
       showSnackbar("Terminal editor is still starting", "error");
       return;
     }
 
-    splitTree.removeSessionFromLeaf(ptyKey);
     const colonIdx = ptyKey.lastIndexOf(":");
-    if (colonIdx !== -1) {
-      const sessionId = ptyKey.slice(0, colonIdx);
-      const tabIndex = parseInt(ptyKey.slice(colonIdx + 1), 10);
-      if (!isNaN(tabIndex)) orchestrator.closeShellTab(sessionId, tabIndex);
+    if (colonIdx === -1) return;
+    const sessionId = ptyKey.slice(0, colonIdx);
+    const tabIndex = parseInt(ptyKey.slice(colonIdx + 1), 10);
+    if (isNaN(tabIndex)) return;
+
+    try {
+      // Keep the pane intact until the orchestrator confirms the backend close.
+      // This avoids an orphaned terminal UI when the daemon close request fails.
+      await orchestrator.closeShellTab(sessionId, tabIndex);
+      splitTree.removeSessionFromLeaf(ptyKey);
+      await tick();
+      refocusTerminal();
+    } catch (error) {
+      showSnackbar(`Failed to close shell tab: ${error instanceof Error ? error.message : String(error)}`, "error");
     }
-    tick().then(() => refocusTerminal());
   }
 
   /** Navigate to the next tab in the focused split leaf. */
@@ -935,12 +943,18 @@
       const separator = ptyKey.lastIndexOf(":");
       if (separator === -1) return;
 
+      // An explicit close removes the tab before daemon shutdown. Ignore the
+      // resulting pty-exited event rather than issuing a second close_tab.
+      if (!splitTree.findTab(ptyKey)) return;
+
       pendingShellCommands.delete(ptyKey);
       splitTree.removeSessionFromLeaf(ptyKey);
       const sessionId = ptyKey.slice(0, separator);
       const tabIndex = Number.parseInt(ptyKey.slice(separator + 1), 10);
       if (!sessionId || Number.isNaN(tabIndex)) return;
-      orchestrator.closeShellTab(sessionId, tabIndex);
+      void orchestrator.closeShellTab(sessionId, tabIndex).catch((error) => {
+        showSnackbar(`Failed to finalize shell tab close: ${error instanceof Error ? error.message : String(error)}`, "error");
+      });
     });
     const unlistenPluginRuntime = listen<import("./lib/types").PluginInventory>("plugin-runtime-changed", (event) => {
       pluginSessionActionsRevision += 1;

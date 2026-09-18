@@ -1,5 +1,7 @@
 use crate::data::handle_data_connection;
-use crate::protocol::{Request, Response, SessionInfoDto, CONN_CONTROL, CONN_DATA};
+use crate::protocol::{
+    Request, Response, SessionInfoDto, CONN_CONTROL, CONN_DATA, PROTOCOL_VERSION,
+};
 use crate::registry::SessionRegistry;
 use crate::transport::{DaemonListener, DaemonStream};
 use crate::types::SpawnOutcome;
@@ -241,7 +243,10 @@ impl DaemonServer {
                         ended_at: s.ended_at,
                     })
                     .collect();
-                Response::Sessions { sessions }
+                Response::Sessions {
+                    protocol_version: PROTOCOL_VERSION,
+                    sessions,
+                }
             }
             Request::Attach { session_id } => {
                 if reg.get(&session_id).is_some() {

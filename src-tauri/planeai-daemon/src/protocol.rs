@@ -18,7 +18,10 @@ pub const CONN_CONTROL: u8 = 0x00;
 pub const CONN_DATA: u8 = 0x01;
 
 /// Current protocol version.
-pub const PROTOCOL_VERSION: u8 = 2;
+/// Version 3 adds the advertised control-plane capability for correlated
+/// shell-tab spawn/cancellation. Clients must only use that lifecycle when a
+/// daemon reports this version (or newer) in its list response.
+pub const PROTOCOL_VERSION: u8 = 3;
 
 /// Write a binary frame: [1-byte type][4-byte big-endian length][payload]
 pub async fn write_frame(
@@ -128,6 +131,9 @@ pub enum Response {
         error: String,
     },
     Sessions {
+        /// Advertises the daemon protocol so a newly updated app can safely
+        /// fall back when it encounters a retained pre-update daemon.
+        protocol_version: u8,
         sessions: Vec<SessionInfoDto>,
     },
     Event {

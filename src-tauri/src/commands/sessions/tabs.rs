@@ -214,6 +214,11 @@ fn prepare_tab_spawn(
     })
 }
 
+struct TabClosePlan {
+    pty_key: String,
+    daemon_backed: bool,
+}
+
 #[tauri::command]
 pub async fn close_tab(
     session_id: String,
@@ -222,35 +227,71 @@ pub async fn close_tab(
     state: State<'_, PtyState>,
 ) -> Result<(), String> {
     let connection = db_state.0.clone();
-    let pty = state.0.clone();
-    crate::commands::blocking(move || close_tab_blocking(session_id, tab_index, connection, pty))
-        .await
+    let plan = crate::commands::blocking({
+        let session_id = session_id.clone();
+        move || prepare_tab_close(session_id, tab_index, connection)
+    })
+    .await?;
+
+    if !state.0.claim_tab_close(&plan.pty_key) {
+        return Ok(());
+    }
+
+    // The database lock was released by prepare_tab_close before this bounded
+    // daemon IPC. Do not lower the persisted count unless the daemon confirms
+    // that this exact shell tab is gone (or was already gone).
+    if plan.daemon_backed {
+        if let Err(error) =
+            crate::daemon_client::kill_shell_tab(&planeai_ipc::daemon_socket_path(), &plan.pty_key)
+                .await
+        {
+            state.0.cancel_tab_close(&plan.pty_key);
+            return Err(error);
+        }
+    }
+
+    let connection = db_state.0.clone();
+    let session_id_for_update = session_id.clone();
+    if let Err(error) = crate::commands::blocking(move || {
+        let conn = connection.lock().map_err(|e| e.to_string())?;
+        let session = db::get_session(&conn, &session_id_for_update)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?;
+        db::update_tab_count(
+            &conn,
+            &session_id_for_update,
+            (session.tab_count - 1).max(1),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    {
+        state.0.cancel_tab_close(&plan.pty_key);
+        return Err(error);
+    }
+
+    // Detach only after the daemon shell has been confirmed dead and the
+    // persisted count has been updated, so a failed kill leaves the tab live
+    // rather than silently orphaning its shell. The close claim remains until
+    // this PTY key is attached again, making duplicate pty-exited events safe.
+    state.0.detach(&plan.pty_key);
+    Ok(())
 }
 
-fn close_tab_blocking(
+fn prepare_tab_close(
     session_id: String,
     tab_index: u32,
     connection: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
-    pty: pty::PtyManager,
-) -> Result<(), String> {
-    let pty_key = format!("{}:{}", session_id, tab_index);
-    pty.detach(&pty_key);
-
+) -> Result<TabClosePlan, String> {
     let conn = connection.lock().map_err(|e| e.to_string())?;
     let session = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
 
-    // This synchronous IPC round-trip can block while the daemon is unhealthy,
-    // so it must remain inside the command's blocking worker.
-    if session.backend == "daemon" {
-        let kill_ops = crate::cleanup::real_kill_ops();
-        let _ = (kill_ops.kill_daemon_session)(&pty_key);
-    }
-
-    let new_count = (session.tab_count - 1).max(1);
-    db::update_tab_count(&conn, &session_id, new_count).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(TabClosePlan {
+        pty_key: format!("{}:{}", session_id, tab_index),
+        daemon_backed: session.backend == "daemon",
+    })
 }
 
 #[tauri::command]

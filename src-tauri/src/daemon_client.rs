@@ -180,13 +180,85 @@ pub async fn spawn_shell_tab(
     cwd: &str,
     env: &HashMap<String, String>,
 ) -> Result<(), String> {
-    let running = tokio::time::timeout(CONTROL_TIMEOUT, list_running_sessions(socket_path))
+    spawn_shell_tab_with_timeout(
+        socket_path,
+        session_id,
+        command,
+        args,
+        cwd,
+        env,
+        CONTROL_TIMEOUT,
+    )
+    .await
+}
+
+async fn spawn_shell_tab_with_timeout(
+    socket_path: &Path,
+    session_id: &str,
+    command: &str,
+    args: &[String],
+    cwd: &str,
+    env: &HashMap<String, String>,
+    control_timeout: std::time::Duration,
+) -> Result<(), String> {
+    let daemon = tokio::time::timeout(control_timeout, list_daemon_sessions(socket_path))
         .await
         .map_err(|_| "daemon shell-tab lookup timed out".to_string())??;
-    if running.contains(session_id) {
+    if daemon.running.contains(session_id) {
         return Ok(());
     }
 
+    if daemon.supports_correlated_shell_tab_spawn() {
+        return spawn_shell_tab_correlated(
+            socket_path,
+            session_id,
+            command,
+            args,
+            cwd,
+            env,
+            control_timeout,
+        )
+        .await;
+    }
+
+    // A daemon retained across an app update does not understand request_id or
+    // cancel_spawn. Use its legacy spawn contract instead of sending either.
+    spawn_shell_tab_legacy(
+        socket_path,
+        session_id,
+        command,
+        args,
+        cwd,
+        env,
+        control_timeout,
+    )
+    .await
+}
+
+/// Kill a daemon-backed shell tab through a bounded asynchronous control request.
+/// A missing session is already absent, so it is equivalent to a successful kill.
+pub async fn kill_shell_tab(socket_path: &Path, session_id: &str) -> Result<(), String> {
+    let request = serde_json::json!({
+        "cmd": "kill",
+        "session_id": session_id,
+    });
+    match tokio::time::timeout(CONTROL_TIMEOUT, send_control_request(socket_path, &request)).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) if error.contains("session not found") => Ok(()),
+        Ok(Err(error)) => Err(format!("daemon shell-tab kill failed: {error}")),
+        Err(_) => Err("daemon shell-tab kill timed out".to_string()),
+    }
+}
+
+async fn spawn_shell_tab_correlated(
+    socket_path: &Path,
+    session_id: &str,
+    command: &str,
+    args: &[String],
+    cwd: &str,
+    env: &HashMap<String, String>,
+    control_timeout: std::time::Duration,
+) -> Result<(), String> {
     let request_id = Uuid::new_v4().to_string();
     let request = serde_json::json!({
         "cmd": "spawn",
@@ -200,7 +272,7 @@ pub async fn spawn_shell_tab(
     });
 
     let spawn_error =
-        match tokio::time::timeout(CONTROL_TIMEOUT, send_control_request(socket_path, &request))
+        match tokio::time::timeout(control_timeout, send_control_request(socket_path, &request))
             .await
         {
             Ok(Ok(_)) => return Ok(()),
@@ -213,24 +285,98 @@ pub async fn spawn_shell_tab(
         "cmd": "cancel_spawn",
         "request_id": request_id,
     });
-    tokio::time::timeout(CONTROL_TIMEOUT, send_control_request(socket_path, &cancel))
+    tokio::time::timeout(control_timeout, send_control_request(socket_path, &cancel))
         .await
         .map_err(|_| "daemon shell-tab spawn cancellation was not acknowledged".to_string())??;
     Err(format!("{spawn_error}; daemon spawn was cancelled"))
 }
 
-/// Fetch the IDs of daemon sessions that are still running. Exited and killed
-/// sessions remain listed for scrollback/reconciliation, but must be spawned
-/// again with `replace_exited` rather than attached as if they were live.
-async fn list_running_sessions(
+/// Spawn with the pre-v3 daemon contract. Once the request line is written, a
+/// lost response is ambiguous: the daemon may have spawned the tab. Returning
+/// success keeps the UI handle alive, letting its terminal attach or its later
+/// close clean up the exact session rather than leaving an orphan behind.
+async fn spawn_shell_tab_legacy(
     socket_path: &Path,
-) -> Result<std::collections::HashSet<String>, String> {
+    session_id: &str,
+    command: &str,
+    args: &[String],
+    cwd: &str,
+    env: &HashMap<String, String>,
+    control_timeout: std::time::Duration,
+) -> Result<(), String> {
+    let stream = AsyncIpcStream::connect(socket_path)
+        .await
+        .map_err(|e| format!("failed to connect to daemon: {e}"))?;
+    let (reader, mut writer) = tokio::io::split(stream);
+    writer
+        .write_all(&[CONN_CONTROL])
+        .await
+        .map_err(|e| format!("failed to send control byte: {e}"))?;
+    let request = serde_json::json!({
+        "cmd": "spawn",
+        "session_id": session_id,
+        "command": command,
+        "args": args,
+        "cwd": cwd,
+        "env": env,
+        "mode": "replace_exited",
+    });
+    let mut line = serde_json::to_string(&request).map_err(|e| e.to_string())?;
+    line.push('\n');
+    if let Err(error) = writer.write_all(line.as_bytes()).await {
+        tracing::warn!(session_id, %error, "legacy daemon shell-tab spawn write was ambiguous; retaining tab handle");
+        return Ok(());
+    }
+
+    let mut reader = BufReader::new(reader);
+    line.clear();
+    match tokio::time::timeout(control_timeout, reader.read_line(&mut line)).await {
+        Ok(Ok(bytes)) if bytes > 0 => {
+            let response: serde_json::Value = serde_json::from_str(line.trim())
+                .map_err(|e| format!("invalid daemon response: {e}"))?;
+            if let Some(error) = response.get("error").and_then(serde_json::Value::as_str) {
+                return Err(error.to_string());
+            }
+            Ok(())
+        }
+        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {
+            tracing::warn!(
+                session_id,
+                "legacy daemon shell-tab spawn response was ambiguous; retaining tab handle"
+            );
+            Ok(())
+        }
+    }
+}
+
+struct DaemonSessionList {
+    running: std::collections::HashSet<String>,
+    protocol_version: Option<u8>,
+}
+
+impl DaemonSessionList {
+    fn supports_correlated_shell_tab_spawn(&self) -> bool {
+        self.protocol_version
+            .is_some_and(|version| version >= PROTOCOL_VERSION)
+    }
+}
+
+/// Fetch the running IDs and advertised daemon protocol. Pre-update daemons
+/// omit protocol_version, which selects the legacy shell-tab spawn fallback.
+async fn list_daemon_sessions(socket_path: &Path) -> Result<DaemonSessionList, String> {
     let response = send_control_request(socket_path, &serde_json::json!({ "cmd": "list" })).await?;
     let sessions = response
         .get("sessions")
         .and_then(serde_json::Value::as_array)
         .ok_or("invalid daemon list response")?;
-    Ok(running_session_ids(sessions))
+    let protocol_version = response
+        .get("protocol_version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|version| u8::try_from(version).ok());
+    Ok(DaemonSessionList {
+        running: running_session_ids(sessions),
+        protocol_version,
+    })
 }
 
 fn running_session_ids(sessions: &[serde_json::Value]) -> std::collections::HashSet<String> {
@@ -414,6 +560,242 @@ fn spawn_detached(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timed_out_effective_spawn_is_acknowledged_cancelled_without_orphaning_a_shell() {
+        use planeai_daemon::server::DaemonServer;
+        use planeai_daemon::transport::DaemonListener;
+        use std::sync::Arc;
+        use tokio::io::AsyncReadExt;
+        use tokio::net::UnixListener;
+        use tokio::sync::{oneshot, Mutex};
+
+        let dir = tempfile::tempdir().unwrap();
+        let daemon_socket = dir.path().join("daemon.sock");
+        let proxy_socket = dir.path().join("proxy.sock");
+        let listener = DaemonListener::bind(&daemon_socket).unwrap();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+        let daemon = Arc::new(DaemonServer::new(4096));
+        let daemon_task = tokio::spawn(async move { daemon.run(listener, shutdown_rx).await });
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let (spawn_effective_tx, spawn_effective_rx) = oneshot::channel();
+        let spawn_effective_tx = Arc::new(Mutex::new(Some(spawn_effective_tx)));
+        let proxy_listener = UnixListener::bind(&proxy_socket).unwrap();
+        let proxy_daemon_socket = daemon_socket.clone();
+        let proxy_task = tokio::spawn(async move {
+            loop {
+                let (stream, _) = proxy_listener.accept().await.unwrap();
+                let daemon_socket = proxy_daemon_socket.clone();
+                let spawn_effective_tx = Arc::clone(&spawn_effective_tx);
+                tokio::spawn(async move {
+                    let (reader, mut writer) = tokio::io::split(stream);
+                    let mut reader = BufReader::new(reader);
+                    let mut discriminator = [0u8; 1];
+                    reader.read_exact(&mut discriminator).await.unwrap();
+                    assert_eq!(discriminator, [CONN_CONTROL]);
+
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await.unwrap();
+                    let request: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+                    let response = send_control_request(&daemon_socket, &request)
+                        .await
+                        .unwrap();
+
+                    if request["cmd"] == "spawn" {
+                        // The real daemon has now completed the spawn, but this
+                        // proxy deliberately withholds its response so the client
+                        // must use the correlated cancellation path.
+                        if let Some(tx) = spawn_effective_tx.lock().await.take() {
+                            tx.send(()).unwrap();
+                        }
+                        std::future::pending::<()>().await;
+                    }
+
+                    let mut response = serde_json::to_string(&response).unwrap();
+                    response.push('\n');
+                    writer.write_all(response.as_bytes()).await.unwrap();
+                });
+            }
+        });
+
+        send_control_request(
+            &daemon_socket,
+            &serde_json::json!({
+                "cmd": "spawn",
+                "session_id": "unrelated-shell",
+                "command": "sleep",
+                "args": ["999"],
+                "mode": "create_only",
+            }),
+        )
+        .await
+        .unwrap();
+
+        let proxy_for_client = proxy_socket.clone();
+        let spawn = tokio::spawn(async move {
+            spawn_shell_tab_with_timeout(
+                &proxy_for_client,
+                "timed-out-shell",
+                "sleep",
+                &["999".to_string()],
+                "/",
+                &HashMap::new(),
+                std::time::Duration::from_millis(250),
+            )
+            .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), spawn_effective_rx)
+            .await
+            .expect("daemon should spawn before the response is delayed")
+            .expect("proxy should observe the effective spawn");
+        let error = spawn.await.unwrap().unwrap_err();
+        assert_eq!(
+            error,
+            "daemon shell-tab spawn timed out; daemon spawn was cancelled"
+        );
+
+        let sessions = send_control_request(&daemon_socket, &serde_json::json!({ "cmd": "list" }))
+            .await
+            .unwrap();
+        let sessions = sessions["sessions"].as_array().unwrap();
+        assert_eq!(
+            running_session_ids(sessions),
+            std::collections::HashSet::from(["unrelated-shell".to_string()]),
+            "only the unrelated shell may remain running"
+        );
+        let cancelled = sessions
+            .iter()
+            .find(|session| session["session_id"] == "timed-out-shell")
+            .expect("effective spawn must be retained as a killed session");
+        assert_eq!(cancelled["status"], "killed");
+
+        kill_shell_tab(&daemon_socket, "unrelated-shell")
+            .await
+            .unwrap();
+        proxy_task.abort();
+        shutdown_tx.send(()).unwrap();
+        daemon_task.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn legacy_daemon_fallback_omits_request_lifecycle_fields() {
+        use std::sync::Arc;
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixListener;
+        use tokio::sync::Mutex;
+
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("legacy.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let requests = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let recorded_requests = Arc::clone(&requests);
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (reader, mut writer) = tokio::io::split(stream);
+                let mut reader = BufReader::new(reader);
+                let mut discriminator = [0u8; 1];
+                reader.read_exact(&mut discriminator).await.unwrap();
+                assert_eq!(discriminator, [CONN_CONTROL]);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let request: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+                recorded_requests.lock().await.push(request.clone());
+                let response = if request["cmd"] == "list" {
+                    // The missing protocol_version emulates a pre-v3 daemon.
+                    serde_json::json!({ "sessions": [] })
+                } else {
+                    serde_json::json!({ "ok": true, "session_id": "legacy:1" })
+                };
+                writer
+                    .write_all(format!("{response}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+
+        spawn_shell_tab_with_timeout(
+            &socket,
+            "legacy:1",
+            "sleep",
+            &["999".to_string()],
+            "/",
+            &HashMap::new(),
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
+
+        let requests = requests.lock().await;
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["cmd"], "list");
+        assert_eq!(requests[1]["cmd"], "spawn");
+        assert!(requests[1].get("request_id").is_none());
+        assert_ne!(requests[1]["cmd"], "cancel_spawn");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn legacy_daemon_timeout_retains_the_shell_tab_handle_without_cancellation() {
+        use std::sync::Arc;
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixListener;
+        use tokio::sync::Mutex;
+
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("legacy-timeout.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let requests = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let recorded_requests = Arc::clone(&requests);
+        let server = tokio::spawn(async move {
+            for request_number in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (reader, mut writer) = tokio::io::split(stream);
+                let mut reader = BufReader::new(reader);
+                let mut discriminator = [0u8; 1];
+                reader.read_exact(&mut discriminator).await.unwrap();
+                assert_eq!(discriminator, [CONN_CONTROL]);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let request: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+                recorded_requests.lock().await.push(request);
+                if request_number == 0 {
+                    writer.write_all(b"{\"sessions\":[]}\n").await.unwrap();
+                } else {
+                    // The spawn may already be effective, but this pre-update
+                    // daemon never replies. The client must not cancel it.
+                    std::future::pending::<()>().await;
+                }
+            }
+        });
+
+        let result = spawn_shell_tab_with_timeout(
+            &socket,
+            "legacy:timeout",
+            "sleep",
+            &["999".to_string()],
+            "/",
+            &HashMap::new(),
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "ambiguous legacy spawn should retain its UI handle: {result:?}"
+        );
+
+        let requests = requests.lock().await;
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1]["cmd"], "spawn");
+        assert!(requests[1].get("request_id").is_none());
+        drop(requests);
+        server.abort();
+    }
 
     #[test]
     fn exited_and_killed_shell_tabs_are_not_treated_as_running() {

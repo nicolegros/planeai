@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -104,6 +104,7 @@ impl SessionBackend for DaemonBackend {
 pub struct PtyManager {
     sessions: Arc<RwLock<HashMap<String, Box<dyn SessionBackend>>>>,
     observer: Arc<RwLock<Arc<dyn OutputObserver>>>,
+    tab_close_claims: Arc<Mutex<HashSet<String>>>,
 }
 
 impl PtyManager {
@@ -111,11 +112,33 @@ impl PtyManager {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             observer: Arc::new(RwLock::new(Arc::new(NoopObserver))),
+            tab_close_claims: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
     pub fn set_observer(&self, observer: Arc<dyn OutputObserver>) {
         *self.observer.write().unwrap() = observer;
+    }
+
+    /// Claim responsibility for closing a shell tab. A claim persists after a
+    /// successful close so delayed duplicate exit notifications are harmless.
+    pub(crate) fn claim_tab_close(&self, pty_key: &str) -> bool {
+        self.tab_close_claims
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(pty_key.to_string())
+    }
+
+    /// Release a close claim when closing failed so a later retry can proceed.
+    pub(crate) fn cancel_tab_close(&self, pty_key: &str) {
+        self.clear_tab_close_claim(pty_key);
+    }
+
+    fn clear_tab_close_claim(&self, pty_key: &str) {
+        self.tab_close_claims
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(pty_key);
     }
 
     /// Attach a PTY to a session. The command run inside depends on the PtyTarget variant.
@@ -131,6 +154,8 @@ impl PtyManager {
         on_data: Channel<Response>,
         env: Vec<(String, String)>,
     ) -> Result<(), String> {
+        self.clear_tab_close_claim(session_id);
+
         // Handle daemon target via async path
         if let PtyTarget::Daemon {
             session_id: sid,
@@ -360,5 +385,34 @@ impl PtyManager {
         let sessions = self.sessions.read().map_err(|e| e.to_string())?;
         let backend = sessions.get(session_id).ok_or("session not attached")?;
         backend.resume()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PtyManager;
+
+    #[test]
+    fn tab_close_claim_blocks_reentrant_close_until_a_later_attach() {
+        let manager = PtyManager::new();
+        let pty_key = "session-1:2";
+
+        assert!(manager.claim_tab_close(pty_key));
+        assert!(
+            !manager.claim_tab_close(pty_key),
+            "a delayed pty-exited close must not claim the tab a second time"
+        );
+
+        manager.cancel_tab_close(pty_key);
+        assert!(
+            manager.claim_tab_close(pty_key),
+            "a failed close must remain retryable"
+        );
+
+        manager.clear_tab_close_claim(pty_key);
+        assert!(
+            manager.claim_tab_close(pty_key),
+            "a newly attached PTY key must be closable again"
+        );
     }
 }

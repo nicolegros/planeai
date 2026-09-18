@@ -26,7 +26,6 @@ import { getCycleState } from "./tab-switcher.svelte";
 import {
   cleanup as tabLayoutCleanup,
   resetAll as tabLayoutReset,
-  closeShellTab,
   toggleDiff as _toggleDiff,
 } from "./tab-layout.svelte";
 

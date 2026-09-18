@@ -52,6 +52,7 @@ mod socket_tests {
 
         // List
         let resp = send_recv(&mut reader, r#"{"cmd":"list"}"#).await;
+        assert_eq!(resp["protocol_version"], 3);
         let sessions = resp["sessions"].as_array().unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0]["session_id"], "s1");

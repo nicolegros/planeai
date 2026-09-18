@@ -317,6 +317,11 @@ impl SessionRegistry {
             .sessions
             .get_mut(session_id)
             .ok_or_else(|| anyhow::anyhow!("session not found: {session_id}"))?;
+        if !entry.state.is_running() {
+            // Retained terminal sessions are already closed. Keep both their
+            // terminal variant and original timestamp for reconciliation.
+            return Ok(());
+        }
         entry.session.kill()?;
         entry.state = SessionState::Killed {
             ended_at: Utc::now(),
@@ -472,6 +477,36 @@ mod tests {
         let info = &reg.list()[0];
         assert_eq!(info.status, "killed");
         assert!(!info.alive);
+    }
+
+    #[test]
+    fn kill_is_idempotent_and_preserves_retained_terminal_states() {
+        let mut reg = SessionRegistry::new();
+        spawn_echo(&mut reg, "exited");
+        spawn_sleep(&mut reg, "killed");
+
+        std::thread::sleep(Duration::from_millis(500));
+        reg.poll_exits();
+        let exited_before = reg
+            .sessions
+            .get("exited")
+            .expect("exited session should be retained")
+            .state
+            .clone();
+
+        reg.kill("killed").unwrap();
+        let killed_before = reg
+            .sessions
+            .get("killed")
+            .expect("killed session should be retained")
+            .state
+            .clone();
+
+        reg.kill("exited").unwrap();
+        reg.kill("killed").unwrap();
+
+        assert_eq!(reg.sessions["exited"].state, exited_before);
+        assert_eq!(reg.sessions["killed"].state, killed_before);
     }
 
     #[test]
