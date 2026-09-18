@@ -1781,6 +1781,33 @@ fn patch_plugin_settings(data_dir: &Path, patch: Value) -> Result<(), String> {
     replace_plugin_settings(data_dir, settings).map(|_| ())
 }
 
+fn legacy_jira_issue_matches(
+    conn: &Connection,
+    issue_key: &str,
+    summary: &str,
+) -> Result<bool, String> {
+    let has_legacy_issues_table: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'jira_issues')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("failed to inspect legacy Jira issue storage: {error}"))?;
+    if !has_legacy_issues_table {
+        return Ok(false);
+    }
+    conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM jira_issues issue
+            JOIN tasks task ON task.key = issue.issue_key
+            WHERE issue.issue_key = ?1 AND issue.summary = ?2 AND task.title = issue.summary
+        )",
+        params![issue_key, summary],
+        |row| row.get(0),
+    )
+    .map_err(|error| format!("failed to match legacy Jira issue: {error}"))
+}
+
 async fn execute_host_task(
     plugin_id: &str,
     capabilities: &HashSet<PluginHostCapability>,
@@ -1796,15 +1823,19 @@ async fn execute_host_task(
         "host.sessions.list" => PluginHostCapability::SessionsRead,
         "host.sessions.repositoryContext" => PluginHostCapability::SessionsRepositoryContext,
         "host.sessions.transitionLinkedTask" => PluginHostCapability::TasksTransition,
-        "host.tasks.read" | "host.task.get" => PluginHostCapability::TasksRead,
+        "host.tasks.read" | "host.task.get" | "host.jira.legacyIssue.matches" => {
+            PluginHostCapability::TasksRead
+        }
         "host.tasks.createChild" => PluginHostCapability::TasksCreate,
         "host.task.create" => PluginHostCapability::TasksCreate,
         "host.task.update" => PluginHostCapability::TasksUpdate,
         _ => return Err("host method not found".to_string()),
     };
     if !capabilities.contains(&required)
-        || (matches!(method, "host.task.create" | "host.task.update")
-            && plugin_id != JIRA_PLUGIN_ID)
+        || (matches!(
+            method,
+            "host.task.create" | "host.task.update" | "host.jira.legacyIssue.matches"
+        ) && plugin_id != JIRA_PLUGIN_ID)
     {
         return Err("plugin capability is not granted".to_string());
     }
@@ -1948,6 +1979,27 @@ async fn execute_host_task(
         })
         .await;
     }
+    if method == "host.jira.legacyIssue.matches" {
+        let key = params
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("legacy Jira issue lookup requires key")?
+            .to_string();
+        let summary = params
+            .get("summary")
+            .and_then(Value::as_str)
+            .ok_or("legacy Jira issue lookup requires summary")?
+            .to_string();
+        return commands::blocking(move || {
+            let path = planeai_paths::db_path();
+            let conn = Connection::open(path).map_err(|error| error.to_string())?;
+            legacy_jira_issue_matches(&conn, &key, &summary)
+                .map(|matches| serde_json::json!({ "matches": matches }))
+        })
+        .await;
+    }
+
     if matches!(method, "host.tasks.read" | "host.task.get") {
         let key = params
             .get("key")
@@ -3601,6 +3653,24 @@ mod tests {
         migrate(&conn).unwrap();
         sync_inventory(&conn, &bundled_manifests().unwrap()).unwrap();
         conn
+    }
+
+    #[test]
+    fn legacy_jira_issue_match_requires_matching_local_and_remote_summary() {
+        let conn = database();
+        conn.execute_batch("CREATE TABLE tasks (key TEXT PRIMARY KEY, title TEXT NOT NULL);")
+            .unwrap();
+        crate::jira_migration::migrate_legacy_schema(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO tasks (key, title) VALUES ('DT-8833', 'Legacy Jira summary');
+             INSERT INTO jira_issues (issue_key, jira_project, summary, status, last_synced_at)
+                 VALUES ('DT-8833', 'DT', 'Legacy Jira summary', 'Accepted', 'now');",
+        )
+        .unwrap();
+
+        assert!(legacy_jira_issue_matches(&conn, "DT-8833", "Legacy Jira summary").unwrap());
+        assert!(!legacy_jira_issue_matches(&conn, "DT-8833", "Different Jira summary").unwrap());
+        assert!(!legacy_jira_issue_matches(&conn, "OTHER-1", "Legacy Jira summary").unwrap());
     }
 
     #[test]
