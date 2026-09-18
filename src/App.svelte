@@ -44,7 +44,7 @@
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { getTabs, getActiveTabIndex, addTab, removeTab } from "./lib/session-tabs.svelte";
-  import { deliverPendingTerminalEditor, queueTerminalEditor, rollbackPendingTerminalEditor } from "./lib/terminal-editor";
+  import { consumePendingTerminalEditorCommand, getPendingTerminalEditorCommand, queueTerminalEditor, rollbackPendingTerminalEditor } from "./lib/terminal-editor";
   import { isMounted as poolIsMounted, touchMru } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
@@ -609,17 +609,8 @@
     splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
   }
 
-  async function runPendingShellCommand(ptyKey: string): Promise<void> {
-    try {
-      const result = await deliverPendingTerminalEditor({
-        ptyKey,
-        pendingCommands: pendingShellCommands,
-        write: pty.write,
-      });
-      if (result === "unavailable") await handleShellAttachError(ptyKey, "Terminal editor is unavailable");
-    } catch (error) {
-      await handleShellAttachError(ptyKey, error);
-    }
+  function confirmPendingShellCommandStarted(ptyKey: string): void {
+    consumePendingTerminalEditorCommand({ ptyKey, pendingCommands: pendingShellCommands });
   }
 
   async function openTerminalEditorInTree(sessionId: string, filePath: string): Promise<void> {
@@ -939,6 +930,18 @@
     const cleanupLoopListener = loopStore.startLoopEventListener(() => projectStore.getProjects().map((p) => p.id));
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
+    const unlistenShellPtyExit = listen<{ pty_key: string }>("pty-exited", (event) => {
+      const ptyKey = event.payload.pty_key;
+      const separator = ptyKey.lastIndexOf(":");
+      if (separator === -1) return;
+
+      pendingShellCommands.delete(ptyKey);
+      splitTree.removeSessionFromLeaf(ptyKey);
+      const sessionId = ptyKey.slice(0, separator);
+      const tabIndex = Number.parseInt(ptyKey.slice(separator + 1), 10);
+      if (!sessionId || Number.isNaN(tabIndex)) return;
+      orchestrator.closeShellTab(sessionId, tabIndex);
+    });
     const unlistenPluginRuntime = listen<import("./lib/types").PluginInventory>("plugin-runtime-changed", (event) => {
       pluginSessionActionsRevision += 1;
       pluginInventory = pluginInventory.filter((plugin) => plugin.id !== event.payload.id).concat(event.payload);
@@ -1139,7 +1142,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenShellPtyExit.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -1348,8 +1351,9 @@
                   focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !modalPluginId}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
+                  initialCommand={tabEntry.type === "shell" ? getPendingTerminalEditorCommand({ ptyKey: tabEntry.ptyKey, pendingCommands: pendingShellCommands }) : undefined}
                   onAttached={() => {
-                    if (tabEntry.type === "shell") void runPendingShellCommand(tabEntry.ptyKey);
+                    if (tabEntry.type === "shell") confirmPendingShellCommandStarted(tabEntry.ptyKey);
                     if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active");
                     if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal();
                   }}

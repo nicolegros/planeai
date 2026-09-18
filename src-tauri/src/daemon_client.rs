@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 /// High-level async client for the daemon's control connection.
 pub struct DaemonClient {
@@ -164,12 +165,137 @@ impl DataConnection {
 
 // ─── Sync IPC ────────────────────────────────────────────────────────────────
 
-/// Sync query to daemon for session list (avoids async/block_on during startup).
+pub const CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Spawn a daemon-backed shell tab through a correlated request lifecycle.
+///
+/// A timeout is not reported until the daemon acknowledges `cancel_spawn`: a
+/// queued spawn is suppressed, while one already created is killed by its exact
+/// request ID. This prevents a delayed control response from leaving an orphan.
+pub async fn spawn_shell_tab(
+    socket_path: &Path,
+    session_id: &str,
+    command: &str,
+    args: &[String],
+    cwd: &str,
+    env: &HashMap<String, String>,
+) -> Result<(), String> {
+    let running = tokio::time::timeout(CONTROL_TIMEOUT, list_running_sessions(socket_path))
+        .await
+        .map_err(|_| "daemon shell-tab lookup timed out".to_string())??;
+    if running.contains(session_id) {
+        return Ok(());
+    }
+
+    let request_id = Uuid::new_v4().to_string();
+    let request = serde_json::json!({
+        "cmd": "spawn",
+        "request_id": request_id,
+        "session_id": session_id,
+        "command": command,
+        "args": args,
+        "cwd": cwd,
+        "env": env,
+        "mode": "replace_exited",
+    });
+
+    let spawn_error =
+        match tokio::time::timeout(CONTROL_TIMEOUT, send_control_request(socket_path, &request))
+            .await
+        {
+            Ok(Ok(_)) => return Ok(()),
+            Ok(Err(error)) => error,
+            Err(_) => "daemon shell-tab spawn timed out".to_string(),
+        };
+
+    tracing::warn!(session_id, request_id, error = %spawn_error, "cancelling uncertain daemon shell-tab spawn");
+    let cancel = serde_json::json!({
+        "cmd": "cancel_spawn",
+        "request_id": request_id,
+    });
+    tokio::time::timeout(CONTROL_TIMEOUT, send_control_request(socket_path, &cancel))
+        .await
+        .map_err(|_| "daemon shell-tab spawn cancellation was not acknowledged".to_string())??;
+    Err(format!("{spawn_error}; daemon spawn was cancelled"))
+}
+
+/// Fetch the IDs of daemon sessions that are still running. Exited and killed
+/// sessions remain listed for scrollback/reconciliation, but must be spawned
+/// again with `replace_exited` rather than attached as if they were live.
+async fn list_running_sessions(
+    socket_path: &Path,
+) -> Result<std::collections::HashSet<String>, String> {
+    let response = send_control_request(socket_path, &serde_json::json!({ "cmd": "list" })).await?;
+    let sessions = response
+        .get("sessions")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("invalid daemon list response")?;
+    Ok(running_session_ids(sessions))
+}
+
+fn running_session_ids(sessions: &[serde_json::Value]) -> std::collections::HashSet<String> {
+    sessions
+        .iter()
+        .filter(|session| {
+            session.get("status").and_then(serde_json::Value::as_str) == Some("running")
+        })
+        .filter_map(|session| session.get("session_id")?.as_str().map(str::to_owned))
+        .collect()
+}
+
+async fn send_control_request(
+    socket_path: &Path,
+    request: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let stream = AsyncIpcStream::connect(socket_path)
+        .await
+        .map_err(|e| format!("failed to connect to daemon: {e}"))?;
+    let (reader, mut writer) = tokio::io::split(stream);
+    writer
+        .write_all(&[CONN_CONTROL])
+        .await
+        .map_err(|e| format!("failed to send control byte: {e}"))?;
+    let mut line = serde_json::to_string(request).map_err(|e| e.to_string())?;
+    line.push('\n');
+    writer
+        .write_all(line.as_bytes())
+        .await
+        .map_err(|e| format!("daemon control write failed: {e}"))?;
+
+    let mut reader = BufReader::new(reader);
+    loop {
+        line.clear();
+        let bytes = reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| format!("daemon control read failed: {e}"))?;
+        if bytes == 0 {
+            return Err("daemon control connection closed".to_string());
+        }
+        let response: serde_json::Value = serde_json::from_str(line.trim())
+            .map_err(|e| format!("invalid daemon response: {e}"))?;
+        if response.get("event").is_some() {
+            continue;
+        }
+        if let Some(error) = response.get("error").and_then(serde_json::Value::as_str) {
+            return Err(error.to_string());
+        }
+        return Ok(response);
+    }
+}
+
+/// Sync query to daemon for startup reconciliation. Shell tabs use the async
+/// cancellable control lifecycle above instead.
 pub fn list_sessions_sync() -> Option<std::collections::HashSet<String>> {
+    list_sessions_sync_inner()
+}
+
+fn list_sessions_sync_inner() -> Option<std::collections::HashSet<String>> {
     use std::io::{BufRead, Write};
 
     let app_dir = planeai_paths::app_data_dir();
     let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir).ok()?;
+    stream.set_read_timeout(Some(CONTROL_TIMEOUT)).ok()?;
     stream.write_all(&[0x00]).ok()?; // control connection type byte
     let req = serde_json::json!({"cmd": "list"});
     stream.write_all(format!("{}\n", req).as_bytes()).ok()?;
@@ -283,4 +409,23 @@ fn spawn_detached(
     cmd.spawn()
         .map_err(|e| format!("failed to spawn daemon: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exited_and_killed_shell_tabs_are_not_treated_as_running() {
+        let sessions = vec![
+            serde_json::json!({ "session_id": "tab:1", "status": "running" }),
+            serde_json::json!({ "session_id": "tab:2", "status": "exited" }),
+            serde_json::json!({ "session_id": "tab:3", "status": "killed" }),
+        ];
+
+        assert_eq!(
+            running_session_ids(&sessions),
+            std::collections::HashSet::from(["tab:1".to_string()])
+        );
+    }
 }

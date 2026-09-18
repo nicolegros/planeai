@@ -78,7 +78,8 @@ export const pty = {
     tabIndex: number,
     darkMode: boolean,
     onData: Channel<ArrayBuffer>,
-  ) => invoke("spawn_tab", { sessionId, tabIndex, darkMode, onData }),
+    initialCommand?: string,
+  ) => invoke("spawn_tab", { sessionId, tabIndex, darkMode, initialCommand, onData }),
   resize: (sessionId: string, rows: number, cols: number) =>
     invoke("resize_pty", { sessionId, rows, cols }),
   pause: (sessionId: string) => invoke("pause_pty", { sessionId }),

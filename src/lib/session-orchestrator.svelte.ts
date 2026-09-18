@@ -294,16 +294,10 @@ export function startEventListeners(): () => void {
   unlisteners.push(
     listen<{ pty_key: string }>("pty-exited", (event) => {
       const { pty_key } = event.payload;
-      const colonIdx = pty_key.indexOf(":");
-      if (colonIdx !== -1) {
-        const sessionId = pty_key.slice(0, colonIdx);
-        const tabIndex = parseInt(pty_key.slice(colonIdx + 1), 10);
-        closeShellTab(sessionId, tabIndex);
-      } else {
-        if (!sessions.find((x) => x.id === pty_key)) return;
-        sessions = sessions.map((x) => (x.id === pty_key ? { ...x, status: "exited" } : x));
-        sessionsApi.markExited(pty_key);
-      }
+      if (pty_key.includes(":")) return;
+      if (!sessions.find((x) => x.id === pty_key)) return;
+      sessions = sessions.map((x) => (x.id === pty_key ? { ...x, status: "exited" } : x));
+      sessionsApi.markExited(pty_key);
     }),
   );
 

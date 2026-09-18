@@ -122,21 +122,15 @@ describe("rollbackPendingTerminalEditor", () => {
   });
 });
 
-describe("deliverPendingTerminalEditor", () => {
-  it("retains a command when its PTY is unavailable and consumes it only on delivery", async () => {
-    const { deliverPendingTerminalEditor } = await import("../terminal-editor");
+describe("pending terminal editor commands", () => {
+  it("makes a queued command available for shell startup and consumes it after spawn", async () => {
+    const { consumePendingTerminalEditorCommand, getPendingTerminalEditorCommand } =
+      await import("../terminal-editor");
     const pending = new Map([["session-1:2", "nvim src/main.rs"]]);
-    const write = vi.fn(async () => false);
+    const command = { ptyKey: "session-1:2", pendingCommands: pending };
 
-    await expect(
-      deliverPendingTerminalEditor({ ptyKey: "session-1:2", pendingCommands: pending, write }),
-    ).resolves.toBe("unavailable");
-    expect(pending.get("session-1:2")).toBe("nvim src/main.rs");
-
-    write.mockResolvedValue(true);
-    await expect(
-      deliverPendingTerminalEditor({ ptyKey: "session-1:2", pendingCommands: pending, write }),
-    ).resolves.toBe("delivered");
-    expect(pending.size).toBe(0);
+    expect(getPendingTerminalEditorCommand(command)).toBe("nvim src/main.rs");
+    expect(consumePendingTerminalEditorCommand(command)).toBe(true);
+    expect(getPendingTerminalEditorCommand(command)).toBeUndefined();
   });
 });

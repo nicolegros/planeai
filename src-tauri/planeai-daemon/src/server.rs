@@ -105,11 +105,18 @@ impl DaemonServer {
                     match result {
                         Ok(0) | Err(_) => break,
                         Ok(_) => {
-                            let resp = match serde_json::from_str::<Request>(line_buf.trim()) {
-                                Ok(req) => self.handle_request(req).await,
-                                Err(e) => Response::error(e.to_string()),
+                            let (resp, request_id) = match serde_json::from_str::<Request>(line_buf.trim()) {
+                                Ok(req) => {
+                                    let request_id = req.request_id().map(str::to_owned);
+                                    (self.handle_request(req).await, request_id)
+                                }
+                                Err(e) => (Response::error(e.to_string()), None),
                             };
-                            let mut out = serde_json::to_string(&resp).unwrap();
+                            let mut value = serde_json::to_value(resp).unwrap();
+                            if let Some(request_id) = request_id {
+                                value["request_id"] = serde_json::Value::String(request_id);
+                            }
+                            let mut out = serde_json::to_string(&value).unwrap();
                             out.push('\n');
                             if writer.write_all(out.as_bytes()).await.is_err() {
                                 break;
@@ -136,6 +143,7 @@ impl DaemonServer {
         let mut reg = self.registry.lock().await;
         match req {
             Request::Spawn {
+                request_id,
                 session_id,
                 command,
                 args,
@@ -147,33 +155,62 @@ impl DaemonServer {
                 let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
                 tracing::info!(
                     session_id = %session_id,
+                    request_id = ?request_id,
                     command = %command,
                     mode = ?spawn_mode,
                     "spawn request"
                 );
-                match reg.spawn(
-                    &session_id,
-                    &command,
-                    &args_refs,
-                    cwd.as_deref(),
-                    env.as_ref(),
-                    self.buffer_capacity,
-                    spawn_mode,
-                ) {
-                    Ok(outcome) => {
-                        tracing::info!(
-                            session_id = %session_id,
-                            outcome = ?outcome,
-                            "spawn outcome"
-                        );
+                let result = match request_id.as_deref() {
+                    Some(request_id) => reg
+                        .spawn_for_request(
+                            request_id,
+                            session_id.clone(),
+                            &command,
+                            &args_refs,
+                            cwd.as_deref(),
+                            env.as_ref(),
+                            self.buffer_capacity,
+                            spawn_mode,
+                        )
+                        .map(|outcome| match outcome {
+                            crate::registry::SpawnRequestOutcome::Spawned {
+                                session_id,
+                                outcome,
+                            } => Some((session_id, outcome)),
+                            crate::registry::SpawnRequestOutcome::Cancelled => None,
+                        }),
+                    None => reg
+                        .spawn(
+                            &session_id,
+                            &command,
+                            &args_refs,
+                            cwd.as_deref(),
+                            env.as_ref(),
+                            self.buffer_capacity,
+                            spawn_mode,
+                        )
+                        .map(|outcome| Some((session_id.clone(), outcome))),
+                };
+                match result {
+                    Ok(Some((canonical_session_id, outcome))) => {
+                        tracing::info!(session_id = %canonical_session_id, outcome = ?outcome, "spawn outcome");
                         if outcome != SpawnOutcome::AlreadyRunning {
                             self.activity.notify_one();
                         }
-                        Response::ok_with_outcome(Some(session_id), outcome)
+                        Response::ok_with_outcome(Some(canonical_session_id), outcome)
                     }
+                    Ok(None) => Response::error("spawn request cancelled"),
                     Err(e) => Response::error(e.to_string()),
                 }
             }
+            Request::CancelSpawn { request_id } => match reg.cancel_spawn(&request_id) {
+                Ok(()) => {
+                    tracing::info!(request_id, "spawn request cancelled");
+                    self.activity.notify_one();
+                    Response::ok(None)
+                }
+                Err(e) => Response::error(e.to_string()),
+            },
             Request::Kill { session_id } => match reg.kill(&session_id) {
                 Ok(()) => {
                     tracing::info!(session_id = %session_id, "session killed");

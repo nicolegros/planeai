@@ -23,13 +23,14 @@
     focused: boolean;
     exited?: boolean;
     skipAttach?: boolean;
+    initialCommand?: string;
     onUserInput?: () => void;
     onAttached?: () => void;
     onAttachError?: (error: unknown) => void;
     onFocused?: (event: PointerEvent | FocusEvent) => void;
   }
 
-  let { sessionId, visible, focused, exited = false, skipAttach = false, onUserInput, onAttached, onAttachError, onFocused }: Props = $props();
+  let { sessionId, visible, focused, exited = false, skipAttach = false, initialCommand, onUserInput, onAttached, onAttachError, onFocused }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let term: Terminal;
@@ -284,7 +285,7 @@
       const parts = sessionId.split(":");
       const baseSessionId = parts[0];
       const tabIndex = parseInt(parts[1] || "0", 10);
-      pty.spawnTab(baseSessionId, tabIndex, isDark(), onData).then(() => {
+      pty.spawnTab(baseSessionId, tabIndex, isDark(), onData, initialCommand).then(() => {
         attached = true;
         onAttached?.();
         const { rows, cols } = term;

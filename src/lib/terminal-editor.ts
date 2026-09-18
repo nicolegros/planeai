@@ -61,25 +61,21 @@ export async function rollbackPendingTerminalEditor(
   return true;
 }
 
-export interface PendingTerminalEditorDelivery {
+export interface PendingTerminalEditorCommand {
   ptyKey: string;
   pendingCommands: Map<string, string>;
-  write: (ptyKey: string, data: number[]) => Promise<boolean>;
 }
 
-/** Deliver a queued terminal editor command only after its PTY reports readiness. */
-export async function deliverPendingTerminalEditor(
-  delivery: PendingTerminalEditorDelivery,
-): Promise<"none" | "delivered" | "unavailable"> {
-  const command = delivery.pendingCommands.get(delivery.ptyKey);
-  if (!command) return "none";
+/** Return the editor command that must be passed while its shell PTY is spawned. */
+export function getPendingTerminalEditorCommand(
+  pending: PendingTerminalEditorCommand,
+): string | undefined {
+  return pending.pendingCommands.get(pending.ptyKey);
+}
 
-  const delivered = await delivery.write(
-    delivery.ptyKey,
-    Array.from(new TextEncoder().encode(`${command}\r`)),
-  );
-  if (!delivered) return "unavailable";
-
-  delivery.pendingCommands.delete(delivery.ptyKey);
-  return "delivered";
+/** Clear a queued editor command after its shell PTY started successfully. */
+export function consumePendingTerminalEditorCommand(
+  pending: PendingTerminalEditorCommand,
+): boolean {
+  return pending.pendingCommands.delete(pending.ptyKey);
 }
