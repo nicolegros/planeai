@@ -615,7 +615,16 @@ impl JiraPlugin {
                 };
                 let task_result = if existing.is_null() {
                     host_call(input, output, &mut request_id, "host.task.create", json!({ "key": issue.key, "title": issue.summary, "description": issue.description, "status": mapped_status, "priority": map_priority(issue.priority.as_deref()), "tags": issue.labels })).await.map(|_| { result.created += 1; })
-                } else if linked_task_key(&conn, &issue.key)?.is_none() {
+                } else if !task_is_owned_by_jira(
+                    &conn,
+                    input,
+                    output,
+                    &mut request_id,
+                    &issue.key,
+                    &issue.summary,
+                )
+                .await?
+                {
                     Err(format!(
                         "refusing to overwrite local task {} without a Jira task link",
                         issue.key
@@ -1184,6 +1193,32 @@ fn rename_source_memberships(conn: &mut Connection, from: &str, to: &str) -> Res
         .map_err(|error| format!("failed to commit Jira source rename: {error}"))
 }
 
+async fn task_is_owned_by_jira<R, W>(
+    conn: &Connection,
+    input: &mut R,
+    output: &mut W,
+    request_id: &mut u64,
+    issue_key: &str,
+    summary: &str,
+) -> Result<bool, String>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    if linked_task_key(conn, issue_key)?.is_some() || can_reconcile_task_link(conn, issue_key)? {
+        return Ok(true);
+    }
+    let legacy = host_call(
+        input,
+        output,
+        request_id,
+        "host.jira.legacyIssue.matches",
+        json!({ "key": issue_key, "summary": summary }),
+    )
+    .await?;
+    Ok(legacy.get("matches").and_then(Value::as_bool) == Some(true))
+}
+
 fn linked_task_key(conn: &Connection, issue_key: &str) -> Result<Option<String>, String> {
     conn.query_row(
         "SELECT task_key FROM jira_task_links WHERE issue_key = ?1",
@@ -1192,6 +1227,15 @@ fn linked_task_key(conn: &Connection, issue_key: &str) -> Result<Option<String>,
     )
     .optional()
     .map_err(|error| format!("failed to read Jira task link: {error}"))
+}
+
+fn can_reconcile_task_link(conn: &Connection, issue_key: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM jira_issues WHERE issue_key = ?1)",
+        params![issue_key],
+        |row| row.get(0),
+    )
+    .map_err(|error| format!("failed to check cached Jira issue: {error}"))
 }
 
 fn sync_issue_source(conn: &Connection, key: &str, source_name: &str) -> Result<(), String> {
@@ -1832,6 +1876,57 @@ mod sync_tests {
             linked_task_key(&conn, "ONE-1").unwrap().as_deref(),
             Some("ONE-1")
         );
+    }
+
+    #[test]
+    fn cached_jira_issue_without_a_link_can_reconcile_its_existing_task() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_database(&conn).unwrap();
+
+        assert!(!can_reconcile_task_link(&conn, "ONE-1").unwrap());
+        upsert_issue(&conn, &issue("ONE-1", "Open"), "source", "todo").unwrap();
+        assert!(can_reconcile_task_link(&conn, "ONE-1").unwrap());
+    }
+
+    #[tokio::test]
+    async fn legacy_provenance_can_reconcile_a_task_without_a_cache_link() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_database(&conn).unwrap();
+        let (plugin_stream, host_stream) = tokio::io::duplex(4096);
+        let (plugin_read, plugin_write) = tokio::io::split(plugin_stream);
+        let (host_read, mut host_write) = tokio::io::split(host_stream);
+        let mut input = BufReader::new(plugin_read);
+        let mut output = plugin_write;
+        let host = tokio::spawn(async move {
+            let mut reader = BufReader::new(host_read);
+            let mut request = String::new();
+            reader.read_line(&mut request).await.unwrap();
+            let request: Value = serde_json::from_str(&request).unwrap();
+            assert_eq!(request["method"], "host.jira.legacyIssue.matches");
+            assert_eq!(
+                request["params"],
+                json!({ "key": "ONE-1", "summary": "Summary" })
+            );
+            let response =
+                json!({ "jsonrpc": "2.0", "id": request["id"], "result": { "matches": true } });
+            host_write
+                .write_all(format!("{response}\n").as_bytes())
+                .await
+                .unwrap();
+        });
+
+        let mut next_id = 0;
+        assert!(task_is_owned_by_jira(
+            &conn,
+            &mut input,
+            &mut output,
+            &mut next_id,
+            "ONE-1",
+            "Summary",
+        )
+        .await
+        .unwrap());
+        host.await.unwrap();
     }
 
     #[test]
