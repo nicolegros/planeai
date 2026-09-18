@@ -124,6 +124,11 @@
       plugin.ui_contributions.filter((contribution) => ["sidebar.header", "sidebar.navigation", "sidebar.section", "sidebar.footer"].includes(contribution.placement)).map((contribution) => ({ plugin, contribution })),
     ).sort(comparePluginContribution),
   );
+  const sessionIndicatorContributions = $derived(
+    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+      plugin.ui_contributions.filter((contribution) => contribution.placement === "session.indicator").map((contribution) => ({ plugin, contribution })),
+    ).sort(comparePluginContribution),
+  );
   const mainPaneCommands = $derived(
     pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
       plugin.ui_contributions.filter((contribution) => contribution.placement === "main-pane").map((contribution) => ({ plugin, contribution })),
@@ -1193,6 +1198,7 @@
         selectedLoopId={activeLoopId}
         onToggleDiff={toggleDiffInTree}
         pluginContributions={sidebarPluginContributions}
+        {sessionIndicatorContributions}
         pluginSessionActions={pluginSessionActions}
         onPluginSessionAction={runPluginSessionAction}
         onPluginNavigate={openPluginContribution}

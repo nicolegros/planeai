@@ -180,6 +180,8 @@ pub enum PluginUiPlacement {
     MainPane,
     #[serde(rename = "session.panel")]
     SessionPanel,
+    #[serde(rename = "session.indicator")]
+    SessionIndicator,
     #[serde(rename = "titlebar")]
     Titlebar,
     #[serde(rename = "interaction")]
@@ -4479,6 +4481,7 @@ mod placement_tests {
         assert!(PluginUiPlacement::SidebarNavigation.is_sidebar());
         assert!(!PluginUiPlacement::Preferences.is_sidebar());
         assert!(!PluginUiPlacement::MainPane.is_sidebar());
+        assert!(!PluginUiPlacement::SessionIndicator.is_sidebar());
     }
 }
 

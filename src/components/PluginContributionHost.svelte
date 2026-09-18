@@ -45,15 +45,18 @@
     kind?: "success" | "error";
     message?: string;
     height?: number;
+    width?: number;
   };
 
   let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session }: Props = $props();
+  const serializedSession = $derived(session ? JSON.stringify(session) : "");
   let container = $state<HTMLElement>();
   let disposer: PluginUiDisposer | null = null;
   let generation = 0;
   const dataChangeListeners = new Set<() => void>();
   const taskDataChangeListeners = new Set<() => void>();
   let refreshLocalPluginTheme: (() => void) | null = null;
+  let refreshLocalPluginData: (() => void) | null = null;
 
   function subscribe(listeners: Set<() => void>, listener: () => void): () => void {
     listeners.add(listener);
@@ -141,11 +144,14 @@
     return loader();
   }
 
+  function sessionContextFromSerialized(): PluginSessionContext | undefined {
+    return serializedSession ? JSON.parse(serializedSession) as PluginSessionContext : undefined;
+  }
+
   function retry(): void {
-    const sessionContext = session;
     if (!container) return;
     const version = ++generation;
-    void mountContribution(container, version, sessionContext);
+    void mountContribution(container, version, sessionContextFromSerialized());
   }
 
   function showLoadFailure(root: ShadowRoot, error: unknown): void {
@@ -162,18 +168,25 @@
 
   function createLocalPluginFrame(root: ShadowRoot, sessionContext?: PluginSessionContext): PluginUiDisposer {
     const isTitlebar = contribution.placement === "titlebar";
+    const isSessionIndicator = contribution.placement === "session.indicator";
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
     frame.className =
       contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
         ? "block h-full w-full border-0"
-        : "block w-full border-0";
+        : isSessionIndicator
+          ? "block h-4 w-4 border-0"
+          : "block w-full border-0";
     frame.style.display = "block";
-    frame.style.width = isTitlebar ? "88px" : "100%";
+    frame.style.width = isTitlebar ? "88px" : isSessionIndicator ? "16px" : "100%";
     frame.style.border = "0";
-    if (isTitlebar) frame.style.backgroundColor = "transparent";
-    if (contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "titlebar") {
+    if (isTitlebar || isSessionIndicator) frame.style.backgroundColor = "transparent";
+    if (isSessionIndicator) {
+      frame.style.height = "16px";
+      frame.style.pointerEvents = "none";
+      frame.tabIndex = -1;
+    } else if (contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "titlebar") {
       frame.style.height = "100%";
     } else if (contribution.placement === "session.panel") {
       frame.style.height = "360px";
@@ -189,12 +202,13 @@
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'">
       <style id="planeai-plugin-theme">${localPluginThemeCss()}</style>
       <style id="planeai-plugin-base">${localPluginBaseCss}</style>
-      ${isTitlebar ? '<style id="planeai-plugin-titlebar">html,body{background:transparent}</style>' : ""}
+      ${isTitlebar ? '<style id="planeai-plugin-titlebar">html,body{background:transparent}</style>' : isSessionIndicator ? '<style id="planeai-plugin-indicator">html,body{background:transparent}</style>' : ""}
       <script>
         let cleanup = null;
         let nextRequestId = 0;
         const pending = new Map();
         const registrations = new Map();
+        const dataChangeListeners = new Set();
         const send = (message) => parent.postMessage(message, "*");
         let sessionPanelContentObserver = null;
         let contentHeightPending = false;
@@ -296,6 +310,10 @@
           },
           data: {
             changed: () => request("data-changed"),
+            onChanged: (listener) => {
+              dataChangeListeners.add(listener);
+              return () => dataChangeListeners.delete(listener);
+            },
             notify: (message, kind = "error") => send({ type: "notify", message, kind }),
           },
         };
@@ -306,6 +324,10 @@
           if (message.type === "theme") {
             const theme = document.getElementById("planeai-plugin-theme");
             if (theme && typeof message.css === "string") theme.textContent = message.css;
+            return;
+          }
+          if (message.type === "data-changed") {
+            for (const listener of dataChangeListeners) listener();
             return;
           }
           if (message.type === "response") {
@@ -427,6 +449,8 @@
           .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "content-height" && contribution.placement === "session.panel" && typeof message.height === "number" && Number.isFinite(message.height)) {
         frame.style.height = `${Math.min(Math.max(Math.ceil(message.height), 1), 10_000)}px`;
+      } else if (message.type === "content-width" && contribution.placement === "session.indicator" && typeof message.width === "number" && Number.isFinite(message.width)) {
+        container?.setAttribute("data-plugin-indicator-visible", message.width > 0 ? "true" : "false");
       } else if (message.type === "navigation") {
         if (message.action === "open" && message.pluginId && message.contributionId) {
           onNavigate(message.pluginId, message.contributionId);
@@ -490,12 +514,15 @@
         .catch((error) => showLoadFailure(root, error));
     };
 
+    const refreshData = (): void => frame.contentWindow?.postMessage({ type: "data-changed" }, "*");
+    if (isSessionIndicator) refreshLocalPluginData = refreshData;
     window.addEventListener("message", onMessage);
     frame.addEventListener("load", initialise, { once: true });
     root.replaceChildren(frame);
     if (autofocus) focusFrame();
     return () => {
       if (refreshLocalPluginTheme === refreshTheme) refreshLocalPluginTheme = null;
+      if (refreshLocalPluginData === refreshData) refreshLocalPluginData = null;
       window.removeEventListener("message", onMessage);
       unregisterSidebarRows();
       registrations.clear();
@@ -624,7 +651,7 @@
   }
 
   $effect(() => {
-    const sessionContext = session;
+    const sessionContext = sessionContextFromSerialized();
     if (!container) return;
     const version = ++generation;
     void mountContribution(container, version, sessionContext);
@@ -647,9 +674,11 @@
     const refreshTheme = (): void => refreshLocalPluginTheme?.();
     window.addEventListener("planeai-theme-changed", refreshTheme);
     void listen<string>("plugin-data-changed", (event) => {
-      if (event.payload !== plugin.id || !["sidebar.section", "interaction", "session.panel"].includes(contribution.placement)) return;
+      if (event.payload !== plugin.id || !["sidebar.section", "interaction", "session.panel", "session.indicator"].includes(contribution.placement)) return;
       if (plugin.source_kind === "builtin" && dataChangeListeners.size > 0) {
         notify(dataChangeListeners);
+      } else if (contribution.placement === "session.indicator" && refreshLocalPluginData) {
+        refreshLocalPluginData();
       } else {
         retry();
       }
@@ -683,10 +712,12 @@
         : "h-full w-full pointer-events-auto"
       : contribution.placement === "main-pane" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
         ? "h-full w-full"
-        : "w-full"
+        : contribution.placement === "session.indicator"
+          ? "h-4 w-4 shrink-0 pointer-events-none"
+          : "w-full"
   }
   tabindex="-1"
-  role="region"
+  role={contribution.placement === "session.indicator" ? undefined : "region"}
   aria-label={`${plugin.name} · ${contribution.label}`}
   data-plugin-ui-contribution={`${plugin.id}:${contribution.id}`}
   data-plugin-sidebar-contribution={contribution.placement.startsWith("sidebar.") ? "" : undefined}

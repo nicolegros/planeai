@@ -2,6 +2,7 @@
   import { projects as projectsApi } from "../lib/api";
   import { listen } from "@tauri-apps/api/event";
   import type { TaskItem, Session, Project, PluginInventory, PluginSessionAction, PluginUiContribution } from "../lib/types";
+  import type { PluginSessionContext } from "../lib/plugin-sdk";
   import { pluginSessionActionsForProvider } from "../lib/plugin-session-actions";
   import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
@@ -46,13 +47,14 @@
     onToggleDiff?: () => void;
     selectedLoopId?: string | null;
     pluginContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
+    sessionIndicatorContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
     pluginSessionActions?: PluginSessionAction[];
     onPluginSessionAction?: (session: Session, action: PluginSessionAction) => void;
     onPluginNavigate?: (pluginId: string, contributionId: string) => void;
     onPluginClose?: () => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], sessionIndicatorContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
   function pluginContributionKey(item: { plugin: PluginInventory; contribution: PluginUiContribution }): string {
@@ -63,6 +65,18 @@
     const key = pluginContributionKey(item);
     if (failedSidebarContributions.has(key)) return;
     failedSidebarContributions = new Set([...failedSidebarContributions, key]);
+  }
+
+  function pluginSessionContext(session: Session): PluginSessionContext {
+    return {
+      id: session.id,
+      projectId: session.project_id,
+      branch: session.branch,
+      baseBranch: session.base_branch,
+      status: session.status as PluginSessionContext["status"],
+      provider: session.provider,
+      taskKey: session.task_key,
+    };
   }
 
   const activePluginContributions = $derived(
@@ -699,7 +713,7 @@
                           {@const isChildSelected = zone === 'sidebar' && childNavIdx === getSelectedIndex()}
                           {@const isChildPreviewing = childSession.id === previewSessionId}
                           <li>
-                            <div class="flex items-center gap-1.5">
+                            <div class="session-row relative flex items-center gap-1.5">
                               <span class="w-[2px] self-stretch rounded-full transition-opacity {isChildActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                               <button
                                 data-nav-index={childNavIdx}
@@ -721,6 +735,11 @@
                                   {/if}
                                 </span>
                               </button>
+                              {#each sessionIndicatorContributions as item (`${childSession.id}:${item.plugin.id}:${item.contribution.id}`)}
+                                <div class="absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 pointer-events-none" data-plugin-session-indicator={childSession.id}>
+                                  <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={pluginSessionContext(childSession)} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} />
+                                </div>
+                              {/each}
                             </div>
                           </li>
                         {/if}
@@ -750,7 +769,7 @@
                       onblur={() => commitRename(session.id)}
                     />
                   {:else}
-                    <div class="flex items-center gap-1.5">
+                    <div class="session-row relative flex items-center gap-1.5">
                       <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                       <button
                         data-nav-index={globalIndex}
@@ -771,6 +790,11 @@
                         {/if}
                       </span>
                     </button>
+                    {#each sessionIndicatorContributions as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
+                      <div class="absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 pointer-events-none" data-plugin-session-indicator={session.id}>
+                        <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={pluginSessionContext(session)} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} />
+                      </div>
+                    {/each}
                     </div>
                   {/if}
                 </li>
@@ -806,7 +830,7 @@
                       {@const isParent = isParentTask(task, projectTasks)}
                       {@const isPreviewing = linked && linked.id === previewSessionId}
                       <li class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
-                        <div class="flex items-center gap-1.5">
+                        <div class="session-row relative flex items-center gap-1.5">
                           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                           <button
                             data-nav-index={taskNavIdx}
@@ -831,6 +855,13 @@
                             </span>
                           {/if}
                         </button>
+                        {#if linked}
+                          {#each sessionIndicatorContributions as item (`${linked.id}:${item.plugin.id}:${item.contribution.id}`)}
+                            <div class="absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 pointer-events-none" data-plugin-session-indicator={linked.id}>
+                              <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={pluginSessionContext(linked)} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} />
+                            </div>
+                          {/each}
+                        {/if}
                         </div>
                       </li>
                     {/each}
@@ -921,6 +952,12 @@
     ]}
   />
 {/if}
+
+<style>
+  :global(.session-row:has([data-plugin-indicator-visible="true"]) > button) {
+    padding-right: 1.75rem;
+  }
+</style>
 
 <!-- Project context menu -->
 {#if projectContextMenu}

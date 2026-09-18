@@ -76,6 +76,7 @@ export type PluginUiPlacement =
   | "preferences"
   | "main-pane"
   | "session.panel"
+  | "session.indicator"
   | "titlebar"
   | "interaction";
 

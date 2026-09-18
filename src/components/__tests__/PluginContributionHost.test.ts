@@ -327,6 +327,63 @@ describe("PluginContributionHost", () => {
     expect(frame.srcdoc).toContain("html,body{background:transparent}");
   });
 
+  it("uses an unfocusable, pointer-inert transparent iframe for local session indicators", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "session.indicator" },
+    }) as typeof component;
+
+    const host = await vi.waitFor(() => {
+      const next = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    const frame = host.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+    expect(host.className).toContain("pointer-events-none");
+    expect(host.getAttribute("role")).toBeNull();
+    expect(frame?.style.width).toBe("16px");
+    expect(frame?.style.height).toBe("16px");
+    expect(frame?.style.pointerEvents).toBe("none");
+    expect(frame?.tabIndex).toBe(-1);
+    expect(frame?.srcdoc).toContain('id="planeai-plugin-indicator"');
+  });
+
+  it("uses indicator content width to toggle the visible-row reservation", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "session.indicator" },
+    }) as typeof component;
+
+    const host = await vi.waitFor(() => {
+      const next = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    const frame = host.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+    const contentWindow = { postMessage: vi.fn() } as unknown as Window;
+    Object.defineProperty(frame, "contentWindow", { configurable: true, value: contentWindow });
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: contentWindow,
+        data: { type: "content-width", width: 16 },
+      }),
+    );
+    expect(host.dataset.pluginIndicatorVisible).toBe("true");
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: contentWindow,
+        data: { type: "content-width", width: 0 },
+      }),
+    );
+    expect(host.dataset.pluginIndicatorVisible).toBe("false");
+  });
+
   it("provides local iframes with semantic PlaneAI tokens and live theme updates", async () => {
     document.documentElement.style.setProperty("--color-main", "#123456");
     target = document.createElement("div");
