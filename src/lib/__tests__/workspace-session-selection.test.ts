@@ -88,3 +88,18 @@ it("does not expose a direct legacy PR API", async () => {
   expect(apiSource).not.toContain('"create_pr"');
   expect(apiSource).not.toContain('"merge_pr"');
 });
+
+it("does not re-close a shell tab after its explicit close removed it from the split tree", () => {
+  expect(appSource).toMatch(
+    /const unlistenShellPtyExit = listen<[\s\S]*?if \(!splitTree\.findTab\(ptyKey\)\) return;[\s\S]*?orchestrator\.closeShellTab\(sessionId, tabIndex\)\.catch\(/,
+  );
+});
+
+it("awaits shell-tab closure before removing the split-tree entry and contains failures", () => {
+  expect(appSource).toMatch(
+    /async function closeShellTabInTree[\s\S]*?await orchestrator\.closeShellTab\(sessionId, tabIndex\);[\s\S]*?splitTree\.removeSessionFromLeaf\(ptyKey\);/,
+  );
+  expect(appSource).toMatch(
+    /async function closeShellTabInTree[\s\S]*?try \{[\s\S]*?await orchestrator\.closeShellTab[\s\S]*?\} catch \(error\) \{[\s\S]*?showSnackbar\(/,
+  );
+});

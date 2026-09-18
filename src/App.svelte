@@ -44,7 +44,7 @@
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { getTabs, getActiveTabIndex, addTab, removeTab } from "./lib/session-tabs.svelte";
-  import { deliverPendingTerminalEditor, queueTerminalEditor, rollbackPendingTerminalEditor } from "./lib/terminal-editor";
+  import { consumePendingTerminalEditorCommand, getPendingTerminalEditorCommand, queueTerminalEditor, rollbackPendingTerminalEditor } from "./lib/terminal-editor";
   import { isMounted as poolIsMounted, touchMru } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
@@ -516,7 +516,7 @@
   }
 
   /** Close the active tab in the focused split leaf. */
-  function splitCloseTab(): void {
+  async function splitCloseTab(): Promise<void> {
     const leaf = splitTree.getFocusedLeaf();
     if (!leaf || leaf.tabs.length === 0) return;
 
@@ -540,24 +540,32 @@
       return;
     }
 
-    closeShellTabInTree(activeEntry.ptyKey);
+    await closeShellTabInTree(activeEntry.ptyKey);
   }
 
   /** Close a shell tab using its PTY key rather than a visual tab position. */
-  function closeShellTabInTree(ptyKey: string): void {
+  async function closeShellTabInTree(ptyKey: string): Promise<void> {
     if (pendingShellCommands.has(ptyKey)) {
       showSnackbar("Terminal editor is still starting", "error");
       return;
     }
 
-    splitTree.removeSessionFromLeaf(ptyKey);
     const colonIdx = ptyKey.lastIndexOf(":");
-    if (colonIdx !== -1) {
-      const sessionId = ptyKey.slice(0, colonIdx);
-      const tabIndex = parseInt(ptyKey.slice(colonIdx + 1), 10);
-      if (!isNaN(tabIndex)) orchestrator.closeShellTab(sessionId, tabIndex);
+    if (colonIdx === -1) return;
+    const sessionId = ptyKey.slice(0, colonIdx);
+    const tabIndex = parseInt(ptyKey.slice(colonIdx + 1), 10);
+    if (isNaN(tabIndex)) return;
+
+    try {
+      // Keep the pane intact until the orchestrator confirms the backend close.
+      // This avoids an orphaned terminal UI when the daemon close request fails.
+      await orchestrator.closeShellTab(sessionId, tabIndex);
+      splitTree.removeSessionFromLeaf(ptyKey);
+      await tick();
+      refocusTerminal();
+    } catch (error) {
+      showSnackbar(`Failed to close shell tab: ${error instanceof Error ? error.message : String(error)}`, "error");
     }
-    tick().then(() => refocusTerminal());
   }
 
   /** Navigate to the next tab in the focused split leaf. */
@@ -609,17 +617,8 @@
     splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
   }
 
-  async function runPendingShellCommand(ptyKey: string): Promise<void> {
-    try {
-      const result = await deliverPendingTerminalEditor({
-        ptyKey,
-        pendingCommands: pendingShellCommands,
-        write: pty.write,
-      });
-      if (result === "unavailable") await handleShellAttachError(ptyKey, "Terminal editor is unavailable");
-    } catch (error) {
-      await handleShellAttachError(ptyKey, error);
-    }
+  function confirmPendingShellCommandStarted(ptyKey: string): void {
+    consumePendingTerminalEditorCommand({ ptyKey, pendingCommands: pendingShellCommands });
   }
 
   async function openTerminalEditorInTree(sessionId: string, filePath: string): Promise<void> {
@@ -939,6 +938,24 @@
     const cleanupLoopListener = loopStore.startLoopEventListener(() => projectStore.getProjects().map((p) => p.id));
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
+    const unlistenShellPtyExit = listen<{ pty_key: string }>("pty-exited", (event) => {
+      const ptyKey = event.payload.pty_key;
+      const separator = ptyKey.lastIndexOf(":");
+      if (separator === -1) return;
+
+      // An explicit close removes the tab before daemon shutdown. Ignore the
+      // resulting pty-exited event rather than issuing a second close_tab.
+      if (!splitTree.findTab(ptyKey)) return;
+
+      pendingShellCommands.delete(ptyKey);
+      splitTree.removeSessionFromLeaf(ptyKey);
+      const sessionId = ptyKey.slice(0, separator);
+      const tabIndex = Number.parseInt(ptyKey.slice(separator + 1), 10);
+      if (!sessionId || Number.isNaN(tabIndex)) return;
+      void orchestrator.closeShellTab(sessionId, tabIndex).catch((error) => {
+        showSnackbar(`Failed to finalize shell tab close: ${error instanceof Error ? error.message : String(error)}`, "error");
+      });
+    });
     const unlistenPluginRuntime = listen<import("./lib/types").PluginInventory>("plugin-runtime-changed", (event) => {
       pluginSessionActionsRevision += 1;
       pluginInventory = pluginInventory.filter((plugin) => plugin.id !== event.payload.id).concat(event.payload);
@@ -1139,7 +1156,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenShellPtyExit.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -1348,8 +1365,9 @@
                   focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !modalPluginId}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
+                  initialCommand={tabEntry.type === "shell" ? getPendingTerminalEditorCommand({ ptyKey: tabEntry.ptyKey, pendingCommands: pendingShellCommands }) : undefined}
                   onAttached={() => {
-                    if (tabEntry.type === "shell") void runPendingShellCommand(tabEntry.ptyKey);
+                    if (tabEntry.type === "shell") confirmPendingShellCommandStarted(tabEntry.ptyKey);
                     if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active");
                     if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal();
                   }}

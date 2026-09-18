@@ -46,6 +46,7 @@ fn resolve_editor_launch(
     project_path: String,
     requested_file_path: &str,
     required_mode: &str,
+    session_id: &str,
 ) -> Result<ResolvedEditorLaunch, String> {
     let editor = config
         .editor
@@ -63,6 +64,7 @@ fn resolve_editor_launch(
         .map(|arg| {
             arg.replace("{file}", &file_path)
                 .replace("{project}", &project_path)
+                .replace("{session_id}", session_id)
         })
         .collect();
 
@@ -95,8 +97,12 @@ async fn configured_launch(
     project_path: String,
     file_path: String,
     mode: &'static str,
+    session_id: String,
 ) -> Result<ResolvedEditorLaunch, String> {
-    super::blocking(move || resolve_editor_launch(&config, project_path, &file_path, mode)).await
+    super::blocking(move || {
+        resolve_editor_launch(&config, project_path, &file_path, mode, &session_id)
+    })
+    .await
 }
 
 #[cfg(not(windows))]
@@ -132,8 +138,8 @@ pub async fn get_terminal_editor_command(
     config_state: State<'_, ConfigState>,
 ) -> Result<String, String> {
     let config = config_state.0.lock().map_err(|e| e.to_string())?.clone();
-    let project_path = session_project_path(session_id, db_state).await?;
-    let launch = configured_launch(config, project_path, file_path, "terminal").await?;
+    let project_path = session_project_path(session_id.clone(), db_state).await?;
+    let launch = configured_launch(config, project_path, file_path, "terminal", session_id).await?;
     Ok(terminal_command(&launch))
 }
 
@@ -146,8 +152,8 @@ pub async fn open_external_editor(
 ) -> Result<(), String> {
     let config = config_state.0.lock().map_err(|e| e.to_string())?.clone();
     let extra_path_dirs = config.resolved_extra_path_dirs();
-    let project_path = session_project_path(session_id, db_state).await?;
-    let launch = configured_launch(config, project_path, file_path, "external").await?;
+    let project_path = session_project_path(session_id.clone(), db_state).await?;
+    let launch = configured_launch(config, project_path, file_path, "external", session_id).await?;
 
     let mut command = tokio::process::Command::new(&launch.command);
     command
@@ -197,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn expands_file_and_project_placeholders() {
+    fn expands_file_project_and_session_id_placeholders() {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("repo");
         let source = project.join("src");
@@ -209,22 +215,34 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
+        let session_id = "session-123";
         let config = Config {
             editor: Some(editor(
                 "external",
                 "code",
-                &["--goto", "{file}", "{project}"],
+                &["--goto", "{file}", "{project}", "--session", "{session_id}"],
             )),
             ..Config::default()
         };
-        let launch =
-            resolve_editor_launch(&config, project_path.clone(), "src/main.rs", "external")
-                .unwrap();
+        let launch = resolve_editor_launch(
+            &config,
+            project_path.clone(),
+            "src/main.rs",
+            "external",
+            session_id,
+        )
+        .unwrap();
 
         assert_eq!(launch.file_path, file_path);
         assert_eq!(
             launch.args,
-            vec!["--goto", file_path.as_str(), project_path.as_str()]
+            vec![
+                "--goto",
+                file_path.as_str(),
+                project_path.as_str(),
+                "--session",
+                session_id,
+            ]
         );
     }
 

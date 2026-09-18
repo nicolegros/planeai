@@ -3,6 +3,8 @@
 use std::io::{Read, Write};
 use std::path::Path;
 
+const CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Ensure the daemon process is running. Spawns it if not reachable.
 pub fn ensure_running(
     daemon_bin: &Path,
@@ -68,10 +70,35 @@ pub fn spawn_session(
     cwd: &str,
     env: Option<&std::collections::HashMap<&str, &str>>,
 ) -> Result<(), String> {
+    let session_id = session_id.to_string();
+    let program = program.to_string();
+    let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+    let cwd = cwd.to_string();
+    let env = env.map(|values| {
+        values
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect::<std::collections::HashMap<String, String>>()
+    });
+
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    spawn_session_inner(&session_id, &program, &args, &cwd, env.as_ref())
+}
+
+fn spawn_session_inner(
+    session_id: &str,
+    program: &str,
+    args: &[&str],
+    cwd: &str,
+    env: Option<&std::collections::HashMap<String, String>>,
+) -> Result<(), String> {
     let app_dir = planeai_paths::app_data_dir();
 
     let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir)
         .map_err(|e| format!("daemon connect failed: {e}"))?;
+    stream
+        .set_read_timeout(Some(CONTROL_TIMEOUT))
+        .map_err(|e| format!("failed to set daemon control timeout: {e}"))?;
     stream
         .write_all(&[0x00])
         .map_err(|e| format!("handshake failed: {e}"))?;
