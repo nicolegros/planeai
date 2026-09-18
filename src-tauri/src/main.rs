@@ -19,7 +19,6 @@ mod output_observer;
 mod paths;
 mod plugin_packages;
 mod plugins;
-mod pr;
 mod pty;
 mod pty_planeai_core_adapter;
 mod session_backend;
@@ -30,7 +29,6 @@ mod startup;
 mod state;
 mod symphony;
 mod task_lifecycle;
-mod template;
 #[cfg(not(windows))]
 mod tmux;
 mod updater;
@@ -145,7 +143,7 @@ fn main() {
             let (cfg, _warnings) = config::load(&config_dir);
             jira_migration::initialize(&conn, &cfg)
                 .expect("failed to initialize Jira migration state");
-            github_migration::initialize(&conn, &app_dir)
+            github_migration::initialize(&conn, &app_dir, &config_dir.join("config.json"))
                 .expect("failed to initialize GitHub migration state");
             if std::env::var("PLANEAI_SESSION_LOG_DIR").is_err() {
                 if let Some(ref dir) = cfg.session_log_dir {
@@ -284,9 +282,6 @@ fn main() {
             // Warm font cache in background
             startup::warm_font_cache();
 
-            // PR status background poll
-            startup::start_pr_poller(app.handle());
-
             // Daemon exit event listener
             startup::start_daemon_event_listener(app.handle());
 
@@ -380,19 +375,6 @@ fn main() {
             fe_delete_to_trash,
             fe_watch_directory,
             fe_unwatch_directory,
-            fetch_pr_url,
-            create_pr,
-            generate_pr_defaults,
-            get_ci_checks,
-            get_ci_failure_logs,
-            get_pr_comments,
-            get_allowed_merge_strategies,
-            get_merge_conflict_status,
-            get_pr_status,
-            merge_pr,
-            mark_pr_ready,
-            get_merge_state,
-            link_pr_url,
             check_cli_installed,
             install_cli,
             list_stale_worktrees,

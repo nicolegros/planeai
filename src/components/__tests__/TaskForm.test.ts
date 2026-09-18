@@ -34,8 +34,6 @@ const mockLaunch = vi.fn((_params?: unknown) =>
       tab_count: 1,
       base_branch: "main",
       task_key: "TASK-2",
-      pr_url: null,
-      pr_state: null,
     },
     warning: null,
   }),

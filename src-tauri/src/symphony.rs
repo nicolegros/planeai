@@ -550,8 +550,6 @@ mod tests {
                 on_notify: None,
                 on_restart: None,
                 on_complete: None,
-                on_pr_open: None,
-                on_pr_merge: None,
                 auto_dispatch: Some(AutoDispatchConfig {
                     poll_interval_ms: 30000,
                     max_concurrent: 2,

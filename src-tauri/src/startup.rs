@@ -1,7 +1,6 @@
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 
-use crate::commands::pr::poll_pr_for_session;
 use crate::commands::sessions::helpers::provider_has_hook;
 use crate::commands::sessions::lifecycle::session_lifecycle_event;
 use crate::config;
@@ -223,46 +222,6 @@ pub fn register_active_sessions(
             .unwrap_or(false);
         ns.register_session(&session.id, display_name, project_name, hook_enabled);
     }
-}
-
-/// Start background PR status poller (every 2 minutes).
-pub fn start_pr_poller(app_handle: &tauri::AppHandle) {
-    let app_handle = app_handle.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(120));
-        let db = app_handle.state::<DbState>();
-        let cfg_state = app_handle.state::<ConfigState>();
-        let Ok(conn) = db.0.lock() else { continue };
-        let Ok(cfg) = cfg_state.0.lock() else {
-            continue;
-        };
-        if cfg.pr_status.is_none() {
-            continue;
-        }
-        let Ok(sessions) = db::list_sessions(&conn) else {
-            continue;
-        };
-        let mut changed = false;
-        for session in &sessions {
-            let was_open = session.pr_state.as_deref() == Some("open");
-            match poll_pr_for_session(&conn, &cfg, session) {
-                Ok(true) => {
-                    changed = true;
-                    if was_open {
-                        let _ = app_handle
-                            .emit("pr-merged", serde_json::json!({ "session_id": session.id }));
-                    }
-                }
-                Err(e) => {
-                    let _ = app_handle.emit("cleanup-error", e);
-                }
-                _ => {}
-            }
-        }
-        if changed {
-            let _ = app_handle.emit("sessions-changed", ());
-        }
-    });
 }
 
 /// Warm font cache in background so preferences page opens instantly.

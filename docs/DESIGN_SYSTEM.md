@@ -98,7 +98,6 @@ Tailwind classes: `font-sans` for UI, `font-mono` for code/metadata.
 | Keyboard helper bar | 34px height             |
 | Command palette     | 600px                   |
 | New session modal   | 452px                   |
-| PR panel            | 282px                   |
 | Tab switcher        | 512px                   |
 
 ## Icons
@@ -108,7 +107,6 @@ All icons from `@lucide/svelte`. Key icons:
 - **Tabs:** `Bot` (Agent), `Terminal` (Shell), `GitCompare` (Diff), `FileCode` (Editor)
 - **Agent state:** `LoaderCircle` (busy, animate-spin), `Lightbulb` (needs attention, animate-pulse)
 - **CI:** `CheckCircle2` (pass), `XCircle` (fail), `LoaderCircle` (running)
-- **PR:** `GitPullRequest`, `GitMerge`
 - **Navigation:** `ChevronDown`, `ChevronRight`, `Plus`, `Settings`
 - **Auto-dispatch:** `Zap`
 

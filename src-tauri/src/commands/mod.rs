@@ -1,4 +1,3 @@
-pub mod ci;
 pub mod cleanup;
 pub mod cli;
 pub mod config;
@@ -10,14 +9,11 @@ pub mod loops;
 pub mod lsp;
 pub mod notify;
 pub mod plugins;
-pub mod pr;
-pub mod pr_comments;
 pub mod projects;
 pub mod sessions;
 pub mod symphony;
 pub mod tasks;
 
-pub use ci::get_ci_failure_logs;
 pub use cleanup::*;
 pub use cli::*;
 pub use config::*;
@@ -29,12 +25,6 @@ pub use loops::*;
 pub use lsp::*;
 pub use notify::*;
 pub use plugins::*;
-pub use pr::{
-    create_pr, fetch_pr_url, generate_pr_defaults, get_allowed_merge_strategies, get_ci_checks,
-    get_merge_conflict_status, get_merge_state, get_pr_status, link_pr_url, mark_pr_ready,
-    merge_pr,
-};
-pub use pr_comments::get_pr_comments;
 pub use projects::*;
 pub use sessions::*;
 pub use symphony::*;

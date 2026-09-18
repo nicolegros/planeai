@@ -86,7 +86,7 @@ export interface PluginSessionContext {
 export interface PluginUiContext {
   plugin: PluginInventory;
   contribution: PluginUiContribution;
-  /** Present only for a generic session.panel contribution. */
+  /** Present for generic session.panel, session.indicator, and titlebar contributions. */
   session?: PluginSessionContext;
   host: PluginUiHost;
 }

@@ -35,16 +35,15 @@ describe("workspace session selection", () => {
     );
   });
 
-  it("routes an active session-panel plugin shortcut before the legacy PR fallback", () => {
+  it("routes an active session-panel plugin shortcut without legacy PR state", () => {
     expect(appSource).toMatch(
       /findPluginShortcut\(event, sessionPanelCommands, mainPaneCommands\)/,
     );
+    expect(appSource).toMatch(/window\.addEventListener\("keydown", onPluginShortcut, true\)/);
     expect(appSource).toMatch(
-      /window\.addEventListener\("keydown", onPluginShortcut, true\)/,
+      /target\.contribution\.placement === "session\.panel"[\s\S]*?openPluginContributionModal\(target\.plugin\.id, target\.contribution\.id\)/,
     );
-    expect(appSource).toMatch(
-      /target\.contribution\.placement === "session\.panel"[\s\S]*?showPrPanel = false;[\s\S]*?openPluginContributionModal\(target\.plugin\.id, target\.contribution\.id\)/,
-    );
+    expect(appSource).not.toContain("showPrPanel");
   });
 
   it("opens only a titlebar navigation target session panel in the generic modal", () => {
@@ -80,4 +79,12 @@ it("reserves initial modal focus for the session-panel plugin iframe", () => {
   expect(appSource).toMatch(
     /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?preventOpenAutoFocus=\{true\}[\s\S]*?<PluginContributionHost[\s\S]*?autofocus=\{true\}/,
   );
+});
+
+it("does not expose a direct legacy PR API", async () => {
+  const apiSource = await import("../api.ts?raw").then((module) => module.default);
+  expect(apiSource).not.toMatch(/export const pr\s*=/);
+  expect(apiSource).not.toContain('"fetch_pr_url"');
+  expect(apiSource).not.toContain('"create_pr"');
+  expect(apiSource).not.toContain('"merge_pr"');
 });

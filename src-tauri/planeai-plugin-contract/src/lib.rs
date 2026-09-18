@@ -52,6 +52,7 @@ const UI_PLACEMENTS: &[&str] = &[
     "preferences",
     "main-pane",
     "session.panel",
+    "session.indicator",
     "titlebar",
     "interaction",
 ];
@@ -334,6 +335,35 @@ mod tests {
             validate_local_manifest(&manifest, "macos-arm64").unwrap(),
             "bin/plugin"
         );
+    }
+
+    #[test]
+    fn accepts_visual_only_session_indicators() {
+        let mut manifest = manifest();
+        manifest["ui_contributions"][0]["placement"] = json!("session.indicator");
+        assert_eq!(
+            validate_local_manifest(&manifest, "macos-arm64").unwrap(),
+            "bin/plugin"
+        );
+    }
+
+    #[test]
+    fn session_indicators_reject_shortcuts_and_order() {
+        let mut shortcut_manifest = manifest();
+        shortcut_manifest["ui_contributions"][0]["placement"] = json!("session.indicator");
+        shortcut_manifest["ui_contributions"][0]["shortcut"] = json!("Mod+Shift+P");
+        assert!(validate_local_manifest(&shortcut_manifest, "macos-arm64")
+            .unwrap_err()
+            .to_string()
+            .contains("shortcuts are only valid"));
+
+        let mut ordered_manifest = manifest();
+        ordered_manifest["ui_contributions"][0]["placement"] = json!("session.indicator");
+        ordered_manifest["ui_contributions"][0]["order"] = json!(1);
+        assert!(validate_local_manifest(&ordered_manifest, "macos-arm64")
+            .unwrap_err()
+            .to_string()
+            .contains("order is only valid"));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use planeai_tasks::model::Status;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -11,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 const GITHUB_PLUGIN_ID: &str = "github";
 const SNAPSHOT_FILE: &str = "legacy-github-pr-v1.json";
-const STATE_VERSION: u64 = 1;
+const STATE_VERSION: u64 = 2;
+const LEGACY_STATE_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -45,6 +47,18 @@ struct MigrationRecord {
     skipped_state_only: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+struct LegacyTaskTransitions {
+    on_open: Option<String>,
+    on_merge: Option<String>,
+}
+
+impl LegacyTaskTransitions {
+    fn is_empty(&self) -> bool {
+        self.on_open.is_none() && self.on_merge.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct LegacySnapshot {
     version: u32,
@@ -52,6 +66,14 @@ struct LegacySnapshot {
     created_at_ms: u64,
     pull_requests: Vec<LegacyPullRequest>,
     skipped_state_only: usize,
+    #[serde(default, skip_serializing_if = "LegacyTaskTransitions::is_empty")]
+    task_transitions: LegacyTaskTransitions,
+}
+
+impl LegacySnapshot {
+    fn is_empty(&self) -> bool {
+        self.pull_requests.is_empty() && self.task_transitions.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -81,7 +103,11 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
 
 /// Freezes the legacy PR columns before any GitHub sidecar can use them. The
 /// completed record deliberately survives until a later legacy-column retirement.
-pub fn initialize(conn: &Connection, app_data_dir: &Path) -> Result<(), String> {
+pub fn initialize(
+    conn: &Connection,
+    app_data_dir: &Path,
+    config_path: &Path,
+) -> Result<(), String> {
     migrate(conn)?;
     let record = read_record(conn)?;
     if matches!(
@@ -104,8 +130,8 @@ pub fn initialize(conn: &Connection, app_data_dir: &Path) -> Result<(), String> 
         return Ok(());
     }
 
-    let snapshot = snapshot_legacy(conn)?;
-    if snapshot.pull_requests.is_empty() {
+    let snapshot = snapshot_legacy(conn, legacy_task_transitions(config_path))?;
+    if snapshot.is_empty() {
         return Ok(());
     }
     let path = snapshot_path(app_data_dir);
@@ -126,7 +152,7 @@ pub fn initialize(conn: &Connection, app_data_dir: &Path) -> Result<(), String> 
 pub fn status(conn: &Connection) -> Result<GithubMigrationStatus, String> {
     migrate(conn)?;
     let record = read_record(conn)?;
-    let live = snapshot_legacy(conn)?;
+    let live = snapshot_legacy(conn, LegacyTaskTransitions::default())?;
     let Some(record) = record else {
         return Ok(if live.pull_requests.is_empty() {
             GithubMigrationStatus {
@@ -236,8 +262,8 @@ pub fn import(conn: &Connection, app_data_dir: &Path) -> Result<GithubMigrationS
             snapshot
         }
         None => {
-            let snapshot = snapshot_legacy(conn)?;
-            if snapshot.pull_requests.is_empty() {
+            let snapshot = snapshot_legacy(conn, LegacyTaskTransitions::default())?;
+            if snapshot.is_empty() {
                 return status(conn);
             }
             let path = snapshot_path(app_data_dir);
@@ -296,7 +322,52 @@ fn record_for(
     })
 }
 
-fn snapshot_legacy(conn: &Connection) -> Result<LegacySnapshot, String> {
+fn legacy_task_transitions(config_path: &Path) -> LegacyTaskTransitions {
+    #[derive(Deserialize)]
+    struct LegacyHook {
+        move_to: String,
+    }
+    #[derive(Deserialize)]
+    struct LegacyTaskManagement {
+        on_pr_open: Option<LegacyHook>,
+        on_pr_merge: Option<LegacyHook>,
+    }
+    #[derive(Deserialize)]
+    struct LegacyConfig {
+        task_management: Option<LegacyTaskManagement>,
+    }
+
+    let Ok(content) = std::fs::read(config_path) else {
+        return LegacyTaskTransitions::default();
+    };
+    let parsed: LegacyConfig = match serde_json::from_reader(json_comments::StripComments::new(
+        &content[..],
+    )) {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::warn!(%error, path = %config_path.display(), "could not read legacy GitHub task transitions");
+            return LegacyTaskTransitions::default();
+        }
+    };
+    let hooks = parsed.task_management;
+    LegacyTaskTransitions {
+        on_open: hooks
+            .as_ref()
+            .and_then(|task_management| task_management.on_pr_open.as_ref())
+            .and_then(|hook| Status::parse(&hook.move_to))
+            .map(|status| status.as_str().to_string()),
+        on_merge: hooks
+            .as_ref()
+            .and_then(|task_management| task_management.on_pr_merge.as_ref())
+            .and_then(|hook| Status::parse(&hook.move_to))
+            .map(|status| status.as_str().to_string()),
+    }
+}
+
+fn snapshot_legacy(
+    conn: &Connection,
+    task_transitions: LegacyTaskTransitions,
+) -> Result<LegacySnapshot, String> {
     let created_at = Utc::now();
     let created_at_ms = created_at.timestamp_millis().max(0) as u64;
     let mut statement = conn
@@ -343,6 +414,7 @@ fn snapshot_legacy(conn: &Connection) -> Result<LegacySnapshot, String> {
         created_at_ms,
         pull_requests,
         skipped_state_only,
+        task_transitions,
     })
 }
 
@@ -372,11 +444,56 @@ fn empty_durable_state() -> Value {
     serde_json::json!({
         "version": STATE_VERSION,
         "pull_requests": {},
+        "task_transitions": { "on_open": null, "on_merge": null },
         "reconciliation": {
             "status": "idle", "attempt_id": null, "started_at": null, "finished_at": null,
             "checked": 0, "recovered_attempt_id": null, "recovered_at": null, "error": null,
         }
     })
+}
+
+fn upgrade_durable_state(mut state: Value) -> Result<Value, String> {
+    match state.get("version").and_then(Value::as_u64) {
+        Some(LEGACY_STATE_VERSION) => {
+            validate_durable_state_version(&state, LEGACY_STATE_VERSION)?;
+            let state = state
+                .as_object_mut()
+                .expect("validated durable state is an object");
+            state.insert("version".to_string(), Value::Number(STATE_VERSION.into()));
+            state.insert(
+                "task_transitions".to_string(),
+                serde_json::json!({ "on_open": null, "on_merge": null }),
+            );
+            let state = Value::Object(state.clone());
+            validate_durable_state(&state)?;
+            Ok(state)
+        }
+        Some(STATE_VERSION) => {
+            validate_durable_state(&state)?;
+            Ok(state)
+        }
+        _ => Err("unsupported GitHub durable state version".to_string()),
+    }
+}
+
+fn merge_task_transitions(state: &mut Value, legacy: &LegacyTaskTransitions) -> Result<(), String> {
+    let transitions = state
+        .get_mut("task_transitions")
+        .and_then(Value::as_object_mut)
+        .expect("validated durable state has task transitions");
+    for (key, legacy_status) in [
+        ("on_open", legacy.on_open.as_deref()),
+        ("on_merge", legacy.on_merge.as_deref()),
+    ] {
+        if transitions.get(key).is_some_and(Value::is_null) {
+            if let Some(status) = legacy_status {
+                let status = Status::parse(status)
+                    .ok_or("legacy GitHub task transition has an invalid status")?;
+                transitions.insert(key.to_string(), Value::String(status.as_str().to_string()));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn import_snapshot(snapshot: &LegacySnapshot, app_data_dir: &Path) -> Result<(), String> {
@@ -386,11 +503,12 @@ fn import_snapshot(snapshot: &LegacySnapshot, app_data_dir: &Path) -> Result<(),
         .as_object()
         .cloned()
         .ok_or("existing plugin settings must be a JSON object")?;
-    let mut state = settings
-        .get(GITHUB_PLUGIN_ID)
-        .cloned()
-        .unwrap_or_else(empty_durable_state);
-    validate_durable_state(&state)?;
+    let mut state = upgrade_durable_state(
+        settings
+            .get(GITHUB_PLUGIN_ID)
+            .cloned()
+            .unwrap_or_else(empty_durable_state),
+    )?;
     let mappings = state
         .get_mut("pull_requests")
         .and_then(Value::as_object_mut)
@@ -425,6 +543,7 @@ fn import_snapshot(snapshot: &LegacySnapshot, app_data_dir: &Path) -> Result<(),
         );
         mappings.insert(legacy.session_id.clone(), Value::Object(mapping));
     }
+    merge_task_transitions(&mut state, &snapshot.task_transitions)?;
     validate_durable_state(&state)?;
     settings.insert(GITHUB_PLUGIN_ID.to_string(), state);
     let settings = Value::Object(settings);
@@ -441,6 +560,16 @@ fn import_snapshot(snapshot: &LegacySnapshot, app_data_dir: &Path) -> Result<(),
 fn validate_snapshot(snapshot: &LegacySnapshot) -> Result<(), String> {
     if snapshot.version != 1 {
         return Err("unsupported legacy GitHub migration snapshot".to_string());
+    }
+    for status in [
+        snapshot.task_transitions.on_open.as_deref(),
+        snapshot.task_transitions.on_merge.as_deref(),
+    ] {
+        if status.is_some_and(|status| Status::parse(status).is_none()) {
+            return Err(
+                "legacy GitHub migration snapshot contains an invalid task transition".to_string(),
+            );
+        }
     }
     for mapping in &snapshot.pull_requests {
         if mapping.session_id.trim().is_empty() || mapping.pr_url.trim().is_empty() {
@@ -461,11 +590,25 @@ fn validate_snapshot(snapshot: &LegacySnapshot) -> Result<(), String> {
 }
 
 fn validate_durable_state(state: &Value) -> Result<(), String> {
+    validate_durable_state_version(state, STATE_VERSION)
+}
+
+fn validate_durable_state_version(state: &Value, version: u64) -> Result<(), String> {
     let object = state
         .as_object()
         .ok_or("GitHub durable state must be a JSON object")?;
-    require_keys(object, &["version", "pull_requests", "reconciliation"])?;
-    if object.get("version").and_then(Value::as_u64) != Some(STATE_VERSION) {
+    let required = match version {
+        LEGACY_STATE_VERSION => &["version", "pull_requests", "reconciliation"][..],
+        STATE_VERSION => &[
+            "version",
+            "pull_requests",
+            "task_transitions",
+            "reconciliation",
+        ][..],
+        _ => return Err("unsupported GitHub durable state version".to_string()),
+    };
+    require_keys(object, required)?;
+    if object.get("version").and_then(Value::as_u64) != Some(version) {
         return Err("unsupported GitHub durable state version".to_string());
     }
     let mappings = object
@@ -506,6 +649,22 @@ fn validate_durable_state(state: &Value) -> Result<(), String> {
                         "GitHub durable state has invalid pull request {field}"
                     ));
                 }
+            }
+        }
+    }
+    if version == STATE_VERSION {
+        let transitions = object
+            .get("task_transitions")
+            .and_then(Value::as_object)
+            .ok_or("GitHub durable state task_transitions must be an object")?;
+        require_keys(transitions, &["on_open", "on_merge"])?;
+        for key in ["on_open", "on_merge"] {
+            if !transitions.get(key).is_some_and(|value| {
+                value.is_null() || value.as_str().and_then(Status::parse).is_some()
+            }) {
+                return Err(format!(
+                    "GitHub durable state has an invalid {key} task transition"
+                ));
             }
         }
     }
@@ -692,7 +851,12 @@ mod tests {
     fn no_legacy_state_is_not_needed() {
         let conn = legacy_db();
         let temp = tempfile::tempdir().unwrap();
-        initialize(&conn, &temp.path().join("data")).unwrap();
+        initialize(
+            &conn,
+            &temp.path().join("data"),
+            &temp.path().join("config.json"),
+        )
+        .unwrap();
         assert_eq!(
             status(&conn).unwrap().state,
             GithubMigrationState::NotNeeded
@@ -710,26 +874,33 @@ mod tests {
             None,
         );
         session(&conn, "state-only", None, Some("merged"));
-        initialize(&conn, &temp.path().join("data")).unwrap();
+        initialize(
+            &conn,
+            &temp.path().join("data"),
+            &temp.path().join("config.json"),
+        )
+        .unwrap();
         let current = status(&conn).unwrap();
         assert_eq!(current.state, GithubMigrationState::Available);
         assert_eq!(current.skipped_state_only, 1);
         assert!(blocks_plugin_start(&conn));
     }
     #[test]
-    fn imports_empty_settings_with_strict_v1_shape() {
+    fn imports_empty_settings_with_strict_v2_shape() {
         let conn = legacy_db();
         let temp = tempfile::tempdir().unwrap();
         let data = temp.path().join("data");
         session(&conn, "s1", Some("https://github.com/o/r/pull/1"), None);
-        initialize(&conn, &data).unwrap();
+        initialize(&conn, &data, &temp.path().join("config.json")).unwrap();
         assert_eq!(
             import(&conn, &data).unwrap().state,
             GithubMigrationState::Completed
         );
         let settings = read_settings(&settings_path(&temp)).unwrap();
         let mapping = &settings["github"]["pull_requests"]["s1"];
-        assert_eq!(settings["github"]["version"], 1);
+        assert_eq!(settings["github"]["version"], 2);
+        assert!(settings["github"]["task_transitions"]["on_open"].is_null());
+        assert!(settings["github"]["task_transitions"]["on_merge"].is_null());
         assert_eq!(mapping["url"], "https://github.com/o/r/pull/1");
         assert_eq!(mapping["state"], "open");
         assert_eq!(mapping["branch"], "topic");
@@ -748,7 +919,7 @@ mod tests {
             Some("https://github.com/o/r/pull/1"),
             Some("merged"),
         );
-        initialize(&conn, &data).unwrap();
+        initialize(&conn, &data, &temp.path().join("config.json")).unwrap();
         let mut github = empty_durable_state();
         github["pull_requests"]["s1"] = serde_json::json!({"session_id":"s1","url":"https://github.com/o/r/pull/1","state":"closed","updated_at":99});
         github["reconciliation"]["status"] = serde_json::json!("failed");
@@ -765,13 +936,103 @@ mod tests {
         assert_eq!(settings["github"]["pull_requests"]["s1"]["state"], "closed");
         assert_eq!(settings["github"]["reconciliation"]["error"], "keep");
     }
+
+    fn legacy_config_with_pr_hooks(
+        data: &Path,
+        on_open: Option<&str>,
+        on_merge: Option<&str>,
+    ) -> PathBuf {
+        std::fs::create_dir_all(data).unwrap();
+        let path = data.join("config.json");
+        let hooks = serde_json::json!({
+            "task_management": {
+                "on_pr_open": on_open.map(|move_to| serde_json::json!({ "move_to": move_to })),
+                "on_pr_merge": on_merge.map(|move_to| serde_json::json!({ "move_to": move_to })),
+            }
+        });
+        std::fs::write(&path, serde_json::to_vec(&hooks).unwrap()).unwrap();
+        path
+    }
+
+    #[test]
+    fn migrates_valid_task_transitions_without_overwriting_plugin_settings() {
+        let conn = legacy_db();
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        session(&conn, "s1", Some("https://github.com/o/r/pull/1"), None);
+        let config_path = legacy_config_with_pr_hooks(&data, Some("in_review"), Some("done"));
+        initialize(&conn, &data, &config_path).unwrap();
+
+        let mut github = empty_durable_state();
+        github["task_transitions"]["on_open"] = serde_json::json!("todo");
+        github["pull_requests"]["s1"] = serde_json::json!({"session_id":"s1","url":"https://github.com/o/r/pull/1","state":"closed","updated_at":99});
+        github["reconciliation"]["error"] = serde_json::json!("keep");
+        write_json_atomically(
+            &settings_path(&temp),
+            &serde_json::json!({"other": {"keep": true}, "github": github}),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            import(&conn, &data).unwrap().state,
+            GithubMigrationState::Completed
+        );
+        let settings = read_settings(&settings_path(&temp)).unwrap();
+        assert_eq!(settings["github"]["version"], STATE_VERSION);
+        assert_eq!(settings["github"]["task_transitions"]["on_open"], "todo");
+        assert_eq!(settings["github"]["task_transitions"]["on_merge"], "done");
+        assert_eq!(settings["github"]["pull_requests"]["s1"]["state"], "closed");
+        assert_eq!(settings["github"]["reconciliation"]["error"], "keep");
+        assert_eq!(settings["other"]["keep"], true);
+        assert_eq!(
+            import(&conn, &data).unwrap().state,
+            GithubMigrationState::Completed
+        );
+        assert_eq!(read_settings(&settings_path(&temp)).unwrap(), settings);
+    }
+
+    #[test]
+    fn skips_invalid_legacy_transition_and_upgrades_v1_plugin_settings() {
+        let conn = legacy_db();
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        let config_path = legacy_config_with_pr_hooks(&data, Some("not-a-status"), Some("done"));
+        initialize(&conn, &data, &config_path).unwrap();
+
+        let mut github = empty_durable_state();
+        github.as_object_mut().unwrap().remove("task_transitions");
+        github["version"] = serde_json::json!(LEGACY_STATE_VERSION);
+        github["pull_requests"]["kept"] = serde_json::json!({"session_id":"kept","url":"https://github.com/o/r/pull/9","state":"open","updated_at":9});
+        write_json_atomically(
+            &settings_path(&temp),
+            &serde_json::json!({"github": github}),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            import(&conn, &data).unwrap().state,
+            GithubMigrationState::Completed
+        );
+        let settings = read_settings(&settings_path(&temp)).unwrap();
+        assert_eq!(settings["github"]["version"], STATE_VERSION);
+        assert!(settings["github"]["task_transitions"]["on_open"].is_null());
+        assert_eq!(settings["github"]["task_transitions"]["on_merge"], "done");
+        assert_eq!(
+            settings["github"]["pull_requests"]["kept"]["url"],
+            "https://github.com/o/r/pull/9"
+        );
+        validate_durable_state(&settings["github"]).unwrap();
+    }
+
     #[test]
     fn different_existing_url_is_a_clear_conflict() {
         let conn = legacy_db();
         let temp = tempfile::tempdir().unwrap();
         let data = temp.path().join("data");
         session(&conn, "s1", Some("https://github.com/o/r/pull/1"), None);
-        initialize(&conn, &data).unwrap();
+        initialize(&conn, &data, &temp.path().join("config.json")).unwrap();
         let mut github = empty_durable_state();
         github["pull_requests"]["s1"] = serde_json::json!({"session_id":"s1","url":"https://github.com/o/r/pull/2","state":"open","updated_at":1});
         write_json_atomically(
@@ -794,7 +1055,7 @@ mod tests {
             Some("https://github.com/o/r/pull/1"),
             Some("open"),
         );
-        initialize(&conn, &data).unwrap();
+        initialize(&conn, &data, &temp.path().join("config.json")).unwrap();
         let backup = std::fs::read(snapshot_path(&data)).unwrap();
         assert_eq!(
             import(&conn, &data).unwrap().state,
@@ -817,14 +1078,14 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let data = temp.path().join("data");
         session(&conn, "s1", Some("https://github.com/o/r/pull/1"), None);
-        initialize(&conn, &data).unwrap();
+        initialize(&conn, &data, &temp.path().join("config.json")).unwrap();
         let snapshot = read_snapshot(&snapshot_path(&data)).unwrap();
         write_record(
             &conn,
             &record_for(&snapshot, &data, GithubMigrationState::Importing, None).unwrap(),
         )
         .unwrap();
-        initialize(&conn, &data).unwrap();
+        initialize(&conn, &data, &temp.path().join("config.json")).unwrap();
         assert_eq!(status(&conn).unwrap().state, GithubMigrationState::Failed);
         assert!(blocks_plugin_start(&conn));
         assert_eq!(

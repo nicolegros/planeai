@@ -13,7 +13,6 @@ use crate::task_lifecycle::{
     StatusChangeCause, TaskLifecycleBatch, TaskLifecycleEvent, TaskLifecycleOrigin,
 };
 
-use crate::commands::pr::poll_pr_for_session;
 use crate::commands::sessions::helpers::{fire_task_hook, session_cwd};
 
 /// Task structure returned to the frontend. Matches the original contract + parent_key.
@@ -365,7 +364,6 @@ pub async fn fire_task_notify_hook(
                 fire_task_hook(&cfg, &session, "on_notify", &cwd, &conn);
             }
         }
-        poll_pr_for_session(&conn, &cfg, &session)?;
         Ok(())
     })
     .await

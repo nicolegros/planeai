@@ -30,7 +30,6 @@
     onToggleDiff: () => void;
     onOpenFile?: (filePath: string) => void;
     onOpenLogViewer?: () => void;
-    onCreatePr?: () => void;
     onSplitVertical?: () => void;
     onSplitHorizontal?: () => void;
     onCloseSplit?: () => void;
@@ -39,7 +38,7 @@
     openFileMode?: boolean;
   }
 
-  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onHideProject, onUnhideProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onCreatePr, onSplitVertical, onSplitHorizontal, onCloseSplit, pluginCommands = [], onOpenPluginContribution, openFileMode = false }: Props = $props();
+  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onHideProject, onUnhideProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onSplitVertical, onSplitHorizontal, onCloseSplit, pluginCommands = [], onOpenPluginContribution, openFileMode = false }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const sessions = $derived(orchestrator.getSessions());
@@ -621,15 +620,6 @@
                   <kbd class="ml-auto text-[10px] font-mono text-t3">{MOD_LABEL}⇧W</kbd>
                 </Command.Item>
                 {/if}
-                <Command.Item
-                  value="pull request"
-                  keywords={["pr", "pull request", "github", "link", "review", "create"]}
-                  disabled={!activeSessionId}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                  onSelect={async () => { const s = sessions.find(x => x.id === activeSessionId); if (s?.pr_url) { openUrl(s.pr_url); close(); } else if (onCreatePr) { close(); onCreatePr(); } }}
-                >
-                  {sessions.find(x => x.id === activeSessionId)?.pr_url ? "View PR" : "Create PR"}
-                </Command.Item>
                 {#if onOpenLogViewer}
                 <Command.Item
                   value="session log viewer"

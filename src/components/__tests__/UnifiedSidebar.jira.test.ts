@@ -14,10 +14,6 @@ vi.mock("../../lib/api", () => ({
     localUiSource,
     dataChanged: vi.fn().mockResolvedValue(undefined),
   },
-  pr: {
-    getPrStatus: vi.fn().mockResolvedValue({ checks: [], conflicting: false }),
-    getPrComments: vi.fn().mockResolvedValue(0),
-  },
   projects: {
     list: projectList,
     getAutoMode: vi.fn().mockResolvedValue(false),
@@ -363,8 +359,6 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
         tab_count: 1,
         base_branch: null,
         task_key: null,
-        pr_url: null,
-        pr_state: null,
       },
     ]);
     await loadProjects();

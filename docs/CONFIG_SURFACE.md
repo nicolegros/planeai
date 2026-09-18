@@ -64,7 +64,6 @@ These exist in the config file for compatibility but are migration-period option
 
 | Field             | Reason                                |
 | ----------------- | ------------------------------------- |
-| `pr_status`       | May move into `task_management`       |
 | `hide_done_tasks` | UI preference, may become per-project |
 
 ---
@@ -233,4 +232,4 @@ For a profile with legacy `integrations.jira` data, migration is explicit: **Pre
 
 ## GitHub plugin legacy PR migration
 
-Profiles with legacy session `pr_url`/`pr_state` values are migrated explicitly from **Preferences → Plugins** into the standalone GitHub plugin's host-owned settings document. PlaneAI freezes a private snapshot of URL-backed mappings, fences only the `github` plugin until import completes, merges compatible mappings into `plugins/state/github/data/settings.json`, and validates the strict v1 `github` namespace before recording completion. State-only legacy values are reported as safely skipped because they cannot form a valid PR mapping. The migration never installs or enables the local GitHub plugin; after a successful import, install or enable it normally. Failed or interrupted imports remain retryable from the same frozen snapshot.
+Profiles with legacy session `pr_url`/`pr_state` values are migrated explicitly from **Preferences → Plugins** into the standalone GitHub plugin's host-owned settings document. PlaneAI freezes a private snapshot of URL-backed mappings, fences only the `github` plugin until import completes, merges compatible mappings into `plugins/state/github/data/settings.json`, and validates the strict versioned `github` namespace before recording completion. State-only legacy values are reported as safely skipped because they cannot form a valid PR mapping. The migration never installs or enables the local GitHub plugin; after a successful import, install or enable it normally. Failed or interrupted imports remain retryable from the same frozen snapshot.

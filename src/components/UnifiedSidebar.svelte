@@ -2,13 +2,13 @@
   import { projects as projectsApi } from "../lib/api";
   import { listen } from "@tauri-apps/api/event";
   import type { TaskItem, Session, Project, PluginInventory, PluginSessionAction, PluginUiContribution } from "../lib/types";
+  import type { PluginSessionContext } from "../lib/plugin-sdk";
   import { pluginSessionActionsForProvider } from "../lib/plugin-session-actions";
   import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { shouldHideProject, isLoopId, parseLoopId } from "../lib/sidebar-session-order";
   import { projectContextMenuItems } from "../lib/project-context-menu";
-  import { openUrl } from "@tauri-apps/plugin-opener";
   import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare, Play, Square } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
@@ -18,8 +18,6 @@
   import { showSnackbar } from "../lib/snackbar.svelte";
   import TaskPanel from "./TaskPanel.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
-  import { getCiStatus } from "../lib/ci-checks.svelte";
-  import { getCommentCount } from "../lib/pr-comments.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import * as loopStore from "../lib/loop-store.svelte";
@@ -49,13 +47,14 @@
     onToggleDiff?: () => void;
     selectedLoopId?: string | null;
     pluginContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
+    sessionIndicatorContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
     pluginSessionActions?: PluginSessionAction[];
     onPluginSessionAction?: (session: Session, action: PluginSessionAction) => void;
     onPluginNavigate?: (pluginId: string, contributionId: string) => void;
     onPluginClose?: () => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], sessionIndicatorContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
   function pluginContributionKey(item: { plugin: PluginInventory; contribution: PluginUiContribution }): string {
@@ -66,6 +65,18 @@
     const key = pluginContributionKey(item);
     if (failedSidebarContributions.has(key)) return;
     failedSidebarContributions = new Set([...failedSidebarContributions, key]);
+  }
+
+  function pluginSessionContext(session: Session): PluginSessionContext {
+    return {
+      id: session.id,
+      projectId: session.project_id,
+      branch: session.branch,
+      baseBranch: session.base_branch,
+      status: session.status as PluginSessionContext["status"],
+      provider: session.provider,
+      taskKey: session.task_key,
+    };
   }
 
   const activePluginContributions = $derived(
@@ -532,14 +543,12 @@
       else if (action.type === "delete") fadeOutThenAct(session.id, () => onDeleteSession(session));
       else if (action.type === "rename") startRename(session);
       else if (action.type === "restart") onRestartSession(session);
-      else if (action.type === "open_pr") { if (session.pr_url) openUrl(session.pr_url); }
       else if (action.type === "review") { onSelectSession(session.id); onToggleDiff?.(); }
     } else if (current.type === "task") {
       const task = current.task;
       if (action.type === "select" || action.type === "start_session") handleTaskClick(task, current.projectPath);
       else if (action.type === "edit") taskPanelRef?.openEdit(task);
       else if (action.type === "status") moveTask(task.key, action.status);
-      else if (action.type === "open_pr") { const linked = sessionForTask(task.key); if (linked?.pr_url) openUrl(linked.pr_url); }
       else if (action.type === "review") { const linked = sessionForTask(task.key); if (linked) { onSelectSession(linked.id); onToggleDiff?.(); } }
       else if (action.type === "archive") { const linked = sessionForTask(task.key); if (linked) fadeOutThenAct(linked.id, () => onArchiveSession(linked)); }
       else if (action.type === "delete") { const linked = sessionForTask(task.key); if (linked) onDeleteSession(linked); }
@@ -563,25 +572,6 @@
 
 <svelte:window onkeydown={handleKeydown} onfocus={onWindowFocus} />
 
-{#snippet ciBadge(id: string)}
-  {@const ci = getCiStatus(id)}
-  {#if ci === 'passing'}
-    <CheckCircle2 class="size-3 text-status-running" title="CI passing" />
-  {:else if ci === 'failing'}
-    <XCircle class="size-3 text-status-exited" title="CI failing" />
-  {:else if ci === 'running'}
-    <span class="size-2 rounded-full bg-amber-500" style="animation:pulse-dot 1.6s ease-in-out infinite" title="CI running"></span>
-  {/if}
-{/snippet}
-
-{#snippet commentBadge(id: string)}
-  {@const count = getCommentCount(id)}
-  {#if count > 0}
-    <span class="flex items-center gap-0.5 text-[10px] text-t3" title="{count} comment{count !== 1 ? 's' : ''}">
-      <MessageSquare class="size-3" />{count}
-    </span>
-  {/if}
-{/snippet}
 
 <aside
   class="relative shrink-0 flex flex-col border-r bg-sidebar {zone === 'sidebar' ? 'border-accent' : 'border-border'}"
@@ -723,7 +713,7 @@
                           {@const isChildSelected = zone === 'sidebar' && childNavIdx === getSelectedIndex()}
                           {@const isChildPreviewing = childSession.id === previewSessionId}
                           <li>
-                            <div class="flex items-center gap-1.5">
+                            <div class="session-row relative flex items-center gap-1.5">
                               <span class="w-[2px] self-stretch rounded-full transition-opacity {isChildActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                               <button
                                 data-nav-index={childNavIdx}
@@ -745,6 +735,11 @@
                                   {/if}
                                 </span>
                               </button>
+                              {#each sessionIndicatorContributions as item (`${childSession.id}:${item.plugin.id}:${item.contribution.id}`)}
+                                <div class="absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 pointer-events-none" data-plugin-session-indicator={childSession.id}>
+                                  <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={pluginSessionContext(childSession)} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} />
+                                </div>
+                              {/each}
                             </div>
                           </li>
                         {/if}
@@ -774,7 +769,7 @@
                       onblur={() => commitRename(session.id)}
                     />
                   {:else}
-                    <div class="flex items-center gap-1.5">
+                    <div class="session-row relative flex items-center gap-1.5">
                       <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                       <button
                         data-nav-index={globalIndex}
@@ -793,10 +788,13 @@
                         {:else if agentStates[session.id] === 'Busy'}
                           <LoaderCircle class="size-3 animate-spin text-t2" />
                         {/if}
-                        {@render ciBadge(session.id)}
-                        {@render commentBadge(session.id)}
                       </span>
                     </button>
+                    {#each sessionIndicatorContributions as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
+                      <div class="absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 pointer-events-none" data-plugin-session-indicator={session.id}>
+                        <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={pluginSessionContext(session)} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} />
+                      </div>
+                    {/each}
                     </div>
                   {/if}
                 </li>
@@ -832,7 +830,7 @@
                       {@const isParent = isParentTask(task, projectTasks)}
                       {@const isPreviewing = linked && linked.id === previewSessionId}
                       <li class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
-                        <div class="flex items-center gap-1.5">
+                        <div class="session-row relative flex items-center gap-1.5">
                           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                           <button
                             data-nav-index={taskNavIdx}
@@ -854,11 +852,16 @@
                               {:else if linked.status === 'exited'}
                                 <span class="font-mono text-[9px] text-t3 bg-panel-hi rounded px-[5px] py-[1px]">exited</span>
                               {/if}
-                              {@render ciBadge(linked.id)}
-                              {@render commentBadge(linked.id)}
                             </span>
                           {/if}
                         </button>
+                        {#if linked}
+                          {#each sessionIndicatorContributions as item (`${linked.id}:${item.plugin.id}:${item.contribution.id}`)}
+                            <div class="absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 pointer-events-none" data-plugin-session-indicator={linked.id}>
+                              <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={pluginSessionContext(linked)} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} />
+                            </div>
+                          {/each}
+                        {/if}
                         </div>
                       </li>
                     {/each}
@@ -949,6 +952,12 @@
     ]}
   />
 {/if}
+
+<style>
+  :global(.session-row:has([data-plugin-indicator-visible="true"]) > button) {
+    padding-right: 1.75rem;
+  }
+</style>
 
 <!-- Project context menu -->
 {#if projectContextMenu}

@@ -180,6 +180,8 @@ pub enum PluginUiPlacement {
     MainPane,
     #[serde(rename = "session.panel")]
     SessionPanel,
+    #[serde(rename = "session.indicator")]
+    SessionIndicator,
     #[serde(rename = "titlebar")]
     Titlebar,
     #[serde(rename = "interaction")]
@@ -1848,8 +1850,6 @@ async fn execute_host_task(
                         "backend": session.backend,
                         "tab_count": session.tab_count,
                         "task_key": session.task_key,
-                        "pr_url": session.pr_url,
-                        "pr_state": session.pr_state,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -4481,6 +4481,7 @@ mod placement_tests {
         assert!(PluginUiPlacement::SidebarNavigation.is_sidebar());
         assert!(!PluginUiPlacement::Preferences.is_sidebar());
         assert!(!PluginUiPlacement::MainPane.is_sidebar());
+        assert!(!PluginUiPlacement::SessionIndicator.is_sidebar());
     }
 }
 

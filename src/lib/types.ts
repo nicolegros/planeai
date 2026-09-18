@@ -12,8 +12,6 @@ export interface Session {
   tab_count: number;
   base_branch: string | null;
   task_key: string | null;
-  pr_url: string | null;
-  pr_state: string | null;
 }
 
 export interface LaunchResult {
@@ -65,13 +63,6 @@ export interface ChangedFile {
 
 export type FileDiff = ReviewFileDiff;
 
-export interface CiCheck {
-  name: string;
-  status: string;
-  conclusion: string | null;
-  url: string | null;
-}
-
 // ─── Plugin runtime types ───────────────────────────────────────────────────
 
 export type PluginSourceKind = "builtin" | "local";
@@ -85,6 +76,7 @@ export type PluginUiPlacement =
   | "preferences"
   | "main-pane"
   | "session.panel"
+  | "session.indicator"
   | "titlebar"
   | "interaction";
 
@@ -180,11 +172,6 @@ export interface CommitEntry {
   sha: string;
   short_sha: string;
   subject: string;
-}
-
-export interface PrStatus {
-  checks: CiCheck[];
-  conflicting: boolean;
 }
 
 export interface JiraStatus {
