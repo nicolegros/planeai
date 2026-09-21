@@ -739,26 +739,6 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
-    conn.execute(
-        "UPDATE plugin_inventory
-         SET ui_contributions = (
-             SELECT json_group_array(
-                 CASE
-                     WHEN json_extract(value, '$.placement') = 'session.panel'
-                         THEN json_set(value, '$.placement', 'main-pane')
-                     ELSE json(value)
-                 END
-             )
-             FROM json_each(plugin_inventory.ui_contributions)
-         )
-         WHERE json_valid(ui_contributions)
-           AND EXISTS (
-               SELECT 1
-               FROM json_each(plugin_inventory.ui_contributions)
-               WHERE json_extract(value, '$.placement') = 'session.panel'
-           )",
-        [],
-    )?;
     Ok(())
 }
 
@@ -951,6 +931,58 @@ pub fn replace_local_inventory(
     get_inventory(conn, &manifest.id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "replaced local plugin inventory record was not found".to_string())
+}
+
+fn refresh_local_inventory(
+    conn: &Connection,
+    manifest: &PluginManifest,
+    backend_entrypoint: &str,
+    content_hash: &str,
+    package_dir: &Path,
+    original_display_path: &str,
+) -> Result<PluginInventory, String> {
+    let existing = get_inventory(conn, &manifest.id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("plugin inventory entry not found: {}", manifest.id))?;
+    if existing.source_kind != PluginSourceKind::Local {
+        return Err(format!(
+            "plugin id is reserved by a bundled plugin: {}",
+            manifest.id
+        ));
+    }
+    manifest.validate()?;
+    validate_shortcut_collisions(conn, manifest)?;
+    let ui_contributions = serde_json::to_string(&manifest.effective_ui_contributions())
+        .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
+    let capabilities = serde_json::to_string(&manifest.capabilities)
+        .map_err(|error| format!("failed to serialize plugin capabilities: {error}"))?;
+    let background_service = serde_json::to_string(&manifest.background_service)
+        .map_err(|error| format!("failed to serialize plugin background service: {error}"))?;
+    conn.execute(
+        "UPDATE plugin_inventory SET
+            name = ?2, version = ?3, host_api_version = ?4, backend_entrypoint = ?5,
+            ui_contributions = ?6, capabilities = ?7, background_service = ?8,
+            installed_hash = ?9, installed_path = ?10, original_display_path = ?11,
+            updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?1 AND source_kind = 'local'",
+        params![
+            manifest.id,
+            manifest.name,
+            manifest.version,
+            manifest.host_api_version,
+            backend_entrypoint,
+            ui_contributions,
+            capabilities,
+            background_service,
+            content_hash,
+            package_dir.display().to_string(),
+            original_display_path,
+        ],
+    )
+    .map_err(|error| format!("failed to refresh local plugin inventory: {error}"))?;
+    get_inventory(conn, &manifest.id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "refreshed local plugin inventory record was not found".to_string())
 }
 
 pub fn list_inventory(conn: &Connection) -> rusqlite::Result<Vec<PluginInventory>> {
@@ -2523,7 +2555,25 @@ impl PluginRuntimeSupervisor {
                 return Err(error);
             }
             Some(inventory) if inventory.installed_hash.as_deref() == Some(&hash) => {
-                return Ok(inventory.clone());
+                let refresh_manifest = manifest.clone();
+                let refresh_backend = backend.clone();
+                let refresh_hash = hash.clone();
+                let refresh_package_dir = package_dir.clone();
+                let refresh_original_path = original_path.clone();
+                let refreshed = self
+                    .with_db(move |conn| {
+                        refresh_local_inventory(
+                            conn,
+                            &refresh_manifest,
+                            &refresh_backend,
+                            &refresh_hash,
+                            &refresh_package_dir,
+                            &refresh_original_path,
+                        )
+                    })
+                    .await?;
+                self.emit_change(&refreshed.id).await;
+                return Ok(refreshed);
             }
             Some(inventory) => inventory.enabled,
             None => false,
@@ -3718,21 +3768,21 @@ mod tests {
     }
 
     #[test]
-    fn migration_converts_legacy_session_panel_to_a_main_pane_contribution() {
+    fn migration_preserves_session_panel_contributions() {
         let conn = database();
         conn.execute(
             "UPDATE plugin_inventory SET ui_contributions = ?1 WHERE id = 'jira'",
-            [r#"[{"id":"legacy-panel","label":"Legacy panel","placement":"session.panel","entrypoint":"ui/panel.js","order":null,"shortcut":null},{"id":"preferences","label":"Preferences","placement":"preferences","entrypoint":"ui/preferences.js","order":null,"shortcut":null}]"#],
+            [r#"[{"id":"session-panel","label":"Session panel","placement":"session.panel","entrypoint":"ui/panel.js","order":null,"shortcut":"Mod+Shift+P"},{"id":"preferences","label":"Preferences","placement":"preferences","entrypoint":"ui/preferences.js","order":null,"shortcut":null}]"#],
         )
         .unwrap();
 
         migrate(&conn).unwrap();
 
         let inventory = get_inventory(&conn, "jira").unwrap().unwrap();
-        assert_eq!(inventory.ui_contributions[0].id, "legacy-panel");
+        assert_eq!(inventory.ui_contributions[0].id, "session-panel");
         assert_eq!(
             inventory.ui_contributions[0].placement,
-            PluginUiPlacement::MainPane
+            PluginUiPlacement::SessionPanel
         );
         assert_eq!(
             inventory.ui_contributions[1].placement,
