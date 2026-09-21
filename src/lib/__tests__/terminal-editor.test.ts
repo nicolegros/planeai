@@ -133,4 +133,5 @@ describe("pending terminal editor commands", () => {
     expect(consumePendingTerminalEditorCommand(command)).toBe(true);
     expect(getPendingTerminalEditorCommand(command)).toBeUndefined();
   });
+
 });

@@ -357,6 +357,8 @@ fn main() {
             check_tmux_available,
             save_session_layout,
             get_session_layout,
+            save_task_workspace_layout,
+            get_task_workspace_layout,
             restart_session,
             archive_session,
             destroy_session,

@@ -49,6 +49,10 @@ export const sessions = {
   saveLayout: (sessionId: string, layoutJson: string) =>
     invoke("save_session_layout", { sessionId, layoutJson }),
   getLayout: (sessionId: string) => invoke<string | null>("get_session_layout", { sessionId }),
+  saveTaskWorkspaceLayout: (projectId: string, taskKey: string, layoutJson: string) =>
+    invoke("save_task_workspace_layout", { projectId, taskKey, layoutJson }),
+  getTaskWorkspaceLayout: (projectId: string, taskKey: string) =>
+    invoke<string | null>("get_task_workspace_layout", { projectId, taskKey }),
 };
 
 export const projects = {

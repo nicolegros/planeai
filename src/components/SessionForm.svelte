@@ -10,15 +10,22 @@
   import { LoaderCircle } from "@lucide/svelte";
 
   interface TaskPrefill { key: string; title: string; description: string; branch: string; name: string; prompt: string; baseBranch?: string; }
-  interface Props { projects: Project[]; sessions: Session[]; onCreated: (session: Session) => void; onCancel: () => void; taskPrefill?: TaskPrefill | null; currentProjectId?: string | null; }
+  interface Props {
+    projects: Project[];
+    sessions: Session[];
+    onCreated: (session: Session) => void;
+    onCancel: () => void;
+    onCreateTask: () => void;
+    taskPrefill?: TaskPrefill | null;
+    currentProjectId?: string | null;
+  }
 
-  let { projects, sessions, onCreated, onCancel, taskPrefill = null, currentProjectId = null }: Props = $props();
+  let { projects, sessions, onCreated, onCancel, onCreateTask, taskPrefill = null, currentProjectId = null }: Props = $props();
 
   const config = $derived(getSettings());
   const providerKeys = $derived(Object.keys(config.providers));
 
-  // svelte-ignore state_referenced_locally
-  let mode = $state<"task" | "manual">(taskPrefill ? "task" : "manual");
+  let mode = $state<"task">("task");
   // svelte-ignore state_referenced_locally
   let sessionName = $state(taskPrefill?.name ?? "");
   // svelte-ignore state_referenced_locally
@@ -43,18 +50,6 @@
   // Task picker state
   let taskItems = $state<TaskItem[]>([]);
   let taskSearchValue = $state("");
-
-  // Clear task-related state when switching to manual mode
-  $effect(() => {
-    if (mode === "manual") {
-      taskKey = "";
-      taskPrompt = "";
-      sessionName = "";
-      branchValue = "";
-      branchSearch = "";
-      newBranchName = "";
-    }
-  });
 
   const selectedProject = $derived(projects.find((p) => p.id === projectValue));
 
@@ -101,13 +96,18 @@
     if (!task) return;
     taskKey = task.key;
     taskSearchValue = task.key;
+    const agentOrdinal = sessions.filter((session) => session.task_key === task.key).length + 1;
     const templates = getTaskManagerTemplates();
-    sessionName = templates?.name ? renderTemplate(templates.name, task) : `${task.key}: ${task.title}`;
+    sessionName = `Agent ${agentOrdinal}`;
     taskPrompt = templates?.prompt ? renderTemplate(templates.prompt, task) : (task.description ? `Implement task ${task.key}: ${task.title}\n\n${task.description}` : `Implement task ${task.key}: ${task.title}`);
-    const slugBranch = templates?.branch ? renderTemplate(templates.branch, task) : `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-/]/g, "")}`;
-    branchSearch = slugBranch;
-    branchValue = slugBranch;
-    newBranchName = slugBranch;
+    const baseTaskBranch = templates?.branch ? renderTemplate(templates.branch, task) : `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-/]/g, "")}`;
+    const taskBranch = agentOrdinal === 1 ? baseTaskBranch : `${baseTaskBranch}--${agentOrdinal}`;
+    branchSearch = taskBranch;
+    branchValue = taskBranch;
+    newBranchName = taskBranch;
+    // Additional agents are isolated by default. Users can explicitly disable this
+    // and reuse a checkout/worktree through the existing form controls.
+    useWorktree = agentOrdinal > 1;
     baseBranchValue = task.base_branch;
   }
 
@@ -130,14 +130,14 @@
   const fk = createFormKeyboardController(
     () => [
       { key: "r", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='project'] input") ?? null },
+      { key: "t", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='task'] input") ?? null },
+      { key: "m", toggle: onCreateTask },
       { key: "s", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='name'] input") ?? null },
       { key: "w", toggle: () => { useWorktree = !useWorktree; } },
       { key: "a", toggle: () => { autoApprove = !autoApprove; } },
       { key: "p", toggle: () => { const current = selectedProvider || config.default_provider; const idx = providerKeys.indexOf(current); selectedProvider = providerKeys[(idx + 1) % providerKeys.length]; }, shiftToggle: () => { const current = selectedProvider || config.default_provider; const idx = providerKeys.indexOf(current); selectedProvider = providerKeys[(idx - 1 + providerKeys.length) % providerKeys.length]; } },
       { key: "b", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
       { key: "n", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='branch'] input") ?? null },
-      { key: "m", toggle: () => { mode = "manual"; } },
-      { key: "t", toggle: () => { mode = "task"; } },
     ],
     { wrapper: () => wrapperEl, onDismiss: onCancel },
   );
@@ -153,6 +153,7 @@
   async function submit() {
     if (submitting) return;
     if (!selectedProject) { error = "Select a project."; return; }
+    if (!taskKey) { error = "Select a task."; return; }
     submitting = true;
 
     const taskKeyParam = taskKey || null;
@@ -192,21 +193,15 @@
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div bind:this={wrapperEl} tabindex="-1" onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); return; } fk.handleKeydown(e); }} onfocusin={fk.handleFocusin} class="outline-none" data-form-keyboard>
 <form bind:this={formEl} class="px-5 pb-0 space-y-3" onsubmit={(e) => { e.preventDefault(); submit(); }}>
-  <!-- Mode toggle -->
+  <!-- Task is mandatory; create one through the existing TaskForm when needed. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div class="flex rounded-lg bg-panel-hi p-0.5" role="toolbar" tabindex="-1">
     <button
       type="button"
       tabindex={-1}
-      class="flex-1 px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors {mode === 'manual' ? 'bg-accent text-on-accent' : 'text-t2 hover:text-t1'}"
-      onclick={() => (mode = "manual")}
-    >Manual <span class="font-mono text-[10px] opacity-60">M</span></button>
-    <button
-      type="button"
-      tabindex={-1}
-      class="flex-1 px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors {mode === 'task' ? 'bg-accent text-on-accent' : 'text-t2 hover:text-t1'}"
-      onclick={() => (mode = "task")}
-    >From task <span class="font-mono text-[10px] opacity-60">T</span></button>
+      class="flex-1 px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors bg-accent text-on-accent"
+      onclick={onCreateTask}
+    >New task <span class="font-mono text-[10px] opacity-60">M</span></button>
   </div>
 
   <div class="space-y-1" data-field="project">
@@ -214,20 +209,17 @@
     <Select items={projectItems} bind:value={projectValue} onkeydown={metaEnter} placeholder="Search project..." emptyText="No projects found" />
   </div>
 
-  <!-- Task picker (From task mode) -->
-  {#if mode === "task"}
-    <div class="space-y-1">
-      <Label>Task</Label>
-      <Select
-        items={taskSelectItems}
-        bind:value={taskSearchValue}
-        onValueChange={onTaskSelected}
-        onkeydown={metaEnter}
-        placeholder="Search tasks..."
-        emptyText="No tasks found"
-      />
-    </div>
-  {/if}
+  <div class="space-y-1" data-field="task">
+    <Label>Task <span class="font-mono text-[10px] px-1 rounded {badge}">T</span></Label>
+    <Select
+      items={taskSelectItems}
+      bind:value={taskSearchValue}
+      onValueChange={onTaskSelected}
+      onkeydown={metaEnter}
+      placeholder="Search tasks..."
+      emptyText="No tasks found"
+    />
+  </div>
 
   <div class="space-y-1" data-field="name">
     <Label>Name <span class="font-mono text-[10px] px-1 rounded {badge}">S</span></Label>

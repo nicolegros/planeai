@@ -1,22 +1,38 @@
 import { describe, expect, it } from "vitest";
 import appSource from "../../App.svelte?raw";
 
-describe("workspace session selection", () => {
-  it("activates an already-loaded session tab when the active session changes", () => {
+describe("TaskWorkspace session selection", () => {
+  it("keeps a task workspace loaded and focuses a newly selected agent tab", () => {
     expect(appSource).toMatch(
-      /if \(hasActive\) \{\s*splitTree\.focusTab\(activeSessionId\);\s*lastTreeSessionId = activeSessionId;/,
+      /if \(workspace\.key === lastTreeWorkspace\?\.key\) \{\s*if \(!focusedSessionChanged\) return;\s*lastFocusedWorkspaceSessionId = activeSessionId;\s*const existing = splitTree\.findTab\(activeSessionId\);/,
     );
   });
 
-  it("only treats the primary agent tab as an already-loaded session terminal", () => {
+  it("builds a flat task workspace from every session linked to the same task", () => {
     expect(appSource).toMatch(
-      /const hasActive = allLeaves\.some\(\(leaf\) =>\s*leaf\.tabs\.some\(\(t\) => t\.ptyKey === activeSessionId\)\s*\);/,
+      /return sessions\.filter\(\(session\) => session\.project_id === workspace\.projectId && session\.task_key === workspace\.taskKey\);/,
+    );
+    expect(appSource).toMatch(/function buildTabEntriesForWorkspace\(workspace: WorkspaceIdentity\)/);
+  });
+
+  it("does not rewrite split-tree state when the focused task agent is already active", () => {
+    expect(appSource).toMatch(
+      /const focusedSessionChanged = activeSessionId !== lastFocusedWorkspaceSessionId;[\s\S]*?if \(!focusedSessionChanged\) return;/,
+    );
+    expect(appSource).toMatch(
+      /if \(existing\.leaf\.activeTab !== activeSessionId\) splitTree\.focusTab\(activeSessionId\);/,
     );
   });
 
   it("does not let a terminal from the previous layout reclaim focus during selection", () => {
     expect(appSource).toMatch(
       /focused=\{isActiveInLeaf && sessionId === activeSessionId && !activePluginId/,
+    );
+  });
+
+  it("adds restored task-session tabs without replacing the workspace layout", () => {
+    expect(appSource).toMatch(
+      /const missingEntries = workspaceEntries\.filter\(\(entry\) => !existingKeys\.has\(entry\.ptyKey\)\);[\s\S]*?for \(const entry of missingEntries\) splitTree\.addSessionToLeaf\(focusedLeaf\.id, entry\);[\s\S]*?splitTree\.setLeafActiveTab\(focusedLeaf\.id, activeTab\);/,
     );
   });
 
@@ -101,5 +117,11 @@ it("awaits shell-tab closure before removing the split-tree entry and contains f
   );
   expect(appSource).toMatch(
     /async function closeShellTabInTree[\s\S]*?try \{[\s\S]*?await orchestrator\.closeShellTab[\s\S]*?\} catch \(error\) \{[\s\S]*?showSnackbar\(/,
+  );
+});
+
+it("archives an active agent session when Cmd+W closes its agent tab", () => {
+  expect(appSource).toMatch(
+    /if \(activeEntry\.type === "agent"\) \{[\s\S]*?await orchestrator\.archiveSession\(session\);/,
   );
 });

@@ -36,6 +36,32 @@ fn shared_migration_is_idempotent() {
 }
 
 #[test]
+fn task_workspace_layouts_are_migrated_with_project_scope() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    migrate_project_session_schema(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO projects (id, name, path, status, prefix) VALUES ('p1', 'project', '/tmp/project', 'active', 'PROJ')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO task_workspaces (project_id, task_key, layout_json) VALUES ('p1', 'PROJ-1', '{\"tree\":{}}')",
+        [],
+    )
+    .unwrap();
+
+    let saved: String = conn
+        .query_row(
+            "SELECT layout_json FROM task_workspaces WHERE project_id = 'p1' AND task_key = 'PROJ-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(saved, "{\"tree\":{}}");
+}
+
+#[test]
 fn production_and_core_path_produce_compatible_schema() {
     // Simulate production db.rs migration path
     let prod_conn = rusqlite::Connection::open_in_memory().unwrap();

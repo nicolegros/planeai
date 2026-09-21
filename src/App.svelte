@@ -208,69 +208,81 @@
     }
   });
 
-  // ─── Per-session split layout (DB-backed) ───────────────────────────────────
-  let lastTreeSessionId = $state<string | null>(null);
+  // ─── TaskWorkspace split layout (DB-backed) ─────────────────────────────────
+  type WorkspaceIdentity = { key: string; projectId: string; taskKey: string | null };
+  let lastTreeWorkspace = $state<WorkspaceIdentity | null>(null);
+  let lastFocusedWorkspaceSessionId: string | null = null;
   let loadGeneration = 0; // not reactive - just a counter for staleness
   let loadingLayout = $state(false); // suppress auto-save and stale-tab cleanup during load
 
-  // When active session changes, save current tree and load/create for new session
+  function workspaceForSession(sessionId: string): WorkspaceIdentity | null {
+    const session = sessions.find((candidate) => candidate.id === sessionId);
+    if (!session) return null;
+    return session.task_key
+      ? { key: `task:${session.project_id}:${session.task_key}`, projectId: session.project_id, taskKey: session.task_key }
+      : { key: `session:${session.id}`, projectId: session.project_id, taskKey: null };
+  }
+
+  function workspaceSessions(workspace: WorkspaceIdentity): Session[] {
+    if (!workspace.taskKey) {
+      const sessionId = workspace.key.slice("session:".length);
+      return sessions.filter((session) => session.id === sessionId);
+    }
+    return sessions.filter((session) => session.project_id === workspace.projectId && session.task_key === workspace.taskKey);
+  }
+
+  // Selecting another agent in the same task keeps the shared workspace loaded and
+  // simply makes that agent terminal the focused context.
   $effect(() => {
     if (!activeSessionId || !splitTreeInitialized) return;
-    if (activeSessionId === lastTreeSessionId) return;
-
-    const tree = splitTree.getTree();
-    if (!tree) {
-      loadLayoutForSession(activeSessionId);
+    const workspace = workspaceForSession(activeSessionId);
+    if (!workspace) return;
+    const focusedSessionChanged = activeSessionId !== lastFocusedWorkspaceSessionId;
+    if (workspace.key === lastTreeWorkspace?.key) {
+      if (!focusedSessionChanged) return;
+      lastFocusedWorkspaceSessionId = activeSessionId;
+      const existing = splitTree.findTab(activeSessionId);
+      if (existing) {
+        if (existing.leaf.activeTab !== activeSessionId) splitTree.focusTab(activeSessionId);
+        return;
+      }
+      const tree = splitTree.getTree();
+      const entries = buildTabEntriesForWorkspace(workspace);
+      if (tree?.type === "leaf") splitTree.replaceRootLeafTabs(entries, activeSessionId);
       return;
     }
 
-    // Check if the active session is already in the tree
-    const allLeaves = splitTree.getAllLeaves();
-    const hasActive = allLeaves.some((leaf) =>
-      leaf.tabs.some((t) => t.ptyKey === activeSessionId)
-    );
-    if (hasActive) {
-      splitTree.focusTab(activeSessionId);
-      lastTreeSessionId = activeSessionId;
-      return;
-    }
-
-    // Session changed — save current tree, then load new
-    if (lastTreeSessionId) {
-      saveSplitTreeToDb();
-    }
-
-    loadLayoutForSession(activeSessionId);
+    if (lastTreeWorkspace) saveSplitTreeToDb();
+    loadLayoutForWorkspace(workspace, activeSessionId);
   });
 
-  async function loadLayoutForSession(sessionId: string): Promise<void> {
+  async function loadLayoutForWorkspace(workspace: WorkspaceIdentity, focusedSessionId: string): Promise<void> {
     loadingLayout = true;
     const gen = ++loadGeneration;
     try {
-      const layoutJson = await sessionsApi.getLayout(sessionId);
-      // Staleness check - if session changed while we were loading, discard
+      const layoutJson = workspace.taskKey
+        ? await sessionsApi.getTaskWorkspaceLayout(workspace.projectId, workspace.taskKey)
+        : await sessionsApi.getLayout(focusedSessionId);
       if (gen !== loadGeneration) { loadingLayout = false; return; }
       if (layoutJson) {
         const data = JSON.parse(layoutJson);
         if (isValidSerializedTree(data)) {
           splitTree.deserialize(data);
-          lastTreeSessionId = sessionId;
+          lastTreeWorkspace = workspace;
+          lastFocusedWorkspaceSessionId = focusedSessionId;
+          splitTree.focusTab(focusedSessionId);
           loadingLayout = false;
           return;
         }
       }
     } catch (e) {
-      console.warn("Failed to load layout for session", sessionId, e);
+      console.warn("Failed to load workspace layout", workspace.key, e);
     }
-    // Staleness check again
     if (gen !== loadGeneration) { loadingLayout = false; return; }
-    // No saved layout or invalid - initialize fresh
-    const entries = buildTabEntriesForSession(sessionId);
-    if (!splitTree.replaceRootLeafTabs(entries)) {
-      // Tree is a split (multi-pane) or null — must create fresh
-      splitTree.initTree(entries);
-    }
-    lastTreeSessionId = sessionId;
+    const entries = buildTabEntriesForWorkspace(workspace);
+    if (!splitTree.replaceRootLeafTabs(entries, focusedSessionId)) splitTree.initTree(entries, focusedSessionId);
+    lastTreeWorkspace = workspace;
+    lastFocusedWorkspaceSessionId = focusedSessionId;
     loadingLayout = false;
   }
 
@@ -344,49 +356,53 @@
     }
   }
 
-  /** Build TabEntry[] for a session from its current tabs in session-tabs store */
-  function buildTabEntriesForSession(sessionId: string): import("./lib/split-tree.svelte").TabEntry[] {
-    const session = sessions.find((s) => s.id === sessionId);
-    const sessionTabs = getTabs(sessionId);
-    if (sessionTabs.length === 0) {
-      return [{ ptyKey: sessionId, label: session?.name || session?.branch || "Agent", icon: session?.provider ? "bot" : "terminal", type: "agent" }];
-    }
-    return sessionTabs.map((t) => ({
-      ptyKey: t.index === 0 ? sessionId : `${sessionId}:${t.index}`,
-      label: t.index === 0 ? (session?.name || session?.branch || "Agent") : (t.customTitle ? t.label : "Shell"),
-      icon: t.index === 0 ? (session?.provider ? "bot" : "terminal") : "terminal",
-      type: (t.index === 0 ? "agent" : "shell") as "agent" | "shell",
-      customTitle: t.customTitle,
-    }));
+  /** Build a flat resource list for the current TaskWorkspace. */
+  function buildTabEntriesForWorkspace(workspace: WorkspaceIdentity): import("./lib/split-tree.svelte").TabEntry[] {
+    return workspaceSessions(workspace).flatMap((session) => {
+      const sessionTabs = getTabs(session.id);
+      if (sessionTabs.length === 0) {
+        return [{
+          ptyKey: session.id,
+          label: session.name || session.branch || "Agent",
+          icon: session.provider ? "bot" : "terminal",
+          type: "agent" as const,
+          customTitle: false,
+        }];
+      }
+      return sessionTabs.map((tab) => ({
+        ptyKey: tab.index === 0 ? session.id : `${session.id}:${tab.index}`,
+        label: tab.index === 0 ? (session.name || session.branch || "Agent") : `${session.name || session.branch || "Agent"} · ${tab.customTitle ? tab.label : "Shell"}`,
+        icon: tab.index === 0 ? (session.provider ? "bot" : "terminal") : "terminal",
+        type: (tab.index === 0 ? "agent" : "shell") as "agent" | "shell",
+        customTitle: tab.customTitle,
+      }));
+    });
   }
 
-  // Stale tabs are cleaned up reactively by the $effect below
-
-  // Remove stale tabs when sessions are deleted/archived
+  // Reconcile restored/new task sessions and prune archived/deleted ones without
+  // replacing the current split layout or its active resource tab.
   $effect(() => {
-    if (loadingLayout) return;
-    const sessionIds = new Set(sessions.map((s) => s.id));
-    // Collect stale keys: tabs whose session was deleted, OR tabs that don't
-    // belong to the current layout's session (cross-contamination guard)
-    const allLeaves = splitTree.getAllLeaves();
+    if (loadingLayout || !lastTreeWorkspace) return;
+    const workspaceEntries = buildTabEntriesForWorkspace(lastTreeWorkspace);
+    const existingKeys = new Set(
+      splitTree.getAllLeaves().flatMap((leaf) => leaf.tabs.map((tab) => tab.ptyKey)),
+    );
+    const missingEntries = workspaceEntries.filter((entry) => !existingKeys.has(entry.ptyKey));
+    const focusedLeaf = splitTree.getFocusedLeaf() ?? splitTree.getAllLeaves()[0];
+    if (focusedLeaf && missingEntries.length > 0) {
+      const activeTab = focusedLeaf.activeTab;
+      for (const entry of missingEntries) splitTree.addSessionToLeaf(focusedLeaf.id, entry);
+      if (activeTab) splitTree.setLeafActiveTab(focusedLeaf.id, activeTab);
+    }
+
+    const validSessionIds = new Set(workspaceSessions(lastTreeWorkspace).map((session) => session.id));
     const stalePtyKeys: string[] = [];
-    for (const leaf of allLeaves) {
+    for (const leaf of splitTree.getAllLeaves()) {
       for (const tab of leaf.tabs) {
-        const sid = ptyKeyToSessionId(tab.ptyKey);
-        if (!sid) continue;
-        // Session deleted
-        if (!sessionIds.has(sid)) {
-          stalePtyKeys.push(tab.ptyKey);
-        }
-        // Session exists but belongs to a different session (cross-project contamination)
-        else if (lastTreeSessionId && sid !== lastTreeSessionId && tab.type === "agent") {
-          stalePtyKeys.push(tab.ptyKey);
-        }
+        if (!validSessionIds.has(ptyKeyToSessionId(tab.ptyKey))) stalePtyKeys.push(tab.ptyKey);
       }
     }
-    for (const key of stalePtyKeys) {
-      splitTree.removeSessionFromLeaf(key);
-    }
+    for (const key of stalePtyKeys) splitTree.removeSessionFromLeaf(key);
   });
 
   // Drag-and-drop state
@@ -523,12 +539,16 @@
     const activeEntry = splitTree.getActiveTabEntry(leaf);
     if (!activeEntry) return;
 
-    // Agent tabs can't be closed directly
+    // Agent tabs represent durable sessions. Cmd+W archives the active agent
+    // rather than destroying its worktree, so task workspaces may be empty.
     if (activeEntry.type === "agent") {
-      if (splitTree.getAllLeaves().length > 1) {
-        splitTree.closeSplit(leaf.id);
-        syncFocusedLeafToOrchestrator();
-        tick().then(() => refocusTerminal());
+      const sessionId = ptyKeyToSessionId(activeEntry.ptyKey);
+      const session = sessions.find((candidate) => candidate.id === sessionId);
+      if (!session) return;
+      try {
+        await orchestrator.archiveSession(session);
+      } catch (error) {
+        showSnackbar(`Failed to close session: ${error instanceof Error ? error.message : String(error)}`, "error");
       }
       return;
     }
@@ -692,18 +712,13 @@
     if (result === "invalid") showSnackbar("Editor configuration has an unknown mode", "error");
   }
 
-  // Sync the focused leaf's active session to the orchestrator
+  // Sync terminal selections—not editor/diff tabs—to the focused agent session.
   function syncFocusedLeafToOrchestrator(): void {
     const leaf = splitTree.getFocusedLeaf();
-    if (leaf && leaf.tabs.length > 0) {
-      const activeEntry = splitTree.getActiveTabEntry(leaf);
-      if (activeEntry) {
-        const sessionId = ptyKeyToSessionId(activeEntry.ptyKey);
-        if (sessionId !== activeSessionId) {
-          selectWorkspaceSession(sessionId);
-        }
-      }
-    }
+    const activeEntry = leaf ? splitTree.getActiveTabEntry(leaf) : null;
+    if (!activeEntry || (activeEntry.type !== "agent" && activeEntry.type !== "shell")) return;
+    const sessionId = ptyKeyToSessionId(activeEntry.ptyKey);
+    if (sessionId !== activeSessionId) selectWorkspaceSession(sessionId);
   }
 
   // ─── Split tree persistence (DB) ────────────────────────────────────────────
@@ -711,17 +726,19 @@
 
   function saveSplitTreeToDb(): void {
     const data = splitTree.serialize();
-    if (!data || !lastTreeSessionId) return;
-    const sessionId = lastTreeSessionId;
-    sessionsApi.saveLayout(sessionId, JSON.stringify(data)).catch((e) => {
-      console.warn("Failed to save split layout for session", sessionId, e);
-    });
+    const workspace = lastTreeWorkspace;
+    if (!data || !workspace) return;
+    const layoutJson = JSON.stringify(data);
+    const save = workspace.taskKey
+      ? sessionsApi.saveTaskWorkspaceLayout(workspace.projectId, workspace.taskKey, layoutJson)
+      : sessionsApi.saveLayout(workspace.key.slice("session:".length), layoutJson);
+    save.catch((e) => console.warn("Failed to save workspace layout", workspace.key, e));
   }
 
   // Auto-save split tree on changes (debounced 500ms)
   $effect(() => {
     const _tree = splitTree.getTree();
-    if (splitTreeInitialized && _tree && lastTreeSessionId && !loadingLayout) {
+    if (splitTreeInitialized && _tree && lastTreeWorkspace && !loadingLayout) {
       if (splitSaveTimeout) clearTimeout(splitSaveTimeout);
       splitSaveTimeout = setTimeout(saveSplitTreeToDb, 500);
     }
@@ -1110,7 +1127,8 @@
         e.preventDefault();
         e.stopImmediatePropagation();
         if (e.key === 'Escape') { showNewItemModal = false; }
-        else if (e.key === 's' || e.key === 't') { showNewItemModal = false; showTaskForm = true; }
+        else if (e.key === 's') { showNewItemModal = false; taskPrefill = null; showSessionForm = true; }
+        else if (e.key === 't') { showNewItemModal = false; showTaskForm = true; }
         else if (e.key === 'l') { showNewItemModal = false; showLoopForm = true; }
       } else if (sessionToDelete) {
         e.preventDefault();
@@ -1171,7 +1189,19 @@
     activeTabId={titlebarActiveTabId}
     runningCount={sessions.filter(s => s.status === 'active').length}
     activeProvider={activeSession?.provider ?? null}
-    onSelectTab={(i, tabId) => { leavePluginWorkspace(); loopStore.setActiveLoopId(null); const tree = splitTree.getTree(); if (tree?.type === "leaf") { const entry = tree.tabs.find((candidate) => candidate.ptyKey === tabId) ?? tree.tabs.find((candidate, visualIndex) => tabIndexForEntry(candidate, visualIndex) === i); if (entry) splitTree.setLeafActiveTab(tree.id, entry.ptyKey); } else orchestrator.selectUnifiedTab(i); }}
+    onSelectTab={(i, tabId) => {
+      leavePluginWorkspace();
+      loopStore.setActiveLoopId(null);
+      const tree = splitTree.getTree();
+      if (tree?.type === "leaf") {
+        const entry = tree.tabs.find((candidate) => candidate.ptyKey === tabId)
+          ?? tree.tabs.find((candidate, visualIndex) => tabIndexForEntry(candidate, visualIndex) === i);
+        if (entry) {
+          splitTree.setLeafActiveTab(tree.id, entry.ptyKey);
+          if (entry.type === "agent" || entry.type === "shell") selectWorkspaceSession(ptyKeyToSessionId(entry.ptyKey));
+        }
+      } else orchestrator.selectUnifiedTab(i);
+    }}
     onCloseTab={(i) => {
       if (!activeSessionId) return;
       if (i === -1) orchestrator.closeDiffTab(activeSessionId);
@@ -1204,7 +1234,7 @@
         onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "", baseBranch: task.base_branch, projectId: proj?.id ?? null }; showSessionForm = true; }}
         onAddProject={openAddProject}
         onOpenPreferences={openPreferences}
-        onCreateSession={() => { showTaskForm = true; }}
+        onCreateSession={() => { taskPrefill = null; showSessionForm = true; }}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
         onSelectLoop={selectWorkspaceLoop}
         onStartLoop={(id) => { loopsApi.start(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
@@ -1238,6 +1268,11 @@
         {sessions}
         {taskPrefill}
         currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
+        onCreateTask={() => {
+          showSessionForm = false;
+          taskPrefill = null;
+          showTaskForm = true;
+        }}
         onCreated={(session) => { leavePluginWorkspace(); showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
         onCancel={() => { showSessionForm = false; taskPrefill = null; tick().then(() => refocusTerminal()); }}
       />
@@ -1321,9 +1356,8 @@
         aria-label="Split pane"
         onclick={(event) => {
           splitTree.setFocusedLeaf(leaf.id);
-          if (activeEntry) {
-            const sid = ptyKeyToSessionId(activeEntry.ptyKey);
-            selectWorkspaceSession(sid);
+          if (activeEntry && (activeEntry.type === "agent" || activeEntry.type === "shell")) {
+            selectWorkspaceSession(ptyKeyToSessionId(activeEntry.ptyKey));
           }
           if (!(event.target instanceof Element && event.target.closest("[data-editor-tab]"))) {
             focusTerminal();
@@ -1340,7 +1374,14 @@
             showAddButton={true}
             showCloseButton={hasMultiplePanes}
             draggable={hasMultiplePanes}
-            onSelectTab={(i, tabId) => { splitTree.setFocusedLeaf(leaf.id); const entry = leaf.tabs.find((tab) => tab.ptyKey === tabId) ?? leaf.tabs.find((tab, visualIndex) => tabIndexForEntry(tab, visualIndex) === i); if (entry) splitTree.setLeafActiveTab(leaf.id, entry.ptyKey); }}
+            onSelectTab={(i, tabId) => {
+              splitTree.setFocusedLeaf(leaf.id);
+              const entry = leaf.tabs.find((tab) => tab.ptyKey === tabId)
+                ?? leaf.tabs.find((tab, visualIndex) => tabIndexForEntry(tab, visualIndex) === i);
+              if (!entry) return;
+              splitTree.setLeafActiveTab(leaf.id, entry.ptyKey);
+              if (entry.type === "agent" || entry.type === "shell") selectWorkspaceSession(ptyKeyToSessionId(entry.ptyKey));
+            }}
             onAddTab={() => { splitTree.setFocusedLeaf(leaf.id); splitNewTab(); }}
             onClose={() => splitTree.closeSplit(leaf.id)}
             onTabDragStart={(e, tabIndex, tabId) => handleTabDragStart(e, tabId ?? leaf.tabs.find((tab, visualIndex) => tabIndexForEntry(tab, visualIndex) === tabIndex)?.ptyKey ?? "", leaf.id)}
@@ -1594,17 +1635,22 @@
     {/if}
 
     {#if showNewItemModal}
-      <SharedDialog open={true} onOpenChange={(v) => { if (!v) showNewItemModal = false; }} title="New…" class="w-[268px] rounded-[13px] border-border-s shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] overflow-hidden">
+      <SharedDialog open={true} onOpenChange={(v) => { if (!v) showNewItemModal = false; }} title="New…" preventOpenAutoFocus={true} class="w-[268px] rounded-[13px] border-border-s shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] overflow-hidden">
         <div>
           <div class="flex items-center px-[15px] pt-[13px] pb-[11px]">
             <span class="text-[13px] font-semibold text-t1">New…</span>
             <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
           </div>
           <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
-            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] bg-accent-bg" onclick={() => { showNewItemModal = false; showTaskForm = true; }}>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] bg-accent-bg" onclick={() => { showNewItemModal = false; taskPrefill = null; showSessionForm = true; }}>
+              <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">›_</span>
+              <span class="flex-1 text-[13.5px] text-t1">Session</span>
+              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">s</span>
+            </button>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showNewItemModal = false; showTaskForm = true; }}>
               <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">☰</span>
               <span class="flex-1 text-[13.5px] text-t1">Task</span>
-              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">t</span>
+              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">t</span>
             </button>
             <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showNewItemModal = false; showLoopForm = true; }}>
               <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">⟳</span>
