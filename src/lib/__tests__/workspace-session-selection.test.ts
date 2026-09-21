@@ -42,12 +42,15 @@ describe("TaskWorkspace session selection", () => {
     );
   });
 
-  it("derives running titlebar contributions independently from session-panel commands", () => {
+  it("routes titlebar targets by their destination placement", () => {
     expect(appSource).toMatch(
       /const titlebarContributions = \$derived\([\s\S]*?contribution\.placement === "titlebar"/,
     );
     expect(appSource).toMatch(
-      /<Titlebar[\s\S]*?\{titlebarContributions\}[\s\S]*?titlebarSession=\{activePluginSessionContext\}[\s\S]*?onOpenTitlebarContribution=\{openPluginContributionModal\}/,
+      /function openTitlebarPluginContribution\(pluginId: string, contributionId: string\): void \{[\s\S]*?contribution\?\.placement === "session\.panel"[\s\S]*?openPluginContributionModal\(pluginId, contributionId\);[\s\S]*?openPluginContribution\(pluginId, contributionId\);/,
+    );
+    expect(appSource).toMatch(
+      /<Titlebar[\s\S]*?\{titlebarContributions\}[\s\S]*?titlebarSession=\{activePluginSessionContext\}[\s\S]*?onOpenTitlebarContribution=\{openTitlebarPluginContribution\}/,
     );
   });
 

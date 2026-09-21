@@ -872,6 +872,17 @@
     modalContributionId = contributionId;
   }
 
+  function openTitlebarPluginContribution(pluginId: string, contributionId: string): void {
+    const contribution = pluginInventory
+      .find((candidate) => candidate.id === pluginId && candidate.state === "running")
+      ?.ui_contributions.find((candidate) => candidate.id === contributionId);
+    if (contribution?.placement === "session.panel") {
+      openPluginContributionModal(pluginId, contributionId);
+      return;
+    }
+    openPluginContribution(pluginId, contributionId);
+  }
+
   function focusPluginInteraction(): boolean {
     const interaction = document.querySelector<HTMLElement>("[data-plugin-interaction-host] [data-plugin-ui-contribution]");
     if (!interaction) return false;
@@ -1343,7 +1354,7 @@
     onAddTab={() => orchestrator.handleNewTab()}
     {titlebarContributions}
     titlebarSession={activePluginSessionContext}
-    onOpenTitlebarContribution={openPluginContributionModal}
+    onOpenTitlebarContribution={openTitlebarPluginContribution}
     onOpenCommand={() => { commandMenuFileMode = false; commandMenuOpen = true; }}
     {symphonyStatus}
   />
