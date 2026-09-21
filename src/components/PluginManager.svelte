@@ -2,18 +2,21 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { plugins } from "../lib/api";
-  import type { GithubMigrationStatus, JiraMigrationStatus, PluginInventory } from "../lib/types";
+  import type { GithubMigrationStatus, JiraMigrationStatus, PluginDiscoveryCandidate, PluginInventory } from "../lib/types";
   import { Button, Dialog } from "./ui";
 
   let { onInventoryChange = (_inventory: PluginInventory[]) => {} }: {
     onInventoryChange?: (inventory: PluginInventory[]) => void;
   } = $props();
   let inventory = $state<PluginInventory[]>([]);
+  let discoveryCandidates = $state<PluginDiscoveryCandidate[] | null>(null);
   let jiraMigration = $state<JiraMigrationStatus | null>(null);
   let githubMigration = $state<GithubMigrationStatus | null>(null);
   let busyId = $state<string | null>(null);
   let installing = $state(false);
+  let discovering = $state(false);
   let loadError = $state<string | null>(null);
   let pendingRemoval = $state<PluginInventory | null>(null);
 
@@ -32,6 +35,23 @@
     } catch (error) {
       loadError = String(error);
     }
+  }
+
+  async function discover() {
+    discovering = true;
+    try {
+      discoveryCandidates = await plugins.discover();
+      loadError = null;
+    } catch (error) {
+      loadError = String(error);
+    } finally {
+      discovering = false;
+    }
+  }
+
+  function formattedUpdatedDate(value: string): string {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
   }
 
   function migrationBlocksEnable(pluginId: string): boolean {
@@ -129,10 +149,34 @@
       <p class="mt-1 text-xs text-t3">Trusted local packages run as supervised subprocesses from PlaneAI-owned imported copies.</p>
     </div>
     <div class="flex gap-2">
+      <Button type="button" disabled={discovering} onclick={() => void discover()}>{discovering ? "Discovering…" : discoveryCandidates ? "Refresh discovery" : "Discover plugins"}</Button>
       <Button type="button" disabled={installing} onclick={() => void installLocal()}>{installing ? "Importing…" : "Install local package"}</Button>
       <Button type="button" onclick={() => void refresh()}>Refresh</Button>
     </div>
   </div>
+
+  {#if discoveryCandidates !== null}
+    <section class="rounded-lg border border-border p-4 space-y-3" aria-live="polite">
+      <div>
+        <h3 class="text-sm font-medium text-t1">Community plugin candidates</h3>
+        <p class="mt-1 text-xs text-t3">Public, active, non-fork repositories tagged <span class="font-mono">planeai</span>, ordered by stars. Candidates are unverified: review a repository before importing a local package.</p>
+      </div>
+      {#each discoveryCandidates as candidate (candidate.url)}
+        <article class="rounded border border-border p-3 space-y-2">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <h4 class="font-mono text-xs text-t1">{candidate.full_name}</h4>
+              <p class="mt-1 text-xs text-t2">{candidate.description ?? "No description provided."}</p>
+            </div>
+            <button type="button" class="shrink-0 rounded bg-panel-hi px-3 py-1.5 text-xs font-medium text-t2 hover:bg-border" onclick={() => void openUrl(candidate.url)}>Open repository</button>
+          </div>
+          <p class="text-[11px] text-t3">{candidate.language ?? "Unknown language"} · {candidate.stargazers_count.toLocaleString()} {candidate.stargazers_count === 1 ? "star" : "stars"} · Updated {formattedUpdatedDate(candidate.updated_at)}</p>
+        </article>
+      {:else}
+        <p class="text-sm text-t3">No public repositories matched the <span class="font-mono">planeai</span> topic.</p>
+      {/each}
+    </section>
+  {/if}
 
   {#if loadError}
     <p class="rounded border border-status-exited/30 bg-status-exited/10 p-3 text-xs text-status-exited">{loadError}</p>
