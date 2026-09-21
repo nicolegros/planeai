@@ -1285,7 +1285,7 @@
     sessionName={activeSessionName}
     {sidebarVisible}
     sessionId={activeSessionId}
-    tabs={hasMultiplePanes ? [] : titlebarTabs}
+    tabs={isEmptyTaskWorkspace || hasMultiplePanes ? [] : titlebarTabs}
     activeTabIndex={titlebarActiveTabIdx}
     activeTabId={titlebarActiveTabId}
     runningCount={sessions.filter(s => s.status === 'active').length}
