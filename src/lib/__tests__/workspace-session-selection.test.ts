@@ -120,8 +120,8 @@ it("awaits shell-tab closure before removing the split-tree entry and contains f
   );
 });
 
-it("archives an active agent session when Cmd+W closes its agent tab", () => {
+it("parks an active agent session when Cmd+W closes its agent tab", () => {
   expect(appSource).toMatch(
-    /if \(activeEntry\.type === "agent"\) \{[\s\S]*?await orchestrator\.archiveSession\(session\);/,
+    /if \(activeEntry\.type === "agent"\) \{[\s\S]*?await orchestrator\.parkSession\(session\);/,
   );
 });

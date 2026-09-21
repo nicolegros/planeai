@@ -7,7 +7,7 @@
   import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
-  import { shouldHideProject, isLoopId, parseLoopId } from "../lib/sidebar-session-order";
+  import { shouldHideProject, isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
   import { projectContextMenuItems } from "../lib/project-context-menu";
   import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare, Play, Square } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
@@ -36,6 +36,7 @@
     onDeleteProject: (project: Project) => void;
     onEditProject: (project: Project) => void;
     onPickTask: (task: TaskItem, repoPath: string) => void;
+    onSelectTask?: (task: TaskItem, repoPath: string) => void;
     onCreateSession?: () => void;
     onSessionsChanged?: () => void;
     onSelectLoop?: (loopId: string) => void;
@@ -45,6 +46,7 @@
     onDeleteLoop?: (loopId: string) => void;
     onDeleteLoopSession?: (session: Session, loopId: string) => void;
     onToggleDiff?: () => void;
+    selectedTaskWorkspace?: { projectId: string; taskKey: string } | null;
     selectedLoopId?: string | null;
     pluginContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
     sessionIndicatorContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
@@ -54,7 +56,7 @@
     onPluginClose?: () => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], sessionIndicatorContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedTaskWorkspace = null, selectedLoopId = null, pluginContributions = [], sessionIndicatorContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
   function pluginContributionKey(item: { plugin: PluginInventory; contribution: PluginUiContribution }): string {
@@ -221,6 +223,9 @@
   );
 
   const previewId = $derived(getPreviewId());
+  const previewTaskWorkspace = $derived(
+    previewId && isTaskWorkspaceId(previewId) ? parseTaskWorkspaceId(previewId) : null,
+  );
   /** If previewing a loop dashboard, this is the loop ID; otherwise null */
   const previewLoopId = $derived(previewId && isLoopId(previewId) ? parseLoopId(previewId) : null);
   /** If previewing a session (not a loop), this is the session ID; otherwise null */
@@ -250,9 +255,8 @@
   }
 
   function handleTaskClick(task: TaskItem, projectPath: string) {
-    const linked = sessionForTask(task.key);
-    if (linked) { onSelectSession(linked.id); focusTerminal(); }
-    else onPickTask(task, projectPath);
+    onSelectTask(task, projectPath);
+    focusTerminal();
   }
 
   function handleOrphanClick(session: Session) {
@@ -546,7 +550,8 @@
       else if (action.type === "review") { onSelectSession(session.id); onToggleDiff?.(); }
     } else if (current.type === "task") {
       const task = current.task;
-      if (action.type === "select" || action.type === "start_session") handleTaskClick(task, current.projectPath);
+      if (action.type === "select") handleTaskClick(task, current.projectPath);
+      else if (action.type === "start_session") onPickTask(task, current.projectPath);
       else if (action.type === "edit") taskPanelRef?.openEdit(task);
       else if (action.type === "status") moveTask(task.key, action.status);
       else if (action.type === "review") { const linked = sessionForTask(task.key); if (linked) { onSelectSession(linked.id); onToggleDiff?.(); } }
@@ -824,11 +829,11 @@
                   <ul class="space-y-0.5">
                     {#each items as task (task.key)}
                       {@const linked = sessionForTask(task.key)}
-                      {@const isActive = linked?.id === activeSessionId && !selectedLoopId}
+                      {@const isActive = (selectedTaskWorkspace?.projectId === project.id && selectedTaskWorkspace.taskKey === task.key) || (linked?.id === activeSessionId && !selectedLoopId)}
                       {@const taskNavIdx = flatNavIndex.get(`task:${task.key}`) ?? -1}
                       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
                       {@const isParent = isParentTask(task, projectTasks)}
-                      {@const isPreviewing = linked && linked.id === previewSessionId}
+                      {@const isPreviewing = (linked?.id === previewSessionId) || (previewTaskWorkspace?.projectId === project.id && previewTaskWorkspace.taskKey === task.key)}
                       <li class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
                         <div class="session-row relative flex items-center gap-1.5">
                           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>

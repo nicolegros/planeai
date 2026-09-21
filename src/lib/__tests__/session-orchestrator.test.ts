@@ -35,6 +35,7 @@ vi.mock("../api", () => ({
     list: vi.fn(() => Promise.resolve([])),
     destroy: vi.fn(() => Promise.resolve()),
     archive: vi.fn(() => Promise.resolve()),
+    park: vi.fn(() => Promise.resolve()),
     restart: vi.fn(() => Promise.resolve()),
     markExited: vi.fn(),
     acknowledge: vi.fn(() => Promise.resolve()),
@@ -62,6 +63,7 @@ import {
   createSession,
   deleteSession,
   archiveSession,
+  parkSession,
   removeProjectSessions,
   restartSession,
   getUnifiedTabs,
@@ -225,6 +227,34 @@ describe("session-orchestrator", () => {
   });
 
   describe("restartSession", () => {
+
+  describe("parkSession", () => {
+    it("uses the non-completing endpoint and keeps a same-task agent selected", async () => {
+      const parked = makeSession({ id: "s1", task_key: "PLA-315" });
+      const sibling = makeSession({ id: "s2", task_key: "PLA-315" });
+      api.list.mockResolvedValue([parked, sibling]);
+      await loadSessions();
+      selectSession(parked.id);
+
+      await parkSession(parked);
+
+      expect(api.park).toHaveBeenCalledWith(parked.id);
+      expect(api.archive).not.toHaveBeenCalled();
+      expect(getSessions().map((session) => session.id)).toEqual([sibling.id]);
+      expect(getActiveSessionId()).toBe(sibling.id);
+    });
+
+    it("allows the final task-linked agent to park without selecting another session", async () => {
+      const parked = makeSession({ id: "s1", task_key: "PLA-315" });
+      api.list.mockResolvedValue([parked]);
+      await loadSessions();
+
+      await parkSession(parked);
+
+      expect(getSessions()).toEqual([]);
+      expect(getActiveSessionId()).toBeNull();
+    });
+  });
     it("replaces session with updated version", async () => {
       api.list.mockResolvedValue([makeSession({ id: "s1", status: "exited" })]);
       await loadSessions();

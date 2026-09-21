@@ -98,7 +98,7 @@
     taskSearchValue = task.key;
     const agentOrdinal = sessions.filter((session) => session.task_key === task.key).length + 1;
     const templates = getTaskManagerTemplates();
-    sessionName = `Agent ${agentOrdinal}`;
+    sessionName = task.title;
     taskPrompt = templates?.prompt ? renderTemplate(templates.prompt, task) : (task.description ? `Implement task ${task.key}: ${task.title}\n\n${task.description}` : `Implement task ${task.key}: ${task.title}`);
     const baseTaskBranch = templates?.branch ? renderTemplate(templates.branch, task) : `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-/]/g, "")}`;
     const taskBranch = agentOrdinal === 1 ? baseTaskBranch : `${baseTaskBranch}--${agentOrdinal}`;

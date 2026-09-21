@@ -361,6 +361,7 @@ fn main() {
             get_task_workspace_layout,
             restart_session,
             archive_session,
+            park_session,
             destroy_session,
             get_task_details,
             list_task_items,

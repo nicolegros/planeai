@@ -4,7 +4,7 @@
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { listen } from "@tauri-apps/api/event";
   import { sessions as sessionsApi, pty, notify, sessionLogs, editor as editorApi, updater } from "./lib/api";
-  import type { Session, Project } from "./lib/types";
+  import type { Session, Project, TaskItem } from "./lib/types";
   import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
@@ -12,7 +12,7 @@
   import { findPluginShortcut } from "./lib/plugin-shortcuts";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
-  import { computeSidebarSessionOrder, isLoopId, parseLoopId } from "./lib/sidebar-session-order";
+  import { computeSidebarSessionOrder, isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { isTerminal, isActive as isLoopActive } from "./lib/loop-status";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { openFileWithConfiguredEditor } from "./lib/file-editor";
@@ -38,6 +38,7 @@
   import PostMergePrompt from "./components/PostMergePrompt.svelte";
   import LoopForm from "./components/LoopForm.svelte";
   import LoopDashboard from "./components/LoopDashboard.svelte";
+  import EmptyTaskWorkspace from "./components/EmptyTaskWorkspace.svelte";
   import PluginContributionHost from "./components/PluginContributionHost.svelte";
   import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
@@ -45,7 +46,7 @@
   import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { getTabs, getActiveTabIndex, addTab, removeTab } from "./lib/session-tabs.svelte";
   import { consumePendingTerminalEditorCommand, getPendingTerminalEditorCommand, queueTerminalEditor, rollbackPendingTerminalEditor } from "./lib/terminal-editor";
-  import { isMounted as poolIsMounted, touchMru } from "./lib/mru.svelte";
+  import { getMruList, isMounted as poolIsMounted } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
   import { initUpdateListener, focusUpdateToast, getUpdateState, setLaunchUpdateAvailable } from "./lib/updater.svelte";
@@ -86,6 +87,11 @@
   let loopToDelete = $state<import("./lib/types").LoopRunSummary | null>(null);
   let renamingSessionId = $state<string | null>(null);
   let taskPrefill = $state<{ key: string; title: string; description: string; branch: string; name: string; prompt: string; baseBranch?: string; projectId?: string | null } | null>(null);
+  let selectedTaskWorkspace = $state<{ task: TaskItem; project: Project } | null>(null);
+  let taskWorkspaceToEdit = $state<{ task: TaskItem; project: Project } | null>(null);
+  let archivedTaskSessions = $state<Session[]>([]);
+  // Task and loop identities are UI-only; persisted MRU accepts real session IDs only.
+  let workspaceMru = $state<string[]>([]);
 
   let editorBindRefs = $state<Record<string, EditorTab>>({});
   $effect(() => { for (const [id, ref] of Object.entries(editorBindRefs)) { if (ref) orchestrator.registerEditorRef(id, ref); } });
@@ -103,6 +109,19 @@
   const symphonyStatus = $derived(orchestrator.getSymphonyStatus());
   const zone = $derived(getActiveZone());
   const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
+  const activeTaskWorkspace = $derived.by(() => {
+    if (selectedTaskWorkspace) return selectedTaskWorkspace;
+    if (!activeSession?.task_key) return null;
+    const project = projects.find((candidate) => candidate.id === activeSession.project_id);
+    const task = project ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === activeSession.task_key) : undefined;
+    return task && project ? { task, project } : null;
+  });
+  const activeTaskSessions = $derived(
+    activeTaskWorkspace
+      ? sessions.filter((session) => session.project_id === activeTaskWorkspace.project.id && session.task_key === activeTaskWorkspace.task.key)
+      : [],
+  );
+  const isEmptyTaskWorkspace = $derived(!!activeTaskWorkspace && activeTaskSessions.length === 0);
   const activePluginSessionContext = $derived(activeSession ? {
     id: activeSession.id,
     projectId: activeSession.project_id,
@@ -270,7 +289,6 @@
           splitTree.deserialize(data);
           lastTreeWorkspace = workspace;
           lastFocusedWorkspaceSessionId = focusedSessionId;
-          splitTree.focusTab(focusedSessionId);
           loadingLayout = false;
           return;
         }
@@ -546,7 +564,7 @@
       const session = sessions.find((candidate) => candidate.id === sessionId);
       if (!session) return;
       try {
-        await orchestrator.archiveSession(session);
+        await orchestrator.parkSession(session);
       } catch (error) {
         showSnackbar(`Failed to close session: ${error instanceof Error ? error.message : String(error)}`, "error");
       }
@@ -910,10 +928,63 @@
   }
 
   function selectWorkspaceSession(sessionId: string): void {
+    const session = sessions.find((candidate) => candidate.id === sessionId);
+    if (session?.task_key) {
+      const project = projects.find((candidate) => candidate.id === session.project_id);
+      const task = project ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === session.task_key) : undefined;
+      if (project && task) {
+        selectedTaskWorkspace = { project, task };
+        touchWorkspaceMru(toTaskWorkspaceId(project.id, task.key));
+      }
+    } else {
+      selectedTaskWorkspace = null;
+    }
     leavePluginWorkspace();
     loopStore.setActiveLoopId(null);
     orchestrator.selectSession(sessionId);
   }
+
+  function openSessionForTask(task: TaskItem, project: Project): void {
+    taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: task.title, prompt: "", baseBranch: task.base_branch, projectId: project.id };
+    showSessionForm = true;
+  }
+
+  function selectWorkspaceTask(task: TaskItem, repoPath: string): void {
+    const project = projects.find((candidate) => candidate.path === repoPath);
+    if (!project) return;
+    selectedTaskWorkspace = { task, project };
+    touchWorkspaceMru(toTaskWorkspaceId(project.id, task.key));
+    loopStore.setActiveLoopId(null);
+    const linked = sessions.find((session) => session.project_id === project.id && session.task_key === task.key);
+    if (linked) {
+      const alreadyActive = linked.id === activeSessionId;
+      selectWorkspaceSession(linked.id);
+      // The active session ID does not change when returning from an empty
+      // TaskWorkspace. Reload its layout because the empty workspace reset the tree.
+      if (alreadyActive) {
+        const workspace = workspaceForSession(linked.id);
+        if (workspace) void loadLayoutForWorkspace(workspace, linked.id);
+      }
+      // Keep the routed task authoritative even if session/task-store reconciliation lags.
+      selectedTaskWorkspace = { task, project };
+    } else splitTree.resetTree();
+  }
+
+  async function restoreTaskSession(session: Session): Promise<void> {
+    await sessionsApi.restore(session.id);
+    await orchestrator.loadSessions();
+    selectWorkspaceSession(session.id);
+  }
+
+  $effect(() => {
+    const workspace = activeTaskWorkspace;
+    if (!workspace) { archivedTaskSessions = []; return; }
+    sessionsApi.listArchived().then((items) => {
+      if (activeTaskWorkspace?.task.key === workspace.task.key && activeTaskWorkspace.project.id === workspace.project.id) {
+        archivedTaskSessions = items.filter((session) => session.project_id === workspace.project.id && session.task_key === workspace.task.key);
+      }
+    }).catch(() => { archivedTaskSessions = []; });
+  });
 
   function jumpToWorkspaceSession(index: number): void {
     leavePluginWorkspace();
@@ -924,19 +995,44 @@
   function selectWorkspaceLoop(loopId: string): void {
     leavePluginWorkspace();
     loopStore.setActiveLoopId(loopId);
-    touchMru(`loop:${loopId}`);
+    touchWorkspaceMru(`loop:${loopId}`);
+  }
+
+  /** Promote a UI-only workspace identity without sending it to session MRU persistence. */
+  function touchWorkspaceMru(id: string): void {
+    workspaceMru = [id, ...workspaceMru.filter((candidate) => candidate !== id)];
+  }
+
+  /** Runtime switcher candidates: collapse task sessions to their task workspace. */
+  function getWorkspaceMruCandidates(): string[] {
+    const valid = getSwitchableIds();
+    const persisted = getMruList().map((id) => {
+      const session = sessions.find((candidate) => candidate.id === id);
+      return session?.task_key ? toTaskWorkspaceId(session.project_id, session.task_key) : id;
+    });
+    return [...workspaceMru, ...persisted, ...sidebarSessionOrder]
+      .filter((id, index, all) => valid.has(id) && all.indexOf(id) === index);
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
 
-  /** Valid IDs for MRU cycling — includes session IDs + loop:<id> entries. */
+  /** Valid IDs for MRU cycling — task workspaces, legacy sessions, and loops. */
   function getSwitchableIds(): Set<string> {
-    const ids = orchestrator.getSwitchableSessionIds();
+    const ids = new Set<string>(sidebarSessionOrder.filter((id) => {
+      const taskWorkspace = parseTaskWorkspaceId(id);
+      if (!taskWorkspace) return true;
+      const project = projects.find((candidate) => candidate.id === taskWorkspace.projectId);
+      const task = project
+        ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === taskWorkspace.taskKey)
+        : undefined;
+      return task?.status !== "todo";
+    }));
+    for (const session of sessions) {
+      if (!session.task_key) ids.add(session.id);
+    }
     for (const p of projects) {
       for (const loop of loopStore.getLoopsForProject(p.id)) {
-        if (loop.status !== "draft" && !isTerminal(loop.status)) {
-          ids.add(`loop:${loop.id}`);
-        }
+        if (loop.status !== "draft" && !isTerminal(loop.status)) ids.add(`loop:${loop.id}`);
       }
     }
     return ids;
@@ -1059,13 +1155,13 @@
         else if (action.type === "jump_to_session") { jumpToWorkspaceSession(action.index); }
         else if (action.type === "tab_switch") {
           const sw = getCycleState();
-          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
-          if (!sw.isCycling) startCycle(currentId, getSwitchableIds());
+          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
+          if (!sw.isCycling) startCycle(currentId, getSwitchableIds(), getWorkspaceMruCandidates());
           else advance(1);
         } else if (action.type === "tab_switch_reverse") {
           const sw = getCycleState();
-          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
-          if (!sw.isCycling) { startCycle(currentId, getSwitchableIds()); advance(-1); }
+          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
+          if (!sw.isCycling) { startCycle(currentId, getSwitchableIds(), getWorkspaceMruCandidates()); advance(-1); }
           else advance(-1);
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
@@ -1079,11 +1175,11 @@
         else if (action.type === "next_tab") { splitNextTab(); }
         else if (action.type === "prev_tab") { splitPrevTab(); }
         else if (action.type === "next_session") {
-          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
+          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
           if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, 1);
           else navCycle.advance(1);
         } else if (action.type === "prev_session") {
-          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
+          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
           if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, -1);
           else navCycle.advance(-1);
         }
@@ -1155,10 +1251,15 @@
     }
     window.addEventListener("keydown", onModalKeydown, true);
 
-    /** Route a navigation target (may be a session ID or a loop:<id> prefixed string). */
+    /** Route a navigation target (task workspace, session, or loop). */
     function routeNavTarget(target: string): void {
       if (isLoopId(target)) {
         selectWorkspaceLoop(parseLoopId(target));
+      } else if (isTaskWorkspaceId(target)) {
+        const parsed = parseTaskWorkspaceId(target);
+        const project = parsed ? projects.find((candidate) => candidate.id === parsed.projectId) : undefined;
+        const task = project && parsed ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === parsed.taskKey) : undefined;
+        if (project && task) selectWorkspaceTask(task, project.path);
       } else {
         selectWorkspaceSession(target);
       }
@@ -1231,7 +1332,8 @@
         onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
         onDeleteProject={(p) => (projectToDelete = p)}
         onEditProject={openEditProject}
-        onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "", baseBranch: task.base_branch, projectId: proj?.id ?? null }; showSessionForm = true; }}
+        onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); if (proj) openSessionForTask(task, proj); }}
+        onSelectTask={selectWorkspaceTask}
         onAddProject={openAddProject}
         onOpenPreferences={openPreferences}
         onCreateSession={() => { taskPrefill = null; showSessionForm = true; }}
@@ -1242,6 +1344,7 @@
         onStopLoop={(id) => { loopsApi.stop(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onDeleteLoop={(id) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === id); if (!loop) return; const hasSessions = (loopStore.getSessionsForLoop(id) ?? []).length > 0; if (hasSessions) { loopToDelete = loop; } else { deleteLoopOnly(id); } }}
         onDeleteLoopSession={(session, loopId) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === loopId); if (loop && isLoopActive(loop.status)) { showSnackbar("Stop the loop before deleting its sessions"); } else { orchestrator.deleteSession(session); } }}
+        selectedTaskWorkspace={activeTaskWorkspace ? { projectId: activeTaskWorkspace.project.id, taskKey: activeTaskWorkspace.task.key } : null}
         selectedLoopId={activeLoopId}
         onToggleDiff={toggleDiffInTree}
         pluginContributions={sidebarPluginContributions}
@@ -1282,13 +1385,24 @@
     {#if showTaskForm}
     <FormDialog title="New Task" onClose={() => { showTaskForm = false; tick().then(() => refocusTerminal()); }}>
       <TaskForm
-        mode="create"
+        mode={taskWorkspaceToEdit ? "edit" : "create"}
         {projects}
         {sessions}
         tasks={taskStore.getAllTasks()}
-        onSubmitted={() => { showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
-        onCancel={() => { showTaskForm = false; tick().then(() => refocusTerminal()); }}
-        onSessionCreated={(session) => { leavePluginWorkspace(); showTaskForm = false; orchestrator.createSession(session); focusTerminal(); }}
+        initial={taskWorkspaceToEdit ? {
+          key: taskWorkspaceToEdit.task.key,
+          title: taskWorkspaceToEdit.task.title,
+          description: taskWorkspaceToEdit.task.description,
+          priority: taskWorkspaceToEdit.task.priority,
+          parentKey: taskWorkspaceToEdit.task.parent_key,
+          blockedBy: taskWorkspaceToEdit.task.blocked_by,
+          tags: taskWorkspaceToEdit.task.tags,
+          baseBranch: taskWorkspaceToEdit.task.base_branch,
+          projectPath: taskWorkspaceToEdit.project.path,
+        } : { projectPath: projects[0]?.path ?? "" }}
+        onSubmitted={() => { taskWorkspaceToEdit = null; showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
+        onCancel={() => { taskWorkspaceToEdit = null; showTaskForm = false; tick().then(() => refocusTerminal()); }}
+        onSessionCreated={(session) => { leavePluginWorkspace(); taskWorkspaceToEdit = null; showTaskForm = false; orchestrator.createSession(session); focusTerminal(); }}
       />
     </FormDialog>
     {/if}
@@ -1329,7 +1443,7 @@
       onUnhideProject={async (id) => { await projectStore.unhideProject(id); }}
       onDeleteProject={(id) => { const p = projects.find(x => x.id === id); if (p) projectToDelete = p; }}
       onRestoreProject={async (id) => { await projectStore.restoreProject(id); }}
-      onPickTask={(task) => { taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" }; showSessionForm = true; }}
+      onPickTask={(task) => { taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: task.title, prompt: "" }; showSessionForm = true; }}
       onCreateTask={() => { showTaskForm = true; }}
       onToggleDiff={() => toggleDiffInTree()}
       onOpenFile={(path) => { if (activeSessionId) openFileInTree(activeSessionId, path); }}
@@ -1478,8 +1592,19 @@
       </div>
     {/snippet}
 
+    {#if isEmptyTaskWorkspace && activeTaskWorkspace}
+      <EmptyTaskWorkspace
+        task={activeTaskWorkspace.task}
+        archivedSessions={archivedTaskSessions}
+        active={!activeLoopId && !activePluginId}
+        onNewSession={() => openSessionForTask(activeTaskWorkspace.task, activeTaskWorkspace.project)}
+        onRestore={restoreTaskSession}
+        onEdit={() => { taskWorkspaceToEdit = activeTaskWorkspace; showTaskForm = true; }}
+      />
+    {/if}
+
     <!-- Always render through split tree (single leaf = normal view) -->
-    {#if splitTreeNode}
+    {#if splitTreeNode && !isEmptyTaskWorkspace}
       <div class:hidden={!!activeLoopId || !!activePluginId} class="w-full h-full">
         <SplitContainer node={splitTreeNode} renderLeaf={splitLeafSnippet} />
       </div>
@@ -1521,7 +1646,7 @@
       </div>
     {/if}
 
-    {#if sessions.length === 0 && !showProjectForm && !showSessionForm && !activeLoopId && !activePluginId}
+    {#if sessions.length === 0 && !activeTaskWorkspace && !showProjectForm && !showSessionForm && !activeLoopId && !activePluginId}
       <div class="flex items-center justify-center h-full">
         <p class="text-t2">No active session. Press <kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">{MOD_LABEL}N</kbd> to create one.</p>
       </div>

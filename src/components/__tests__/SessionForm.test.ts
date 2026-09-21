@@ -176,7 +176,7 @@ describe("SessionForm", () => {
   });
 });
 
-  it("numbers an additional task agent and defaults it to an isolated worktree", async () => {
+  it("keeps the task title for an additional task agent while defaulting it to an isolated worktree", async () => {
     const target = renderForm({
       sessions: [{
         id: "existing",
@@ -202,7 +202,7 @@ describe("SessionForm", () => {
     await tick();
     flushSync();
 
-    expect(target.querySelector<HTMLInputElement>("input[placeholder='My session...']")?.value).toBe("Agent 2");
+    expect(target.querySelector<HTMLInputElement>("input[placeholder='My session...']")?.value).toBe("Fix bug");
     expect(target.querySelector<HTMLInputElement>("[data-field='branch'] input")?.value).toBe("proj-1/fix-bug--2");
     expect(target.querySelector<HTMLInputElement>("#use-worktree")?.checked).toBe(true);
   });
