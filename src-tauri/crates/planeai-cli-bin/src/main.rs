@@ -81,6 +81,23 @@ enum SessionAction {
         #[arg(long)]
         pretty: bool,
     },
+    /// Create a sibling session in the current task workspace ($PLANEAI_SESSION_ID required)
+    Spawn {
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long)]
+        base_branch: Option<String>,
+        #[arg(long)]
+        yolo: bool,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        prompt: Option<String>,
+        #[arg(long)]
+        pretty: bool,
+    },
     #[command(name = "ls")]
     List {
         #[arg(long)]
@@ -380,6 +397,21 @@ enum AxiSessionAction {
         #[arg(long)]
         prompt: Option<String>,
     },
+    /// Create a sibling session in the current task workspace ($PLANEAI_SESSION_ID required)
+    Spawn {
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long)]
+        base_branch: Option<String>,
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        yolo: bool,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        prompt: Option<String>,
+    },
     /// Send a prompt to a running session
     Prompt { id: String, text: Option<String> },
     /// Read session output (last N lines, ANSI stripped)
@@ -575,6 +607,45 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("{{\"error\": \"{e}\"}}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            SessionAction::Spawn {
+                name,
+                branch,
+                base_branch,
+                yolo,
+                provider,
+                prompt,
+                pretty,
+            } => {
+                let parent_session_id = std::env::var("PLANEAI_SESSION_ID")
+                    .map_err(|_| "session spawn must run inside a PlaneAI agent session ($PLANEAI_SESSION_ID is not set)")
+                    .unwrap_or_else(|error| {
+                        eprintln!("{{\"error\": \"{error}\"}}");
+                        std::process::exit(1);
+                    });
+                let opts = planeai::cli::WorkspaceSiblingOpts {
+                    name,
+                    branch,
+                    base_branch,
+                    yolo,
+                    provider,
+                    prompt,
+                };
+                match planeai::cli::create_workspace_sibling(&conn, &parent_session_id, opts) {
+                    Ok(session) => {
+                        let output = serde_json::to_string(&session).unwrap();
+                        if pretty {
+                            let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+                            println!("{}", serde_json::to_string_pretty(&value).unwrap());
+                        } else {
+                            println!("{output}");
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("{{\"error\": \"{error}\"}}");
                         std::process::exit(1);
                     }
                 }
@@ -1105,6 +1176,31 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
             match planeai::cli::create_session(conn, opts) {
                 Ok(session) => planeai::axi::session_create_output(&session),
                 Err(e) => return emit_axi_error(&e),
+            }
+        }
+        AxiSessionAction::Spawn {
+            name,
+            branch,
+            base_branch,
+            yolo,
+            provider,
+            prompt,
+        } => {
+            let parent_session_id = match std::env::var("PLANEAI_SESSION_ID") {
+                Ok(session_id) => session_id,
+                Err(_) => return emit_axi_error("session spawn must run inside a PlaneAI agent session ($PLANEAI_SESSION_ID is not set)"),
+            };
+            let opts = planeai::cli::WorkspaceSiblingOpts {
+                name,
+                branch,
+                base_branch,
+                yolo,
+                provider,
+                prompt,
+            };
+            match planeai::cli::create_workspace_sibling(conn, &parent_session_id, opts) {
+                Ok(session) => planeai::axi::session_create_output(&session),
+                Err(error) => return emit_axi_error(&error),
             }
         }
         AxiSessionAction::Prompt { id, text } => {

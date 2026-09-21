@@ -1531,7 +1531,7 @@
                     else showSnackbar(String(error));
                   }}
                   onFocused={(event) => {
-                    if (event.type === "focusin" && sessionId !== activeSessionId) return;
+                    if (event.type === "focusin" && !isActiveInLeaf) return;
                     splitTree.setFocusedLeaf(leaf.id);
                     selectWorkspaceSession(sessionId);
                     focusTerminal();
