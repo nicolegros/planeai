@@ -170,8 +170,9 @@ export function updateTabLabel(ptyKey: string, label: string): void {
 /** Initialize with a single leaf containing the given tab entries. */
 export function initTree(tabs: TabEntry[], activeTab?: string): void {
   const leafId = generateId();
-  const activePtyKey = activeTab ?? tabs[0]?.ptyKey ?? "";
-  tree = { type: "leaf", id: leafId, tabs: [...tabs], activeTab: activePtyKey };
+  const unique = uniqueByPtyKey(tabs);
+  const activePtyKey = activeTab ?? unique[0]?.ptyKey ?? "";
+  tree = { type: "leaf", id: leafId, tabs: unique, activeTab: activePtyKey };
   focusedLeafId = leafId;
 }
 
@@ -182,16 +183,10 @@ export function initTree(tabs: TabEntry[], activeTab?: string): void {
  */
 export function replaceRootLeafTabs(tabs: TabEntry[], activeTab?: string): boolean {
   if (!tree || tree.type !== "leaf") return false;
-  const activePtyKey = activeTab ?? tabs[0]?.ptyKey ?? "";
-  tree.tabs = [...tabs];
-  tree.activeTab = activePtyKey;
+  const unique = uniqueByPtyKey(tabs);
+  tree.tabs = unique;
+  tree.activeTab = activeTab ?? unique[0]?.ptyKey ?? "";
   return true;
-}
-
-/** Replace the entire tree (used for deserialization). */
-export function setTree(newTree: TreeNode, newFocusedLeafId: string): void {
-  tree = newTree;
-  focusedLeafId = newFocusedLeafId;
 }
 
 /** Reset all state (for tests or cleanup). */
@@ -236,14 +231,15 @@ export function splitFocusedLeaf(direction: SplitDirection): string | null {
 }
 
 /**
- * Add a tab entry to a specific leaf.
+ * Add a tab entry to a specific leaf. Returns whether the tab is in the tree
+ * afterwards, which a caller holding a leaf id across an await must check.
  *
  * Tabs render through a keyed block, so a duplicate ptyKey crashes the whole
- * workspace. A ptyKey already in the tree is updated in place and activated
- * instead of appended a second time.
+ * workspace. A ptyKey already in the tree is updated in place and activated in
+ * whichever leaf holds it, rather than appended to `leafId` a second time.
  */
-export function addSessionToLeaf(leafId: string, tab: TabEntry): void {
-  if (!tree) return;
+export function addSessionToLeaf(leafId: string, tab: TabEntry): boolean {
+  if (!tree) return false;
   const existingLeaf = findLeafBySession(tree, tab.ptyKey);
   if (existingLeaf) {
     tree = mapTree(tree, (node) => {
@@ -254,14 +250,16 @@ export function addSessionToLeaf(leafId: string, tab: TabEntry): void {
         activeTab: tab.ptyKey,
       };
     });
-    return;
+    return true;
   }
+  if (!findLeaf(tree, leafId)) return false;
   tree = mapTree(tree, (node) => {
     if (node.type === "leaf" && node.id === leafId) {
       return { ...node, tabs: [...node.tabs, tab], activeTab: tab.ptyKey };
     }
     return node;
   });
+  return true;
 }
 
 /**
@@ -607,8 +605,50 @@ export function serialize(): SerializedTree | null {
 }
 
 export function deserialize(data: SerializedTree): void {
-  tree = data.tree;
+  tree = dedupePtyKeys(data.tree, new Set());
   focusedLeafId = data.focusedLeafId;
+}
+
+/**
+ * Keep the first entry for each pty key not already in `seen`, recording what it kept.
+ *
+ * Tabs render through a keyed block, so a duplicate pty key crashes the whole
+ * workspace. Every entry point that accepts caller-supplied tabs funnels through
+ * here rather than trusting its input.
+ */
+function retainUnseenPtyKeys(tabs: TabEntry[], seen: Set<string>): TabEntry[] {
+  return tabs.filter((tab) => {
+    if (seen.has(tab.ptyKey)) return false;
+    seen.add(tab.ptyKey);
+    return true;
+  });
+}
+
+/** Keep the first entry for each pty key in a flat tab list. */
+function uniqueByPtyKey(tabs: TabEntry[]): TabEntry[] {
+  return retainUnseenPtyKeys(tabs, new Set());
+}
+
+/**
+ * Strip pty keys repeated anywhere in a persisted layout.
+ *
+ * Layouts saved before duplicates were prevented would otherwise crash the keyed
+ * tab render the moment they load. A leaf whose active tab was dropped falls back
+ * to its first remaining tab.
+ */
+function dedupePtyKeys(node: TreeNode, seen: Set<string>): TreeNode {
+  if (node.type === "leaf") {
+    const tabs = retainUnseenPtyKeys(node.tabs, seen);
+    if (tabs.length === node.tabs.length) return node;
+    const activeTab = tabs.some((tab) => tab.ptyKey === node.activeTab)
+      ? node.activeTab
+      : (tabs[0]?.ptyKey ?? "");
+    return { ...node, tabs, activeTab };
+  }
+  return {
+    ...node,
+    children: [dedupePtyKeys(node.children[0], seen), dedupePtyKeys(node.children[1], seen)],
+  };
 }
 
 // ─── Tree Helpers (pure functions) ───────────────────────────────────────────

@@ -41,6 +41,13 @@ beforeEach(() => {
 });
 
 describe("initTree", () => {
+  it("drops duplicate pty keys", () => {
+    initTree([tab("s1"), tab("s1:1"), tab("s1:1", "Duplicate")], "s1:1");
+    const leaf = getFocusedLeaf()!;
+    expect(leaf.tabs.map((t) => t.ptyKey)).toEqual(["s1", "s1:1"]);
+    expect(leaf.activeTab).toBe("s1:1");
+  });
+
   it("creates a single leaf with given tabs", () => {
     initTree([tab("s1"), tab("s2")]);
     const tree = getTree();
@@ -471,6 +478,47 @@ describe("serialize / deserialize", () => {
     const leaves = getAllLeaves();
     expect(leaves.length).toBe(2);
   });
+
+  it("drops duplicate pty keys from a persisted layout", () => {
+    // A layout saved before duplicate entries were prevented would otherwise
+    // crash the keyed tab render as soon as it loads.
+    deserialize({
+      focusedLeafId: "leaf-1",
+      tree: {
+        type: "leaf",
+        id: "leaf-1",
+        tabs: [tab("s1"), tab("s1:1"), tab("s1:1", "Duplicate")],
+        activeTab: "s1:1",
+      },
+    });
+
+    const leaf = getFocusedLeaf()!;
+    expect(leaf.tabs.map((t) => t.ptyKey)).toEqual(["s1", "s1:1"]);
+    expect(leaf.tabs[1].label).toBe("S1:1");
+    expect(leaf.activeTab).toBe("s1:1");
+  });
+
+  it("drops a pty key duplicated across leaves and repairs the active tab", () => {
+    deserialize({
+      focusedLeafId: "leaf-2",
+      tree: {
+        type: "split",
+        id: "split-1",
+        direction: "vertical",
+        ratio: 0.5,
+        children: [
+          { type: "leaf", id: "leaf-1", tabs: [tab("s1"), tab("s1:1")], activeTab: "s1" },
+          { type: "leaf", id: "leaf-2", tabs: [tab("s1:1"), tab("s2")], activeTab: "s1:1" },
+        ],
+      },
+    });
+
+    expect(getLeafById("leaf-1")!.tabs.map((t) => t.ptyKey)).toEqual(["s1", "s1:1"]);
+    const second = getLeafById("leaf-2")!;
+    expect(second.tabs.map((t) => t.ptyKey)).toEqual(["s2"]);
+    // activeTab pointed at the dropped duplicate.
+    expect(second.activeTab).toBe("s2");
+  });
 });
 
 describe("findTab", () => {
@@ -512,6 +560,13 @@ describe("focusTab", () => {
 });
 
 describe("replaceRootLeafTabs", () => {
+  it("drops duplicate pty keys", () => {
+    initTree([tab("s1")]);
+    expect(replaceRootLeafTabs([tab("s1"), tab("s2"), tab("s2", "Duplicate")], "s2")).toBe(true);
+    const leaf = getFocusedLeaf()!;
+    expect(leaf.tabs.map((t) => t.ptyKey)).toEqual(["s1", "s2"]);
+    expect(leaf.activeTab).toBe("s2");
+  });
   it("replaces tabs in-place when tree is a single leaf", () => {
     initTree([tab("s1")]);
     const leafId = getFocusedLeafId()!;

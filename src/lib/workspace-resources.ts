@@ -18,9 +18,12 @@ export type ResourceOpen = "opened" | "focused" | "closed" | "unavailable";
  * Place a shell tab for an already-allocated pty key into a leaf. Shell tabs
  * created outside `openShellResource` (terminal editor tabs, which allocate
  * their pty key ahead of time) go through here so every shell tab looks alike.
+ *
+ * Returns whether the tab is in the layout afterwards. A caller that resolved
+ * `leafId` before an await must treat false as a failure and roll back.
  */
-export function addShellTabToLeaf(leafId: string, ptyKey: string, label = "Shell"): void {
-  splitTree.addSessionToLeaf(leafId, { ptyKey, label, icon: "terminal", type: "shell" });
+export function addShellTabToLeaf(leafId: string, ptyKey: string, label = "Shell"): boolean {
+  return splitTree.addSessionToLeaf(leafId, { ptyKey, label, icon: "terminal", type: "shell" });
 }
 
 /**
@@ -71,12 +74,12 @@ export function openShellResourceInFocusedLeaf(sessionId: string): string | null
 }
 
 /** Pty key for a session's diff resource. */
-export function diffPtyKey(sessionId: string): string {
+function diffPtyKey(sessionId: string): string {
   return `${sessionId}:diff`;
 }
 
 /** Pty key for a session's embedded editor resource for one file. */
-export function editorPtyKey(sessionId: string, filePath: string): string {
+function editorPtyKey(sessionId: string, filePath: string): string {
   return `${sessionId}:editor:${filePath}`;
 }
 

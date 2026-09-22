@@ -52,6 +52,9 @@ async function openShellEditor(): Promise<{
       reservedAtReconcile = pending.has(`${SESSION}:1`);
       reconcile(pending);
     },
+    closeTab: async () => {
+      throw new Error("must not release a tab that opened successfully");
+    },
     addShellTab: addShellTabToLeaf,
     pendingCommands: pending,
   });
@@ -125,6 +128,9 @@ describe("shell editor tabs under workspace reconciliation", () => {
         incrementTabCount: async () => {
           throw new Error("daemon offline");
         },
+        closeTab: async () => {
+          throw new Error("must not release an unpersisted tab");
+        },
         addShellTab: () => {
           throw new Error("must not mount a shell tab");
         },
@@ -136,5 +142,36 @@ describe("shell editor tabs under workspace reconciliation", () => {
     expect(getTabs(SESSION).map((tab) => tab.index)).toEqual([0]);
     reconcile(pending);
     expect(splitTree.getFocusedLeaf()?.tabs.map((tab) => tab.ptyKey)).toEqual([SESSION]);
+  });
+
+  it("rolls back when the target pane disappears while the count is persisted", async () => {
+    const pending = new Map<string, string>();
+    const closed: Array<[string, number]> = [];
+
+    const opened = await queueTerminalEditor({
+      sessionId: SESSION,
+      filePath: FILE,
+      getTerminalCommand: async () => COMMAND,
+      getFocusedLeafId: splitTree.getFocusedLeafId,
+      addTab,
+      removeTab,
+      // The pane is closed, or the workspace switched, while the count persists.
+      incrementTabCount: async () => {
+        splitTree.resetTree();
+      },
+      closeTab: async (sessionId, tabIndex) => {
+        closed.push([sessionId, tabIndex]);
+      },
+      addShellTab: addShellTabToLeaf,
+      pendingCommands: pending,
+    });
+
+    expect(opened).toBe(false);
+    // A leaked reservation would block closing the tab and make reconciliation
+    // skip the pty key forever, leaving an invisible orphan.
+    expect(pending.size).toBe(0);
+    expect(getTabs(SESSION).map((tab) => tab.index)).toEqual([0]);
+    // The count was already persisted, so the backend tab must be released too.
+    expect(closed).toEqual([[SESSION, 1]]);
   });
 });

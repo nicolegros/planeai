@@ -613,6 +613,7 @@
         addTab,
         removeTab,
         incrementTabCount: pty.incrementTabCount,
+        closeTab: pty.closeTab,
         addShellTab: addShellTabToLeaf,
         pendingCommands: pendingShellCommands,
       });
