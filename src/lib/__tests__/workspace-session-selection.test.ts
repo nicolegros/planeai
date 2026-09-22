@@ -30,6 +30,11 @@ describe("TaskWorkspace session selection", () => {
     );
   });
 
+  it("requests focus for the restored active terminal after loading a workspace layout", () => {
+    expect(appSource).toMatch(/if \(isValidSerializedTree\(data\)\) \{[\s\S]*?splitTree\.deserialize\(data\);[\s\S]*?loadingLayout = false;[\s\S]*?requestFocusedTerminalFocus\(\);/);
+    expect(appSource).toMatch(/function requestFocusedTerminalFocus\(\): void \{[\s\S]*?getActiveTabEntry\(leaf\)[\s\S]*?requestTerminalFocus\(activeTab\.ptyKey\)/);
+  });
+
   it("adds restored task-session tabs without replacing the workspace layout", () => {
     expect(appSource).toMatch(
       /const missingEntries = workspaceEntries\.filter\(\(entry\) => !existingKeys\.has\(entry\.ptyKey\)\);[\s\S]*?for \(const entry of missingEntries\) splitTree\.addSessionToLeaf\(focusedLeaf\.id, entry\);[\s\S]*?splitTree\.setLeafActiveTab\(focusedLeaf\.id, activeTab\);/,

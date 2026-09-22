@@ -291,6 +291,7 @@
           lastTreeWorkspace = workspace;
           lastFocusedWorkspaceSessionId = focusedSessionId;
           loadingLayout = false;
+          requestFocusedTerminalFocus();
           return;
         }
       }
@@ -1041,6 +1042,12 @@
         terminalFocusRequest = { id: (terminalFocusRequest?.id ?? 0) + 1, sessionId };
       });
     });
+  }
+
+  function requestFocusedTerminalFocus(): void {
+    const leaf = splitTree.getFocusedLeaf();
+    const activeTab = leaf ? splitTree.getActiveTabEntry(leaf) : null;
+    if (activeTab?.type === "agent" || activeTab?.type === "shell") requestTerminalFocus(activeTab.ptyKey);
   }
 
   /** Valid IDs for MRU cycling — task workspaces, legacy sessions, and loops. */
