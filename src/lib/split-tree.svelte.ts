@@ -237,9 +237,25 @@ export function splitFocusedLeaf(direction: SplitDirection): string | null {
 
 /**
  * Add a tab entry to a specific leaf.
+ *
+ * Tabs render through a keyed block, so a duplicate ptyKey crashes the whole
+ * workspace. A ptyKey already in the tree is updated in place and activated
+ * instead of appended a second time.
  */
 export function addSessionToLeaf(leafId: string, tab: TabEntry): void {
   if (!tree) return;
+  const existingLeaf = findLeafBySession(tree, tab.ptyKey);
+  if (existingLeaf) {
+    tree = mapTree(tree, (node) => {
+      if (node.type !== "leaf" || node.id !== existingLeaf.id) return node;
+      return {
+        ...node,
+        tabs: node.tabs.map((existing) => (existing.ptyKey === tab.ptyKey ? tab : existing)),
+        activeTab: tab.ptyKey,
+      };
+    });
+    return;
+  }
   tree = mapTree(tree, (node) => {
     if (node.type === "leaf" && node.id === leafId) {
       return { ...node, tabs: [...node.tabs, tab], activeTab: tab.ptyKey };

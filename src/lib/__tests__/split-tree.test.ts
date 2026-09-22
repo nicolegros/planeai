@@ -19,6 +19,7 @@ import {
   moveTabToDirection,
   getNeighborLeaf,
   getLeafForSession,
+  getLeafById,
   getActiveTabEntry,
   updateTabLabel,
   findTab,
@@ -115,6 +116,28 @@ describe("addSessionToLeaf", () => {
     const leaf = getFocusedLeaf()!;
     expect(leaf.tabs.map((t) => t.ptyKey)).toEqual(["s1", "s2"]);
     expect(leaf.activeTab).toBe("s2");
+  });
+
+  it("updates an existing pty key in place instead of duplicating it", () => {
+    initTree([tab("s1"), tab("s1:1", "Shell")]);
+    const leafId = getFocusedLeafId()!;
+    addSessionToLeaf(leafId, tab("s1:1", "main.rs"));
+
+    const leaf = getFocusedLeaf()!;
+    expect(leaf.tabs.map((t) => t.ptyKey)).toEqual(["s1", "s1:1"]);
+    expect(leaf.tabs[1].label).toBe("main.rs");
+    expect(leaf.activeTab).toBe("s1:1");
+  });
+
+  it("activates a pty key that already lives in another leaf", () => {
+    initTree([tab("s1"), tab("s1:1")]);
+    const originalLeafId = getFocusedLeafId()!;
+    const newLeafId = splitFocusedLeaf("vertical")!;
+    addSessionToLeaf(newLeafId, tab("s1:1", "main.rs"));
+
+    expect(getLeafForSession("s1:1")!.id).toBe(originalLeafId);
+    expect(getLeafById(newLeafId)!.tabs).toHaveLength(0);
+    expect(getLeafById(originalLeafId)!.activeTab).toBe("s1:1");
   });
 });
 

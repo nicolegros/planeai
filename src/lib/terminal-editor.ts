@@ -13,9 +13,12 @@ export interface TerminalEditorQueue {
 /**
  * Create a dedicated shell tab for a terminal editor command.
  *
- * The persisted tab count is updated before the shell tab mounts, so closing the
- * tab cannot race ahead of the count increment. A failed persistence update
- * removes the local tab and leaves no pending command or mounted terminal.
+ * The command is reserved against its pty key before the tab count is persisted,
+ * so a workspace reconcile that observes the new session tab mid-flight skips it
+ * instead of mounting a bare shell. The persisted tab count is still updated
+ * before the shell tab mounts, so closing the tab cannot race ahead of the count
+ * increment. A failed persistence update removes the local tab and leaves no
+ * pending command or mounted terminal.
  */
 export async function queueTerminalEditor(queue: TerminalEditorQueue): Promise<boolean> {
   const focusedLeafId = queue.getFocusedLeafId();
@@ -25,15 +28,17 @@ export async function queueTerminalEditor(queue: TerminalEditorQueue): Promise<b
   const tabIndex = queue.addTab(queue.sessionId);
   if (tabIndex === -1) return false;
 
+  const ptyKey = `${queue.sessionId}:${tabIndex}`;
+  queue.pendingCommands.set(ptyKey, command);
+
   try {
     await queue.incrementTabCount(queue.sessionId);
   } catch (error) {
+    queue.pendingCommands.delete(ptyKey);
     queue.removeTab(queue.sessionId, tabIndex);
     throw error;
   }
 
-  const ptyKey = `${queue.sessionId}:${tabIndex}`;
-  queue.pendingCommands.set(ptyKey, command);
   queue.addShellTab(focusedLeafId, ptyKey, queue.filePath.split("/").pop() ?? queue.filePath);
   return true;
 }

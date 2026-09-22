@@ -46,6 +46,7 @@
   import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { getTabs, getActiveTabIndex, addTab, removeTab } from "./lib/session-tabs.svelte";
   import { consumePendingTerminalEditorCommand, getPendingTerminalEditorCommand, queueTerminalEditor, rollbackPendingTerminalEditor } from "./lib/terminal-editor";
+  import { ptyKeyToSessionId, reconcileWorkspaceTabs } from "./lib/workspace-tabs";
   import { getMruList, isMounted as poolIsMounted } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
@@ -403,26 +404,12 @@
   // replacing the current split layout or its active resource tab.
   $effect(() => {
     if (loadingLayout || !lastTreeWorkspace) return;
-    const workspaceEntries = buildTabEntriesForWorkspace(lastTreeWorkspace);
-    const existingKeys = new Set(
-      splitTree.getAllLeaves().flatMap((leaf) => leaf.tabs.map((tab) => tab.ptyKey)),
-    );
-    const missingEntries = workspaceEntries.filter((entry) => !existingKeys.has(entry.ptyKey));
-    const focusedLeaf = splitTree.getFocusedLeaf() ?? splitTree.getAllLeaves()[0];
-    if (focusedLeaf && missingEntries.length > 0) {
-      const activeTab = focusedLeaf.activeTab;
-      for (const entry of missingEntries) splitTree.addSessionToLeaf(focusedLeaf.id, entry);
-      if (activeTab) splitTree.setLeafActiveTab(focusedLeaf.id, activeTab);
-    }
-
-    const validSessionIds = new Set(workspaceSessions(lastTreeWorkspace).map((session) => session.id));
-    const stalePtyKeys: string[] = [];
-    for (const leaf of splitTree.getAllLeaves()) {
-      for (const tab of leaf.tabs) {
-        if (!validSessionIds.has(ptyKeyToSessionId(tab.ptyKey))) stalePtyKeys.push(tab.ptyKey);
-      }
-    }
-    for (const key of stalePtyKeys) splitTree.removeSessionFromLeaf(key);
+    reconcileWorkspaceTabs({
+      workspaceEntries: buildTabEntriesForWorkspace(lastTreeWorkspace),
+      validSessionIds: new Set(workspaceSessions(lastTreeWorkspace).map((session) => session.id)),
+      reservedPtyKeys: pendingShellCommands,
+      tree: splitTree,
+    });
   });
 
   // Drag-and-drop state
@@ -466,12 +453,6 @@
     const separator = tabEntry.ptyKey.lastIndexOf(":");
     const index = Number.parseInt(tabEntry.ptyKey.slice(separator + 1), 10);
     return separator === -1 || Number.isNaN(index) ? fallback : index;
-  }
-
-  /** Extract the session ID from a pty key (strips ":tabIndex" suffix if present) */
-  function ptyKeyToSessionId(ptyKey: string): string {
-    const colonIdx = ptyKey.indexOf(":");
-    return colonIdx === -1 ? ptyKey : ptyKey.slice(0, colonIdx);
   }
 
   // Handle split keyboard actions
