@@ -178,11 +178,12 @@ Each `ui_contributions` item requires a unique safe `id`, `label`, `placement`, 
    make local-plugin-fixture
    ```
 
-2. In PlaneAI, open **Preferences → Plugins** and choose **Install local package**. Select the package directory, not an individual binary or manifest.
-3. Enable the imported plugin. Open its `main-pane` from Cmd+K or interact with its declared sidebar/preferences placement. The fixture appears as **Local Fixture**.
-4. Use **Reload** after a runtime error or to restart an already imported package. Reload restarts the imported immutable copy; it does not reread your source directory.
-5. To publish a changed manifest, binary, or UI, rebuild and choose **Install local package** again. Selecting a package with the same installed local-plugin ID replaces its immutable package copy, preserves host-owned settings, secrets, logs, and data, and restarts the plugin if it was enabled. Imported content is copied under a SHA-256 directory, so edits to the original directory never affect an installed version.
-6. Disable a plugin to stop its sidecar. **Remove plugin** is available only for local packages and deletes PlaneAI's imported package and host-owned plugin state. It does not delete your original source directory.
+2. To find community candidates, open **Preferences → Plugins** and choose **Discover plugins**. PlaneAI asks your existing `gh` CLI to search public, non-archived, non-fork GitHub repositories tagged with the fixed `planeai` topic, returning up to 100 results ordered by stars. Results exist only for the current app session and are refreshed only when you choose discovery again. These results are unverified repository links—not packages, compatibility claims, downloads, or install actions. Review and obtain source from an author you trust before importing it.
+3. Choose **Install local package** and select the reviewed package directory, not an individual binary or manifest.
+4. Enable the imported plugin. Open its `main-pane` from Cmd+K or interact with its declared sidebar/preferences placement. The fixture appears as **Local Fixture**.
+5. Use **Reload** after a runtime error or to restart an already imported package. Reload restarts the imported immutable copy; it does not reread your source directory.
+6. To publish a changed manifest, binary, or UI, rebuild and choose **Install local package** again. Selecting a package with the same installed local-plugin ID replaces its immutable package copy, preserves host-owned settings, secrets, logs, and data, and restarts the plugin if it was enabled. Imported content is copied under a SHA-256 directory, so edits to the original directory never affect an installed version.
+7. Disable a plugin to stop its sidecar. **Remove plugin** is available only for local packages and deletes PlaneAI's imported package and host-owned plugin state. It does not delete your original source directory.
 
 ## Headless contract test
 

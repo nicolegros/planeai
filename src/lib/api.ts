@@ -10,6 +10,7 @@ import type {
   FileDiff,
   CommitEntry,
   PluginInventory,
+  PluginDiscoveryCandidate,
   GithubMigrationStatus,
   JiraMigrationStatus,
   LoopRunSummary,
@@ -236,6 +237,7 @@ export const symphony = {
 
 export const plugins = {
   list: () => invoke<PluginInventory[]>("list_plugins"),
+  discover: () => invoke<PluginDiscoveryCandidate[]>("discover_plugins"),
   listSessionActions: () =>
     invoke<import("./types").PluginSessionAction[]>("list_plugin_session_actions"),
   installLocal: (sourcePath: string) =>

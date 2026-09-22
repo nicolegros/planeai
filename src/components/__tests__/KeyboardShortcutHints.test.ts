@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 
 vi.mock("../../lib/session-orchestrator.svelte", () => ({
@@ -16,6 +16,10 @@ import { MOD_ENTER_HINT, MOD_LABEL } from "../../lib/keyboard";
 describe("editor feedback shortcut hints", () => {
   let components: ReturnType<typeof mount>[] = [];
   let targets: HTMLElement[] = [];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
 
   function createTarget(): HTMLDivElement {
     const target = document.createElement("div");
@@ -39,12 +43,15 @@ describe("editor feedback shortcut hints", () => {
     );
   }
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const component of components) unmount(component);
+    await tick();
+    vi.runAllTimers();
     for (const target of targets) target.remove();
     components = [];
     targets = [];
     focusTerminal();
+    vi.useRealTimers();
   });
 
   it("shows the feedback send shortcut in the editor bottom helper", async () => {
