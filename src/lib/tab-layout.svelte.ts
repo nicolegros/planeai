@@ -190,37 +190,6 @@ export function toggleEditor(): void {
   }
 }
 
-// ─── Editor Integration ──────────────────────────────────────────────────────
-
-export function registerEditorRef(
-  sessionId: string,
-  ref: { openFile: (path: string) => void; save: () => void },
-): void {
-  editorRefs[sessionId] = ref;
-}
-
-export function unregisterEditorRef(sessionId: string): void {
-  delete editorRefs[sessionId];
-}
-
-export function openFile(filePath: string): void {
-  const id = getActiveSessionId();
-  if (!id) return;
-  editorTabOpen = { ...editorTabOpen, [id]: true };
-  editorTabActive = { ...editorTabActive, [id]: true };
-  diffTabActive = { ...diffTabActive, [id]: false };
-  const tryOpen = () => {
-    if (editorRefs[id]) editorRefs[id].openFile(filePath);
-    else requestAnimationFrame(tryOpen);
-  };
-  tryOpen();
-}
-
-export function saveActiveEditor(): void {
-  const id = getActiveSessionId();
-  if (id && editorTabActive[id]) editorRefs[id]?.save();
-}
-
 // ─── State setters ───────────────────────────────────────────────────────────
 
 export function setDiffFileName(sessionId: string, name: string): void {

@@ -15,6 +15,7 @@
   import { EditorState, Compartment, Prec } from "@codemirror/state";
   import { vim } from "@replit/codemirror-vim";
   import { registerEditor, unregisterEditor } from "../lib/vim-registry";
+  import { registerEditorResource, unregisterEditorResource } from "../lib/editor-resources";
   import { basicSetup } from "codemirror";
   import { defaultKeymap } from "@codemirror/commands";
   import { searchKeymap } from "@codemirror/search";
@@ -65,6 +66,8 @@
   interface Props {
     repoPath: string;
     sessionId: string;
+    /** Identity of this editor tab in the workspace layout. */
+    ptyKey: string;
     sessionExited?: boolean;
     visible: boolean;
     focused?: boolean;
@@ -76,7 +79,7 @@
     onModifiedChange?: (modified: boolean) => void;
   }
 
-  let { repoPath, sessionId, sessionExited = false, visible, focused = false, theme = "vs-dark", initialFile, onClose, onFocusEditor, onFileChange, onModifiedChange }: Props = $props();
+  let { repoPath, sessionId, ptyKey, sessionExited = false, visible, focused = false, theme = "vs-dark", initialFile, onClose, onFocusEditor, onFileChange, onModifiedChange }: Props = $props();
 
   let buffers = $state<Buffer[]>([]);
   let activeIndex = $state(-1);
@@ -484,6 +487,13 @@
       view.destroy();
     }
     view = null;
+  });
+
+  // App-level commands (Cmd+S) resolve the front editor tab from the workspace
+  // layout, then reach its buffer through this registration.
+  $effect(() => {
+    registerEditorResource(ptyKey, { save: () => saveCurrentBuffer() });
+    return () => unregisterEditorResource(ptyKey);
   });
 
   $effect(() => {

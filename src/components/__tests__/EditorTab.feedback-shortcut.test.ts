@@ -49,6 +49,7 @@ describe("EditorTab feedback send shortcut", () => {
       props: {
         repoPath: "/repo",
         sessionId: "session-1",
+        ptyKey: "session-1:editor:src/example.ts",
         visible: true,
         focused: true,
         initialFile: "src/example.ts",
@@ -158,6 +159,7 @@ describe("EditorTab feedback send shortcut", () => {
       props: {
         repoPath: "/repo",
         sessionId: "session-2",
+        ptyKey: "session-2:editor:src/example.ts",
         visible: true,
         focused: false,
         onClose: vi.fn(),

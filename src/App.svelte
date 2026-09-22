@@ -48,6 +48,7 @@
   import { consumePendingTerminalEditorCommand, getPendingTerminalEditorCommand, queueTerminalEditor, rollbackPendingTerminalEditor } from "./lib/terminal-editor";
   import { ptyKeyToSessionId, reconcileWorkspaceTabs } from "./lib/workspace-tabs";
   import { addShellTabToLeaf, openEditorResource, openShellResourceInFocusedLeaf, openShellResourceInNewPane, toggleDiffResource } from "./lib/workspace-resources";
+  import { saveActiveEditorResource } from "./lib/editor-resources";
   import { getMruList, isMounted as poolIsMounted } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
@@ -95,9 +96,6 @@
   let archivedTaskSessions = $state<Session[]>([]);
   // Task and loop identities are UI-only; persisted MRU accepts real session IDs only.
   let workspaceMru = $state<string[]>([]);
-
-  let editorBindRefs = $state<Record<string, EditorTab>>({});
-  $effect(() => { for (const [id, ref] of Object.entries(editorBindRefs)) { if (ref) orchestrator.registerEditorRef(id, ref); } });
 
   // ─── Derived from orchestrator ──────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -1149,7 +1147,7 @@
         else if (action.type === "toggle_sessions_panel") { if (!sidebarVisible) sidebarVisible = true; }
         else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskStore.refresh(projects.map((p) => p.path)); }
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
-        else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
+        else if (action.type === "save_file") { saveActiveEditorResource(); }
         else if (action.type === "focus_merge_prompt") {
           if (getPrompt()) focusMergePrompt();
           else {
@@ -1530,6 +1528,7 @@
                 <EditorTab
                   repoPath={editorRepoPath}
                   sessionId={sessionId}
+                  ptyKey={tabEntry.ptyKey}
                   sessionExited={session.status === "exited"}
                   visible={isActiveInLeaf && !activePluginId}
                   theme={isDark() ? "vs-dark" : "vs"}
