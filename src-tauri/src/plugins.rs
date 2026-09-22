@@ -3433,6 +3433,49 @@ async fn plugin_log_path(app: &AppHandle, plugin_id: &str) -> Result<PathBuf, St
         .join("stderr.log"))
 }
 
+/// Build the PATH handed to plugin backend processes.
+///
+/// A GUI launch (Spotlight, Finder, Dock) inherits launchd's minimal PATH, which
+/// excludes user-local bin directories. Plugin backends routinely shell out to
+/// user-installed CLIs (`planeai-plugin-kiro-usage` runs `kiro-cli`), so without
+/// this they fail with `No such file or directory (os error 2)`. Reuse the same
+/// augmentation every other planeai subprocess gets, including the user's
+/// configured `extra_path_dirs`.
+fn plugin_runtime_path(app: &AppHandle) -> String {
+    let extra_path_dirs = app
+        .try_state::<crate::state::ConfigState>()
+        .and_then(|state| {
+            state
+                .0
+                .lock()
+                .ok()
+                .map(|config| config.resolved_extra_path_dirs())
+        })
+        .unwrap_or_default();
+    plugin_runtime_path_for(&extra_path_dirs)
+}
+
+fn plugin_runtime_path_for(extra_path_dirs: &[String]) -> String {
+    planeai_core::command::augmented_path(extra_path_dirs)
+}
+
+fn build_runtime_command(binary: &Path, state_root: Option<&Path>, path_env: &str) -> Command {
+    let mut command = Command::new(binary);
+    if let Some(state_root) = state_root {
+        command
+            .env("PLANEAI_PLUGIN_DATA_DIR", state_root.join("data"))
+            .env("PLANEAI_PLUGIN_SECRETS_DIR", state_root.join("secrets"));
+    }
+    command
+        .env("PATH", path_env)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    planeai_core::command::no_window_tokio(&mut command);
+    command
+}
+
 async fn spawn_runtime(
     app: AppHandle,
     binary: &Path,
@@ -3441,18 +3484,7 @@ async fn spawn_runtime(
     plugin_id: &str,
     capabilities: HashSet<PluginHostCapability>,
 ) -> Result<RuntimeProcess, String> {
-    let mut command = Command::new(binary);
-    if let Some(state_root) = state_root {
-        command
-            .env("PLANEAI_PLUGIN_DATA_DIR", state_root.join("data"))
-            .env("PLANEAI_PLUGIN_SECRETS_DIR", state_root.join("secrets"));
-    }
-    command
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-    planeai_core::command::no_window_tokio(&mut command);
+    let mut command = build_runtime_command(binary, state_root, &plugin_runtime_path(&app));
     let mut child = command
         .spawn()
         .map_err(|e| format!("failed to spawn plugin runtime {}: {e}", binary.display()))?;
@@ -4615,5 +4647,87 @@ mod session_prompt_tests {
         )
         .unwrap_err()
         .contains("not granted"));
+    }
+}
+
+#[cfg(test)]
+mod runtime_spawn_tests {
+    use super::*;
+
+    fn command_env(command: &Command, key: &str) -> Option<String> {
+        command
+            .as_std()
+            .get_envs()
+            .find(|(name, _)| *name == std::ffi::OsStr::new(key))
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn plugin_backend_is_spawned_with_an_explicit_path() {
+        let command = build_runtime_command(
+            Path::new("/opt/planeai/plugins/kiro-usage/backend"),
+            None,
+            "/custom/bin:/usr/bin",
+        );
+        assert_eq!(
+            command_env(&command, "PATH").as_deref(),
+            Some("/custom/bin:/usr/bin"),
+            "plugin backends must not inherit the GUI launch PATH"
+        );
+    }
+
+    #[test]
+    fn plugin_backend_keeps_its_state_directories() {
+        let command = build_runtime_command(
+            Path::new("/opt/planeai/plugins/kiro-usage/backend"),
+            Some(Path::new("/state/kiro-usage")),
+            "/usr/bin",
+        );
+        assert_eq!(
+            command_env(&command, "PLANEAI_PLUGIN_DATA_DIR").as_deref(),
+            Some("/state/kiro-usage/data")
+        );
+        assert_eq!(
+            command_env(&command, "PLANEAI_PLUGIN_SECRETS_DIR").as_deref(),
+            Some("/state/kiro-usage/secrets")
+        );
+    }
+
+    /// Reproduces the Spotlight launch failure: launchd hands the app a minimal
+    /// PATH, so a plugin backend that shells out to a user-installed CLI fails
+    /// with `No such file or directory (os error 2)`. The PATH planeai hands to
+    /// plugin backends must resolve that CLI.
+    #[cfg(unix)]
+    #[test]
+    fn plugin_runtime_path_resolves_binaries_a_gui_launch_path_would_miss() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let user_bin = tempfile::tempdir().unwrap();
+        let cli = user_bin.path().join("planeai-path-probe");
+        std::fs::write(&cli, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let extra_path_dirs = vec![user_bin.path().to_string_lossy().into_owned()];
+        let gui_launch_path = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+        let spawn_probe = |path: &str| {
+            std::process::Command::new("/bin/sh")
+                .args(["-c", "planeai-path-probe"])
+                .env_clear()
+                .env("PATH", path)
+                .status()
+                .unwrap()
+                .success()
+        };
+
+        assert!(
+            !spawn_probe(gui_launch_path),
+            "the bug: a minimal GUI launch PATH cannot resolve user-installed CLIs"
+        );
+        assert!(
+            spawn_probe(&plugin_runtime_path_for(&extra_path_dirs)),
+            "the fix: the plugin runtime PATH must resolve user-installed CLIs"
+        );
     }
 }

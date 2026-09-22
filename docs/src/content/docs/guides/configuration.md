@@ -228,7 +228,7 @@ GUI apps inherit a minimal system PATH that may not include directories where yo
 }
 ```
 
-These directories are prepended before the conventional ones, giving them highest priority.
+These directories are prepended before the conventional ones, giving them highest priority. They apply to agent sessions, shell tabs, and plugin backends — so a plugin that shells out to a CLI (for example a usage-reporting plugin that runs `kiro-cli`) resolves it even when planeai is launched from Spotlight, Finder, or the Dock.
 
 ### Environment Override
 
