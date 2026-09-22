@@ -92,10 +92,10 @@ it("ignores a hidden terminal's focus event after a session switch", () => {
   );
 });
 
-it("requests focus for the keyboard-selected terminal tab", () => {
-  expect(appSource).toMatch(/function requestTerminalFocus\(sessionId: string\): void/);
-  expect(appSource).toMatch(/function splitNextTab\(\)[\s\S]*?syncFocusedLeafToOrchestrator\(\);[\s\S]*?requestTerminalFocus\(next\.ptyKey\)/);
-  expect(appSource).toMatch(/function splitPrevTab\(\)[\s\S]*?syncFocusedLeafToOrchestrator\(\);[\s\S]*?requestTerminalFocus\(previous\.ptyKey\)/);
+it("preserves the keyboard-selected terminal PTY after session synchronization", () => {
+  expect(appSource).toMatch(/function preserveKeyboardSelectedTerminal[\s\S]*?selectWorkspaceSession\(sessionId\)[\s\S]*?splitTree\.focusTab\(entry\.ptyKey\)[\s\S]*?requestTerminalFocus\(entry\.ptyKey\)/);
+  expect(appSource).toMatch(/function splitNextTab\(\)[\s\S]*?preserveKeyboardSelectedTerminal\(next\)/);
+  expect(appSource).toMatch(/function splitPrevTab\(\)[\s\S]*?preserveKeyboardSelectedTerminal\(previous\)/);
 });
 
 it("preserves editor focus when a split-pane click originates inside an editor", () => {

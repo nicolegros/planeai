@@ -608,16 +608,26 @@
     }
   }
 
+  function preserveKeyboardSelectedTerminal(entry: import("./lib/split-tree.svelte").TabEntry): void {
+    if (entry.type !== "agent" && entry.type !== "shell") return;
+    const sessionId = ptyKeyToSessionId(entry.ptyKey);
+    if (sessionId !== activeSessionId) selectWorkspaceSession(sessionId);
+    // Session synchronization can focus the agent tab. Restore the specific
+    // keyboard-selected PTY after that reactive update settles.
+    tick().then(() => requestAnimationFrame(() => {
+      splitTree.focusTab(entry.ptyKey);
+      requestTerminalFocus(entry.ptyKey);
+    }));
+  }
+
   /** Navigate to the next tab in the focused split leaf. */
   function splitNextTab(): void {
     const leaf = splitTree.getFocusedLeaf();
     if (!leaf || leaf.tabs.length <= 1) return;
     const currentIdx = leaf.tabs.findIndex((t) => t.ptyKey === leaf.activeTab);
-    const nextIdx = (currentIdx + 1) % leaf.tabs.length;
-    const next = leaf.tabs[nextIdx];
+    const next = leaf.tabs[(currentIdx + 1) % leaf.tabs.length];
     splitTree.setLeafActiveTab(leaf.id, next.ptyKey);
-    syncFocusedLeafToOrchestrator();
-    if (next.type === "agent" || next.type === "shell") requestTerminalFocus(next.ptyKey);
+    preserveKeyboardSelectedTerminal(next);
   }
 
   /** Navigate to the previous tab in the focused split leaf. */
@@ -625,11 +635,9 @@
     const leaf = splitTree.getFocusedLeaf();
     if (!leaf || leaf.tabs.length <= 1) return;
     const currentIdx = leaf.tabs.findIndex((t) => t.ptyKey === leaf.activeTab);
-    const prevIdx = (currentIdx - 1 + leaf.tabs.length) % leaf.tabs.length;
-    const previous = leaf.tabs[prevIdx];
+    const previous = leaf.tabs[(currentIdx - 1 + leaf.tabs.length) % leaf.tabs.length];
     splitTree.setLeafActiveTab(leaf.id, previous.ptyKey);
-    syncFocusedLeafToOrchestrator();
-    if (previous.type === "agent" || previous.type === "shell") requestTerminalFocus(previous.ptyKey);
+    preserveKeyboardSelectedTerminal(previous);
   }
 
   /** Toggle diff tab: if it exists in the tree, focus it; otherwise add it to focused leaf. */
