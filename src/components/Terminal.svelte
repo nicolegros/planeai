@@ -21,6 +21,7 @@
     sessionId: string;
     visible: boolean;
     focused: boolean;
+    focusRequest?: { id: number; sessionId: string } | null;
     exited?: boolean;
     skipAttach?: boolean;
     initialCommand?: string;
@@ -30,7 +31,7 @@
     onFocused?: (event: PointerEvent | FocusEvent) => void;
   }
 
-  let { sessionId, visible, focused, exited = false, skipAttach = false, initialCommand, onUserInput, onAttached, onAttachError, onFocused }: Props = $props();
+  let { sessionId, visible, focused, focusRequest = null, exited = false, skipAttach = false, initialCommand, onUserInput, onAttached, onAttachError, onFocused }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let term: Terminal;
@@ -39,6 +40,13 @@
   let attached = $state(false);
   let opened = $state(false);
   let lastSentDims: { cols: number; rows: number } | null = null;
+  let handledFocusRequest = 0;
+  let suppressProgrammaticFocusin = false;
+
+  function handleTerminalFocus(event: PointerEvent | FocusEvent): void {
+    if (event.type === "focusin" && suppressProgrammaticFocusin) return;
+    onFocused?.(event);
+  }
 
   const SCROLLBACK_LINES = 20_000;
   const RESIZE_DEBOUNCE_MS = 50;
@@ -384,6 +392,18 @@
     }
   });
 
+  $effect(() => {
+    const request = focusRequest;
+    if (!request || request.id === handledFocusRequest || request.sessionId !== sessionId || !term || !opened || !visible) return;
+    handledFocusRequest = request.id;
+    requestAnimationFrame(() => {
+      if (!term || !opened || !visible || focusRequest?.id !== request.id) return;
+      suppressProgrammaticFocusin = true;
+      term.focus();
+      queueMicrotask(() => { suppressProgrammaticFocusin = false; });
+    });
+  });
+
   // Only re-run when terminal-relevant settings change
   $effect(() => {
     if (!term) return;
@@ -442,5 +462,5 @@
   class:hidden={!visible}
   style="background-color: {termBg}"
   onpointerdown={onFocused}
-  onfocusin={onFocused}
+  onfocusin={handleTerminalFocus}
 ></div>

@@ -72,10 +72,16 @@ describe("TaskWorkspace session selection", () => {
   });
 });
 
-it("ignores a previous terminal's focus event after a session switch", () => {
+it("ignores a hidden terminal's focus event after a session switch", () => {
   expect(appSource).toMatch(
-    /onFocused=\{\(event\) => \{\s*if \(event\.type === "focusin" && sessionId !== activeSessionId\) return;/,
+    /onFocused=\{\(event\) => \{\s*if \(event\.type === "focusin" && !isActiveInLeaf\) return;/,
   );
+});
+
+it("requests terminal-owned focus after keyboard navigation commits", () => {
+  expect(appSource).toMatch(/function requestTerminalFocus\(sessionId: string\): void/);
+  expect(appSource).toMatch(/function splitNextTab\(\)[\s\S]*?syncFocusedLeafToOrchestrator\(\);[\s\S]*?requestTerminalFocus\(next\.ptyKey\)/);
+  expect(appSource).toMatch(/function splitPrevTab\(\)[\s\S]*?syncFocusedLeafToOrchestrator\(\);[\s\S]*?requestTerminalFocus\(previous\.ptyKey\)/);
 });
 
 it("preserves editor focus when a split-pane click originates inside an editor", () => {
