@@ -23,6 +23,8 @@
     autofocus?: boolean;
     closeOnEscape?: boolean;
     session?: PluginSessionContext;
+    /** Resolves the focused session at action time for local plugin recipients. */
+    getFocusedAgentSession?: () => PluginSessionContext | undefined;
   }
 
   type LocalPluginFrameMessage = {
@@ -48,7 +50,7 @@
     width?: number;
   };
 
-  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session }: Props = $props();
+  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, getFocusedAgentSession = () => undefined }: Props = $props();
   const serializedSession = $derived(session ? JSON.stringify(session) : "");
   let container = $state<HTMLElement>();
   let disposer: PluginUiDisposer | null = null;
@@ -277,6 +279,9 @@
         addEventListener("keydown", forwardSidebarKeydown);
         const host = {
           call: (method, params = null) => request("call", { method, params }),
+          recipient: {
+            getFocusedAgentSession: () => request("focused-agent-session"),
+          },
           rpc: {
             call: (method, params = null) => request("host-rpc", { method, params }),
           },
@@ -411,7 +416,9 @@
         if (autofocus) focusFrame();
         return;
       }
-      if (message.type === "call" && typeof message.method === "string") {
+      if (message.type === "focused-agent-session") {
+        respond(message.requestId, true, getFocusedAgentSession() ?? null);
+      } else if (message.type === "call" && typeof message.method === "string") {
         void callPlugin(message.method, message.params)
           .then((value) => respond(message.requestId, true, value))
           .catch((error) => respond(message.requestId, false, error));
@@ -557,6 +564,9 @@
       };
       const host: PluginUiHost = {
         call: <T>(method: string, params: unknown = null) => callPlugin<T>(method, params),
+        recipient: {
+          getFocusedAgentSession: async () => getFocusedAgentSession() ?? null,
+        },
         rpc: {
           call: <T>(_method: string, _params: unknown = null) =>
             Promise.reject(new Error("direct host RPC is available only to local plugins")),

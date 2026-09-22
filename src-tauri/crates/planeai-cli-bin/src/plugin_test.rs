@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
 
+#[cfg(test)]
 const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
 const MAX_FRAME_BYTES: usize = 64 * 1024;
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
@@ -33,11 +34,19 @@ pub fn run(package: &Path, scenario: Option<&Path>) -> Result<()> {
     let manifest = read_manifest(&package)?;
     let entrypoint = validate_local_manifest(&manifest, current_platform_key())?;
     let capabilities = manifest_capabilities(&manifest);
+    let host_api_version = manifest
+        .get("host_api_version")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("plugin manifest host_api_version must be a string"))?;
     validate_ui_entrypoints(&package, &manifest)?;
     let executable = validate_entrypoint(&package, &entrypoint)?;
 
     let mut process = PluginProcess::spawn(&executable, &package, &capabilities)?;
-    let handshake = process.call(1, "plugin.handshake", handshake_params(&capabilities))?;
+    let handshake = process.call(
+        1,
+        "plugin.handshake",
+        handshake_params(&capabilities, host_api_version),
+    )?;
     let subscriptions = validate_handshake(&handshake, &manifest)?;
     let mut request_id = 2;
 
@@ -177,9 +186,9 @@ fn manifest_capabilities(manifest: &Value) -> Vec<String> {
         .collect()
 }
 
-fn handshake_params(capabilities: &[String]) -> Value {
+fn handshake_params(capabilities: &[String], host_api_version: &str) -> Value {
     json!({
-        "host_api_version": HOST_API_VERSION,
+        "host_api_version": host_api_version,
         "host_capabilities": capabilities,
     })
 }
@@ -863,9 +872,6 @@ fn validate_handshake(result: &Value, manifest: &Value) -> Result<Vec<String>> {
             bail!("mismatched plugin.handshake result: {field} does not match manifest");
         }
     }
-    if result.get("host_api_version").and_then(Value::as_str) != Some(HOST_API_VERSION) {
-        bail!("mismatched plugin.handshake result: unsupported host API version");
-    }
     result
         .get("lifecycle_event_subscriptions")
         .cloned()
@@ -956,8 +962,12 @@ mod tests {
         invalid_id["id"] = json!("Fixture");
         assert!(validate_local_manifest(&invalid_id, "test-platform").is_err());
 
+        let mut recipient_api = manifest();
+        recipient_api["host_api_version"] = json!("planeai.plugin-host.v2");
+        assert!(validate_local_manifest(&recipient_api, "test-platform").is_ok());
+
         let mut incompatible_api = manifest();
-        incompatible_api["host_api_version"] = json!("planeai.plugin-host.v2");
+        incompatible_api["host_api_version"] = json!("planeai.plugin-host.v3");
         assert!(validate_local_manifest(&incompatible_api, "test-platform").is_err());
 
         let mut unsupported_capability = manifest();
@@ -1088,7 +1098,7 @@ mod tests {
     #[test]
     fn handshake_advertises_manifest_granted_capabilities() {
         assert_eq!(
-            handshake_params(&manifest_capabilities(&manifest())),
+            handshake_params(&manifest_capabilities(&manifest()), HOST_API_VERSION),
             json!({
                 "host_api_version": HOST_API_VERSION,
                 "host_capabilities": ["settings", "tasks.read", "task-events"],

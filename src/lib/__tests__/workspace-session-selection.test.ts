@@ -42,12 +42,21 @@ describe("TaskWorkspace session selection", () => {
     );
   });
 
-  it("derives running titlebar contributions independently from session-panel commands", () => {
+  it("gives a session panel a live focused-agent recipient resolver", () => {
+    expect(appSource).toMatch(
+      /<PluginContributionHost[\s\S]*?session=\{activeContribution\.placement === "session\.panel" \? activePluginSessionContext : undefined\}[\s\S]*?getFocusedAgentSession=\{\(\) => activePluginSessionContext\}/,
+    );
+  });
+
+  it("routes titlebar targets by their destination placement", () => {
     expect(appSource).toMatch(
       /const titlebarContributions = \$derived\([\s\S]*?contribution\.placement === "titlebar"/,
     );
     expect(appSource).toMatch(
-      /<Titlebar[\s\S]*?\{titlebarContributions\}[\s\S]*?titlebarSession=\{activePluginSessionContext\}[\s\S]*?onOpenTitlebarContribution=\{openPluginContributionModal\}/,
+      /function openTitlebarPluginContribution\(pluginId: string, contributionId: string\): void \{[\s\S]*?contribution\?\.placement === "session\.panel"[\s\S]*?openPluginContributionModal\(pluginId, contributionId\);[\s\S]*?openPluginContribution\(pluginId, contributionId\);/,
+    );
+    expect(appSource).toMatch(
+      /<Titlebar[\s\S]*?\{titlebarContributions\}[\s\S]*?titlebarSession=\{activePluginSessionContext\}[\s\S]*?onOpenTitlebarContribution=\{openTitlebarPluginContribution\}/,
     );
   });
 
@@ -67,15 +76,21 @@ describe("TaskWorkspace session selection", () => {
       /function openPluginContributionModal\(pluginId: string, contributionId: string\): void \{[\s\S]*?candidate\.placement === "session\.panel"[\s\S]*?modalPluginId = pluginId;/,
     );
     expect(appSource).toMatch(
-      /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?title=\{modalContribution\.label\}[\s\S]*?preventEscapeClose=\{false\}[\s\S]*?<PluginContributionHost[\s\S]*?session=\{activePluginSessionContext\}[\s\S]*?closeOnEscape=\{true\}/,
+      /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?title=\{modalContribution\.label\}[\s\S]*?preventEscapeClose=\{false\}[\s\S]*?<PluginContributionHost[\s\S]*?session=\{activePluginSessionContext\}[\s\S]*?getFocusedAgentSession=\{\(\) => activePluginSessionContext\}[\s\S]*?closeOnEscape=\{true\}/,
     );
   });
 });
 
-it("ignores a previous terminal's focus event after a session switch", () => {
+it("ignores a hidden terminal's focus event after a session switch", () => {
   expect(appSource).toMatch(
-    /onFocused=\{\(event\) => \{\s*if \(event\.type === "focusin" && sessionId !== activeSessionId\) return;/,
+    /onFocused=\{\(event\) => \{\s*if \(event\.type === "focusin" && !isActiveInLeaf\) return;/,
   );
+});
+
+it("requests focus for the keyboard-selected terminal tab", () => {
+  expect(appSource).toMatch(/function requestTerminalFocus\(sessionId: string\): void/);
+  expect(appSource).toMatch(/function splitNextTab\(\)[\s\S]*?syncFocusedLeafToOrchestrator\(\);[\s\S]*?requestTerminalFocus\(next\.ptyKey\)/);
+  expect(appSource).toMatch(/function splitPrevTab\(\)[\s\S]*?syncFocusedLeafToOrchestrator\(\);[\s\S]*?requestTerminalFocus\(previous\.ptyKey\)/);
 });
 
 it("preserves editor focus when a split-pane click originates inside an editor", () => {

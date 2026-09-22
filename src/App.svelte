@@ -76,6 +76,7 @@
   const pendingShellCommands = new Map<string, string>();
   let pluginSessionActions = $state<PluginSessionAction[]>([]);
   let pluginSessionActionsRevision = 0;
+  let terminalFocusRequest = $state<{ id: number; sessionId: string } | null>(null);
 
   let modalPluginId = $state<string | null>(null);
   let modalContributionId = $state<string | null>(null);
@@ -612,7 +613,10 @@
     if (!leaf || leaf.tabs.length <= 1) return;
     const currentIdx = leaf.tabs.findIndex((t) => t.ptyKey === leaf.activeTab);
     const nextIdx = (currentIdx + 1) % leaf.tabs.length;
-    splitTree.setLeafActiveTab(leaf.id, leaf.tabs[nextIdx].ptyKey);
+    const next = leaf.tabs[nextIdx];
+    splitTree.setLeafActiveTab(leaf.id, next.ptyKey);
+    syncFocusedLeafToOrchestrator();
+    if (next.type === "agent" || next.type === "shell") requestTerminalFocus(next.ptyKey);
   }
 
   /** Navigate to the previous tab in the focused split leaf. */
@@ -621,7 +625,10 @@
     if (!leaf || leaf.tabs.length <= 1) return;
     const currentIdx = leaf.tabs.findIndex((t) => t.ptyKey === leaf.activeTab);
     const prevIdx = (currentIdx - 1 + leaf.tabs.length) % leaf.tabs.length;
-    splitTree.setLeafActiveTab(leaf.id, leaf.tabs[prevIdx].ptyKey);
+    const previous = leaf.tabs[prevIdx];
+    splitTree.setLeafActiveTab(leaf.id, previous.ptyKey);
+    syncFocusedLeafToOrchestrator();
+    if (previous.type === "agent" || previous.type === "shell") requestTerminalFocus(previous.ptyKey);
   }
 
   /** Toggle diff tab: if it exists in the tree, focus it; otherwise add it to focused leaf. */
@@ -865,6 +872,17 @@
     modalContributionId = contributionId;
   }
 
+  function openTitlebarPluginContribution(pluginId: string, contributionId: string): void {
+    const contribution = pluginInventory
+      .find((candidate) => candidate.id === pluginId && candidate.state === "running")
+      ?.ui_contributions.find((candidate) => candidate.id === contributionId);
+    if (contribution?.placement === "session.panel") {
+      openPluginContributionModal(pluginId, contributionId);
+      return;
+    }
+    openPluginContribution(pluginId, contributionId);
+  }
+
   function focusPluginInteraction(): boolean {
     const interaction = document.querySelector<HTMLElement>("[data-plugin-interaction-host] [data-plugin-ui-contribution]");
     if (!interaction) return false;
@@ -942,6 +960,7 @@
     leavePluginWorkspace();
     loopStore.setActiveLoopId(null);
     orchestrator.selectSession(sessionId);
+    requestTerminalFocus(sessionId);
   }
 
   function openSessionForTask(task: TaskItem, project: Project): void {
@@ -1015,6 +1034,14 @@
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
+
+  function requestTerminalFocus(sessionId: string): void {
+    tick().then(() => {
+      requestAnimationFrame(() => {
+        terminalFocusRequest = { id: (terminalFocusRequest?.id ?? 0) + 1, sessionId };
+      });
+    });
+  }
 
   /** Valid IDs for MRU cycling — task workspaces, legacy sessions, and loops. */
   function getSwitchableIds(): Set<string> {
@@ -1268,8 +1295,20 @@
     function onKeyUp(e: KeyboardEvent) {
       const isModRelease = (e.key === "Control" && !e.ctrlKey) || (e.key === "Meta" && !e.metaKey);
       if (!isModRelease) return;
-      if (getCycleState().isCycling) { const target = commit(); if (target) { routeNavTarget(target); if (!isLoopId(target)) focusTerminal(); } }
-      if (navCycle.isCycling()) { const target = navCycle.commit(); if (target) { routeNavTarget(target); if (!isLoopId(target)) focusTerminal(); } }
+      if (getCycleState().isCycling) {
+        const target = commit();
+        if (target && !isLoopId(target)) {
+          routeNavTarget(target);
+          focusTerminal();
+        } else if (target) routeNavTarget(target);
+      }
+      if (navCycle.isCycling()) {
+        const target = navCycle.commit();
+        if (target && !isLoopId(target)) {
+          routeNavTarget(target);
+          focusTerminal();
+        } else if (target) routeNavTarget(target);
+      }
     }
     function onBlur() { setTimeout(() => { if (!document.hasFocus()) { if (getCycleState().isCycling) cancel(); if (navCycle.isCycling()) navCycle.cancel(); } }, 0); }
     window.addEventListener("keyup", onKeyUp);
@@ -1315,7 +1354,7 @@
     onAddTab={() => orchestrator.handleNewTab()}
     {titlebarContributions}
     titlebarSession={activePluginSessionContext}
-    onOpenTitlebarContribution={openPluginContributionModal}
+    onOpenTitlebarContribution={openTitlebarPluginContribution}
     onOpenCommand={() => { commandMenuFileMode = false; commandMenuOpen = true; }}
     {symphonyStatus}
   />
@@ -1515,6 +1554,7 @@
               <!-- Wrapper hides inactive tabs; Terminal's visible prop also pauses during loop overlay -->
               <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
                 <Terminal
+                  focusRequest={terminalFocusRequest}
                   sessionId={tabEntry.ptyKey}
                   visible={isActiveInLeaf && !activeLoopId && !activePluginId}
                   focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !modalPluginId}
@@ -1617,7 +1657,7 @@
           <span class="text-sm font-medium text-t1">{activePlugin ? `${activePlugin.name} · ${activeContribution?.label ?? "Contribution"}` : "Plugin"}</span>
         </div>
         {#if activePlugin && activeContribution}
-          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} session={activeContribution.placement === "session.panel" ? activePluginSessionContext : undefined} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} autofocus /></div>
+          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} session={activeContribution.placement === "session.panel" ? activePluginSessionContext : undefined} getFocusedAgentSession={() => activePluginSessionContext} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} autofocus /></div>
         {:else}
           <div class="flex min-h-0 flex-1 items-center justify-center text-sm text-t3">Plugin contribution is no longer available.</div>
         {/if}
@@ -1830,6 +1870,7 @@
         plugin={modalPlugin}
         contribution={modalContribution}
         session={activePluginSessionContext}
+        getFocusedAgentSession={() => activePluginSessionContext}
         onNavigate={(pluginId, contributionId) => {
           closePluginContributionModal();
           openPluginContribution(pluginId, contributionId);
