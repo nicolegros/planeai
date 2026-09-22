@@ -3,10 +3,10 @@ import { mount, unmount } from "svelte";
 import TabStrip from "../../components/TabStrip.svelte";
 import * as splitTree from "../split-tree.svelte";
 import type { TabEntry } from "../split-tree.svelte";
-import { addTab, getTabs, initSession } from "../session-tabs.svelte";
-import { removeTab } from "../session-tabs.svelte";
+import { addTab, getTabs, initSession, removeTab } from "../session-tabs.svelte";
 import { queueTerminalEditor } from "../terminal-editor";
 import { reconcileWorkspaceTabs } from "../workspace-tabs";
+import { addShellTabToLeaf } from "../workspace-resources";
 
 const SESSION = "agent-1";
 const FILE = "/repo/src/main.rs";
@@ -52,9 +52,7 @@ async function openShellEditor(): Promise<{
       reservedAtReconcile = pending.has(`${SESSION}:1`);
       reconcile(pending);
     },
-    addShellTab: (leafId, ptyKey, label) => {
-      splitTree.addSessionToLeaf(leafId, { ptyKey, label, icon: "terminal", type: "shell" });
-    },
+    addShellTab: addShellTabToLeaf,
     pendingCommands: pending,
   });
   return { pending, reservedAtReconcile };

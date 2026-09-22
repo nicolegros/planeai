@@ -47,6 +47,7 @@
   import { getTabs, getActiveTabIndex, addTab, removeTab } from "./lib/session-tabs.svelte";
   import { consumePendingTerminalEditorCommand, getPendingTerminalEditorCommand, queueTerminalEditor, rollbackPendingTerminalEditor } from "./lib/terminal-editor";
   import { ptyKeyToSessionId, reconcileWorkspaceTabs } from "./lib/workspace-tabs";
+  import { addShellTabToLeaf, openEditorResource, openShellResourceInFocusedLeaf, openShellResourceInNewPane, toggleDiffResource } from "./lib/workspace-resources";
   import { getMruList, isMounted as poolIsMounted } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
@@ -489,30 +490,7 @@
    */
   function doSplit(direction: "vertical" | "horizontal"): void {
     if (!activeSessionId) return;
-
-    const newLeafId = splitTree.splitFocusedLeaf(direction);
-    if (!newLeafId) return;
-
-    // Create a new shell tab within the current session
-    const tabIndex = addTab(activeSessionId);
-    if (tabIndex === -1) {
-      // Undo the split — destroy the empty leaf
-      splitTree.destroyLeaf(newLeafId);
-      return;
-    }
-    pty.incrementTabCount(activeSessionId);
-
-    // The pty key for shell tabs is "sessionId:tabIndex"
-    const ptyKey = `${activeSessionId}:${tabIndex}`;
-
-    // Verify this ptyKey isn't already in the tree (defensive)
-    const existing = splitTree.getLeafForSession(ptyKey);
-    if (existing) {
-      splitTree.destroyLeaf(newLeafId);
-      return;
-    }
-
-    splitTree.addSessionToLeaf(newLeafId, { ptyKey, label: "Shell", icon: "terminal", type: "shell" });
+    if (!openShellResourceInNewPane(activeSessionId, direction)) return;
     // Wait for Terminal to mount + open before refocusing
     tick().then(() => requestAnimationFrame(() => refocusTerminal()));
   }
@@ -520,15 +498,7 @@
   /** Open a new shell tab in the focused split leaf. */
   function splitNewTab(): void {
     if (!activeSessionId) return;
-    const focusedLeafId = splitTree.getFocusedLeafId();
-    if (!focusedLeafId) return;
-
-    const tabIndex = addTab(activeSessionId);
-    if (tabIndex === -1) return;
-    pty.incrementTabCount(activeSessionId);
-
-    const ptyKey = `${activeSessionId}:${tabIndex}`;
-    splitTree.addSessionToLeaf(focusedLeafId, { ptyKey, label: "Shell", icon: "terminal", type: "shell" });
+    if (!openShellResourceInFocusedLeaf(activeSessionId)) return;
     refocusTerminal();
   }
 
@@ -624,32 +594,9 @@
   /** Toggle diff tab: if it exists in the tree, focus it; otherwise add it to focused leaf. */
   function toggleDiffInTree(): void {
     if (!activeSessionId) return;
-    const diffPtyKey = `${activeSessionId}:diff`;
-
-    // If already open, toggle: if active focus away, if not active focus it
-    const existing = splitTree.findTab(diffPtyKey);
-    if (existing) {
-      if (existing.leaf.activeTab === diffPtyKey) {
-        // Diff is active — close it
-        splitTree.removeSessionFromLeaf(diffPtyKey);
-        tick().then(() => refocusTerminal());
-      } else {
-        // Diff exists but not active — focus it
-        splitTree.focusTab(diffPtyKey);
-      }
-      return;
+    if (toggleDiffResource(activeSessionId) === "closed") {
+      tick().then(() => refocusTerminal());
     }
-
-    // Add diff tab to focused leaf
-    const focusedLeafId = splitTree.getFocusedLeafId();
-    if (!focusedLeafId) return;
-    const tabEntry: import("./lib/split-tree.svelte").TabEntry = {
-      ptyKey: diffPtyKey,
-      label: "Diff",
-      icon: "git-compare",
-      type: "diff",
-    };
-    splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
   }
 
   function confirmPendingShellCommandStarted(ptyKey: string): void {
@@ -666,9 +613,7 @@
         addTab,
         removeTab,
         incrementTabCount: pty.incrementTabCount,
-        addShellTab: (leafId, ptyKey, label) => {
-          splitTree.addSessionToLeaf(leafId, { ptyKey, label, icon: "terminal", type: "shell" });
-        },
+        addShellTab: addShellTabToLeaf,
         pendingCommands: pendingShellCommands,
       });
       if (opened) tick().then(() => requestAnimationFrame(() => refocusTerminal()));
@@ -692,29 +637,11 @@
     showSnackbar(`Failed to open terminal editor: ${error}`, "error");
   }
 
-  /** Open a file in PlaneAI's embedded editor. */
-  function openEmbeddedFileInTree(sessionId: string, filePath: string): void {
-    const editorPtyKey = `${sessionId}:editor:${filePath}`;
-    if (splitTree.focusTab(editorPtyKey)) return;
-
-    const focusedLeafId = splitTree.getFocusedLeafId();
-    if (!focusedLeafId) return;
-    const fileName = filePath.split("/").pop() ?? filePath;
-    const tabEntry: import("./lib/split-tree.svelte").TabEntry = {
-      ptyKey: editorPtyKey,
-      label: fileName,
-      icon: "file",
-      type: "editor",
-      filePath,
-    };
-    splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
-  }
-
   /** Open a file with the globally configured editor. */
   async function openFileInTree(sessionId: string, filePath: string): Promise<void> {
     if (filePath.split(/[/\\]/).includes("..")) return;
     const result = await openFileWithConfiguredEditor(getSettings().editor, {
-      openEmbedded: () => openEmbeddedFileInTree(sessionId, filePath),
+      openEmbedded: () => { openEditorResource(sessionId, filePath); },
       openTerminal: () => openTerminalEditorInTree(sessionId, filePath),
       openExternal: async () => {
         try {

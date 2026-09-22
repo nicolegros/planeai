@@ -207,6 +207,7 @@ Each session can have multiple tabs. Tab 0 is the agent; tabs 1+ are shell tabs.
 - **Tmux backend**: shell tabs use a local PTY (`PtyTarget::Shell`) and are ephemeral — they die with the app.
 - **Dynamic tab titles**: shell tabs listen for OSC title changes from the terminal. When the shell reports a running command (e.g., `vim`, `cargo`), the tab label updates to show that command name (`src/lib/shell-title.ts` extracts the binary name, filtering out shell resets and cwd paths). Tabs with a custom title are preserved across relabeling.
 - **Pty key uniqueness**: the split tree keys its tab render by pty key, so a duplicate entry crashes the whole workspace (`each_key_duplicate`) and freezes tab switching. `splitTree.addSessionToLeaf` therefore updates an existing pty key in place rather than appending a second entry. Flows that create a tab across an `await` (shell editor tabs) reserve their pty key in `pendingShellCommands` first, so `reconcileWorkspaceTabs` skips it instead of mounting a bare shell without the queued editor command.
+- **Where resources are created**: every shell, diff and embedded-editor tab enters the layout through `src/lib/workspace-resources.ts`; workspace sessions are reconciled against the layout by `src/lib/workspace-tabs.ts`. `App.svelte` only drives focus and error reporting on top of those, so pty key allocation stays in one place.
 
 ### Exit detection
 
