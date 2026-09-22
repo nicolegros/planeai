@@ -4687,18 +4687,20 @@ mod runtime_spawn_tests {
 
     #[test]
     fn plugin_backend_keeps_its_state_directories() {
+        let state_root = Path::new("/state/kiro-usage");
         let command = build_runtime_command(
             Path::new("/opt/planeai/plugins/kiro-usage/backend"),
-            Some(Path::new("/state/kiro-usage")),
+            Some(state_root),
             "/usr/bin",
         );
+        // Compared as paths, not strings: separators differ across platforms.
         assert_eq!(
-            command_env(&command, "PLANEAI_PLUGIN_DATA_DIR").as_deref(),
-            Some("/state/kiro-usage/data")
+            command_env(&command, "PLANEAI_PLUGIN_DATA_DIR").map(PathBuf::from),
+            Some(state_root.join("data"))
         );
         assert_eq!(
-            command_env(&command, "PLANEAI_PLUGIN_SECRETS_DIR").as_deref(),
-            Some("/state/kiro-usage/secrets")
+            command_env(&command, "PLANEAI_PLUGIN_SECRETS_DIR").map(PathBuf::from),
+            Some(state_root.join("secrets"))
         );
     }
 
