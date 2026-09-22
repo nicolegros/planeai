@@ -352,16 +352,13 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
     struct WindowsPromptOps;
     impl PromptOps for WindowsPromptOps {
         fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String> {
-            use std::process::Command;
-            let output = Command::new("tmux")
-                .args(["send-keys", "-t", tmux_name, "-l", text])
+            let output = crate::tmux::command(&["send-keys", "-t", tmux_name, "-l", text])
                 .output()
                 .map_err(|e| format!("failed to run tmux: {e}"))?;
             if !output.status.success() {
                 return Err(String::from_utf8_lossy(&output.stderr).to_string());
             }
-            let output = Command::new("tmux")
-                .args(["send-keys", "-t", tmux_name, "Enter"])
+            let output = crate::tmux::command(&["send-keys", "-t", tmux_name, "Enter"])
                 .output()
                 .map_err(|e| format!("failed to run tmux: {e}"))?;
             if !output.status.success() {
@@ -386,9 +383,7 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
                 .map_err(|e| e.to_string())
         }
         fn tmux_has_session(&self, tmux_name: &str) -> bool {
-            use std::process::Command;
-            Command::new("tmux")
-                .args(["has-session", "-t", tmux_name])
+            crate::tmux::command(&["has-session", "-t", tmux_name])
                 .output()
                 .map(|o| o.status.success())
                 .unwrap_or(false)
@@ -706,19 +701,16 @@ pub fn read_daemon_buffer_after(
 
 /// Read output from a tmux-backend session via tmux capture-pane.
 pub fn read_tmux_pane(tmux_name: &str, lines: usize) -> Result<String, String> {
-    let mut cmd = std::process::Command::new("tmux");
-    cmd.args([
+    let output = crate::tmux::command(&[
         "capture-pane",
         "-p",
         "-t",
         tmux_name,
         "-S",
         &format!("-{lines}"),
-    ]);
-    planeai_core::command::no_window(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run tmux: {e}"))?;
+    ])
+    .output()
+    .map_err(|e| format!("failed to run tmux: {e}"))?;
 
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
@@ -748,10 +740,7 @@ pub fn read_tmux_pane_after(
     max_bytes: usize,
 ) -> Result<TmuxCursorReadResult, String> {
     // Capture full scrollback (up to 10000 lines for cursor matching)
-    let mut cmd = std::process::Command::new("tmux");
-    cmd.args(["capture-pane", "-p", "-t", tmux_name, "-S", "-10000"]);
-    planeai_core::command::no_window(&mut cmd);
-    let output = cmd
+    let output = crate::tmux::command(&["capture-pane", "-p", "-t", tmux_name, "-S", "-10000"])
         .output()
         .map_err(|e| format!("failed to run tmux: {e}"))?;
 
@@ -833,10 +822,7 @@ pub fn read_tmux_pane_after(
 /// Build an initial tmux cursor (for first read without --after).
 #[allow(dead_code)]
 pub fn build_tmux_cursor_from_pane(tmux_name: &str) -> Result<String, String> {
-    let mut cmd = std::process::Command::new("tmux");
-    cmd.args(["capture-pane", "-p", "-t", tmux_name, "-S", "-10000"]);
-    planeai_core::command::no_window(&mut cmd);
-    let output = cmd
+    let output = crate::tmux::command(&["capture-pane", "-p", "-t", tmux_name, "-S", "-10000"])
         .output()
         .map_err(|e| format!("failed to run tmux: {e}"))?;
 

@@ -5,6 +5,21 @@ pub fn tmux_bin() -> &'static str {
     BIN.get_or_init(|| crate::command::resolve("tmux"))
 }
 
+/// Build a `tmux` invocation.
+///
+/// Always go through this rather than spawning `tmux` by bare name: a bare
+/// program name is resolved against the spawning process's PATH, and a GUI
+/// launch (Spotlight, Finder, Dock) inherits a minimal PATH that excludes
+/// `/opt/homebrew/bin` and other user-local directories. [`tmux_bin`] resolves
+/// the absolute path once. This also applies the Windows no-console-window flag
+/// every planeai subprocess needs.
+pub fn command(args: &[&str]) -> Command {
+    let mut cmd = Command::new(tmux_bin());
+    cmd.args(args);
+    planeai_core::command::no_window(&mut cmd);
+    cmd
+}
+
 /// Generate a tmux session name: planeai-<project>-<8hex>
 pub fn session_name(project_name: &str) -> String {
     let hex: String = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
@@ -39,8 +54,7 @@ pub fn build_new_session_args(
 pub fn has_session(tmux_name: &str) -> bool {
     // Use '=' prefix for exact match to avoid tmux interpreting dots as separators
     let target = format!("={}", tmux_name);
-    Command::new(tmux_bin())
-        .args(["has-session", "-t", &target])
+    command(&["has-session", "-t", &target])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -49,8 +63,7 @@ pub fn has_session(tmux_name: &str) -> bool {
 /// Kill a tmux session.
 pub fn kill_session(tmux_name: &str) -> Result<(), String> {
     let target = format!("={}", tmux_name);
-    let output = Command::new(tmux_bin())
-        .args(["kill-session", "-t", &target])
+    let output = command(&["kill-session", "-t", &target])
         .output()
         .map_err(|e| format!("failed to run tmux: {e}"))?;
 
@@ -106,8 +119,7 @@ pub fn create_session_with_cmd_and_path(
         &path_flag,
         cmd,
     ];
-    let output = Command::new(tmux_bin())
-        .args(&args)
+    let output = command(&args)
         .output()
         .map_err(|e| format!("failed to run tmux: {e}"))?;
 
@@ -121,8 +133,7 @@ pub fn create_session_with_cmd_and_path(
 /// Send literal text to a tmux session, followed by Enter.
 pub fn send_keys(tmux_name: &str, text: &str) -> Result<(), String> {
     // Send literal text (no key-name interpretation)
-    let output = Command::new(tmux_bin())
-        .args(["send-keys", "-t", tmux_name, "-l", text])
+    let output = command(&["send-keys", "-t", tmux_name, "-l", text])
         .output()
         .map_err(|e| format!("failed to run tmux: {e}"))?;
     if !output.status.success() {
@@ -130,8 +141,7 @@ pub fn send_keys(tmux_name: &str, text: &str) -> Result<(), String> {
     }
 
     // Send Enter separately
-    let output = Command::new(tmux_bin())
-        .args(["send-keys", "-t", tmux_name, "Enter"])
+    let output = command(&["send-keys", "-t", tmux_name, "Enter"])
         .output()
         .map_err(|e| format!("failed to run tmux: {e}"))?;
     if !output.status.success() {
@@ -186,6 +196,53 @@ mod tests {
                 std::path::Path::new(bin).exists(),
                 "resolved path does not exist: {bin}"
             );
+        }
+    }
+
+    #[test]
+    fn tmux_commands_are_built_from_the_resolved_binary() {
+        let cmd = command(&["has-session", "-t", "=planeai-demo"]);
+        assert_eq!(cmd.get_program(), std::ffi::OsStr::new(tmux_bin()));
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            ["has-session", "-t", "=planeai-demo"]
+                .map(std::ffi::OsStr::new)
+                .to_vec()
+        );
+    }
+
+    /// A bare `tmux` program name is resolved against the spawning process's
+    /// PATH. A GUI launch (Spotlight, Finder, Dock) inherits a minimal PATH that
+    /// excludes `/opt/homebrew/bin`, so every call site must go through
+    /// [`command`] — which resolves the binary up front — instead of spawning by
+    /// name.
+    #[test]
+    fn no_call_site_spawns_tmux_by_bare_name() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        collect_bare_tmux_spawns(&src, &mut offenders);
+        assert!(
+            offenders.is_empty(),
+            "these call sites spawn tmux by bare name instead of tmux::command(): {offenders:?}"
+        );
+    }
+
+    fn collect_bare_tmux_spawns(dir: &std::path::Path, offenders: &mut Vec<String>) {
+        // Built at runtime so this scanner does not match its own source.
+        let needle = format!("Command::new({quote}tmux{quote})", quote = '"');
+        for entry in std::fs::read_dir(dir).expect("readable source directory") {
+            let path = entry.expect("readable directory entry").path();
+            if path.is_dir() {
+                collect_bare_tmux_spawns(&path, offenders);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let source = std::fs::read_to_string(&path).expect("readable source file");
+                for (index, line) in source.lines().enumerate() {
+                    if line.contains(&needle) {
+                        offenders.push(format!("{}:{}", path.display(), index + 1));
+                    }
+                }
+            }
         }
     }
 }
