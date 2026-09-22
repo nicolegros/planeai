@@ -219,20 +219,26 @@ mod tests {
     /// name.
     #[test]
     fn no_call_site_spawns_tmux_by_bare_name() {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let backend = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut offenders = Vec::new();
-        collect_bare_tmux_spawns(&src, &mut offenders);
+        collect_bare_tmux_spawns(backend, &mut offenders);
         assert!(
             offenders.is_empty(),
             "these call sites spawn tmux by bare name instead of tmux::command(): {offenders:?}"
         );
     }
 
+    /// Walks every Rust source file in the backend workspace. Build output and
+    /// dot-directories are skipped so the scan stays cheap.
     fn collect_bare_tmux_spawns(dir: &std::path::Path, offenders: &mut Vec<String>) {
         // Built at runtime so this scanner does not match its own source.
         let needle = format!("Command::new({quote}tmux{quote})", quote = '"');
         for entry in std::fs::read_dir(dir).expect("readable source directory") {
             let path = entry.expect("readable directory entry").path();
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if name == "target" || name.starts_with('.') {
+                continue;
+            }
             if path.is_dir() {
                 collect_bare_tmux_spawns(&path, offenders);
             } else if path.extension().is_some_and(|ext| ext == "rs") {

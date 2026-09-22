@@ -3438,25 +3438,32 @@ async fn plugin_log_path(app: &AppHandle, plugin_id: &str) -> Result<PathBuf, St
 /// A GUI launch (Spotlight, Finder, Dock) inherits launchd's minimal PATH, which
 /// excludes user-local bin directories. Plugin backends routinely shell out to
 /// user-installed CLIs (`planeai-plugin-kiro-usage` runs `kiro-cli`), so without
-/// this they fail with `No such file or directory (os error 2)`. Reuse the same
-/// augmentation every other planeai subprocess gets, including the user's
-/// configured `extra_path_dirs`.
-fn plugin_runtime_path(app: &AppHandle) -> String {
-    let extra_path_dirs = app
-        .try_state::<crate::state::ConfigState>()
-        .and_then(|state| {
-            state
-                .0
-                .lock()
-                .ok()
-                .map(|config| config.resolved_extra_path_dirs())
-        })
-        .unwrap_or_default();
-    plugin_runtime_path_for(&extra_path_dirs)
+/// this they fail with `No such file or directory (os error 2)`. Applies the same
+/// augmentation every other planeai subprocess gets.
+fn plugin_runtime_path(extra_path_dirs: &[String]) -> String {
+    planeai_core::command::augmented_path(extra_path_dirs)
 }
 
-fn plugin_runtime_path_for(extra_path_dirs: &[String]) -> String {
-    planeai_core::command::augmented_path(extra_path_dirs)
+/// Read the user's configured extra PATH directories.
+///
+/// Falls back to an empty list so a plugin still starts with the conventional
+/// directories on its PATH. That fallback is warned about rather than silent: it
+/// leaves a plugin unable to find CLIs installed outside the conventional
+/// directories, which is the failure this PATH handling exists to prevent.
+fn configured_extra_path_dirs(app: &AppHandle) -> Vec<String> {
+    let Some(config_state) = app.try_state::<crate::state::ConfigState>() else {
+        tracing::warn!("config state unavailable; plugin PATH omits extra_path_dirs");
+        return Vec::new();
+    };
+    // Bound to a local so the lock guard drops before `config_state` does.
+    let dirs = match config_state.0.lock() {
+        Ok(config) => config.resolved_extra_path_dirs(),
+        Err(_) => {
+            tracing::warn!("config lock poisoned; plugin PATH omits extra_path_dirs");
+            Vec::new()
+        }
+    };
+    dirs
 }
 
 fn build_runtime_command(binary: &Path, state_root: Option<&Path>, path_env: &str) -> Command {
@@ -3484,7 +3491,8 @@ async fn spawn_runtime(
     plugin_id: &str,
     capabilities: HashSet<PluginHostCapability>,
 ) -> Result<RuntimeProcess, String> {
-    let mut command = build_runtime_command(binary, state_root, &plugin_runtime_path(&app));
+    let path_env = plugin_runtime_path(&configured_extra_path_dirs(&app));
+    let mut command = build_runtime_command(binary, state_root, &path_env);
     let mut child = command
         .spawn()
         .map_err(|e| format!("failed to spawn plugin runtime {}: {e}", binary.display()))?;
@@ -4726,7 +4734,7 @@ mod runtime_spawn_tests {
             "the bug: a minimal GUI launch PATH cannot resolve user-installed CLIs"
         );
         assert!(
-            spawn_probe(&plugin_runtime_path_for(&extra_path_dirs)),
+            spawn_probe(&plugin_runtime_path(&extra_path_dirs)),
             "the fix: the plugin runtime PATH must resolve user-installed CLIs"
         );
     }
