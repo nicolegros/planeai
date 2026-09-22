@@ -394,6 +394,7 @@ fn main() {
             session_logs::is_dogfood_log_viewer_enabled,
             list_plugins,
             list_plugin_session_actions,
+            discover_plugins,
             install_local_plugin,
             remove_local_plugin,
             plugin_call,

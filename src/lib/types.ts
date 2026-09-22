@@ -111,6 +111,15 @@ export interface PluginSessionCompletion {
   message: string | null;
 }
 
+export interface PluginDiscoveryCandidate {
+  full_name: string;
+  description: string | null;
+  url: string;
+  updated_at: string;
+  stargazers_count: number;
+  language: string | null;
+}
+
 export interface PluginInventory {
   id: string;
   name: string;
