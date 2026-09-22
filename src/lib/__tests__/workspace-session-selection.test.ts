@@ -88,6 +88,7 @@ it("ignores a hidden terminal's focus event after a session switch", () => {
 });
 
 it("requests focus for the keyboard-selected terminal tab", () => {
+it("requests terminal-owned focus after keyboard navigation commits", () => {
   expect(appSource).toMatch(/function requestTerminalFocus\(sessionId: string\): void/);
   expect(appSource).toMatch(/function splitNextTab\(\)[\s\S]*?syncFocusedLeafToOrchestrator\(\);[\s\S]*?requestTerminalFocus\(next\.ptyKey\)/);
   expect(appSource).toMatch(/function splitPrevTab\(\)[\s\S]*?syncFocusedLeafToOrchestrator\(\);[\s\S]*?requestTerminalFocus\(previous\.ptyKey\)/);
