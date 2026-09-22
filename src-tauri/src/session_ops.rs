@@ -317,19 +317,60 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
     struct RealPromptOps;
     impl PromptOps for RealPromptOps {
         fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String> {
-            crate::tmux::send_keys(tmux_name, text)
+            tmux_send_prompt(tmux_name, text)
         }
         fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String> {
             notify_gui_send_prompt(session_id, text)
         }
         fn tmux_has_session(&self, tmux_name: &str) -> bool {
-            crate::tmux::has_session(tmux_name)
+            tmux_session_exists(tmux_name)
         }
         fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String> {
             daemon_send_prompt(session_id, text)
         }
     }
     RealPromptOps
+}
+
+// The `tmux` module is `cfg(not(windows))`, so the Windows arms below build their
+// invocations from `command::tmux_command` directly rather than reaching for it.
+
+#[cfg(not(windows))]
+fn tmux_send_prompt(tmux_name: &str, text: &str) -> Result<(), String> {
+    crate::tmux::send_keys(tmux_name, text)
+}
+
+#[cfg(windows)]
+fn tmux_send_prompt(tmux_name: &str, text: &str) -> Result<(), String> {
+    // Literal text first (no key-name interpretation), then Enter separately.
+    run_tmux(&["send-keys", "-t", tmux_name, "-l", text])?;
+    run_tmux(&["send-keys", "-t", tmux_name, "Enter"])
+}
+
+#[cfg(windows)]
+fn run_tmux(args: &[&str]) -> Result<(), String> {
+    let output = crate::command::tmux_command(args)
+        .output()
+        .map_err(|e| format!("failed to run tmux: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+#[cfg(not(windows))]
+fn tmux_session_exists(tmux_name: &str) -> bool {
+    crate::tmux::has_session(tmux_name)
+}
+
+#[cfg(windows)]
+fn tmux_session_exists(tmux_name: &str) -> bool {
+    // '=' forces an exact match so a name is not matched by prefix.
+    crate::command::tmux_command(&["has-session", "-t", &format!("={tmux_name}")])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// The newline-delimited frame the GUI's notify listener expects.
@@ -680,7 +721,7 @@ const TMUX_CURSOR_SCROLLBACK_LINES: usize = 10_000;
 
 /// Read output from a tmux-backend session via tmux capture-pane.
 pub fn read_tmux_pane(tmux_name: &str, lines: usize) -> Result<String, String> {
-    let output = crate::tmux::command(&[
+    let output = crate::command::tmux_command(&[
         "capture-pane",
         "-p",
         "-t",
