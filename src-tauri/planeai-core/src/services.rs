@@ -193,12 +193,25 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
     // Track which session spawned this one (orchestration / parent-child relationships)
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT");
 
-    // Split layout persistence — stores the split tree JSON per session
+    // Legacy split layout persistence — stores the split tree JSON per session.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS session_layouts (
              session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
              layout_json TEXT NOT NULL,
              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         )",
+    )?;
+
+    // Task workspaces own the shared layout for every agent session linked to a task.
+    // `tasks` live in task-manager storage, so this is intentionally keyed by its
+    // stable project/task identity instead of a foreign key to a local tasks table.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_workspaces (
+             project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+             task_key TEXT NOT NULL,
+             layout_json TEXT NOT NULL,
+             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             PRIMARY KEY (project_id, task_key)
          )",
     )?;
 

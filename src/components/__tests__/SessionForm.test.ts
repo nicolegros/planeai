@@ -47,6 +47,7 @@ const baseProps = {
   sessions: [],
   onCreated: vi.fn(),
   onCancel: vi.fn(),
+  onCreateTask: vi.fn(),
 };
 
 function renderForm(props = {}) {
@@ -56,14 +57,20 @@ function renderForm(props = {}) {
 }
 
 describe("SessionForm", () => {
-  it("defaults to manual mode when no taskPrefill is provided", () => {
+  it("always renders task selection and a New task route", () => {
     const target = renderForm();
-    const buttons = target.querySelectorAll("[role='toolbar'] button");
-    const manualBtn = Array.from(buttons).find((b) => b.textContent?.includes("Manual"));
-    expect(manualBtn?.className).toContain("bg-accent");
+    expect(target.querySelector("[data-field='task']")).not.toBeNull();
+    expect(target.querySelector("[role='toolbar'] button")?.textContent).toContain("New task");
   });
 
-  it("defaults to task mode when taskPrefill is provided", () => {
+  it("routes the New task button to the task form", () => {
+    const onCreateTask = vi.fn();
+    const target = renderForm({ onCreateTask });
+    (target.querySelector("[role='toolbar'] button") as HTMLButtonElement).click();
+    expect(onCreateTask).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the task picker available when task-prefilled", () => {
     const target = renderForm({
       taskPrefill: {
         key: "PROJ-1",
@@ -74,41 +81,21 @@ describe("SessionForm", () => {
         prompt: "Fix it",
       },
     });
-    const buttons = target.querySelectorAll("[role='toolbar'] button");
-    const taskBtn = Array.from(buttons).find((b) => b.textContent?.includes("From task"));
-    expect(taskBtn?.className).toContain("bg-accent");
+    expect(target.querySelector("[data-field='task']")).not.toBeNull();
   });
 
-  it("renders Manual button first and From task button second", () => {
+  it("uses M to route to New task in normal mode", () => {
+    const onCreateTask = vi.fn();
+    const target = renderForm({ onCreateTask });
+    target.querySelector<HTMLElement>("[data-form-keyboard]")!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "m", bubbles: true, cancelable: true }),
+    );
+    expect(onCreateTask).toHaveBeenCalledOnce();
+  });
+
+  it("does not render a manual launch mode", () => {
     const target = renderForm();
-    const buttons = target.querySelectorAll("[role='toolbar'] button");
-    expect(buttons[0].textContent).toContain("Manual");
-    expect(buttons[1].textContent).toContain("From task");
-  });
-
-  it("clears task-prefilled fields when switching from task to manual mode", async () => {
-    const target = renderForm({
-      taskPrefill: {
-        key: "PROJ-1",
-        title: "Fix bug",
-        description: "A bug to fix",
-        branch: "fix/bug",
-        name: "PROJ-1: Fix bug",
-        prompt: "Fix the bug",
-      },
-    });
-
-    // Verify starts in task mode with prefilled name
-    const nameInput = target.querySelector<HTMLInputElement>("input[placeholder='My session...']")!;
-    expect(nameInput.value).toBe("PROJ-1: Fix bug");
-
-    // Switch to manual mode by clicking the Manual button
-    const manualBtn = target.querySelectorAll("[role='toolbar'] button")[0] as HTMLButtonElement;
-    manualBtn.click();
-    flushSync();
-
-    // Name and branch fields should be cleared
-    expect(nameInput.value).toBe("");
+    expect(target.textContent).not.toContain("Manual");
   });
 
   it("sets base branch from task's base_branch when task is selected", async () => {
@@ -137,6 +124,18 @@ describe("SessionForm", () => {
     const baseInput = baseField!.querySelector("input");
     expect(baseInput).not.toBeNull();
     expect(baseInput!.value).toBe("main");
+  });
+
+  it("focuses the task picker with T in normal mode", async () => {
+    const target = renderForm();
+    document.body.append(target);
+    await tick();
+    flushSync();
+    const taskInput = target.querySelector<HTMLInputElement>("[data-field='task'] input")!;
+    target.querySelector<HTMLElement>("[data-form-keyboard]")!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true }),
+    );
+    expect(document.activeElement).toBe(taskInput);
   });
 
   it("submit button is not disabled initially", () => {
@@ -176,3 +175,34 @@ describe("SessionForm", () => {
     expect(submitBtn.querySelector("svg")).not.toBeNull();
   });
 });
+
+  it("keeps the task title for an additional task agent while defaulting it to an isolated worktree", async () => {
+    const target = renderForm({
+      sessions: [{
+        id: "existing",
+        project_id: "p1",
+        name: "Agent 1",
+        branch: "proj-1/fix-bug",
+        status: "active",
+        task_key: "PROJ-1",
+        worktree_path: "/tmp/worktree",
+      }],
+      taskPrefill: {
+        key: "PROJ-1",
+        title: "Fix bug",
+        description: "",
+        branch: "",
+        name: "",
+        prompt: "",
+      },
+    });
+
+    await tick();
+    flushSync();
+    await tick();
+    flushSync();
+
+    expect(target.querySelector<HTMLInputElement>("input[placeholder='My session...']")?.value).toBe("Fix bug");
+    expect(target.querySelector<HTMLInputElement>("[data-field='branch'] input")?.value).toBe("proj-1/fix-bug--2");
+    expect(target.querySelector<HTMLInputElement>("#use-worktree")?.checked).toBe(true);
+  });

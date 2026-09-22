@@ -41,6 +41,7 @@ export const sessions = {
     invoke<LaunchResult>("launch_session", params as unknown as Record<string, unknown>),
   destroy: (id: string) => invoke("destroy_session", { id }),
   archive: (id: string) => invoke("archive_session", { id }),
+  park: (id: string) => invoke("park_session", { id }),
   restore: (id: string) => invoke("restore_session", { id }),
   rename: (id: string, name: string) => invoke("rename_session", { id, name }),
   restart: (sessionId: string) => invoke<Session>("restart_session", { sessionId }),
@@ -50,6 +51,10 @@ export const sessions = {
   saveLayout: (sessionId: string, layoutJson: string) =>
     invoke("save_session_layout", { sessionId, layoutJson }),
   getLayout: (sessionId: string) => invoke<string | null>("get_session_layout", { sessionId }),
+  saveTaskWorkspaceLayout: (projectId: string, taskKey: string, layoutJson: string) =>
+    invoke("save_task_workspace_layout", { projectId, taskKey, layoutJson }),
+  getTaskWorkspaceLayout: (projectId: string, taskKey: string) =>
+    invoke<string | null>("get_task_workspace_layout", { projectId, taskKey }),
 };
 
 export const projects = {

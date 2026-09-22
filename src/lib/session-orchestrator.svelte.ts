@@ -213,6 +213,20 @@ export async function archiveSession(s: Session): Promise<void> {
   }
 }
 
+export async function parkSession(s: Session): Promise<void> {
+  await sessionsApi.park(s.id);
+  dismissForSession(s.id);
+  clearComments(s.id);
+  clearEditorFeedback(s.id);
+  destroyViewedState(s.id);
+  poolRemove(s.id);
+  sessions = sessions.filter((x) => x.id !== s.id);
+  if (activeSessionId === s.id) {
+    activeSessionId = sessions.find((x) => x.project_id === s.project_id && x.task_key === s.task_key)?.id ?? null;
+    if (activeSessionId) poolActivate(activeSessionId);
+  }
+}
+
 export async function restartSession(s: Session): Promise<void> {
   const updated = await sessionsApi.restart(s.id);
   sessions = sessions.map((x) => (x.id === s.id ? updated : x));

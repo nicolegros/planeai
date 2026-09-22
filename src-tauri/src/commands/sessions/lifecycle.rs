@@ -79,6 +79,32 @@ pub fn archive_session(
 }
 
 #[tauri::command]
+pub fn park_session(
+    id: String,
+    db_state: State<DbState>,
+    pty_state: State<PtyState>,
+    runtime: State<PluginRuntimeHandle>,
+) -> Result<(), String> {
+    pty_state.0.detach(&id);
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, &id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+    // Parking closes an agent without declaring its linked task complete.
+    crate::session_ops::archive(&conn, &id, &None, &cleanup::real_kill_ops())?;
+    if session.status != "archived" {
+        runtime
+            .0
+            .dispatch_session_lifecycle(session_lifecycle_event(
+                &session,
+                &session.status,
+                "archived",
+            ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn destroy_session(
     id: String,
     db_state: State<'_, DbState>,

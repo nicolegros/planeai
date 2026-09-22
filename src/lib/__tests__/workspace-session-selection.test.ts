@@ -1,16 +1,26 @@
 import { describe, expect, it } from "vitest";
 import appSource from "../../App.svelte?raw";
 
-describe("workspace session selection", () => {
-  it("activates an already-loaded session tab when the active session changes", () => {
+describe("TaskWorkspace session selection", () => {
+  it("keeps a task workspace loaded and focuses a newly selected agent tab", () => {
     expect(appSource).toMatch(
-      /if \(hasActive\) \{\s*splitTree\.focusTab\(activeSessionId\);\s*lastTreeSessionId = activeSessionId;/,
+      /if \(workspace\.key === lastTreeWorkspace\?\.key\) \{\s*if \(!focusedSessionChanged\) return;\s*lastFocusedWorkspaceSessionId = activeSessionId;\s*const existing = splitTree\.findTab\(activeSessionId\);/,
     );
   });
 
-  it("only treats the primary agent tab as an already-loaded session terminal", () => {
+  it("builds a flat task workspace from every session linked to the same task", () => {
     expect(appSource).toMatch(
-      /const hasActive = allLeaves\.some\(\(leaf\) =>\s*leaf\.tabs\.some\(\(t\) => t\.ptyKey === activeSessionId\)\s*\);/,
+      /return sessions\.filter\(\(session\) => session\.project_id === workspace\.projectId && session\.task_key === workspace\.taskKey\);/,
+    );
+    expect(appSource).toMatch(/function buildTabEntriesForWorkspace\(workspace: WorkspaceIdentity\)/);
+  });
+
+  it("does not rewrite split-tree state when the focused task agent is already active", () => {
+    expect(appSource).toMatch(
+      /const focusedSessionChanged = activeSessionId !== lastFocusedWorkspaceSessionId;[\s\S]*?if \(!focusedSessionChanged\) return;/,
+    );
+    expect(appSource).toMatch(
+      /if \(existing\.leaf\.activeTab !== activeSessionId\) splitTree\.focusTab\(activeSessionId\);/,
     );
   });
 
@@ -20,9 +30,26 @@ describe("workspace session selection", () => {
     );
   });
 
+  it("requests focus for the restored active terminal after loading a workspace layout", () => {
+    expect(appSource).toMatch(/if \(isValidSerializedTree\(data\)\) \{[\s\S]*?splitTree\.deserialize\(data\);[\s\S]*?loadingLayout = false;[\s\S]*?requestFocusedTerminalFocus\(\);/);
+    expect(appSource).toMatch(/function requestFocusedTerminalFocus\(\): void \{[\s\S]*?getActiveTabEntry\(leaf\)[\s\S]*?requestTerminalFocus\(activeTab\.ptyKey\)/);
+  });
+
+  it("adds restored task-session tabs without replacing the workspace layout", () => {
+    expect(appSource).toMatch(
+      /const missingEntries = workspaceEntries\.filter\(\(entry\) => !existingKeys\.has\(entry\.ptyKey\)\);[\s\S]*?for \(const entry of missingEntries\) splitTree\.addSessionToLeaf\(focusedLeaf\.id, entry\);[\s\S]*?splitTree\.setLeafActiveTab\(focusedLeaf\.id, activeTab\);/,
+    );
+  });
+
   it("gives an active main-pane plugin a flex-grown contribution area", () => {
     expect(appSource).toMatch(
       /\{#if activePluginId\}\s*<div class="flex h-full flex-col bg-main">[\s\S]*?<div class="min-h-0 flex-1">\s*<PluginContributionHost/,
+    );
+  });
+
+  it("gives a session panel a live focused-agent recipient resolver", () => {
+    expect(appSource).toMatch(
+      /<PluginContributionHost[\s\S]*?session=\{activeContribution\.placement === "session\.panel" \? activePluginSessionContext : undefined\}[\s\S]*?getFocusedAgentSession=\{\(\) => activePluginSessionContext\}/,
     );
   });
 
@@ -54,15 +81,21 @@ describe("workspace session selection", () => {
       /function openPluginContributionModal\(pluginId: string, contributionId: string\): void \{[\s\S]*?candidate\.placement === "session\.panel"[\s\S]*?modalPluginId = pluginId;/,
     );
     expect(appSource).toMatch(
-      /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?title=\{modalContribution\.label\}[\s\S]*?preventEscapeClose=\{false\}[\s\S]*?<PluginContributionHost[\s\S]*?session=\{activePluginSessionContext\}[\s\S]*?closeOnEscape=\{true\}/,
+      /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?title=\{modalContribution\.label\}[\s\S]*?preventEscapeClose=\{false\}[\s\S]*?<PluginContributionHost[\s\S]*?session=\{activePluginSessionContext\}[\s\S]*?getFocusedAgentSession=\{\(\) => activePluginSessionContext\}[\s\S]*?closeOnEscape=\{true\}/,
     );
   });
 });
 
-it("ignores a previous terminal's focus event after a session switch", () => {
+it("ignores a hidden terminal's focus event after a session switch", () => {
   expect(appSource).toMatch(
-    /onFocused=\{\(event\) => \{\s*if \(event\.type === "focusin" && sessionId !== activeSessionId\) return;/,
+    /onFocused=\{\(event\) => \{\s*if \(event\.type === "focusin" && !isActiveInLeaf\) return;/,
   );
+});
+
+it("preserves the keyboard-selected terminal PTY after session synchronization", () => {
+  expect(appSource).toMatch(/function preserveKeyboardSelectedTerminal[\s\S]*?selectWorkspaceSession\(sessionId\)[\s\S]*?splitTree\.focusTab\(entry\.ptyKey\)[\s\S]*?requestTerminalFocus\(entry\.ptyKey\)/);
+  expect(appSource).toMatch(/function splitNextTab\(\)[\s\S]*?preserveKeyboardSelectedTerminal\(next\)/);
+  expect(appSource).toMatch(/function splitPrevTab\(\)[\s\S]*?preserveKeyboardSelectedTerminal\(previous\)/);
 });
 
 it("preserves editor focus when a split-pane click originates inside an editor", () => {
@@ -104,5 +137,11 @@ it("awaits shell-tab closure before removing the split-tree entry and contains f
   );
   expect(appSource).toMatch(
     /async function closeShellTabInTree[\s\S]*?try \{[\s\S]*?await orchestrator\.closeShellTab[\s\S]*?\} catch \(error\) \{[\s\S]*?showSnackbar\(/,
+  );
+});
+
+it("parks an active agent session when Cmd+W closes its agent tab", () => {
+  expect(appSource).toMatch(
+    /if \(activeEntry\.type === "agent"\) \{[\s\S]*?await orchestrator\.parkSession\(session\);/,
   );
 });

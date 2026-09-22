@@ -59,4 +59,20 @@ describe("installKeyboardRouter shortcut ownership", () => {
     expect(onAction).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(true);
   });
+
+  it("routes Cmd+N before a focused consumer can claim it", () => {
+    const consumer = addShortcutConsumer();
+    const modKey = IS_MAC ? "metaKey" : "ctrlKey";
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "n",
+      [modKey]: true,
+    });
+
+    consumer.dispatchEvent(event);
+
+    expect(onAction).toHaveBeenCalledWith({ type: "new_session" });
+    expect(event.defaultPrevented).toBe(true);
+  });
 });

@@ -5,7 +5,7 @@
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import * as loopStore from "../lib/loop-store.svelte";
-  import { isLoopId, parseLoopId } from "../lib/sidebar-session-order";
+  import { isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
 
   interface Props {
     mruSessionIds: string[];
@@ -52,6 +52,13 @@
     return null;
   }
 
+  function getTaskWorkspace(id: string): { task: import("../lib/types").TaskItem; project: Project } | null {
+    const parsed = parseTaskWorkspaceId(id);
+    const project = parsed ? projects.find((candidate) => candidate.id === parsed.projectId) : undefined;
+    const task = project && parsed ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === parsed.taskKey) : undefined;
+    return project && task ? { project, task } : null;
+  }
+
   function shortId(id: string): string {
     return id.slice(0, 8);
   }
@@ -60,7 +67,17 @@
 <div class="absolute inset-0 flex items-center justify-center z-20">
   <div class="w-[512px] max-w-[84%] bg-panel border border-border-s rounded-xl shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] p-2">
     {#each mruSessionIds as id, i (id)}
-      {#if isLoopId(id)}
+      {#if isTaskWorkspaceId(id)}
+        {@const workspace = getTaskWorkspace(id)}
+        {#if workspace}
+          <div class="flex items-center gap-[10px] h-[38px] px-3 rounded-lg {i === selectedIndex ? 'bg-accent' : ''}">
+            <span class="shrink-0 size-[6px] rounded-full {statusDotColors[workspace.task.status] ?? 'bg-t3'}"></span>
+            <span class="shrink-0 font-mono text-[10px] font-medium {i === selectedIndex ? 'text-on-accent opacity-65' : 'text-t3'}">{workspace.task.key}</span>
+            <span class="text-[13px] font-medium truncate {i === selectedIndex ? 'text-on-accent' : 'text-t1'}">{workspace.task.title}</span>
+            <span class="ml-auto shrink-0 text-[11.5px] {i === selectedIndex ? 'text-on-accent opacity-65' : 'text-t3'}">{workspace.project.name}</span>
+          </div>
+        {/if}
+      {:else if isLoopId(id)}
         {@const loop = getLoop(id)}
         {#if loop}
           <div class="flex items-center gap-[10px] h-[38px] px-3 rounded-lg {i === selectedIndex ? 'bg-accent' : ''}">

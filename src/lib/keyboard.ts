@@ -260,6 +260,7 @@ export function installKeyboardRouter(
     "next_session",
     "prev_session",
     "open_preferences",
+    "new_session",
     "split_vertical",
     "split_horizontal",
     "close_split",
@@ -323,6 +324,12 @@ export function installKeyboardRouter(
     }
   }
 
+  // Cmd/Ctrl+N opens global UI and must not be consumed by xterm or CodeMirror.
+  function captureNewSession(e: KeyboardEvent): void {
+    const action = matchChord(e);
+    if (action?.type === "new_session") routeAction(e, action);
+  }
+
   function handler(e: KeyboardEvent): void {
     // Contribution ShadowRoots receive composed key events before the host router.
     // A plugin may cancel an event to claim any non-reserved shortcut while focused.
@@ -335,9 +342,11 @@ export function installKeyboardRouter(
   // Ctrl+Tab is reserved for MRU session switching, even when focused content
   // (such as xterm) consumes bubbling keyboard events.
   window.addEventListener("keydown", captureTabSwitcher, true);
+  window.addEventListener("keydown", captureNewSession, true);
   window.addEventListener("keydown", handler);
   return () => {
     window.removeEventListener("keydown", captureTabSwitcher, true);
+    window.removeEventListener("keydown", captureNewSession, true);
     window.removeEventListener("keydown", handler);
   };
 }

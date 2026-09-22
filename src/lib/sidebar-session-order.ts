@@ -36,6 +36,23 @@ export function toLoopId(loopId: string): string {
   return `loop:${loopId}`;
 }
 
+/** Create a task workspace ID for navigation and MRU state. */
+export function toTaskWorkspaceId(projectId: string, taskKey: string): string {
+  return `task:${projectId}:${taskKey}`;
+}
+
+/** Detect a task workspace navigation ID. */
+export function isTaskWorkspaceId(id: string): boolean {
+  return id.startsWith("task:");
+}
+
+/** Parse a task workspace navigation ID. */
+export function parseTaskWorkspaceId(id: string): { projectId: string; taskKey: string } | null {
+  const [, projectId, ...keyParts] = id.split(":");
+  const taskKey = keyParts.join(":");
+  return projectId && taskKey ? { projectId, taskKey } : null;
+}
+
 export function computeSidebarSessionOrder(
   projects: Project[],
   sessions: Session[],
@@ -85,8 +102,7 @@ export function computeSidebarSessionOrder(
         .filter((t) => t.status === status)
         .sort((a, b) => b.priority - a.priority);
       for (const t of group) {
-        const linked = sessions.find((s) => s.task_key === t.key);
-        if (linked) ids.push(linked.id);
+        ids.push(toTaskWorkspaceId(project.id, t.key));
       }
     }
   }

@@ -316,6 +316,57 @@ pub fn create_session(conn: &Connection, opts: SessionCreateOpts) -> Result<db::
         .ok_or_else(|| "session created but not found in database".to_string())
 }
 
+/// Options for a sibling session in the invoking agent's TaskWorkspace.
+pub struct WorkspaceSiblingOpts {
+    pub name: Option<String>,
+    pub branch: Option<String>,
+    pub base_branch: Option<String>,
+    pub yolo: bool,
+    pub provider: Option<String>,
+    pub prompt: Option<String>,
+}
+
+/// Create an isolated, task-linked sibling session for an existing agent session.
+pub fn create_workspace_sibling(
+    conn: &Connection,
+    parent_session_id: &str,
+    opts: WorkspaceSiblingOpts,
+) -> Result<db::Session, String> {
+    let parent = db::get_session(conn, parent_session_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("current session not found: {parent_session_id}"))?;
+    let task_key = parent
+        .task_key
+        .clone()
+        .ok_or_else(|| "current session is not linked to a task workspace".to_string())?;
+    let project = db::list_projects(conn)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|candidate| candidate.id == parent.project_id)
+        .ok_or_else(|| "project for current session not found".to_string())?;
+    let suffix = &uuid::Uuid::new_v4().to_string().replace('-', "")[..8];
+    let branch = opts
+        .branch
+        .unwrap_or_else(|| format!("{}--{suffix}", parent.branch));
+
+    create_session(
+        conn,
+        SessionCreateOpts {
+            project: project.name,
+            branch,
+            name: opts.name.or_else(|| Some(parent.name.clone())),
+            new_branch: true,
+            worktree: true,
+            base_branch: opts.base_branch.or(parent.base_branch.clone()),
+            yolo: opts.yolo,
+            provider: opts.provider.or(parent.provider.clone()),
+            task_key: Some(task_key),
+            prompt: opts.prompt,
+            parent_session_id: Some(parent.id),
+        },
+    )
+}
+
 /// Resolve the daemon binary path. Checks /usr/local/bin first, then falls back
 /// to the current executable's directory.
 fn resolve_daemon_binary() -> std::path::PathBuf {

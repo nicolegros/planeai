@@ -26,6 +26,12 @@ fn is_worktree_conflict(e: &str) -> bool {
     e.contains("already checked out") || e.contains("already used by worktree")
 }
 
+fn require_task_key(task_key: Option<String>) -> Result<String, String> {
+    task_key
+        .filter(|key| !key.trim().is_empty())
+        .ok_or_else(|| "A task is required to create a session.".to_string())
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn launch_session(
@@ -47,6 +53,7 @@ pub async fn launch_session(
     task_key: Option<String>,
     task_prompt: Option<String>,
 ) -> Result<LaunchResult, String> {
+    let task_key = require_task_key(task_key)?;
     // Tauri accepts these client-provided fields for compatibility; the authoritative values
     // are loaded below after acquiring the project operation lock.
     let _ = (&project_name, &repo_path);
@@ -252,7 +259,7 @@ pub async fn launch_session(
         Some(&provider_key),
         &backend,
         auto_approve,
-        task_key.as_deref(),
+        Some(&task_key),
         effective_base_branch.as_deref(),
         None,
     )
@@ -427,7 +434,17 @@ fn rollback_branch_creation(
 mod tests {
     use planeai_core::command::shell_args;
 
-    use super::rollback_branch_creation;
+    use super::{require_task_key, rollback_branch_creation};
+
+    #[test]
+    fn user_launch_requires_a_nonempty_task_key() {
+        assert_eq!(
+            require_task_key(Some("PLA-315".to_string())).unwrap(),
+            "PLA-315"
+        );
+        assert!(require_task_key(None).is_err());
+        assert!(require_task_key(Some("  ".to_string())).is_err());
+    }
 
     #[test]
     fn shell_args_preserves_quoted_prompt() {
