@@ -46,6 +46,9 @@
   import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { getTabs, getActiveTabIndex, addTab, removeTab } from "./lib/session-tabs.svelte";
   import { consumePendingTerminalEditorCommand, getPendingTerminalEditorCommand, queueTerminalEditor, rollbackPendingTerminalEditor } from "./lib/terminal-editor";
+  import { ptyKeyToSessionId, reconcileWorkspaceTabs } from "./lib/workspace-tabs";
+  import { addShellTabToLeaf, openEditorResource, openShellResourceInFocusedLeaf, openShellResourceInNewPane, toggleDiffResource } from "./lib/workspace-resources";
+  import { saveActiveEditorResource } from "./lib/editor-resources";
   import { getMruList, isMounted as poolIsMounted } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
@@ -93,9 +96,6 @@
   let archivedTaskSessions = $state<Session[]>([]);
   // Task and loop identities are UI-only; persisted MRU accepts real session IDs only.
   let workspaceMru = $state<string[]>([]);
-
-  let editorBindRefs = $state<Record<string, EditorTab>>({});
-  $effect(() => { for (const [id, ref] of Object.entries(editorBindRefs)) { if (ref) orchestrator.registerEditorRef(id, ref); } });
 
   // ─── Derived from orchestrator ──────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -403,26 +403,12 @@
   // replacing the current split layout or its active resource tab.
   $effect(() => {
     if (loadingLayout || !lastTreeWorkspace) return;
-    const workspaceEntries = buildTabEntriesForWorkspace(lastTreeWorkspace);
-    const existingKeys = new Set(
-      splitTree.getAllLeaves().flatMap((leaf) => leaf.tabs.map((tab) => tab.ptyKey)),
-    );
-    const missingEntries = workspaceEntries.filter((entry) => !existingKeys.has(entry.ptyKey));
-    const focusedLeaf = splitTree.getFocusedLeaf() ?? splitTree.getAllLeaves()[0];
-    if (focusedLeaf && missingEntries.length > 0) {
-      const activeTab = focusedLeaf.activeTab;
-      for (const entry of missingEntries) splitTree.addSessionToLeaf(focusedLeaf.id, entry);
-      if (activeTab) splitTree.setLeafActiveTab(focusedLeaf.id, activeTab);
-    }
-
-    const validSessionIds = new Set(workspaceSessions(lastTreeWorkspace).map((session) => session.id));
-    const stalePtyKeys: string[] = [];
-    for (const leaf of splitTree.getAllLeaves()) {
-      for (const tab of leaf.tabs) {
-        if (!validSessionIds.has(ptyKeyToSessionId(tab.ptyKey))) stalePtyKeys.push(tab.ptyKey);
-      }
-    }
-    for (const key of stalePtyKeys) splitTree.removeSessionFromLeaf(key);
+    reconcileWorkspaceTabs({
+      workspaceEntries: buildTabEntriesForWorkspace(lastTreeWorkspace),
+      validSessionIds: new Set(workspaceSessions(lastTreeWorkspace).map((session) => session.id)),
+      reservedPtyKeys: pendingShellCommands,
+      tree: splitTree,
+    });
   });
 
   // Drag-and-drop state
@@ -468,12 +454,6 @@
     return separator === -1 || Number.isNaN(index) ? fallback : index;
   }
 
-  /** Extract the session ID from a pty key (strips ":tabIndex" suffix if present) */
-  function ptyKeyToSessionId(ptyKey: string): string {
-    const colonIdx = ptyKey.indexOf(":");
-    return colonIdx === -1 ? ptyKey : ptyKey.slice(0, colonIdx);
-  }
-
   // Handle split keyboard actions
   function handleSplitAction(actionType: string): void {
     switch (actionType) {
@@ -508,30 +488,7 @@
    */
   function doSplit(direction: "vertical" | "horizontal"): void {
     if (!activeSessionId) return;
-
-    const newLeafId = splitTree.splitFocusedLeaf(direction);
-    if (!newLeafId) return;
-
-    // Create a new shell tab within the current session
-    const tabIndex = addTab(activeSessionId);
-    if (tabIndex === -1) {
-      // Undo the split — destroy the empty leaf
-      splitTree.destroyLeaf(newLeafId);
-      return;
-    }
-    pty.incrementTabCount(activeSessionId);
-
-    // The pty key for shell tabs is "sessionId:tabIndex"
-    const ptyKey = `${activeSessionId}:${tabIndex}`;
-
-    // Verify this ptyKey isn't already in the tree (defensive)
-    const existing = splitTree.getLeafForSession(ptyKey);
-    if (existing) {
-      splitTree.destroyLeaf(newLeafId);
-      return;
-    }
-
-    splitTree.addSessionToLeaf(newLeafId, { ptyKey, label: "Shell", icon: "terminal", type: "shell" });
+    if (!openShellResourceInNewPane(activeSessionId, direction)) return;
     // Wait for Terminal to mount + open before refocusing
     tick().then(() => requestAnimationFrame(() => refocusTerminal()));
   }
@@ -539,15 +496,7 @@
   /** Open a new shell tab in the focused split leaf. */
   function splitNewTab(): void {
     if (!activeSessionId) return;
-    const focusedLeafId = splitTree.getFocusedLeafId();
-    if (!focusedLeafId) return;
-
-    const tabIndex = addTab(activeSessionId);
-    if (tabIndex === -1) return;
-    pty.incrementTabCount(activeSessionId);
-
-    const ptyKey = `${activeSessionId}:${tabIndex}`;
-    splitTree.addSessionToLeaf(focusedLeafId, { ptyKey, label: "Shell", icon: "terminal", type: "shell" });
+    if (!openShellResourceInFocusedLeaf(activeSessionId)) return;
     refocusTerminal();
   }
 
@@ -643,32 +592,9 @@
   /** Toggle diff tab: if it exists in the tree, focus it; otherwise add it to focused leaf. */
   function toggleDiffInTree(): void {
     if (!activeSessionId) return;
-    const diffPtyKey = `${activeSessionId}:diff`;
-
-    // If already open, toggle: if active focus away, if not active focus it
-    const existing = splitTree.findTab(diffPtyKey);
-    if (existing) {
-      if (existing.leaf.activeTab === diffPtyKey) {
-        // Diff is active — close it
-        splitTree.removeSessionFromLeaf(diffPtyKey);
-        tick().then(() => refocusTerminal());
-      } else {
-        // Diff exists but not active — focus it
-        splitTree.focusTab(diffPtyKey);
-      }
-      return;
+    if (toggleDiffResource(activeSessionId) === "closed") {
+      tick().then(() => refocusTerminal());
     }
-
-    // Add diff tab to focused leaf
-    const focusedLeafId = splitTree.getFocusedLeafId();
-    if (!focusedLeafId) return;
-    const tabEntry: import("./lib/split-tree.svelte").TabEntry = {
-      ptyKey: diffPtyKey,
-      label: "Diff",
-      icon: "git-compare",
-      type: "diff",
-    };
-    splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
   }
 
   function confirmPendingShellCommandStarted(ptyKey: string): void {
@@ -685,9 +611,8 @@
         addTab,
         removeTab,
         incrementTabCount: pty.incrementTabCount,
-        addShellTab: (leafId, ptyKey, label) => {
-          splitTree.addSessionToLeaf(leafId, { ptyKey, label, icon: "terminal", type: "shell" });
-        },
+        closeTab: pty.closeTab,
+        addShellTab: addShellTabToLeaf,
         pendingCommands: pendingShellCommands,
       });
       if (opened) tick().then(() => requestAnimationFrame(() => refocusTerminal()));
@@ -711,29 +636,11 @@
     showSnackbar(`Failed to open terminal editor: ${error}`, "error");
   }
 
-  /** Open a file in PlaneAI's embedded editor. */
-  function openEmbeddedFileInTree(sessionId: string, filePath: string): void {
-    const editorPtyKey = `${sessionId}:editor:${filePath}`;
-    if (splitTree.focusTab(editorPtyKey)) return;
-
-    const focusedLeafId = splitTree.getFocusedLeafId();
-    if (!focusedLeafId) return;
-    const fileName = filePath.split("/").pop() ?? filePath;
-    const tabEntry: import("./lib/split-tree.svelte").TabEntry = {
-      ptyKey: editorPtyKey,
-      label: fileName,
-      icon: "file",
-      type: "editor",
-      filePath,
-    };
-    splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
-  }
-
   /** Open a file with the globally configured editor. */
   async function openFileInTree(sessionId: string, filePath: string): Promise<void> {
     if (filePath.split(/[/\\]/).includes("..")) return;
     const result = await openFileWithConfiguredEditor(getSettings().editor, {
-      openEmbedded: () => openEmbeddedFileInTree(sessionId, filePath),
+      openEmbedded: () => { openEditorResource(sessionId, filePath); },
       openTerminal: () => openTerminalEditorInTree(sessionId, filePath),
       openExternal: async () => {
         try {
@@ -1240,7 +1147,7 @@
         else if (action.type === "toggle_sessions_panel") { if (!sidebarVisible) sidebarVisible = true; }
         else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskStore.refresh(projects.map((p) => p.path)); }
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
-        else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
+        else if (action.type === "save_file") { saveActiveEditorResource(); }
         else if (action.type === "focus_merge_prompt") {
           if (getPrompt()) focusMergePrompt();
           else {
@@ -1621,6 +1528,7 @@
                 <EditorTab
                   repoPath={editorRepoPath}
                   sessionId={sessionId}
+                  ptyKey={tabEntry.ptyKey}
                   sessionExited={session.status === "exited"}
                   visible={isActiveInLeaf && !activePluginId}
                   theme={isDark() ? "vs-dark" : "vs"}

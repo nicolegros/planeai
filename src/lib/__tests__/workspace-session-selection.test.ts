@@ -37,7 +37,7 @@ describe("TaskWorkspace session selection", () => {
 
   it("adds restored task-session tabs without replacing the workspace layout", () => {
     expect(appSource).toMatch(
-      /const missingEntries = workspaceEntries\.filter\(\(entry\) => !existingKeys\.has\(entry\.ptyKey\)\);[\s\S]*?for \(const entry of missingEntries\) splitTree\.addSessionToLeaf\(focusedLeaf\.id, entry\);[\s\S]*?splitTree\.setLeafActiveTab\(focusedLeaf\.id, activeTab\);/,
+      /reconcileWorkspaceTabs\(\{\s*workspaceEntries: buildTabEntriesForWorkspace\(lastTreeWorkspace\),[\s\S]*?reservedPtyKeys: pendingShellCommands,[\s\S]*?tree: splitTree,/,
     );
   });
 

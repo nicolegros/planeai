@@ -22,8 +22,10 @@ describe("queueTerminalEditor", () => {
       incrementTabCount: async () => {
         events.push("persist");
       },
+      closeTab: vi.fn(),
       addShellTab: (leafId, ptyKey, label) => {
         events.push(`tree:${leafId}:${ptyKey}:${label}`);
+        return true;
       },
       pendingCommands: pending,
     });
@@ -35,7 +37,8 @@ describe("queueTerminalEditor", () => {
 
   it("rolls back local tab state and does not mount a terminal when persistence fails", async () => {
     const removeTab = vi.fn();
-    const addShellTab = vi.fn();
+    const addShellTab = vi.fn(() => true);
+    const closeTab = vi.fn();
     const pending = new Map<string, string>();
 
     await expect(
@@ -49,6 +52,7 @@ describe("queueTerminalEditor", () => {
         incrementTabCount: async () => {
           throw new Error("database unavailable");
         },
+        closeTab,
         addShellTab,
         pendingCommands: pending,
       }),
@@ -56,6 +60,57 @@ describe("queueTerminalEditor", () => {
 
     expect(removeTab).toHaveBeenCalledWith("session-1", 2);
     expect(addShellTab).not.toHaveBeenCalled();
+    // Nothing was persisted, so nothing needs releasing.
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(pending.size).toBe(0);
+  });
+
+  it("releases the persisted tab when the target pane is gone", async () => {
+    const removeTab = vi.fn();
+    const closeTab = vi.fn();
+    const pending = new Map<string, string>();
+
+    await expect(
+      queueTerminalEditor({
+        sessionId: "session-1",
+        filePath: "src/main.rs",
+        getTerminalCommand: async () => "nvim src/main.rs",
+        getFocusedLeafId: () => "leaf-1",
+        addTab: () => 2,
+        removeTab,
+        incrementTabCount: vi.fn(),
+        closeTab,
+        addShellTab: () => false,
+        pendingCommands: pending,
+      }),
+    ).resolves.toBe(false);
+
+    expect(removeTab).toHaveBeenCalledWith("session-1", 2);
+    expect(closeTab).toHaveBeenCalledWith("session-1", 2);
+    expect(pending.size).toBe(0);
+  });
+
+  it("surfaces a failed release so the drifted tab count is not hidden", async () => {
+    const pending = new Map<string, string>();
+
+    await expect(
+      queueTerminalEditor({
+        sessionId: "session-1",
+        filePath: "src/main.rs",
+        getTerminalCommand: async () => "nvim src/main.rs",
+        getFocusedLeafId: () => "leaf-1",
+        addTab: () => 2,
+        removeTab: vi.fn(),
+        incrementTabCount: vi.fn(),
+        closeTab: async () => {
+          throw new Error("daemon unreachable");
+        },
+        addShellTab: () => false,
+        pendingCommands: pending,
+      }),
+    ).rejects.toThrow("daemon unreachable");
+
+    // The reservation is still released, so the pty key is not stuck forever.
     expect(pending.size).toBe(0);
   });
 
@@ -72,7 +127,8 @@ describe("queueTerminalEditor", () => {
         addTab,
         removeTab: vi.fn(),
         incrementTabCount: vi.fn(),
-        addShellTab: vi.fn(),
+        closeTab: vi.fn(),
+        addShellTab: vi.fn(() => true),
         pendingCommands: new Map(),
       }),
     ).resolves.toBe(false);
@@ -133,5 +189,4 @@ describe("pending terminal editor commands", () => {
     expect(consumePendingTerminalEditorCommand(command)).toBe(true);
     expect(getPendingTerminalEditorCommand(command)).toBeUndefined();
   });
-
 });

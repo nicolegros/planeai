@@ -6,16 +6,24 @@ export interface TerminalEditorQueue {
   addTab: (sessionId: string) => number;
   removeTab: (sessionId: string, tabIndex: number) => void;
   incrementTabCount: (sessionId: string) => Promise<unknown>;
-  addShellTab: (leafId: string, ptyKey: string, label: string) => void;
+  closeTab: (sessionId: string, tabIndex: number) => Promise<unknown>;
+  /** Returns whether the tab reached the layout; false means roll back. */
+  addShellTab: (leafId: string, ptyKey: string, label: string) => boolean;
   pendingCommands: Map<string, string>;
 }
 
 /**
  * Create a dedicated shell tab for a terminal editor command.
  *
- * The persisted tab count is updated before the shell tab mounts, so closing the
- * tab cannot race ahead of the count increment. A failed persistence update
- * removes the local tab and leaves no pending command or mounted terminal.
+ * The command is reserved against its pty key before the tab count is persisted,
+ * so a workspace reconcile that observes the new session tab mid-flight skips it
+ * instead of mounting a bare shell. The persisted tab count is still updated
+ * before the shell tab mounts, so closing the tab cannot race ahead of the count
+ * increment.
+ *
+ * Both failure paths leave no reservation, no local tab and no mounted terminal:
+ * a failed persistence update, and a target pane that the user closed or
+ * navigated away from while the update was in flight.
  */
 export async function queueTerminalEditor(queue: TerminalEditorQueue): Promise<boolean> {
   const focusedLeafId = queue.getFocusedLeafId();
@@ -25,16 +33,30 @@ export async function queueTerminalEditor(queue: TerminalEditorQueue): Promise<b
   const tabIndex = queue.addTab(queue.sessionId);
   if (tabIndex === -1) return false;
 
+  const ptyKey = `${queue.sessionId}:${tabIndex}`;
+  queue.pendingCommands.set(ptyKey, command);
+
   try {
     await queue.incrementTabCount(queue.sessionId);
   } catch (error) {
+    queue.pendingCommands.delete(ptyKey);
     queue.removeTab(queue.sessionId, tabIndex);
     throw error;
   }
 
-  const ptyKey = `${queue.sessionId}:${tabIndex}`;
-  queue.pendingCommands.set(ptyKey, command);
-  queue.addShellTab(focusedLeafId, ptyKey, queue.filePath.split("/").pop() ?? queue.filePath);
+  const label = queue.filePath.split("/").pop() ?? queue.filePath;
+  if (!queue.addShellTab(focusedLeafId, ptyKey, label)) {
+    // The pane is gone. Release the reservation and the count that was just
+    // persisted, otherwise the tab is unreachable and uncloseable. A failed
+    // release rejects so the caller can report the drifted tab count.
+    await rollbackPendingTerminalEditor({
+      ptyKey,
+      pendingCommands: queue.pendingCommands,
+      removeTab: queue.removeTab,
+      closeTab: queue.closeTab,
+    });
+    return false;
+  }
   return true;
 }
 
@@ -45,7 +67,14 @@ export interface TerminalEditorRollback {
   closeTab: (sessionId: string, tabIndex: number) => Promise<unknown>;
 }
 
-/** Remove a terminal editor tab after its shell PTY fails to attach. */
+/**
+ * Release a terminal editor tab that will never run: its shell PTY failed to
+ * attach, or its target pane vanished before the tab could be placed.
+ *
+ * Returns false when the pty key held no reservation. Rejects if the backend tab
+ * cannot be closed, leaving the persisted tab count drifted — the caller must
+ * report that rather than swallow it.
+ */
 export async function rollbackPendingTerminalEditor(
   rollback: TerminalEditorRollback,
 ): Promise<boolean> {

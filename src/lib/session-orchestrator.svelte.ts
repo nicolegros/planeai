@@ -23,11 +23,8 @@ import { dismissForSession } from "./post-merge-prompt.svelte";
 import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
 import { getCycleState } from "./tab-switcher.svelte";
-import {
-  cleanup as tabLayoutCleanup,
-  resetAll as tabLayoutReset,
-  toggleDiff as _toggleDiff,
-} from "./tab-layout.svelte";
+import { cleanup as tabLayoutCleanup, resetAll as tabLayoutReset } from "./tab-layout.svelte";
+import { openDiffResource } from "./workspace-resources";
 
 // Re-export tab layout functions for consumers still importing from orchestrator
 export {
@@ -47,10 +44,6 @@ export {
   handleNextTab,
   handlePrevTab,
   toggleEditor,
-  registerEditorRef,
-  unregisterEditorRef,
-  openFile,
-  saveActiveEditor,
   setDiffFileName,
   setEditorFileName,
   setEditorModified,
@@ -118,11 +111,6 @@ export function clearReviewReady(sessionId: string): void {
   if (!reviewReady[sessionId]) return;
   const { [sessionId]: _, ...rest } = reviewReady;
   reviewReady = rest;
-}
-
-export function toggleDiff(): void {
-  _toggleDiff();
-  if (activeSessionId) clearReviewReady(activeSessionId);
 }
 
 // ─── Session Lifecycle ───────────────────────────────────────────────────────
@@ -222,7 +210,8 @@ export async function parkSession(s: Session): Promise<void> {
   poolRemove(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
-    activeSessionId = sessions.find((x) => x.project_id === s.project_id && x.task_key === s.task_key)?.id ?? null;
+    activeSessionId =
+      sessions.find((x) => x.project_id === s.project_id && x.task_key === s.task_key)?.id ?? null;
     if (activeSessionId) poolActivate(activeSessionId);
   }
 }
@@ -293,7 +282,7 @@ export function startEventListeners(): () => void {
           if (sid === activeSessionId) {
             if (getSettings().auto_open_review !== false) {
               // Defer to next frame so state updates don't block the current tick
-              requestAnimationFrame(() => toggleDiff());
+              requestAnimationFrame(() => openDiffResource(sid));
             }
           } else {
             reviewReady = { ...reviewReady, [sid]: true };
