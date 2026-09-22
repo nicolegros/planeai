@@ -1870,6 +1870,7 @@
         plugin={modalPlugin}
         contribution={modalContribution}
         session={activePluginSessionContext}
+        getFocusedAgentSession={() => activePluginSessionContext}
         onNavigate={(pluginId, contributionId) => {
           closePluginContributionModal();
           openPluginContribution(pluginId, contributionId);
