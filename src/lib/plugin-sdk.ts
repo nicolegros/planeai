@@ -22,6 +22,10 @@ export type PluginSettings = Record<string, unknown>;
 export interface PluginUiHost {
   /** Calls the owning plugin sidecar; lifecycle methods remain reserved for PlaneAI. */
   call<T>(method: string, params?: unknown): Promise<T>;
+  /** Resolves the currently focused session when invoked, rather than mount context. */
+  recipient: {
+    getFocusedAgentSession(): Promise<PluginSessionContext | null>;
+  };
   /**
    * Calls a PlaneAI public data operation directly. The host derives the owning
    * plugin identity, checks its manifest capability, and never exposes Tauri.

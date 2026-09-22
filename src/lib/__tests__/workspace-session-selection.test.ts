@@ -42,6 +42,12 @@ describe("TaskWorkspace session selection", () => {
     );
   });
 
+  it("gives a session panel a live focused-agent recipient resolver", () => {
+    expect(appSource).toMatch(
+      /<PluginContributionHost[\s\S]*?session=\{activeContribution\.placement === "session\.panel" \? activePluginSessionContext : undefined\}[\s\S]*?getFocusedAgentSession=\{\(\) => activePluginSessionContext\}/,
+    );
+  });
+
   it("routes titlebar targets by their destination placement", () => {
     expect(appSource).toMatch(
       /const titlebarContributions = \$derived\([\s\S]*?contribution\.placement === "titlebar"/,

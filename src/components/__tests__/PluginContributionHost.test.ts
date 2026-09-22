@@ -154,6 +154,8 @@ describe("PluginContributionHost", () => {
       expect(frame?.srcdoc).toContain("settings-get");
       expect(frame?.srcdoc).toContain("settings-replace");
       expect(frame?.srcdoc).toContain("host-rpc");
+      expect(frame?.srcdoc).toContain("focused-agent-session");
+      expect(frame?.srcdoc).toContain("getFocusedAgentSession");
       expect(frame?.srcdoc).toContain("sidebar-keydown");
       expect(frame?.srcdoc).toContain("sidebarNavigationKeys");
       expect(frame?.srcdoc).toContain('addEventListener("keydown", forwardSidebarKeydown)');

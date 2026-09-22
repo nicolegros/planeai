@@ -1657,7 +1657,7 @@
           <span class="text-sm font-medium text-t1">{activePlugin ? `${activePlugin.name} · ${activeContribution?.label ?? "Contribution"}` : "Plugin"}</span>
         </div>
         {#if activePlugin && activeContribution}
-          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} session={activeContribution.placement === "session.panel" ? activePluginSessionContext : undefined} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} autofocus /></div>
+          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} session={activeContribution.placement === "session.panel" ? activePluginSessionContext : undefined} getFocusedAgentSession={() => activePluginSessionContext} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} autofocus /></div>
         {:else}
           <div class="flex min-h-0 flex-1 items-center justify-center text-sm text-t3">Plugin contribution is no longer available.</div>
         {/if}
