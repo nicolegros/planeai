@@ -8,6 +8,7 @@ import { pty } from "../api";
 import { destroySession, getTabs, initSession } from "../session-tabs.svelte";
 import * as splitTree from "../split-tree.svelte";
 import {
+  openDiffResource,
   openEditorResource,
   openShellResource,
   openShellResourceInFocusedLeaf,
@@ -96,6 +97,30 @@ describe("openShellResourceInNewPane", () => {
     expect(openShellResourceInNewPane(SESSION, "vertical")).toBeNull();
     expect(splitTree.getTree()?.type).toBe("leaf");
     expect(ptyKeys()).toEqual([SESSION]);
+  });
+});
+
+describe("openDiffResource", () => {
+  it("opens the diff in the focused leaf", () => {
+    expect(openDiffResource(SESSION)).toBe("opened");
+    expect(ptyKeys()).toEqual([SESSION, `${SESSION}:diff`]);
+  });
+
+  it("focuses an already-open diff rather than closing it", () => {
+    openDiffResource(SESSION);
+    splitTree.focusTab(SESSION);
+
+    expect(openDiffResource(SESSION)).toBe("focused");
+    expect(ptyKeys()).toEqual([SESSION, `${SESSION}:diff`]);
+    expect(splitTree.getFocusedLeaf()?.activeTab).toBe(`${SESSION}:diff`);
+  });
+
+  it("is idempotent when the diff is already the active tab", () => {
+    openDiffResource(SESSION);
+
+    expect(openDiffResource(SESSION)).toBe("focused");
+    expect(ptyKeys()).toEqual([SESSION, `${SESSION}:diff`]);
+    expect(splitTree.getFocusedLeaf()?.activeTab).toBe(`${SESSION}:diff`);
   });
 });
 

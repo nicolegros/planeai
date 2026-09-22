@@ -84,17 +84,12 @@ function editorPtyKey(sessionId: string, filePath: string): string {
 }
 
 /**
- * Toggle the diff resource: open it in the focused leaf, focus it when it is
- * open elsewhere, or close it when it is already the active tab.
+ * Open the diff resource in the focused leaf, or focus it if it is already in the
+ * layout. Idempotent, so repeated automatic opens never close it.
  */
-export function toggleDiffResource(sessionId: string): ResourceOpen {
+export function openDiffResource(sessionId: string): ResourceOpen {
   const ptyKey = diffPtyKey(sessionId);
-  const existing = splitTree.findTab(ptyKey);
-  if (existing) {
-    if (existing.leaf.activeTab === ptyKey) {
-      splitTree.removeSessionFromLeaf(ptyKey);
-      return "closed";
-    }
+  if (splitTree.findTab(ptyKey)) {
     splitTree.focusTab(ptyKey);
     return "focused";
   }
@@ -108,6 +103,20 @@ export function toggleDiffResource(sessionId: string): ResourceOpen {
     type: "diff",
   });
   return "opened";
+}
+
+/**
+ * Toggle the diff resource: close it when it is already the active tab, and
+ * otherwise open or focus it.
+ */
+export function toggleDiffResource(sessionId: string): ResourceOpen {
+  const ptyKey = diffPtyKey(sessionId);
+  const existing = splitTree.findTab(ptyKey);
+  if (existing?.leaf.activeTab === ptyKey) {
+    splitTree.removeSessionFromLeaf(ptyKey);
+    return "closed";
+  }
+  return openDiffResource(sessionId);
 }
 
 /** Open a file in the embedded editor, focusing an already-open tab for it. */

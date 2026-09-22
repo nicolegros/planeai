@@ -173,24 +173,6 @@ export function handlePrevTab(): void {
   selectUnifiedTab(tabs[(currentPos - 1 + tabs.length) % tabs.length].index);
 }
 
-export function toggleDiff(): void {
-  const id = getActiveSessionId();
-  if (!id) return;
-  if (diffTabOpen[id]) {
-    if (diffTabActive[id]) {
-      diffTabActive = { ...diffTabActive, [id]: false };
-      diffTabOpen = { ...diffTabOpen, [id]: false };
-    } else {
-      diffTabActive = { ...diffTabActive, [id]: true };
-      editorTabActive = { ...editorTabActive, [id]: false };
-    }
-  } else {
-    diffTabOpen = { ...diffTabOpen, [id]: true };
-    diffTabActive = { ...diffTabActive, [id]: true };
-    editorTabActive = { ...editorTabActive, [id]: false };
-  }
-}
-
 export function toggleEditor(): void {
   const id = getActiveSessionId();
   if (!id) return;

@@ -48,6 +48,7 @@ vi.mock("../api", () => ({
 }));
 
 import { sessions as sessionsApi, symphony } from "../api";
+import * as splitTree from "../split-tree.svelte";
 import { getSettings } from "../settings.svelte";
 import type { Session } from "../types";
 import {
@@ -71,10 +72,7 @@ import {
   selectUnifiedTab,
   handleNextTab,
   handlePrevTab,
-  toggleDiff,
   toggleEditor,
-  getDiffTabOpen,
-  getDiffTabActive,
   getEditorTabOpen,
   getEditorTabActive,
   getAgentStates,
@@ -227,34 +225,33 @@ describe("session-orchestrator", () => {
   });
 
   describe("restartSession", () => {
+    describe("parkSession", () => {
+      it("uses the non-completing endpoint and keeps a same-task agent selected", async () => {
+        const parked = makeSession({ id: "s1", task_key: "PLA-315" });
+        const sibling = makeSession({ id: "s2", task_key: "PLA-315" });
+        api.list.mockResolvedValue([parked, sibling]);
+        await loadSessions();
+        selectSession(parked.id);
 
-  describe("parkSession", () => {
-    it("uses the non-completing endpoint and keeps a same-task agent selected", async () => {
-      const parked = makeSession({ id: "s1", task_key: "PLA-315" });
-      const sibling = makeSession({ id: "s2", task_key: "PLA-315" });
-      api.list.mockResolvedValue([parked, sibling]);
-      await loadSessions();
-      selectSession(parked.id);
+        await parkSession(parked);
 
-      await parkSession(parked);
+        expect(api.park).toHaveBeenCalledWith(parked.id);
+        expect(api.archive).not.toHaveBeenCalled();
+        expect(getSessions().map((session) => session.id)).toEqual([sibling.id]);
+        expect(getActiveSessionId()).toBe(sibling.id);
+      });
 
-      expect(api.park).toHaveBeenCalledWith(parked.id);
-      expect(api.archive).not.toHaveBeenCalled();
-      expect(getSessions().map((session) => session.id)).toEqual([sibling.id]);
-      expect(getActiveSessionId()).toBe(sibling.id);
+      it("allows the final task-linked agent to park without selecting another session", async () => {
+        const parked = makeSession({ id: "s1", task_key: "PLA-315" });
+        api.list.mockResolvedValue([parked]);
+        await loadSessions();
+
+        await parkSession(parked);
+
+        expect(getSessions()).toEqual([]);
+        expect(getActiveSessionId()).toBeNull();
+      });
     });
-
-    it("allows the final task-linked agent to park without selecting another session", async () => {
-      const parked = makeSession({ id: "s1", task_key: "PLA-315" });
-      api.list.mockResolvedValue([parked]);
-      await loadSessions();
-
-      await parkSession(parked);
-
-      expect(getSessions()).toEqual([]);
-      expect(getActiveSessionId()).toBeNull();
-    });
-  });
     it("replaces session with updated version", async () => {
       api.list.mockResolvedValue([makeSession({ id: "s1", status: "exited" })]);
       await loadSessions();
@@ -365,22 +362,6 @@ describe("session-orchestrator", () => {
       expect(getUnifiedActiveIndex()).toBe(2);
       handlePrevTab();
       expect(getUnifiedActiveIndex()).toBe(1);
-    });
-
-    it("toggleDiff opens and activates", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
-      await loadSessions();
-      toggleDiff();
-      expect(getDiffTabOpen()["s1"]).toBe(true);
-      expect(getDiffTabActive()["s1"]).toBe(true);
-    });
-
-    it("toggleDiff closes when active", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
-      await loadSessions();
-      toggleDiff();
-      toggleDiff();
-      expect(getDiffTabOpen()["s1"]).toBe(false);
     });
 
     it("toggleEditor opens and activates", async () => {
@@ -494,6 +475,84 @@ describe("session-orchestrator", () => {
 
       handler({ payload: { session_id: "s1", state: "Idle" } });
       expect(playTaskComplete).toHaveBeenCalled();
+
+      cleanup();
+    });
+
+    it("auto-opens the review tab in the workspace layout when the active agent finishes", async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const listenMock = vi.mocked(listen);
+      listenMock.mockClear();
+
+      vi.mocked(getSettings).mockReturnValue({
+        appearance: { mode: "system", theme: "default" },
+        terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
+        providers: {},
+        default_provider: "kiro",
+        task_management: null,
+        sound_enabled: false,
+      });
+
+      api.list.mockResolvedValue([
+        makeSession({ id: "s1", worktree_path: "/tmp/wt", base_branch: "main" }),
+      ]);
+      await loadSessions();
+      selectSession("s1");
+
+      splitTree.resetTree();
+      splitTree.initTree([{ ptyKey: "s1", label: "Agent", icon: "bot", type: "agent" }], "s1");
+
+      const cleanup = startEventListeners();
+      const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
+      const handler = agentCall![1] as (event: {
+        payload: { session_id: string; state: string };
+      }) => void;
+
+      handler({ payload: { session_id: "s1", state: "Idle" } });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+      const leaf = splitTree.getFocusedLeaf();
+      expect(leaf?.tabs.map((tab) => tab.ptyKey)).toEqual(["s1", "s1:diff"]);
+      expect(leaf?.activeTab).toBe("s1:diff");
+
+      cleanup();
+    });
+
+    it("does not close an already-open review tab when the agent finishes again", async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const listenMock = vi.mocked(listen);
+      listenMock.mockClear();
+
+      vi.mocked(getSettings).mockReturnValue({
+        appearance: { mode: "system", theme: "default" },
+        terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
+        providers: {},
+        default_provider: "kiro",
+        task_management: null,
+        sound_enabled: false,
+      });
+
+      api.list.mockResolvedValue([
+        makeSession({ id: "s1", worktree_path: "/tmp/wt", base_branch: "main" }),
+      ]);
+      await loadSessions();
+      selectSession("s1");
+
+      splitTree.resetTree();
+      splitTree.initTree([{ ptyKey: "s1", label: "Agent", icon: "bot", type: "agent" }], "s1");
+
+      const cleanup = startEventListeners();
+      const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
+      const handler = agentCall![1] as (event: {
+        payload: { session_id: string; state: string };
+      }) => void;
+
+      handler({ payload: { session_id: "s1", state: "Idle" } });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      handler({ payload: { session_id: "s1", state: "Idle" } });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+      expect(splitTree.getFocusedLeaf()?.tabs.map((tab) => tab.ptyKey)).toEqual(["s1", "s1:diff"]);
 
       cleanup();
     });
