@@ -112,6 +112,8 @@ Handshake and ordinary RPC calls have a five-second deadline. On deadline expiry
 
 The host supplies `PLANEAI_PLUGIN_DATA_DIR` and `PLANEAI_PLUGIN_SECRETS_DIR`. Store public, replaceable plugin state in the former. Keep secrets backend-only in the latter: the UI settings bridge and sidecar settings callback never return secret files. The fixture's `fixture.status` reports both paths only to demonstrate their presence; real plugins should not surface secret paths or contents to UI.
 
+The host also supplies `PATH`. A GUI launch (Spotlight, Finder, Dock) inherits a minimal `PATH` from the OS that excludes user-local bin directories, so PlaneAI replaces it with the same augmented `PATH` it gives agent sessions: the user's `extra_path_dirs` config, then conventional developer directories (`~/.local/bin`, `~/.cargo/bin`, `~/go/bin`, `/opt/homebrew/bin`, `/usr/local/bin`), then the inherited `PATH`. A backend that shells out to a CLI can rely on plain `PATH` lookup. If a user installs a tool somewhere unconventional (version-manager shims, for example), they add that directory to `extra_path_dirs` in `~/.config/planeai/config.json`.
+
 Task lifecycle delivery is best-effort and isolated from PlaneAI task commits. Subscribe in the handshake, declare `task-events`, make handlers idempotent, and log failures to stderr. The fixture handles `plugin.taskLifecycle` and emits a lifecycle diagnostic.
 
 ## UI contributions

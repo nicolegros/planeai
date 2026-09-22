@@ -313,32 +313,17 @@ pub trait PromptOps {
     fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String>;
 }
 
-#[cfg(not(windows))]
 pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
     struct RealPromptOps;
     impl PromptOps for RealPromptOps {
         fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String> {
-            crate::tmux::send_keys(tmux_name, text)
+            tmux_send_prompt(tmux_name, text)
         }
         fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String> {
-            use std::io::Write;
-            use std::os::unix::net::UnixStream;
-            let sock = planeai_paths::app_data_dir().join("notify.sock");
-            if !sock.exists() {
-                return Err("GUI is not running (socket not found)".to_string());
-            }
-            let mut stream = UnixStream::connect(&sock).map_err(|e| e.to_string())?;
-            let msg = serde_json::json!({
-                "event": "send_prompt",
-                "session_id": session_id,
-                "text": text,
-            });
-            stream
-                .write_all(format!("{}\n", msg).as_bytes())
-                .map_err(|e| e.to_string())
+            notify_gui_send_prompt(session_id, text)
         }
         fn tmux_has_session(&self, tmux_name: &str) -> bool {
-            crate::tmux::has_session(tmux_name)
+            tmux_session_exists(tmux_name)
         }
         fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String> {
             daemon_send_prompt(session_id, text)
@@ -347,57 +332,84 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
     RealPromptOps
 }
 
+// The `tmux` module is `cfg(not(windows))`, so the Windows arms below build their
+// invocations from `command::tmux_command` directly rather than reaching for it.
+
+#[cfg(not(windows))]
+fn tmux_send_prompt(tmux_name: &str, text: &str) -> Result<(), String> {
+    crate::tmux::send_keys(tmux_name, text)
+}
+
 #[cfg(windows)]
-pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
-    struct WindowsPromptOps;
-    impl PromptOps for WindowsPromptOps {
-        fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String> {
-            use std::process::Command;
-            let output = Command::new("tmux")
-                .args(["send-keys", "-t", tmux_name, "-l", text])
-                .output()
-                .map_err(|e| format!("failed to run tmux: {e}"))?;
-            if !output.status.success() {
-                return Err(String::from_utf8_lossy(&output.stderr).to_string());
-            }
-            let output = Command::new("tmux")
-                .args(["send-keys", "-t", tmux_name, "Enter"])
-                .output()
-                .map_err(|e| format!("failed to run tmux: {e}"))?;
-            if !output.status.success() {
-                return Err(String::from_utf8_lossy(&output.stderr).to_string());
-            }
-            Ok(())
-        }
-        fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String> {
-            use std::io::Write;
-            let pipe_name = format!("\\\\.\\pipe\\planeai-notify");
-            let mut stream = std::fs::OpenOptions::new()
-                .write(true)
-                .open(&pipe_name)
-                .map_err(|e| format!("GUI is not running (pipe not found): {e}"))?;
-            let msg = serde_json::json!({
-                "event": "send_prompt",
-                "session_id": session_id,
-                "text": text,
-            });
-            stream
-                .write_all(format!("{}\n", msg).as_bytes())
-                .map_err(|e| e.to_string())
-        }
-        fn tmux_has_session(&self, tmux_name: &str) -> bool {
-            use std::process::Command;
-            Command::new("tmux")
-                .args(["has-session", "-t", tmux_name])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        }
-        fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String> {
-            daemon_send_prompt(session_id, text)
-        }
+fn tmux_send_prompt(tmux_name: &str, text: &str) -> Result<(), String> {
+    // Literal text first (no key-name interpretation), then Enter separately.
+    run_tmux(&["send-keys", "-t", tmux_name, "-l", text])?;
+    run_tmux(&["send-keys", "-t", tmux_name, "Enter"])
+}
+
+#[cfg(windows)]
+fn run_tmux(args: &[&str]) -> Result<(), String> {
+    let output = crate::command::tmux_command(args)
+        .output()
+        .map_err(|e| format!("failed to run tmux: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
     }
-    WindowsPromptOps
+}
+
+#[cfg(not(windows))]
+fn tmux_session_exists(tmux_name: &str) -> bool {
+    crate::tmux::has_session(tmux_name)
+}
+
+#[cfg(windows)]
+fn tmux_session_exists(tmux_name: &str) -> bool {
+    // '=' forces an exact match so a name is not matched by prefix.
+    crate::command::tmux_command(&["has-session", "-t", &format!("={tmux_name}")])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// The newline-delimited frame the GUI's notify listener expects.
+fn send_prompt_frame(session_id: &str, text: &str) -> String {
+    let msg = serde_json::json!({
+        "event": "send_prompt",
+        "session_id": session_id,
+        "text": text,
+    });
+    format!("{msg}\n")
+}
+
+/// Hand a prompt to the running GUI over its local IPC transport:
+/// a unix domain socket, or a named pipe on Windows.
+#[cfg(not(windows))]
+fn notify_gui_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+    let sock = planeai_paths::app_data_dir().join("notify.sock");
+    if !sock.exists() {
+        return Err("GUI is not running (socket not found)".to_string());
+    }
+    let mut stream = UnixStream::connect(&sock).map_err(|e| e.to_string())?;
+    stream
+        .write_all(send_prompt_frame(session_id, text).as_bytes())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+fn notify_gui_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    const PIPE_NAME: &str = r"\\.\pipe\planeai-notify";
+    let mut stream = std::fs::OpenOptions::new()
+        .write(true)
+        .open(PIPE_NAME)
+        .map_err(|e| format!("GUI is not running (pipe not found): {e}"))?;
+    stream
+        .write_all(send_prompt_frame(session_id, text).as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(unix)]
@@ -704,21 +716,21 @@ pub fn read_daemon_buffer_after(
     }
 }
 
+/// Scrollback depth captured when matching a tmux cursor against pane history.
+const TMUX_CURSOR_SCROLLBACK_LINES: usize = 10_000;
+
 /// Read output from a tmux-backend session via tmux capture-pane.
 pub fn read_tmux_pane(tmux_name: &str, lines: usize) -> Result<String, String> {
-    let mut cmd = std::process::Command::new("tmux");
-    cmd.args([
+    let output = crate::command::tmux_command(&[
         "capture-pane",
         "-p",
         "-t",
         tmux_name,
         "-S",
         &format!("-{lines}"),
-    ]);
-    planeai_core::command::no_window(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run tmux: {e}"))?;
+    ])
+    .output()
+    .map_err(|e| format!("failed to run tmux: {e}"))?;
 
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
@@ -747,19 +759,7 @@ pub fn read_tmux_pane_after(
     cursor: &str,
     max_bytes: usize,
 ) -> Result<TmuxCursorReadResult, String> {
-    // Capture full scrollback (up to 10000 lines for cursor matching)
-    let mut cmd = std::process::Command::new("tmux");
-    cmd.args(["capture-pane", "-p", "-t", tmux_name, "-S", "-10000"]);
-    planeai_core::command::no_window(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run tmux: {e}"))?;
-
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-
-    let full_text = String::from_utf8_lossy(&output.stdout).to_string();
+    let full_text = read_tmux_pane(tmux_name, TMUX_CURSOR_SCROLLBACK_LINES)?;
     let all_lines: Vec<&str> = full_text.lines().collect();
 
     // Parse cursor: "tmux:<line_index>:<hash>"
@@ -833,18 +833,7 @@ pub fn read_tmux_pane_after(
 /// Build an initial tmux cursor (for first read without --after).
 #[allow(dead_code)]
 pub fn build_tmux_cursor_from_pane(tmux_name: &str) -> Result<String, String> {
-    let mut cmd = std::process::Command::new("tmux");
-    cmd.args(["capture-pane", "-p", "-t", tmux_name, "-S", "-10000"]);
-    planeai_core::command::no_window(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run tmux: {e}"))?;
-
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-
-    let full_text = String::from_utf8_lossy(&output.stdout).to_string();
+    let full_text = read_tmux_pane(tmux_name, TMUX_CURSOR_SCROLLBACK_LINES)?;
     let all_lines: Vec<&str> = full_text.lines().collect();
     Ok(build_tmux_cursor(&all_lines))
 }

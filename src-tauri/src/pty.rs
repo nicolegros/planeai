@@ -11,8 +11,6 @@ use crate::daemon_client::DataConnection;
 use crate::output_observer::{NoopObserver, OutputObserver};
 use crate::pty_planeai_core_adapter::PlaneaiPtyBackend;
 use crate::session_backend::{SessionBackend, WriteAck};
-#[cfg(not(windows))]
-use crate::tmux;
 use planeai_pty::FlowControl;
 
 /// Describes what command to run inside the PTY.
@@ -181,7 +179,7 @@ impl PtyManager {
             PtyTarget::TmuxAttach { tmux_name } => {
                 #[cfg(not(windows))]
                 {
-                    let tmux_bin = tmux::tmux_bin().to_string();
+                    let tmux_bin = crate::command::tmux_bin().to_string();
                     // Quote tmux_name to prevent shell metacharacter injection.
                     let escaped_name = tmux_name.replace('\'', "'\\''");
                     let cmd = format!("{} attach-session -t '={}'", tmux_bin, escaped_name);

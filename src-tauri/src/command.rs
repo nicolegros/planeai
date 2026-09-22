@@ -104,6 +104,29 @@ pub fn resolve(cmd: &str) -> String {
     cmd.to_string()
 }
 
+/// Resolve the `tmux` binary once and cache it.
+///
+/// Lives here rather than in `tmux`, which is `cfg(not(windows))`, so that
+/// cross-platform callers such as `session_ops::read_tmux_pane` can reach it.
+pub fn tmux_bin() -> &'static str {
+    static BIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BIN.get_or_init(|| resolve("tmux"))
+}
+
+/// Build a `tmux` invocation.
+///
+/// Always go through this rather than spawning `tmux` by bare name: a bare
+/// program name is resolved against the spawning process's PATH, and a GUI
+/// launch (Spotlight, Finder, Dock) inherits a minimal PATH that excludes
+/// `/opt/homebrew/bin` and other user-local directories. This also applies the
+/// Windows no-console-window flag every planeai subprocess needs.
+pub fn tmux_command(args: &[&str]) -> Command {
+    let mut cmd = Command::new(tmux_bin());
+    cmd.args(args);
+    planeai_core::command::no_window(&mut cmd);
+    cmd
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +241,74 @@ mod tests {
             !output.status.success(),
             "subprocess with minimal PATH should NOT find tools outside standard dirs"
         );
+    }
+
+    #[test]
+    fn tmux_bin_is_an_absolute_path_when_tmux_is_installed() {
+        let bin = tmux_bin();
+        // A bare "tmux" means it wasn't found — acceptable on runners without tmux.
+        if bin != "tmux" {
+            assert!(
+                Path::new(bin).is_absolute(),
+                "expected absolute path, got: {bin}"
+            );
+            assert!(
+                Path::new(bin).exists(),
+                "resolved path does not exist: {bin}"
+            );
+        }
+    }
+
+    #[test]
+    fn tmux_commands_are_built_from_the_resolved_binary() {
+        let cmd = tmux_command(&["has-session", "-t", "=planeai-demo"]);
+        assert_eq!(cmd.get_program(), std::ffi::OsStr::new(tmux_bin()));
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            ["has-session", "-t", "=planeai-demo"]
+                .map(std::ffi::OsStr::new)
+                .to_vec()
+        );
+    }
+
+    /// A bare `tmux` program name is resolved against the spawning process's
+    /// PATH. A GUI launch (Spotlight, Finder, Dock) inherits a minimal PATH that
+    /// excludes `/opt/homebrew/bin`, so every call site must go through
+    /// [`tmux_command`] — which resolves the binary up front — instead of
+    /// spawning by name.
+    #[test]
+    fn no_call_site_spawns_tmux_by_bare_name() {
+        let backend = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut offenders = Vec::new();
+        collect_bare_tmux_spawns(backend, &mut offenders);
+        assert!(
+            offenders.is_empty(),
+            "these call sites spawn tmux by bare name instead of command::tmux_command(): {offenders:?}"
+        );
+    }
+
+    /// Walks every Rust source file in the backend workspace. Build output and
+    /// dot-directories are skipped so the scan stays cheap.
+    fn collect_bare_tmux_spawns(dir: &Path, offenders: &mut Vec<String>) {
+        // Built at runtime so this scanner does not match its own source.
+        let needle = format!("Command::new({quote}tmux{quote})", quote = '"');
+        for entry in std::fs::read_dir(dir).expect("readable source directory") {
+            let path = entry.expect("readable directory entry").path();
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if name == "target" || name.starts_with('.') {
+                continue;
+            }
+            if path.is_dir() {
+                collect_bare_tmux_spawns(&path, offenders);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let source = std::fs::read_to_string(&path).expect("readable source file");
+                for (index, line) in source.lines().enumerate() {
+                    if line.contains(&needle) {
+                        offenders.push(format!("{}:{}", path.display(), index + 1));
+                    }
+                }
+            }
+        }
     }
 }
