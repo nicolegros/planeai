@@ -5,6 +5,11 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{Map, Value};
 
 const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
+const RECIPIENT_HOST_API_VERSION: &str = "planeai.plugin-host.v2";
+
+fn supports_host_api_version(version: &str) -> bool {
+    matches!(version, HOST_API_VERSION | RECIPIENT_HOST_API_VERSION)
+}
 
 const MANIFEST_FIELDS: &[&str] = &[
     "schema",
@@ -70,7 +75,7 @@ pub fn validate_local_manifest(manifest: &Value, platform: &str) -> Result<Strin
     for field in ["name", "version"] {
         required_string(object, field)?;
     }
-    if required_string(object, "host_api_version")? != HOST_API_VERSION {
+    if !supports_host_api_version(required_string(object, "host_api_version")?) {
         bail!("plugin manifest requires an unsupported host API version");
     }
     if required_string(object, "source_kind")? != "local" {

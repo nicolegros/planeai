@@ -23,6 +23,11 @@ use crate::commands;
 use crate::task_lifecycle::TaskLifecycleBatch;
 
 const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
+const RECIPIENT_HOST_API_VERSION: &str = "planeai.plugin-host.v2";
+
+fn supports_host_api_version(version: &str) -> bool {
+    matches!(version, HOST_API_VERSION | RECIPIENT_HOST_API_VERSION)
+}
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 // A Jira lifecycle writeback may refresh credentials, look up a transition,
 // perform that transition, and add a comment. Each network request is bounded
@@ -232,7 +237,7 @@ impl PluginManifest {
         if self.name.trim().is_empty() || self.version.trim().is_empty() {
             return Err("plugin name and version are required".to_string());
         }
-        if self.host_api_version != HOST_API_VERSION {
+        if !supports_host_api_version(&self.host_api_version) {
             return Err(format!(
                 "plugin {} requires unsupported host API {}",
                 self.id, self.host_api_version
@@ -3057,7 +3062,7 @@ impl PluginRuntimeSupervisor {
             .request(
                 "plugin.handshake",
                 serde_json::json!({
-                    "host_api_version": HOST_API_VERSION,
+                    "host_api_version": inventory.host_api_version,
                     "host_capabilities": capabilities,
                 }),
             )
@@ -3070,7 +3075,7 @@ impl PluginRuntimeSupervisor {
                 if value.plugin_id == inventory.id
                     && value.plugin_name == inventory.name
                     && value.plugin_version == inventory.version
-                    && value.host_api_version == HOST_API_VERSION =>
+                    && value.host_api_version == inventory.host_api_version =>
             {
                 value
             }
