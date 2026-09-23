@@ -27,9 +27,13 @@
   type FormMode = "local" | "remote";
   let mode = $state<FormMode>("local");
 
-  // Local mode fields
+  // Local mode fields. These capture the initial prop values on purpose: the form owns
+  // the fields once mounted, so later `project` changes must not overwrite user edits.
+  // svelte-ignore state_referenced_locally
   let path = $state(project?.path ?? (getSettings().projects_base_path ? getSettings().projects_base_path + "/" : ""));
+  // svelte-ignore state_referenced_locally
   let name = $state(project?.name ?? "");
+  // svelte-ignore state_referenced_locally
   let nameManuallyEdited = $state(project !== null);
 
   // Remote mode fields
@@ -203,6 +207,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div bind:this={wrapperEl} tabindex="-1" onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); return; } fk.handleKeydown(e); }} onfocusin={fk.handleFocusin} class="outline-none" data-form-keyboard>
 <form class="px-5 pb-0 space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }}>
 

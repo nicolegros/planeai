@@ -313,7 +313,7 @@
 
 <!-- Modal for create/edit -->
 {#if modalMode !== null}
-<div class="fixed inset-0 z-50 flex items-center justify-center" onkeydown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={modalMode === "create" ? "Create Task" : "Edit Task"}>
+<div class="fixed inset-0 z-50 flex items-center justify-center" onkeydown={(e) => e.stopPropagation()} role="dialog" tabindex="-1" aria-modal="true" aria-label={modalMode === "create" ? "Create Task" : "Edit Task"}>
   <div class="w-[36rem] max-h-[85vh] flex flex-col p-6 rounded-lg border border-border bg-panel shadow-lg overflow-hidden">
     <h2 class="flex-shrink-0 text-lg font-semibold text-t1 px-5 pb-2">{modalMode === "create" ? "Create Task" : "Edit Task"}</h2>
     <div class="flex-1 min-h-0 overflow-y-auto">

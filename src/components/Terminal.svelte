@@ -421,7 +421,9 @@
     if (fitAddon) fitAddon.fit();
   });
 
-  // Re-attach when session is restarted (exited → active)
+  // Re-attach when session is restarted (exited → active). Snapshots the current value
+  // deliberately so the effect below can compare previous against current.
+  // svelte-ignore state_referenced_locally
   let prevExited = exited;
   $effect(() => {
     if (prevExited && !exited && term && !skipAttach) {

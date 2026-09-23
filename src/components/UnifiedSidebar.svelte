@@ -666,46 +666,53 @@
                   <!-- Loop item (aligned with status section headers) -->
                   <div class="flex items-center gap-1.5">
                     <span class="w-[2px] self-stretch rounded-full transition-opacity {isLoopDashboardActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
-                    <button
-                      data-nav-index={loopNavIdx}
-                      class="group flex-1 min-w-0 text-left py-[6px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg pl-4 pr-2 cursor-pointer
+                    <!-- Row background and the hover group live on this wrapper so the quick-action
+                         buttons sit beside the navigation button rather than nested inside it —
+                         a button may not contain another button. -->
+                    <div
+                      class="group flex-1 min-w-0 flex items-center gap-1.5 transition-colors rounded-lg pr-2
                         {isLoopDashboardActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
                         {isLoopPreviewing ? 'ring-2 ring-accent' : isLoopSelected ? 'ring-2 ring-accent' : ''}"
-                      onclick={() => onSelectLoop?.(loop.id)}
-                      oncontextmenu={(e) => { e.preventDefault(); loopContextMenu = { x: e.clientX, y: e.clientY, loop }; }}
-                      title={loop.goal}
                     >
-                    <!-- Status indicator -->
-                    {#if isLoopTerminalSuccess(loop.status)}
-                      <CheckCircle2 class="size-3 shrink-0 {loopStatusTextColors[loop.status] ?? 'text-t3'}" />
-                    {:else if isLoopTerminalFailure(loop.status)}
-                      <XCircle class="size-3 shrink-0 {loopStatusTextColors[loop.status] ?? 'text-t3'}" />
-                    {:else}
-                      <span class="size-1.5 rounded-full shrink-0 {loopStatusColor(loop.status)}"></span>
-                    {/if}
-                    <!-- Label -->
-                    {#if loop.task_key}
-                      <span class="font-medium text-[12.5px] text-t1 truncate">{loop.task_key}</span>
-                    {:else}
-                      <span class="text-t3 font-mono text-xs truncate">{shortId(loop.id)}</span>
-                    {/if}
-                    <span class="text-t3 text-xs">{loop.strategy}</span>
-                    <!-- Round limit -->
-                    <span class="text-t3 text-xs shrink-0">max {loop.max_rounds} rounds</span>
-                    <!-- Quick actions (show on hover) -->
-                    <span class="hidden group-hover:flex items-center gap-0.5">
-                      {#if loop.status === "draft"}
-                        <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1" onclick={(e) => { e.stopPropagation(); onStartLoop?.(loop.id); }} title="Start" aria-label="Start loop"><Play class="size-3" /></button>
-                      {:else if isLoopActive(loop.status)}
-                        <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1" onclick={(e) => { e.stopPropagation(); onTickLoop?.(loop.id); }} title="Tick" aria-label="Tick loop"><Play class="size-3" /></button>
-                        <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-status-exited" onclick={(e) => { e.stopPropagation(); onStopLoop?.(loop.id); }} title="Stop" aria-label="Stop loop"><Square class="size-3" /></button>
+                      <button
+                        data-nav-index={loopNavIdx}
+                        class="flex-1 min-w-0 text-left py-[6px] text-[13px] flex items-center gap-1.5 pl-4 cursor-pointer"
+                        onclick={() => onSelectLoop?.(loop.id)}
+                        oncontextmenu={(e) => { e.preventDefault(); loopContextMenu = { x: e.clientX, y: e.clientY, loop }; }}
+                        title={loop.goal}
+                      >
+                      <!-- Status indicator -->
+                      {#if isLoopTerminalSuccess(loop.status)}
+                        <CheckCircle2 class="size-3 shrink-0 {loopStatusTextColors[loop.status] ?? 'text-t3'}" />
+                      {:else if isLoopTerminalFailure(loop.status)}
+                        <XCircle class="size-3 shrink-0 {loopStatusTextColors[loop.status] ?? 'text-t3'}" />
+                      {:else}
+                        <span class="size-1.5 rounded-full shrink-0 {loopStatusColor(loop.status)}"></span>
                       {/if}
-                    </span>
-                    <!-- Chevron on right -->
-                    {#if childSessions.length > 0}
-                      {#if loopCollapsed}<ChevronRight class="size-3 ml-auto text-t3 shrink-0" />{:else}<ChevronDown class="size-3 ml-auto text-t3 shrink-0" />{/if}
-                    {/if}
-                    </button>
+                      <!-- Label -->
+                      {#if loop.task_key}
+                        <span class="font-medium text-[12.5px] text-t1 truncate">{loop.task_key}</span>
+                      {:else}
+                        <span class="text-t3 font-mono text-xs truncate">{shortId(loop.id)}</span>
+                      {/if}
+                      <span class="text-t3 text-xs">{loop.strategy}</span>
+                      <!-- Round limit -->
+                      <span class="text-t3 text-xs shrink-0">max {loop.max_rounds} rounds</span>
+                      </button>
+                      <!-- Quick actions (show on hover) -->
+                      <span class="hidden group-hover:flex items-center gap-0.5 shrink-0">
+                        {#if loop.status === "draft"}
+                          <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1" onclick={(e) => { e.stopPropagation(); onStartLoop?.(loop.id); }} title="Start" aria-label="Start loop"><Play class="size-3" /></button>
+                        {:else if isLoopActive(loop.status)}
+                          <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1" onclick={(e) => { e.stopPropagation(); onTickLoop?.(loop.id); }} title="Tick" aria-label="Tick loop"><Play class="size-3" /></button>
+                          <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-status-exited" onclick={(e) => { e.stopPropagation(); onStopLoop?.(loop.id); }} title="Stop" aria-label="Stop loop"><Square class="size-3" /></button>
+                        {/if}
+                      </span>
+                      <!-- Chevron on right -->
+                      {#if childSessions.length > 0}
+                        {#if loopCollapsed}<ChevronRight class="size-3 text-t3 shrink-0" />{:else}<ChevronDown class="size-3 text-t3 shrink-0" />{/if}
+                      {/if}
+                    </div>
                   </div>
                   <!-- Indented child sessions -->
                   {#if !loopCollapsed && childSessions.length > 0}

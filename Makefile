@@ -25,7 +25,7 @@ fmt:
 
 lint: sidecar-placeholders ## Check formatting and clippy
 	pnpm lint
-	pnpm exec svelte-check
+	pnpm exec svelte-check --fail-on-warnings
 	pnpm fmt:check
 	cd src-tauri && cargo fmt --all -- --check
 	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo clippy --workspace --all-targets --all-features -- -D warnings
