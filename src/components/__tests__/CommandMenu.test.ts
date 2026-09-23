@@ -237,6 +237,36 @@ describe("CommandMenu", () => {
     expect(props.onSelectTask).not.toHaveBeenCalled();
   });
 
+  it("does not pull focus back to the previously focused element after selecting a task", async () => {
+    // The dialog's focus scope restores focus to whatever was focused before it opened, which
+    // would undo the focus the app moves to the selected task's terminal.
+    const sentinel = document.createElement("input");
+    document.body.append(sentinel);
+    sentinel.focus();
+    expect(document.activeElement).toBe(sentinel);
+
+    tasksByProject = { "/tmp/project": [makeTask({ key: "PLA-42", title: "Fix the launcher" })] };
+    const props = menuProps();
+    const onOpenChange = vi.fn();
+    props.onOpenChange = onOpenChange;
+    render(props);
+    const input = await findRootInput();
+
+    await typeQuery(input, "Fix the launcher");
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    expect(props.onSelectTask).toHaveBeenCalledOnce();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+
+    // Tear the dialog down the way the app does when `open` flips to false.
+    if (component) unmount(component);
+    component = undefined;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(document.activeElement).not.toBe(sentinel);
+    sentinel.remove();
+  });
+
   it("no longer offers the Pick task submenu", async () => {
     render();
     await findRootInput();
