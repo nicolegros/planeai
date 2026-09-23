@@ -1,3 +1,4 @@
+pub mod capture_cursor;
 pub mod cleanup;
 pub mod command;
 pub mod dispatch;
