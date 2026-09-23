@@ -5,7 +5,8 @@ export function pluginSessionActionsForProvider(
   actions: PluginSessionAction[],
   provider: string | null,
 ): PluginSessionAction[] {
-  return actions.filter((action) =>
-    action.providers.length === 0 || (provider !== null && action.providers.includes(provider)),
+  return actions.filter(
+    (action) =>
+      action.providers.length === 0 || (provider !== null && action.providers.includes(provider)),
   );
 }

@@ -10,7 +10,9 @@ function shortcutFor(event: KeyboardEvent): string | null {
   if (!isPlatformMod(event) || (IS_MAC ? event.ctrlKey : event.metaKey)) return null;
   const key = /^Key[A-Z]$/.test(event.code) ? event.code.slice(3) : event.key.toUpperCase();
   if (!/^[A-Z]$/.test(key)) return null;
-  return ["Mod", ...(event.shiftKey ? ["Shift"] : []), ...(event.altKey ? ["Alt"] : []), key].join("+");
+  return ["Mod", ...(event.shiftKey ? ["Shift"] : []), ...(event.altKey ? ["Alt"] : []), key].join(
+    "+",
+  );
 }
 
 /**
@@ -25,7 +27,9 @@ export function findPluginShortcut(
 ): PluginShortcutTarget | null {
   const shortcut = shortcutFor(event);
   if (!shortcut) return null;
-  return sessionPanels.find(({ contribution }) => contribution.shortcut === shortcut)
-    ?? mainPanes.find(({ contribution }) => contribution.shortcut === shortcut)
-    ?? null;
+  return (
+    sessionPanels.find(({ contribution }) => contribution.shortcut === shortcut) ??
+    mainPanes.find(({ contribution }) => contribution.shortcut === shortcut) ??
+    null
+  );
 }

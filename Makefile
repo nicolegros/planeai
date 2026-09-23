@@ -1,4 +1,4 @@
-.PHONY: dev build bundle open test test-plugin-fixture dev-bundle ci fmt lint docs install sidecars local-plugin-fixture
+.PHONY: dev build bundle open test test-plugin-fixture dev-bundle ci fmt lint docs install sidecars sidecar-placeholders local-plugin-fixture
 
 # Dummy updater signing key for local builds (not used in CI releases)
 ifeq ($(OS),Windows_NT)
@@ -23,12 +23,17 @@ fmt:
 	pnpm fmt
 	cd src-tauri && cargo fmt --all
 
-lint: ## Check formatting and clippy
+lint: sidecar-placeholders ## Check formatting and clippy
 	pnpm lint
 	pnpm exec svelte-check
 	pnpm fmt:check
 	cd src-tauri && cargo fmt --all -- --check
 	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# Empty placeholder binaries let the Tauri build script resolve `externalBin`
+# without a full sidecar build. Mirrors the CI step; never overwrites real binaries.
+sidecar-placeholders:
+	cd src-tauri && ./scripts/ensure-sidecars.sh --placeholders-only
 
 dev: sidecars
 	cd src-tauri && cargo build -p planeai-plugin-jira

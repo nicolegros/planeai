@@ -37,21 +37,32 @@ describe("language-server profiles", () => {
       ok: false,
       error: "Profile ID is required.",
     });
-    expect(validateLanguageServerProfile(
-      { id: "rust", languageId: "rust", extensions: "rs", command: "rust-analyzer", args: "", enabled: true },
-      ["rust"],
-    )).toEqual({ ok: false, error: "A profile named “rust” already exists." });
+    expect(
+      validateLanguageServerProfile(
+        {
+          id: "rust",
+          languageId: "rust",
+          extensions: "rs",
+          command: "rust-analyzer",
+          args: "",
+          enabled: true,
+        },
+        ["rust"],
+      ),
+    ).toEqual({ ok: false, error: "A profile named “rust” already exists." });
   });
 
   it("round-trips a saved profile into an editable draft", () => {
-    expect(languageServerProfileDraft({
-      id: "pyright",
-      language_id: "python",
-      extensions: ["py", "pyi"],
-      command: "pyright-langserver",
-      args: ["--stdio", "--verbose"],
-      enabled: null,
-    })).toEqual({
+    expect(
+      languageServerProfileDraft({
+        id: "pyright",
+        language_id: "python",
+        extensions: ["py", "pyi"],
+        command: "pyright-langserver",
+        args: ["--stdio", "--verbose"],
+        enabled: null,
+      }),
+    ).toEqual({
       id: "pyright",
       languageId: "python",
       extensions: "py, pyi",
@@ -62,12 +73,14 @@ describe("language-server profiles", () => {
   });
 
   it("accepts profiles whose empty arrays were omitted during serialization", () => {
-    expect(languageServerProfileDraft({
-      id: "local-rust-analyzer",
-      language_id: "rust",
-      extensions: ["rs"],
-      command: "rust-analyzer",
-    })).toEqual({
+    expect(
+      languageServerProfileDraft({
+        id: "local-rust-analyzer",
+        language_id: "rust",
+        extensions: ["rs"],
+        command: "rust-analyzer",
+      }),
+    ).toEqual({
       id: "local-rust-analyzer",
       languageId: "rust",
       extensions: "rs",
@@ -76,5 +89,4 @@ describe("language-server profiles", () => {
       enabled: true,
     });
   });
-
 });

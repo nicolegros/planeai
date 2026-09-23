@@ -207,7 +207,11 @@ describe("tab-switcher state machine", () => {
 
     startCycle("task:project:PLA-1", validIds, candidates);
 
-    expect(getCycleState().cycleList).toEqual(["loop:loop-1", "legacy-session", "task:project:PLA-1"]);
+    expect(getCycleState().cycleList).toEqual([
+      "loop:loop-1",
+      "legacy-session",
+      "task:project:PLA-1",
+    ]);
     expect(commit()).toBe("loop:loop-1");
   });
 
