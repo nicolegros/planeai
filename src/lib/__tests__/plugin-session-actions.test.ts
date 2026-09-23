@@ -17,6 +17,8 @@ describe("pluginSessionActionsForProvider", () => {
   });
 
   it("does not expose provider-scoped actions for sessions without a provider", () => {
-    expect(pluginSessionActionsForProvider(actions, null).map((action) => action.id)).toEqual(["all"]);
+    expect(pluginSessionActionsForProvider(actions, null).map((action) => action.id)).toEqual([
+      "all",
+    ]);
   });
 });

@@ -17,7 +17,10 @@
 
   let { repoPath, baseBranch, currentBase, currentHead, onConfirm, onCancel }: Props = $props();
 
+  // Initial prop values on purpose — the pickers own these once mounted.
+  // svelte-ignore state_referenced_locally
   let baseValue = $state(currentBase);
+  // svelte-ignore state_referenced_locally
   let headValue = $state(currentHead ?? "__working_tree__");
   let branches = $state<{ value: string; label: string }[]>([]);
   let commits = $state<CommitEntry[]>([]);
@@ -38,6 +41,7 @@
       { key: "b", ref: () => wrapperEl?.querySelector("[data-field='base'] input") as HTMLElement | null },
       { key: "h", ref: () => wrapperEl?.querySelector("[data-field='head'] input") as HTMLElement | null },
     ],
+    // svelte-ignore state_referenced_locally
     { wrapper: () => wrapperEl ?? null, onDismiss: onCancel },
   );
 
@@ -83,6 +87,7 @@
 <FormDialog title="Compare Branches" onClose={onCancel}>
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div bind:this={wrapperEl} tabindex="0" onkeydown={(e) => { handleFormKeydown(e); fk.handleKeydown(e); }} onfocusin={(e) => { if (e.target === wrapperEl) return; fk.handleFocusin(e); }} class="outline-none px-5 pb-5" data-form-keyboard>
     <form class="space-y-3" onsubmit={(e) => { e.preventDefault(); confirm(); }} onkeydown={handleFormKeydown}>
       <div class="space-y-1" data-field="base">

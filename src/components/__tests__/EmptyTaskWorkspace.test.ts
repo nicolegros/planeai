@@ -33,10 +33,12 @@ function render(archivedSessions: Session[] = []) {
   const onNewSession = vi.fn();
   const onRestore = vi.fn();
   const onEdit = vi.fn();
-  mounted.push(mount(EmptyTaskWorkspace, {
-    target,
-    props: { task, archivedSessions, onNewSession, onRestore, onEdit },
-  }));
+  mounted.push(
+    mount(EmptyTaskWorkspace, {
+      target,
+      props: { task, archivedSessions, onNewSession, onRestore, onEdit },
+    }),
+  );
   return { target, onNewSession, onRestore, onEdit };
 }
 

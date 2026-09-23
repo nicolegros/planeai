@@ -87,9 +87,9 @@ describe("SessionForm", () => {
   it("uses M to route to New task in normal mode", () => {
     const onCreateTask = vi.fn();
     const target = renderForm({ onCreateTask });
-    target.querySelector<HTMLElement>("[data-form-keyboard]")!.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "m", bubbles: true, cancelable: true }),
-    );
+    target
+      .querySelector<HTMLElement>("[data-form-keyboard]")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "m", bubbles: true, cancelable: true }));
     expect(onCreateTask).toHaveBeenCalledOnce();
   });
 
@@ -132,9 +132,9 @@ describe("SessionForm", () => {
     await tick();
     flushSync();
     const taskInput = target.querySelector<HTMLInputElement>("[data-field='task'] input")!;
-    target.querySelector<HTMLElement>("[data-form-keyboard]")!.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true }),
-    );
+    target
+      .querySelector<HTMLElement>("[data-form-keyboard]")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true }));
     expect(document.activeElement).toBe(taskInput);
   });
 
@@ -176,9 +176,10 @@ describe("SessionForm", () => {
   });
 });
 
-  it("keeps the task title for an additional task agent while defaulting it to an isolated worktree", async () => {
-    const target = renderForm({
-      sessions: [{
+it("keeps the task title for an additional task agent while defaulting it to an isolated worktree", async () => {
+  const target = renderForm({
+    sessions: [
+      {
         id: "existing",
         project_id: "p1",
         name: "Agent 1",
@@ -186,23 +187,28 @@ describe("SessionForm", () => {
         status: "active",
         task_key: "PROJ-1",
         worktree_path: "/tmp/worktree",
-      }],
-      taskPrefill: {
-        key: "PROJ-1",
-        title: "Fix bug",
-        description: "",
-        branch: "",
-        name: "",
-        prompt: "",
       },
-    });
-
-    await tick();
-    flushSync();
-    await tick();
-    flushSync();
-
-    expect(target.querySelector<HTMLInputElement>("input[placeholder='My session...']")?.value).toBe("Fix bug");
-    expect(target.querySelector<HTMLInputElement>("[data-field='branch'] input")?.value).toBe("proj-1/fix-bug--2");
-    expect(target.querySelector<HTMLInputElement>("#use-worktree")?.checked).toBe(true);
+    ],
+    taskPrefill: {
+      key: "PROJ-1",
+      title: "Fix bug",
+      description: "",
+      branch: "",
+      name: "",
+      prompt: "",
+    },
   });
+
+  await tick();
+  flushSync();
+  await tick();
+  flushSync();
+
+  expect(target.querySelector<HTMLInputElement>("input[placeholder='My session...']")?.value).toBe(
+    "Fix bug",
+  );
+  expect(target.querySelector<HTMLInputElement>("[data-field='branch'] input")?.value).toBe(
+    "proj-1/fix-bug--2",
+  );
+  expect(target.querySelector<HTMLInputElement>("#use-worktree")?.checked).toBe(true);
+});

@@ -14,27 +14,32 @@ function applyRename(view: EditorView, newName: string): void {
   if (!plugin || !word) return;
 
   plugin.client.sync();
-  void plugin.client.withMapping(async (mapping) => {
-    const response = await plugin.client.request<RenameParams, LspWorkspaceEdit>("textDocument/rename", {
-      textDocument: { uri: plugin.uri },
-      position: plugin.toPosition(word.from),
-      newName,
-    });
-    if (!response) return;
+  void plugin.client
+    .withMapping(async (mapping) => {
+      const response = await plugin.client.request<RenameParams, LspWorkspaceEdit>(
+        "textDocument/rename",
+        {
+          textDocument: { uri: plugin.uri },
+          position: plugin.toPosition(word.from),
+          newName,
+        },
+      );
+      if (!response) return;
 
-    for (const [uri, edits] of textEditsByUri(response)) {
-      const file = plugin.client.workspace.getFile(uri);
-      if (!file || edits.length === 0) continue;
-      plugin.client.workspace.updateFile(uri, {
-        changes: edits.map((edit) => ({
-          from: mapping.mapPosition(uri, edit.range.start),
-          to: mapping.mapPosition(uri, edit.range.end),
-          insert: edit.newText,
-        })),
-        userEvent: "rename",
-      });
-    }
-  }).catch((error) => plugin.reportError("Rename request failed", error));
+      for (const [uri, edits] of textEditsByUri(response)) {
+        const file = plugin.client.workspace.getFile(uri);
+        if (!file || edits.length === 0) continue;
+        plugin.client.workspace.updateFile(uri, {
+          changes: edits.map((edit) => ({
+            from: mapping.mapPosition(uri, edit.range.start),
+            to: mapping.mapPosition(uri, edit.range.end),
+            insert: edit.newText,
+          })),
+          userEvent: "rename",
+        });
+      }
+    })
+    .catch((error) => plugin.reportError("Rename request failed", error));
 }
 
 /** Applies a server rename response, including rust-analyzer's documentChanges form. */

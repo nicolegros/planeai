@@ -461,6 +461,9 @@
   </div>
 
   <!-- Tree (rendered by @pierre/trees) -->
+  <!-- @pierre/trees owns the interactive rows inside this host; the host only forwards
+       pointer gestures, so it carries no role of its own. -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     bind:this={treeContainer}
     class="file-tree-host flex-1 overflow-hidden"

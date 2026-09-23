@@ -14,7 +14,11 @@ export function getCycleState() {
 }
 
 /** Begin a cycle. Returns false if nothing to switch to. */
-export function startCycle(currentSessionId: string | undefined, validIds?: Set<string>, candidates?: string[]): boolean {
+export function startCycle(
+  currentSessionId: string | undefined,
+  validIds?: Set<string>,
+  candidates?: string[],
+): boolean {
   const mru = candidates ?? getMruList();
   const filtered = validIds ? mru.filter((id) => validIds.has(id)) : mru;
   const others = filtered.filter((id) => id !== currentSessionId);

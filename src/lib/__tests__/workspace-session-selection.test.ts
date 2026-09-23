@@ -12,7 +12,9 @@ describe("TaskWorkspace session selection", () => {
     expect(appSource).toMatch(
       /return sessions\.filter\(\(session\) => session\.project_id === workspace\.projectId && session\.task_key === workspace\.taskKey\);/,
     );
-    expect(appSource).toMatch(/function buildTabEntriesForWorkspace\(workspace: WorkspaceIdentity\)/);
+    expect(appSource).toMatch(
+      /function buildTabEntriesForWorkspace\(workspace: WorkspaceIdentity\)/,
+    );
   });
 
   it("does not rewrite split-tree state when the focused task agent is already active", () => {
@@ -31,8 +33,12 @@ describe("TaskWorkspace session selection", () => {
   });
 
   it("requests focus for the restored active terminal after loading a workspace layout", () => {
-    expect(appSource).toMatch(/if \(isValidSerializedTree\(data\)\) \{[\s\S]*?splitTree\.deserialize\(data\);[\s\S]*?loadingLayout = false;[\s\S]*?requestFocusedTerminalFocus\(\);/);
-    expect(appSource).toMatch(/function requestFocusedTerminalFocus\(\): void \{[\s\S]*?getActiveTabEntry\(leaf\)[\s\S]*?requestTerminalFocus\(activeTab\.ptyKey\)/);
+    expect(appSource).toMatch(
+      /if \(isValidSerializedTree\(data\)\) \{[\s\S]*?splitTree\.deserialize\(data\);[\s\S]*?loadingLayout = false;[\s\S]*?requestFocusedTerminalFocus\(\);/,
+    );
+    expect(appSource).toMatch(
+      /function requestFocusedTerminalFocus\(\): void \{[\s\S]*?getActiveTabEntry\(leaf\)[\s\S]*?requestTerminalFocus\(activeTab\.ptyKey\)/,
+    );
   });
 
   it("adds restored task-session tabs without replacing the workspace layout", () => {
@@ -93,9 +99,15 @@ it("ignores a hidden terminal's focus event after a session switch", () => {
 });
 
 it("preserves the keyboard-selected terminal PTY after session synchronization", () => {
-  expect(appSource).toMatch(/function preserveKeyboardSelectedTerminal[\s\S]*?selectWorkspaceSession\(sessionId\)[\s\S]*?splitTree\.focusTab\(entry\.ptyKey\)[\s\S]*?requestTerminalFocus\(entry\.ptyKey\)/);
-  expect(appSource).toMatch(/function splitNextTab\(\)[\s\S]*?preserveKeyboardSelectedTerminal\(next\)/);
-  expect(appSource).toMatch(/function splitPrevTab\(\)[\s\S]*?preserveKeyboardSelectedTerminal\(previous\)/);
+  expect(appSource).toMatch(
+    /function preserveKeyboardSelectedTerminal[\s\S]*?selectWorkspaceSession\(sessionId\)[\s\S]*?splitTree\.focusTab\(entry\.ptyKey\)[\s\S]*?requestTerminalFocus\(entry\.ptyKey\)/,
+  );
+  expect(appSource).toMatch(
+    /function splitNextTab\(\)[\s\S]*?preserveKeyboardSelectedTerminal\(next\)/,
+  );
+  expect(appSource).toMatch(
+    /function splitPrevTab\(\)[\s\S]*?preserveKeyboardSelectedTerminal\(previous\)/,
+  );
 });
 
 it("preserves editor focus when a split-pane click originates inside an editor", () => {

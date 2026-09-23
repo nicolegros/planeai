@@ -1404,7 +1404,7 @@
       onUnhideProject={async (id) => { await projectStore.unhideProject(id); }}
       onDeleteProject={(id) => { const p = projects.find(x => x.id === id); if (p) projectToDelete = p; }}
       onRestoreProject={async (id) => { await projectStore.restoreProject(id); }}
-      onPickTask={(task) => { taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: task.title, prompt: "" }; showSessionForm = true; }}
+      onSelectTask={(task, repoPath) => { selectWorkspaceTask(task, repoPath); focusTerminal(); }}
       onCreateTask={() => { showTaskForm = true; }}
       onToggleDiff={() => toggleDiffInTree()}
       onOpenFile={(path) => { if (activeSessionId) openFileInTree(activeSessionId, path); }}
@@ -1424,6 +1424,10 @@
       {@const activeEntry = splitTree.getActiveTabEntry(leaf)}
       {@const activeTabIdx = leafTabs.find((tab) => leaf.tabs.find((entry, visualIndex) => tabIndexForEntry(entry, visualIndex) === tab.index)?.ptyKey === leaf.activeTab)?.index ?? 0}
       {@const showLeafTabBar = hasMultiplePanes}
+      <!-- Click-to-focus on the pane container. Focus is also reachable from the keyboard
+           via the pane navigation shortcuts, so no key handler is duplicated here. -->
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <div
         class="split-leaf {hasMultiplePanes ? '' : 'split-leaf-single'}"
         class:split-leaf-focused={leaf.id === splitTree.getFocusedLeafId() && hasMultiplePanes}
