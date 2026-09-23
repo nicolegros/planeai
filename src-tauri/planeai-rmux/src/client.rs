@@ -61,6 +61,17 @@ impl ResourceHandle {
     }
 }
 
+/// A live pane inside a PlaneAI workspace, as the daemon reports it.
+///
+/// Carries the workspace name rather than a [`WorkspaceName`] because the daemon
+/// is the source here: a name PlaneAI no longer recognises must still be
+/// reportable, so parsing is left to the caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LivePane {
+    pub workspace_key: String,
+    pub pane_id: u32,
+}
+
 /// A live pane plus the handles needed to drive and resize it.
 pub struct AttachedPane {
     pane: Pane,
@@ -384,6 +395,21 @@ impl RmuxClient {
 
     /// Pane ids the daemon currently hosts for PlaneAI, for reconciliation.
     pub async fn live_pane_ids(&self) -> Result<HashSet<u32>> {
+        Ok(self
+            .live_panes()
+            .await?
+            .into_iter()
+            .map(|pane| pane.pane_id)
+            .collect())
+    }
+
+    /// Every pane the daemon hosts for PlaneAI, with the workspace holding it.
+    ///
+    /// [`Self::live_pane_ids`] answers "is this recorded pane still alive".  This
+    /// answers the inverse — "which live panes does PlaneAI no longer account
+    /// for" — which also needs the workspace, because closing a pane is addressed
+    /// by workspace and handle.
+    pub async fn live_panes(&self) -> Result<Vec<LivePane>> {
         let panes = self
             .rmux
             .find_panes()
@@ -393,7 +419,10 @@ impl RmuxClient {
         Ok(panes
             .iter()
             .filter(|pane| naming::is_planeai_session(pane.session_name.as_ref()))
-            .map(|pane| pane.pane_id.as_u32())
+            .map(|pane| LivePane {
+                workspace_key: pane.session_name.as_ref().to_string(),
+                pane_id: pane.pane_id.as_u32(),
+            })
             .collect())
     }
 

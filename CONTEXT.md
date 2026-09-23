@@ -278,6 +278,15 @@ gets cleaned up. The `pty_key` → pane mapping lives in the `rmux_resources`
 table; pane ids are renewable handles valid for one daemon lifetime, so startup
 reconciliation prunes stale rows and marks the affected sessions `exited`.
 
+Reconciliation sweeps both directions, because a pane and the row that owns it
+are written one after the other and either can be the survivor:
+
+- **Record without a pane** — `prune_dead_resources` drops rows whose pane the daemon no longer hosts, and marks the affected sessions `exited`.
+- **Pane without a session** — `sweep_orphan_panes` closes live panes that no session row owns, whether they never got a row (a launch that spawned then failed to persist) or lost it (a session deleted while its pane ran). Panes are matched by `pane_id`; window names carry the `pty_key` for human inspection only and are set best-effort, so they are not identity. The sweep runs only during startup reconciliation — a pane is legitimately unrecorded between its spawn and its row being committed — and is skipped entirely when the database holds no sessions at all, since an empty database cannot be told apart from a lost one and every live pane would look orphaned.
+
+A launch that cannot record its pane closes it rather than returning an error and
+leaving it running, so a failed launch leaks nothing for the sweep to collect.
+
 Ownership rules:
 
 - One rmux session per TaskWorkspace, created when its first resource is spawned, destroyed **only on explicit task deletion** (`planeai-cli task delete`). Moving a task to `Done` archives its agent panes but keeps the workspace and its rmux session.

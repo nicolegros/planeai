@@ -303,6 +303,62 @@ async fn removing_absent_things_is_not_an_error() {
 
 #[tokio::test]
 #[ignore = "requires the rmux binary"]
+async fn live_panes_report_the_workspace_holding_them() {
+    let runtime = tempfile::tempdir().unwrap();
+    let client = connect(runtime.path()).await;
+    let task = format!("LIVE-{}", unique_suffix());
+    let workspace = workspace(&task);
+    let cwd = runtime.path().display().to_string();
+
+    let agent = client
+        .spawn_resource(&spawn_spec(&workspace, "agent", "sleep 600", &cwd))
+        .await
+        .expect("spawn agent");
+    let shell = client
+        .spawn_resource(&spawn_spec(&workspace, "agent:1", "sleep 600", &cwd))
+        .await
+        .expect("spawn shell tab");
+
+    let live = client.live_panes().await.expect("live_panes");
+
+    // The orphan sweep addresses a close by workspace, so a pane that cannot name
+    // its workspace cannot be collected.
+    let mine: Vec<&planeai_rmux::LivePane> = live
+        .iter()
+        .filter(|pane| pane.workspace_key == workspace.as_str())
+        .collect();
+    assert_eq!(mine.len(), 2, "both panes should be reported: {live:?}");
+    for pane in &mine {
+        assert_eq!(
+            planeai_rmux::WorkspaceName::from_stored(&pane.workspace_key).as_ref(),
+            Some(&workspace),
+            "the reported name must parse back to the workspace that was spawned"
+        );
+    }
+    let mut reported: Vec<u32> = mine.iter().map(|pane| pane.pane_id).collect();
+    reported.sort_unstable();
+    let mut expected = vec![agent.as_u32(), shell.as_u32()];
+    expected.sort_unstable();
+    assert_eq!(reported, expected);
+
+    // Closing one pane removes exactly that pane from the live set.
+    client
+        .close_resource(&workspace, shell)
+        .await
+        .expect("close shell tab");
+    let live = client.live_panes().await.expect("live_panes after close");
+    let mine: Vec<u32> = live
+        .iter()
+        .filter(|pane| pane.workspace_key == workspace.as_str())
+        .map(|pane| pane.pane_id)
+        .collect();
+    assert_eq!(mine, vec![agent.as_u32()]);
+
+    client.kill_workspace(&workspace).await.expect("cleanup");
+}
+
+#[tokio::test]
+#[ignore = "requires the rmux binary"]
 async fn a_client_whose_daemon_exited_reports_it_as_recoverable() {
     let runtime = tempfile::tempdir().unwrap();
     let client = connect(runtime.path()).await;

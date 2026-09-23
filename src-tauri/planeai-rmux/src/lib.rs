@@ -16,7 +16,7 @@ mod error;
 mod naming;
 mod output;
 
-pub use client::{shell_argv, AttachedPane, ResourceHandle, ResourceSpawn, RmuxClient};
+pub use client::{shell_argv, AttachedPane, LivePane, ResourceHandle, ResourceSpawn, RmuxClient};
 pub use config::{Endpoint, RmuxConfig, DAEMON_BINARY_ENV, ENDPOINT_ENV};
 pub use error::{Error, Result};
 pub use naming::{is_planeai_session, WorkspaceKey, WorkspaceName, SESSION_PREFIX};

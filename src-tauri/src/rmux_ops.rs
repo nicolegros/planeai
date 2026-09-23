@@ -89,8 +89,22 @@ pub fn spawn_resource_blocking(
     })?;
 
     // Record after the spawn succeeds so a failed launch leaves no stale pane id.
-    crate::rmux_resources::put(&db()?, pty_key, session_id, workspace, handle)
-        .map_err(|error| error.to_string())?;
+    // A failed write closes the pane: it is running but unreferenced, and no sweep
+    // keyed on `rmux_resources` would ever find it again.
+    let rollback_workspace = workspace.clone();
+    persist_or_close(
+        pty_key,
+        || {
+            crate::rmux_resources::put(&db()?, pty_key, session_id, workspace, handle)
+                .map_err(|error| error.to_string())
+        },
+        || {
+            blocking(move |client| {
+                let workspace = rollback_workspace.clone();
+                async move { client.close_resource(&workspace, handle).await }
+            })
+        },
+    )?;
     Ok(handle)
 }
 
@@ -220,6 +234,80 @@ pub fn prune_dead_resources(conn: &Connection) -> Result<Vec<String>, String> {
     crate::rmux_resources::prune_missing(conn, &live).map_err(|error| error.to_string())
 }
 
+/// Close live panes PlaneAI has no session for, and forget their records.
+///
+/// The counterpart to [`prune_dead_resources`], which only handles the other
+/// direction. Returns how many panes were closed.
+///
+/// Safe only during startup reconciliation, before anything can spawn: a pane is
+/// legitimately unaccounted for during the window between its spawn and the write
+/// that records it, so sweeping alongside a launch could close a pane that was
+/// about to become valid.
+pub fn sweep_orphan_panes(
+    conn: &Connection,
+    known_session_ids: &std::collections::HashSet<String>,
+) -> Result<usize, String> {
+    // An unreachable daemon hosts nothing, so there is nothing to close. Records
+    // are left alone: `prune_dead_resources` owns that direction and can tell a
+    // dead daemon from a missing pane.
+    let Ok(live) = blocking(|client| async move { client.live_panes().await }) else {
+        return Ok(0);
+    };
+
+    let sweep = crate::rmux_resources::orphaned_panes(conn, &live, known_session_ids)
+        .map_err(|error| error.to_string())?;
+    if sweep.is_empty() {
+        return Ok(0);
+    }
+
+    let mut closures: Vec<(WorkspaceName, ResourceHandle)> = Vec::new();
+    for pane in &sweep.panes {
+        // A name PlaneAI cannot parse is not one it should be killing.
+        let Some(workspace) = WorkspaceName::from_stored(&pane.workspace_key) else {
+            tracing::warn!(
+                workspace_key = %pane.workspace_key,
+                pane_id = pane.pane_id,
+                "skipping orphan sweep for an unrecognised rmux workspace"
+            );
+            continue;
+        };
+        tracing::info!(
+            workspace_key = %pane.workspace_key,
+            pane_id = pane.pane_id,
+            "closing orphaned rmux pane: no PlaneAI session owns it"
+        );
+        closures.push((workspace, ResourceHandle::from_u32(pane.pane_id)));
+    }
+
+    let closed = closures.len();
+    if !closures.is_empty() {
+        // Attempt every pane: one stuck pane must not strand the rest.
+        let result = blocking(move |client| {
+            let closures = closures.clone();
+            async move {
+                let mut first_error = None;
+                for (workspace, handle) in closures {
+                    if let Err(error) = client.close_resource(&workspace, handle).await {
+                        first_error = first_error.or(Some(error));
+                    }
+                }
+                match first_error {
+                    Some(error) => Err(error),
+                    None => Ok(()),
+                }
+            }
+        });
+        if let Err(error) = result {
+            tracing::warn!(%error, "could not close every orphaned rmux pane");
+        }
+    }
+
+    for pty_key in &sweep.stale_records {
+        let _ = crate::rmux_resources::remove(conn, pty_key);
+    }
+    Ok(closed)
+}
+
 #[allow(dead_code)]
 fn capture(session_id: &str) -> Result<String, String> {
     let (workspace, handle) = resolve(&db()?, session_id)?;
@@ -238,4 +326,96 @@ fn resolve(conn: &Connection, session_id: &str) -> Result<(WorkspaceName, Resour
         .workspace()
         .ok_or_else(|| format!("unrecognised rmux workspace: {}", record.workspace_key))?;
     Ok((workspace, record.handle()))
+}
+
+/// Persist a spawned pane's mapping, closing the pane if that fails.
+///
+/// The spawn has already succeeded by the time this runs, so a failed write would
+/// otherwise leave a live pane that nothing references: the launch reports an
+/// error, no row points at the pane, and it survives every later sweep keyed on
+/// `rmux_resources`. Closing it keeps the failure atomic.
+///
+/// The persistence error is what the caller sees. A rollback that also fails is
+/// logged rather than returned — it is a consequence of the first failure, and
+/// replacing the cause with it would hide why the launch failed.
+fn persist_or_close<Persist, Close>(
+    pty_key: &str,
+    persist: Persist,
+    close: Close,
+) -> Result<(), String>
+where
+    Persist: FnOnce() -> Result<(), String>,
+    Close: FnOnce() -> Result<(), String>,
+{
+    let Err(error) = persist() else {
+        return Ok(());
+    };
+    tracing::warn!(
+        pty_key,
+        %error,
+        "could not record rmux pane; closing it so the launch leaves no orphan"
+    );
+    if let Err(rollback_error) = close() {
+        tracing::error!(
+            pty_key,
+            %rollback_error,
+            "orphaned rmux pane: recording failed and the pane could not be closed"
+        );
+    }
+    Err(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn a_recorded_pane_is_left_running() {
+        let closed = Cell::new(false);
+
+        let result = persist_or_close(
+            "session-a",
+            || Ok(()),
+            || {
+                closed.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(result.is_ok());
+        assert!(
+            !closed.get(),
+            "a successfully recorded pane must keep running"
+        );
+    }
+
+    #[test]
+    fn a_pane_that_could_not_be_recorded_is_closed() {
+        let closed = Cell::new(false);
+
+        let result = persist_or_close(
+            "session-a",
+            || Err("database is locked".to_string()),
+            || {
+                closed.set(true);
+                Ok(())
+            },
+        );
+
+        // The caller must see why the launch failed, not how it was cleaned up.
+        assert_eq!(result, Err("database is locked".to_string()));
+        assert!(closed.get(), "an unrecorded pane must not be left running");
+    }
+
+    #[test]
+    fn a_failed_rollback_still_reports_the_original_failure() {
+        let result = persist_or_close(
+            "session-a",
+            || Err("database is locked".to_string()),
+            || Err("daemon is unreachable".to_string()),
+        );
+
+        assert_eq!(result, Err("database is locked".to_string()));
+    }
 }

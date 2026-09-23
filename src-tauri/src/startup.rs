@@ -129,7 +129,8 @@ pub fn reconcile_daemon_sessions(conn: &rusqlite::Connection, _cfg: &config::Con
     }
 }
 
-/// Reconcile rmux sessions: mark sessions exited when their pane is gone.
+/// Reconcile rmux sessions: mark sessions exited when their pane is gone, and
+/// close panes no session owns.
 ///
 /// Pane ids are only valid for a daemon lifetime, so a restarted daemon
 /// invalidates every recorded resource. Pruning the mapping and marking the
@@ -143,30 +144,52 @@ pub fn reconcile_rmux_sessions(conn: &rusqlite::Connection) {
         .iter()
         .filter(|session| session.backend == planeai_rmux::BACKEND && session.status == "active")
         .collect();
-    if active.is_empty() {
-        return;
+
+    if !active.is_empty() {
+        tracing::info!(count = active.len(), "reconciling rmux sessions on startup");
+
+        // A dead daemon prunes everything, which is the correct outcome: no rmux
+        // session survived it.
+        match crate::rmux_ops::prune_dead_resources(conn) {
+            Ok(affected) => {
+                for session in active {
+                    // A session with no remaining agent resource is no longer running.
+                    let has_agent = crate::rmux_resources::get(conn, &session.id)
+                        .map(|record| record.is_some())
+                        .unwrap_or(false);
+                    if !has_agent || affected.contains(&session.id) {
+                        let _ = db::mark_session_exited(conn, &session.id);
+                    }
+                }
+            }
+            Err(error) => tracing::warn!(%error, "could not reconcile rmux resources"),
+        }
     }
 
-    tracing::info!(count = active.len(), "reconciling rmux sessions on startup");
+    sweep_orphan_rmux_panes(conn, &sessions);
+}
 
-    // A dead daemon prunes everything, which is the correct outcome: no rmux
-    // session survived it.
-    let affected = match crate::rmux_ops::prune_dead_resources(conn) {
-        Ok(affected) => affected,
-        Err(error) => {
-            tracing::warn!(%error, "could not reconcile rmux resources");
-            return;
-        }
-    };
+/// Close rmux panes that outlived the sessions that owned them.
+///
+/// Runs even when no rmux session is active, because that is precisely the state
+/// an orphan leaves behind: the pane is alive and its session row is not.
+///
+/// Skipped entirely when the database holds no sessions at all. Such a database
+/// cannot distinguish a fresh install from one that was moved or lost, and every
+/// live pane would look orphaned — killing a user's running agents on the
+/// strength of an empty database is far worse than leaking panes, which the next
+/// sweep can still collect.
+fn sweep_orphan_rmux_panes(conn: &rusqlite::Connection, sessions: &[db::Session]) {
+    if sessions.is_empty() {
+        return;
+    }
+    let known_session_ids: std::collections::HashSet<String> =
+        sessions.iter().map(|session| session.id.clone()).collect();
 
-    for session in active {
-        // A session with no remaining agent resource is no longer running.
-        let has_agent = crate::rmux_resources::get(conn, &session.id)
-            .map(|record| record.is_some())
-            .unwrap_or(false);
-        if !has_agent || affected.contains(&session.id) {
-            let _ = db::mark_session_exited(conn, &session.id);
-        }
+    match crate::rmux_ops::sweep_orphan_panes(conn, &known_session_ids) {
+        Ok(0) => {}
+        Ok(closed) => tracing::info!(closed, "closed orphaned rmux panes on startup"),
+        Err(error) => tracing::warn!(%error, "could not sweep orphaned rmux panes"),
     }
 }
 

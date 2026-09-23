@@ -159,6 +159,77 @@ pub fn prune_missing(
     Ok(affected)
 }
 
+/// What an orphan sweep found: live panes to close and records to forget.
+///
+/// The two are reported separately because they are different leaks. A pane with
+/// no record at all leaked from a launch that spawned it and then failed to
+/// persist it; a record whose session row is gone leaked from a session deleted
+/// while its pane ran. Only the first needs a pane closed, but both need the
+/// mapping cleaned.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct OrphanSweep {
+    /// Live panes with no owning session, in daemon report order.
+    pub panes: Vec<planeai_rmux::LivePane>,
+    /// `pty_key`s whose session row no longer exists.
+    pub stale_records: Vec<String>,
+}
+
+impl OrphanSweep {
+    pub fn is_empty(&self) -> bool {
+        self.panes.is_empty() && self.stale_records.is_empty()
+    }
+}
+
+/// Find live panes PlaneAI can no longer account for.
+///
+/// The inverse of [`prune_missing`]: that drops records whose pane died, this
+/// finds panes that outlived their record. Both leaks open in the same window
+/// between spawning a pane and committing the row that owns it.
+///
+/// `known_session_ids` is supplied by the caller rather than read here so this
+/// stays a decision over two sets, testable without the sessions schema. Panes
+/// are matched by `pane_id`: the daemon names windows after the `pty_key`, but
+/// that name is cosmetic and best-effort, so it is not identity.
+pub fn orphaned_panes(
+    conn: &Connection,
+    live: &[planeai_rmux::LivePane],
+    known_session_ids: &std::collections::HashSet<String>,
+) -> rusqlite::Result<OrphanSweep> {
+    let mut statement =
+        conn.prepare("SELECT pty_key, session_id, workspace_key, pane_id FROM rmux_resources")?;
+    let records: Vec<ResourceRecord> = statement
+        .query_map([], |row| {
+            Ok(ResourceRecord {
+                pty_key: row.get(0)?,
+                session_id: row.get(1)?,
+                workspace_key: row.get(2)?,
+                pane_id: row.get::<_, i64>(3)? as u32,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    let owned: std::collections::HashMap<u32, &ResourceRecord> = records
+        .iter()
+        .map(|record| (record.pane_id, record))
+        .collect();
+
+    let mut sweep = OrphanSweep::default();
+    for pane in live {
+        match owned.get(&pane.pane_id) {
+            // Recorded and owned by a session that still exists: leave it alone.
+            Some(record) if known_session_ids.contains(&record.session_id) => {}
+            _ => sweep.panes.push(pane.clone()),
+        }
+    }
+    for record in &records {
+        if !known_session_ids.contains(&record.session_id) {
+            sweep.stale_records.push(record.pty_key.clone());
+        }
+    }
+    Ok(sweep)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,5 +429,222 @@ mod tests {
         .unwrap();
 
         assert_eq!(get(&conn, "session-a").unwrap().unwrap().pane_id, u32::MAX);
+    }
+
+    fn live(pane_id: u32) -> planeai_rmux::LivePane {
+        planeai_rmux::LivePane {
+            workspace_key: workspace().as_str().to_string(),
+            pane_id,
+        }
+    }
+
+    fn sessions(ids: &[&str]) -> std::collections::HashSet<String> {
+        ids.iter().map(|id| (*id).to_string()).collect()
+    }
+
+    #[test]
+    fn a_recorded_pane_of_a_live_session_is_not_an_orphan() {
+        let conn = setup();
+        put(
+            &conn,
+            "session-a",
+            "session-a",
+            &workspace(),
+            ResourceHandle::from_u32(1),
+        )
+        .unwrap();
+
+        let sweep = orphaned_panes(&conn, &[live(1)], &sessions(&["session-a"])).unwrap();
+
+        assert!(sweep.is_empty(), "{sweep:?}");
+    }
+
+    #[test]
+    fn a_live_pane_with_no_record_is_an_orphan() {
+        let conn = setup();
+
+        // This is what a launch that spawned a pane then failed to persist leaves.
+        let sweep = orphaned_panes(&conn, &[live(7)], &sessions(&["session-a"])).unwrap();
+
+        assert_eq!(sweep.panes, vec![live(7)]);
+        assert!(sweep.stale_records.is_empty());
+    }
+
+    #[test]
+    fn a_live_pane_whose_session_row_is_gone_is_an_orphan() {
+        let conn = setup();
+        put(
+            &conn,
+            "session-a",
+            "session-a",
+            &workspace(),
+            ResourceHandle::from_u32(1),
+        )
+        .unwrap();
+
+        // The session row was deleted while its pane kept running.
+        let sweep = orphaned_panes(&conn, &[live(1)], &sessions(&[])).unwrap();
+
+        assert_eq!(sweep.panes, vec![live(1)]);
+        assert_eq!(sweep.stale_records, vec!["session-a".to_string()]);
+    }
+
+    #[test]
+    fn a_stale_record_is_reported_even_when_its_pane_is_already_gone() {
+        let conn = setup();
+        put(
+            &conn,
+            "session-a",
+            "session-a",
+            &workspace(),
+            ResourceHandle::from_u32(1),
+        )
+        .unwrap();
+
+        // Nothing live to close, but the mapping still has to be forgotten.
+        let sweep = orphaned_panes(&conn, &[], &sessions(&[])).unwrap();
+
+        assert!(sweep.panes.is_empty());
+        assert_eq!(sweep.stale_records, vec!["session-a".to_string()]);
+    }
+
+    #[test]
+    fn shell_tabs_of_a_deleted_session_are_all_swept() {
+        let conn = setup();
+        for (pty_key, pane) in [("session-a", 1u32), ("session-a:1", 2), ("session-a:2", 3)] {
+            put(
+                &conn,
+                pty_key,
+                "session-a",
+                &workspace(),
+                ResourceHandle::from_u32(pane),
+            )
+            .unwrap();
+        }
+        put(
+            &conn,
+            "session-b",
+            "session-b",
+            &workspace(),
+            ResourceHandle::from_u32(4),
+        )
+        .unwrap();
+
+        let sweep = orphaned_panes(
+            &conn,
+            &[live(1), live(2), live(3), live(4)],
+            &sessions(&["session-b"]),
+        )
+        .unwrap();
+
+        // Every resource of the departed session, and none of the survivor's.
+        assert_eq!(sweep.panes, vec![live(1), live(2), live(3)]);
+        assert_eq!(
+            sweep.stale_records,
+            vec![
+                "session-a".to_string(),
+                "session-a:1".to_string(),
+                "session-a:2".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_daemon_hosting_nothing_yields_no_orphans() {
+        let conn = setup();
+        put(
+            &conn,
+            "session-a",
+            "session-a",
+            &workspace(),
+            ResourceHandle::from_u32(1),
+        )
+        .unwrap();
+
+        let sweep = orphaned_panes(&conn, &[], &sessions(&["session-a"])).unwrap();
+
+        assert!(sweep.is_empty(), "{sweep:?}");
+    }
+
+    /// Reproduces the leak that motivated the sweep, from a real database: eleven
+    /// session-scoped workspaces whose session rows were gone while every pane was
+    /// still running, alongside one task workspace that was legitimately active.
+    #[test]
+    fn a_real_leak_sweeps_every_departed_pane_and_spares_the_live_one() {
+        let conn = setup();
+
+        let departed = [
+            ("1c886c9c-58d0-4611-b3d9-b9821677f2ca", 14u32),
+            ("27db6b12-b995-4721-a7e8-28f35e6e95ab", 2),
+            ("4b911d4c-c64e-4d25-84c1-6ce7e2089c17", 22),
+            ("63a977fc-8fe4-437e-8bea-3a88c194af40", 23),
+            ("6eb61b96-71be-47dc-92ab-739096244e70", 24),
+            ("a1183600-93c7-4ac9-ae7a-8fcfc9dd63ce", 4),
+            ("a709d553-14a8-4398-9f5a-65f7f1affee5", 3),
+            ("c15d7de7-25e1-484c-8b7c-0b1ce81c50e0", 11),
+            ("d0acc818-d15b-4e35-a5b1-4858157975c1", 6),
+            ("e425b611-9a19-4b29-9e6d-3b230ddcd38c", 25),
+            ("f1c641aa-143c-457a-a015-852a7289deb8", 19),
+        ];
+        let mut live = Vec::new();
+        for (session_id, pane_id) in departed {
+            let workspace =
+                planeai_rmux::WorkspaceKey::for_session("proj", None, session_id).name();
+            put(
+                &conn,
+                session_id,
+                session_id,
+                &workspace,
+                ResourceHandle::from_u32(pane_id),
+            )
+            .unwrap();
+            live.push(planeai_rmux::LivePane {
+                workspace_key: workspace.as_str().to_string(),
+                pane_id,
+            });
+        }
+
+        // The one workspace that is still owned: a task workspace with an active session.
+        let owned_workspace = planeai_rmux::WorkspaceKey::Task {
+            project_id: "3fe1c738-9683-4f3b-8119-36fee19fbb0b".to_string(),
+            task_key: "PLA-323".to_string(),
+        }
+        .name();
+        put(
+            &conn,
+            "2dc10d52-f2a7-4978-a378-7eaf6b460912",
+            "2dc10d52-f2a7-4978-a378-7eaf6b460912",
+            &owned_workspace,
+            ResourceHandle::from_u32(0),
+        )
+        .unwrap();
+        live.push(planeai_rmux::LivePane {
+            workspace_key: owned_workspace.as_str().to_string(),
+            pane_id: 0,
+        });
+
+        let sweep = orphaned_panes(
+            &conn,
+            &live,
+            &sessions(&["2dc10d52-f2a7-4978-a378-7eaf6b460912"]),
+        )
+        .unwrap();
+
+        assert_eq!(sweep.panes.len(), 11);
+        assert_eq!(sweep.stale_records.len(), 11);
+        // Pane 0 is the live agent; closing it would kill a running session.
+        assert!(
+            !sweep.panes.iter().any(|pane| pane.pane_id == 0),
+            "the active task workspace must be spared: {:?}",
+            sweep.panes
+        );
+        // Every workspace the sweep reports must parse, or it cannot be closed.
+        for pane in &sweep.panes {
+            assert!(
+                planeai_rmux::WorkspaceName::from_stored(&pane.workspace_key).is_some(),
+                "unparseable workspace: {}",
+                pane.workspace_key
+            );
+        }
     }
 }
