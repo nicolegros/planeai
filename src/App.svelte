@@ -1404,7 +1404,7 @@
       onUnhideProject={async (id) => { await projectStore.unhideProject(id); }}
       onDeleteProject={(id) => { const p = projects.find(x => x.id === id); if (p) projectToDelete = p; }}
       onRestoreProject={async (id) => { await projectStore.restoreProject(id); }}
-      onPickTask={(task) => { taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: task.title, prompt: "" }; showSessionForm = true; }}
+      onSelectTask={(task, repoPath) => { selectWorkspaceTask(task, repoPath); focusTerminal(); }}
       onCreateTask={() => { showTaskForm = true; }}
       onToggleDiff={() => toggleDiffInTree()}
       onOpenFile={(path) => { if (activeSessionId) openFileInTree(activeSessionId, path); }}

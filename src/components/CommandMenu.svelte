@@ -1,13 +1,16 @@
 <script lang="ts">
-  import { Command, Dialog } from "bits-ui";
+  import { Command, Dialog, computeCommandScore } from "bits-ui";
   import { MOD_LABEL } from "../lib/keyboard";
-  import { sessions as sessionsApi, projects as projectsApi, tasks as tasksApi, git } from "../lib/api";
+  import { sessions as sessionsApi, projects as projectsApi, git } from "../lib/api";
   import type { Session, Project, TaskItem, PluginInventory, PluginUiContribution } from "../lib/types";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
+  import * as taskStore from "../lib/task-store.svelte";
+  import * as loopStore from "../lib/loop-store.svelte";
+  import { computeCommandMenuSessions, computeCommandMenuTaskRows, matchableValue, taskRowValue } from "../lib/command-menu-items";
 
   interface Props {
     open: boolean;
@@ -25,7 +28,7 @@
     onUnhideProject: (id: string) => void | Promise<void>;
     onDeleteProject: (id: string) => void;
     onRestoreProject: (id: string) => void;
-    onPickTask: (task: TaskItem) => void;
+    onSelectTask: (task: TaskItem, repoPath: string) => void;
     onCreateTask: () => void;
     onToggleDiff: () => void;
     onOpenFile?: (filePath: string) => void;
@@ -38,17 +41,36 @@
     openFileMode?: boolean;
   }
 
-  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onHideProject, onUnhideProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onSplitVertical, onSplitHorizontal, onCloseSplit, pluginCommands = [], onOpenPluginContribution, openFileMode = false }: Props = $props();
+  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onHideProject, onUnhideProject, onDeleteProject, onRestoreProject, onSelectTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onSplitVertical, onSplitHorizontal, onCloseSplit, pluginCommands = [], onOpenPluginContribution, openFileMode = false }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const sessions = $derived(orchestrator.getSessions());
   const activeSessionId = $derived(orchestrator.getActiveSessionId());
   const projects = $derived(projectStore.getProjects());
 
+  /** Repo path of the project owning the active session — its tasks sort first. */
+  const activeProjectPath = $derived.by(() => {
+    const session = sessions.find((s) => s.id === activeSessionId);
+    if (!session) return null;
+    return projects.find((p) => p.id === session.project_id)?.path ?? null;
+  });
+
+  /** Every project's tasks, flattened and ordered for search. */
+  const taskRows = $derived(
+    computeCommandMenuTaskRows(projects, taskStore.getTasksByProject(), activeProjectPath, !!getSettings().hide_done_tasks),
+  );
+
+  /** Only sessions no visible task row can navigate to. */
+  const menuSessions = $derived(
+    computeCommandMenuSessions(sessions, taskRows, (id) => loopStore.getLoopIdForSession(id) !== null),
+  );
+
+  /** Root search query. Tasks only render once there is something to match. */
+  let query = $state("");
+
   let archivedSessions = $state<Session[]>([]);
-  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "hideProject" | "unhideProject" | "deleteProject" | "restoreProject" | "pickTask" | "openFile" | "autoDispatch">("none");
+  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "hideProject" | "unhideProject" | "deleteProject" | "restoreProject" | "openFile" | "autoDispatch">("none");
   let archivedProjects = $state<Project[]>([]);
-  let taskItems = $state<TaskItem[]>([]);
   let fileList = $state<string[]>([]);
   let projectAutoModes = $state<Record<string, boolean>>({});
 
@@ -60,19 +82,6 @@
   async function openArchivedProjects() {
     archivedProjects = await projectsApi.listArchived();
     subMenu = "restoreProject";
-  }
-
-  async function openTaskPicker() {
-    const session = sessions.find((s) => s.id === activeSessionId);
-    const project = session ? projects.find((p) => p.id === session.project_id) : projects[0];
-    const repoPath = project?.path;
-    if (!repoPath) { close(); return; }
-    try {
-      taskItems = await tasksApi.list(repoPath);
-    } catch {
-      taskItems = [];
-    }
-    subMenu = "pickTask";
   }
 
   function openArchiveProject() {
@@ -131,6 +140,7 @@
 
   function close() {
     subMenu = "none";
+    query = "";
     onOpenChange(false);
   }
 
@@ -139,6 +149,7 @@
   $effect(() => {
     const isOpen = open;
     if (isOpen && !wasOpen) {
+      query = "";
       if (openFileMode) {
         openFilePicker();
       } else {
@@ -345,33 +356,6 @@
             </Command.Viewport>
           </Command.List>
         </Command.Root>
-      {:else if subMenu === "pickTask"}
-        <Command.Root class="flex flex-col" loop disablePointerSelection>
-          <Command.Input
-            class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
-            placeholder="Search tasks..."
-          />
-          <Command.List class="max-h-72 overflow-y-auto p-2">
-            <Command.Viewport>
-              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No tasks found.</Command.Empty>
-              <Command.Group>
-                <Command.GroupItems>
-                  {#each taskItems as task (task.key)}
-                    <Command.Item
-                      value="{task.key}: {task.title}"
-                      keywords={[task.key, task.title]}
-                      class="flex h-9 cursor-pointer items-center rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
-                      onSelect={() => { onPickTask(task); close(); }}
-                    >
-                      <span class="font-medium font-mono text-accent mr-2">{task.key}</span>
-                      <span class="truncate">{task.title}</span>
-                    </Command.Item>
-                  {/each}
-                </Command.GroupItems>
-              </Command.Group>
-            </Command.Viewport>
-          </Command.List>
-        </Command.Root>
       {:else if subMenu === "openFile"}
         <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
@@ -425,10 +409,11 @@
           </Command.List>
         </Command.Root>
       {:else}
-      <Command.Root class="flex flex-col" loop disablePointerSelection>
+      <Command.Root class="flex flex-col" loop disablePointerSelection filter={(value, search, keywords) => computeCommandScore(matchableValue(value), search, keywords)}>
         <Command.Input
+          bind:value={query}
           class="h-11 w-full border-b border-border bg-transparent px-4 text-sm outline-none placeholder:text-t3"
-          placeholder="Go to a session, task, or action…"
+          placeholder="Go to a task, session, or action…"
         />
         <Command.List class="max-h-72 overflow-y-auto p-2">
           <Command.Viewport>
@@ -450,23 +435,44 @@
               </Command.GroupItems>
             </Command.Group>
 
-            <Command.Separator class="my-1 h-px bg-border" />
+            {#if query.trim().length > 0}
+              <Command.Separator class="my-1 h-px bg-border" />
+              <Command.Group>
+                <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Tasks</Command.GroupHeading>
+                <Command.GroupItems>
+                  {#each taskRows as row (`${row.repoPath}:${row.task.key}`)}
+                    <Command.Item
+                      value={taskRowValue(row)}
+                      keywords={[row.task.key, row.task.title]}
+                      class="flex h-9 cursor-pointer items-center rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
+                      onSelect={() => { onSelectTask(row.task, row.repoPath); close(); }}
+                    >
+                      <span class="font-medium font-mono text-accent mr-2">{row.task.key}</span>
+                      <span class="truncate">{row.task.title}</span>
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            {/if}
 
-            <Command.Group>
-              <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Sessions</Command.GroupHeading>
-              <Command.GroupItems>
-                {#each sessions as session (session.id)}
-                  <Command.Item
-                    value="session {session.name || session.branch} {session.id}"
-                    keywords={[session.name, session.branch]}
-                    class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg {session.id === activeSessionId ? 'font-medium' : ''}"
-                    onSelect={() => { onSelectSession(session.id); close(); }}
-                  >
-                    <span class="truncate">{session.name || session.branch}</span>
-                  </Command.Item>
-                {/each}
-              </Command.GroupItems>
-            </Command.Group>
+            {#if menuSessions.length > 0}
+              <Command.Separator class="my-1 h-px bg-border" />
+              <Command.Group>
+                <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Sessions</Command.GroupHeading>
+                <Command.GroupItems>
+                  {#each menuSessions as session (session.id)}
+                    <Command.Item
+                      value="session {session.name || session.branch} {session.id}"
+                      keywords={[session.name, session.branch]}
+                      class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg {session.id === activeSessionId ? 'font-medium' : ''}"
+                      onSelect={() => { onSelectSession(session.id); close(); }}
+                    >
+                      <span class="truncate">{session.name || session.branch}</span>
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            {/if}
 
             {#if pluginCommands.length > 0}
               <Command.Separator class="my-1 h-px bg-border" />
@@ -523,14 +529,6 @@
                   onSelect={() => { onDeleteSession(); close(); }}
                 >
                   Delete current session
-                </Command.Item>
-                <Command.Item
-                  value="pick task"
-                  keywords={["task", "kanban", "issue", "ticket", "pick"]}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
-                  onSelect={openTaskPicker}
-                >
-                  Pick task…
                 </Command.Item>
                 <Command.Item
                   value="create task"

@@ -23,6 +23,12 @@ Click any task to interact with it:
 
 Right-click a task to open the context menu with quick actions: start session, edit, or move to a different status.
 
+### Finding a task from the keyboard
+
+Open the command menu (**⌘K** / **Ctrl+K**) and start typing a task key or title. Tasks from every project are searchable, so you do not need an active session in the right project first. Selecting a task does the same thing as clicking it in the sidebar.
+
+Tasks appear once you type — the menu's default view stays a short list of actions. Tasks in the project you are currently working in are listed first. Completed tasks are included unless "Hide done tasks" is enabled.
+
 ## Creating tasks
 
 There are three ways to create tasks, each suited to a different workflow.
