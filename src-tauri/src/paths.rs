@@ -34,6 +34,39 @@ pub fn resolve_daemon_binary(app: &tauri::AppHandle) -> PathBuf {
     PathBuf::from(bin_name)
 }
 
+/// Resolve the bundled `rmux-daemon` sidecar.
+///
+/// rmux ships the daemon as a separate executable from the `rmux` CLI, and that
+/// is what the SDK spawns. Returning a path that does not exist is expected on a
+/// development machine, where the SDK falls back to PATH.
+pub fn resolve_rmux_daemon_binary(app: &tauri::AppHandle) -> PathBuf {
+    use tauri::Manager as _;
+
+    let bin_name = if cfg!(windows) {
+        "rmux-daemon.exe"
+    } else {
+        "rmux-daemon"
+    };
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let bundled = resource_dir.join(bin_name);
+        if bundled.exists() {
+            return bundled;
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sibling = dir.join(bin_name);
+            if sibling.exists() {
+                return sibling;
+            }
+        }
+    }
+
+    PathBuf::from(bin_name)
+}
+
 /// Resolve the daemon binary without an AppHandle (for use in sync contexts).
 pub fn resolve_daemon_binary_fallback() -> PathBuf {
     let bin_name = if cfg!(windows) {

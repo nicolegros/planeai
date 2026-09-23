@@ -279,6 +279,38 @@ fn resolve_backend_falls_back_to_local_when_unset() {
 }
 
 #[test]
+fn resolve_backend_selects_rmux_when_configured() {
+    // The rmux backend is opt-in through config only, the way daemon was
+    // introduced; the launch and attach paths key off this exact value.
+    let config = Config {
+        session_backend: Some(planeai_rmux::BACKEND.to_string()),
+        ..Default::default()
+    };
+    assert_eq!(resolve_backend(&config), "rmux");
+}
+
+#[test]
+fn executable_on_path_finds_a_file_in_a_path_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let binary = dir.path().join("planeai-fake-rmux-daemon");
+    fs::write(&binary, b"#!/bin/sh\n").unwrap();
+
+    // `rmux_available` caches per process, so the reusable lookup is what is
+    // worth testing: the Preferences warning depends on it finding real files.
+    let previous = std::env::var_os("PATH");
+    std::env::set_var("PATH", dir.path());
+    let found = executable_on_path("planeai-fake-rmux-daemon");
+    let missing = executable_on_path("planeai-definitely-not-installed");
+    match previous {
+        Some(value) => std::env::set_var("PATH", value),
+        None => std::env::remove_var("PATH"),
+    }
+
+    assert!(found, "a file present in a PATH directory must be found");
+    assert!(!missing, "an absent binary must not be reported as present");
+}
+
+#[test]
 fn session_backend_round_trips_through_config_file() {
     let dir = tempfile::tempdir().unwrap();
     let config_dir = dir.path();

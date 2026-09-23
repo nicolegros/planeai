@@ -324,6 +324,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3283,9 +3292,11 @@ dependencies = [
  "planeai-paths",
  "planeai-plugin-contract",
  "planeai-pty",
+ "planeai-rmux",
  "planeai-tasks",
  "planeai-toon",
  "regex",
+ "rmux-sdk",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3319,6 +3330,7 @@ dependencies = [
  "planeai-ipc",
  "planeai-paths",
  "planeai-plugin-contract",
+ "planeai-rmux",
  "planeai-tasks",
  "planeai-toon",
  "rusqlite",
@@ -3432,6 +3444,29 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "portable-pty",
+]
+
+[[package]]
+name = "planeai-rmux"
+version = "0.1.0"
+dependencies = [
+ "planeai-core",
+ "planeai-paths",
+ "rmux-proto",
+ "rmux-sdk",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "planeai-rmux-spike"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "rmux-sdk",
+ "tokio",
 ]
 
 [[package]]
@@ -3913,6 +3948,74 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rmux-ipc"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31f63795a405962308478f28ae2551d8e3f73ac8827c6f838f7b8083085ba2a6"
+dependencies = [
+ "getrandom 0.3.4",
+ "libc",
+ "rmux-os",
+ "rustix",
+ "sha2 0.10.9",
+ "tokio",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rmux-os"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d7017db3e6cfb59857df098ece53d22e31bdf8cd10c63dadb50ae1a140e1ce2"
+dependencies = [
+ "libc",
+ "rmux-types",
+ "rustix",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rmux-proto"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf07fafa60cc2b10f6630d400acb85b472dc1d981866c5396d21cc03f6176489"
+dependencies = [
+ "bincode",
+ "rmux-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "rmux-sdk"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0684ac39de5e707a3dfe6e21ef14299e9540097ed27d5de33300ab8eca50df3"
+dependencies = [
+ "libc",
+ "rmux-ipc",
+ "rmux-os",
+ "rmux-proto",
+ "rustix",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "tokio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rmux-types"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c591db0342827ab26e271262d3ecad75c72b6299e865ee45b2a15d9db85f3db"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -4416,6 +4519,16 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "signal-hook"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d881a16cf4426aa584979d30bd82cb33429027e42122b169753d6ef1085ed6e2"
+dependencies = [
+ "libc",
+ "signal-hook-registry",
+]
 
 [[package]]
 name = "signal-hook-registry"
@@ -5123,7 +5236,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

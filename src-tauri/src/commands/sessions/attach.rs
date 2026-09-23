@@ -57,6 +57,25 @@ pub async fn attach_session(
             },
             None,
         )
+    } else if session.backend == planeai_rmux::BACKEND {
+        // Resolve the recorded pane here so the PTY layer stays free of DB access.
+        // A missing record means the agent is gone — a restarted daemon
+        // invalidates every pane id — so the session is treated as exited rather
+        // than silently attaching to nothing.
+        let record = crate::rmux_resources::get(&conn, &session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("rmux session has no recorded pane; restart it")?;
+        let workspace = record
+            .workspace()
+            .ok_or("rmux session has an unrecognised workspace")?;
+        (
+            pty::PtyTarget::Rmux {
+                pty_key: session_id.clone(),
+                workspace,
+                handle: record.handle(),
+            },
+            None,
+        )
     } else {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
@@ -93,8 +112,9 @@ pub async fn attach_session(
     };
 
     // Build env via prepare_session() for local/tmux targets (canonical PATH augmentation).
-    // Daemon targets don't need env — the daemon process has its own.
-    let env = if session.backend != "daemon" {
+    // Daemon and rmux targets don't need env here — the agent process is spawned with its
+    // own environment at launch time, not at attach time.
+    let env = if session.backend != "daemon" && session.backend != planeai_rmux::BACKEND {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         let extra_path_dirs = cfg.resolved_extra_path_dirs();
         let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
@@ -124,6 +144,14 @@ pub async fn attach_session(
     } else {
         vec![]
     };
+
+    tracing::info!(
+        session_id = %session_id,
+        backend = %session.backend,
+        status = %session.status,
+        task_key = ?session.task_key,
+        "attach_session"
+    );
 
     state
         .0

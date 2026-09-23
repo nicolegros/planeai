@@ -230,6 +230,30 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             &effective_working_dir,
             Some(&session_env),
         )?;
+    } else if plan.backend == planeai_rmux::BACKEND {
+        // Without this branch the session row would be written with no process
+        // behind it, leaving a session that looks active and is empty.
+        let extra_path_dirs = env.config.resolved_extra_path_dirs();
+        let mut path_buf = String::new();
+        let session_env = planeai_core::command::build_daemon_env(
+            &extra_path_dirs,
+            &plan.session_id,
+            &mut path_buf,
+        );
+        let workspace = planeai_rmux::WorkspaceKey::for_session(
+            &plan.project_id,
+            plan.task_key.as_deref(),
+            &plan.session_id,
+        )
+        .name();
+        crate::rmux_ops::spawn_resource_blocking(
+            &plan.session_id,
+            &plan.session_id,
+            &workspace,
+            &plan.command,
+            &effective_working_dir,
+            &session_env,
+        )?;
     } else if let Some(tmux_name) = &plan.tmux_name {
         #[cfg(not(windows))]
         {

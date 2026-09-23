@@ -25,6 +25,15 @@ pub enum PtyTarget {
         session_id: String,
         socket_path: PathBuf,
     },
+    /// Attach to a resource hosted by PlaneAI's private rmux daemon.
+    ///
+    /// The workspace and pane are resolved by the caller from the `pty_key`
+    /// mapping, so the PTY layer never has to reach into the database.
+    Rmux {
+        pty_key: String,
+        workspace: planeai_rmux::WorkspaceName,
+        handle: planeai_rmux::ResourceHandle,
+    },
 }
 
 // Flusher coalesces output so bursts arrive as single chunks.
@@ -96,6 +105,70 @@ impl SessionBackend for DaemonBackend {
     }
 }
 
+// ─── Rmux Backend ────────────────────────────────────────────────────────────
+
+/// Writes and resizes for an rmux-hosted session.
+///
+/// Resize addresses the pane's **window**: probe 2 in ADR-0012 showed
+/// `Pane::resize` is a no-op for a sole pane in a detached session, so resizing
+/// the pane alone would leave the child's tty at its original size.
+///
+/// `pause`/`resume` deliberately do **not** stop reading the rmux stream. rmux
+/// applies no backpressure to the child, so a paused transport loses output
+/// (probe 7). The reader keeps draining into a bounded buffer and flow control
+/// gates delivery to the frontend instead.
+struct RmuxBackend {
+    pane: Arc<rmux_sdk::Pane>,
+    window: Arc<rmux_sdk::Window>,
+    cancelled: Arc<AtomicBool>,
+    flow: Arc<FlowControl>,
+}
+
+impl SessionBackend for RmuxBackend {
+    fn write(&self, data: &[u8]) -> Result<WriteAck, String> {
+        // `send_text` is the literal `send-keys -l` path, so bytes reach the tty
+        // unmodified. It takes a str, so non-UTF-8 input is rejected rather than
+        // silently mangled.
+        let text = match std::str::from_utf8(data) {
+            Ok(text) => text.to_string(),
+            Err(error) => return Err(format!("rmux input must be UTF-8: {error}")),
+        };
+        let pane = self.pane.clone();
+        let (acknowledge, receiver) = tokio::sync::oneshot::channel();
+        tauri::async_runtime::spawn(async move {
+            let result = pane.send_text(&text).await.map_err(|e| e.to_string());
+            let _ = acknowledge.send(result);
+        });
+        Ok(WriteAck::Pending(receiver))
+    }
+
+    fn resize(&self, rows: u16, cols: u16) -> Result<(), String> {
+        let window = self.window.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = window.resize(Some(cols), Some(rows)).await {
+                tracing::debug!(%error, "rmux window resize failed");
+            }
+        });
+        Ok(())
+    }
+
+    fn pause(&self) -> Result<(), String> {
+        self.flow.pause();
+        Ok(())
+    }
+
+    fn resume(&self) -> Result<(), String> {
+        self.flow.resume();
+        Ok(())
+    }
+
+    fn detach(&self) {
+        self.cancelled.store(true, Ordering::Release);
+        // Release the flusher so it can observe cancellation and exit.
+        self.flow.resume();
+    }
+}
+
 // ─── PtyManager ──────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -163,6 +236,16 @@ impl PtyManager {
             return self.attach_daemon(&sid, socket_path, app, on_data);
         }
 
+        // Handle rmux target via async path
+        if let PtyTarget::Rmux {
+            pty_key,
+            workspace,
+            handle,
+        } = target
+        {
+            return self.attach_rmux(&pty_key, workspace, handle, app, on_data);
+        }
+
         // A shell terminal can remount when its split leaf changes. Rebind its
         // output channel instead of killing and recreating the running local PTY.
         if matches!(&target, PtyTarget::Shell { .. }) {
@@ -196,6 +279,7 @@ impl PtyManager {
                 }
             }
             PtyTarget::Daemon { .. } => unreachable!(),
+            PtyTarget::Rmux { .. } => unreachable!(),
         };
 
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -336,6 +420,172 @@ impl PtyManager {
                         cv.notify_one();
                     }
                     Err(_) => break,
+                }
+            }
+
+            done.store(true, Ordering::Release);
+            pending.1.notify_one();
+        });
+
+        Ok(())
+    }
+
+    /// Attach to an rmux-hosted session.
+    ///
+    /// The reader loop never stops consuming the rmux stream, even while the
+    /// frontend is paused: rmux drops output for a slow subscriber rather than
+    /// throttling the child (ADR-0012, probe 7). Backpressure is applied to
+    /// delivery instead, via the same flusher/`FlowControl` arrangement the
+    /// daemon backend uses.
+    fn attach_rmux(
+        &self,
+        pty_key: &str,
+        workspace: planeai_rmux::WorkspaceName,
+        handle: planeai_rmux::ResourceHandle,
+        app: AppHandle,
+        on_data: Channel<Response>,
+    ) -> Result<(), String> {
+        tracing::info!(pty_key, %workspace, "attaching to rmux resource");
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flow = Arc::new(FlowControl::new());
+        let sid = pty_key.to_string();
+
+        {
+            let sessions = self.sessions.read().map_err(|e| e.to_string())?;
+            if let Some(old) = sessions.get(pty_key) {
+                old.detach();
+            }
+        }
+
+        let cancelled_clone = cancelled.clone();
+        let flow_clone = flow.clone();
+        let observer = self.observer.read().unwrap().clone();
+        let sessions_arc = self.sessions.clone();
+
+        tauri::async_runtime::spawn(async move {
+            // Retries once if the cached connection died while idle, which it can:
+            // the daemon exits with its last session and closes idle clients.
+            let attached = match crate::rmux_client::with_retry(|client| {
+                let workspace = workspace.clone();
+                async move { client.attach_resource(&workspace, handle).await }
+            })
+            .await
+            {
+                Ok(attached) => attached,
+                Err(error) => {
+                    tracing::error!(pty_key = %sid, %error, "rmux attach failed");
+                    let _ = app.emit("pty-exited", serde_json::json!({ "pty_key": sid }));
+                    return;
+                }
+            };
+            let (pane, window, mut stream) = attached.into_parts();
+
+            let backend: Box<dyn SessionBackend> = Box::new(RmuxBackend {
+                pane: Arc::new(pane),
+                window: Arc::new(window),
+                cancelled: cancelled_clone.clone(),
+                flow: flow_clone.clone(),
+            });
+            {
+                let mut sessions = sessions_arc.write().unwrap();
+                sessions.insert(sid.clone(), backend);
+            }
+
+            // Bounded buffer shared between the async reader and the sync flusher.
+            let pending = Arc::new((
+                Mutex::new(planeai_rmux::OutputBuffer::with_default_capacity()),
+                Condvar::new(),
+            ));
+            let done = Arc::new(AtomicBool::new(false));
+
+            // ── Flusher thread: coalesces and honours frontend backpressure ──
+            let pending_f = pending.clone();
+            let done_f = done.clone();
+            let cancelled_f = cancelled_clone.clone();
+            let flow_f = flow_clone;
+            let exit_key = sid.clone();
+            let app_flusher = app.clone();
+            thread::spawn(move || {
+                let (lock, cv) = &*pending_f;
+                loop {
+                    {
+                        let mut buffer = lock.lock().unwrap();
+                        while buffer.is_empty() {
+                            if done_f.load(Ordering::Acquire) {
+                                let chunk = buffer.take();
+                                if !chunk.is_empty() {
+                                    let _ = on_data.send(Response::new(chunk));
+                                }
+                                if !cancelled_f.load(Ordering::Acquire) {
+                                    let _ = app_flusher.emit(
+                                        "pty-exited",
+                                        serde_json::json!({ "pty_key": exit_key }),
+                                    );
+                                }
+                                return;
+                            }
+                            let (next, _) = cv.wait_timeout(buffer, FLUSH_MAX_IDLE).unwrap();
+                            buffer = next;
+                        }
+                    }
+
+                    // Frontend backpressure gates delivery only; the reader above
+                    // keeps draining rmux so the daemon never drops our output.
+                    flow_f.wait_if_paused();
+
+                    thread::sleep(FLUSH_COALESCE);
+
+                    let (chunk, gap) = {
+                        let mut buffer = lock.lock().unwrap();
+                        (buffer.take(), buffer.take_gap())
+                    };
+                    if let Some(gap) = gap {
+                        tracing::warn!(
+                            session_id = %exit_key,
+                            cause = ?gap.cause,
+                            "rmux output gap"
+                        );
+                    }
+                    if chunk.is_empty() {
+                        continue;
+                    }
+                    if on_data.send(Response::new(chunk)).is_err() {
+                        break;
+                    }
+                }
+                if !cancelled_f.load(Ordering::Acquire) {
+                    let _ =
+                        app_flusher.emit("pty-exited", serde_json::json!({ "pty_key": exit_key }));
+                }
+            });
+
+            // ── Async reader: drains rmux continuously, never pausing ──
+            loop {
+                if cancelled_clone.load(Ordering::Acquire) {
+                    break;
+                }
+                match stream.next().await {
+                    Ok(Some(rmux_sdk::PaneOutputChunk::Bytes { bytes, .. })) => {
+                        observer.on_output(&sid, bytes.len());
+                        let (lock, cv) = &*pending;
+                        lock.lock().unwrap().push(&bytes);
+                        cv.notify_one();
+                    }
+                    Ok(Some(rmux_sdk::PaneOutputChunk::Lag(notice))) => {
+                        // The daemon dropped output for this subscriber. Record it
+                        // so the gap is reported rather than silently rendered.
+                        let (lock, cv) = &*pending;
+                        lock.lock()
+                            .unwrap()
+                            .record_transport_gap(notice.missed_events);
+                        cv.notify_one();
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) => break,
+                    Err(error) => {
+                        tracing::debug!(session_id = %sid, %error, "rmux stream ended");
+                        break;
+                    }
                 }
             }
 

@@ -40,6 +40,8 @@ struct RecordingBackend {
     worktrees_created: Mutex<Vec<(String, String, String, String)>>,
     tmux_sessions: Mutex<Vec<(String, String, String, String)>>,
     daemon_sessions: Mutex<Vec<(String, String, String)>>,
+    rmux_sessions: Mutex<Vec<(String, String, String)>>,
+    rmux_workspaces: Mutex<Vec<String>>,
     sessions_inserted: Mutex<Vec<NewSession>>,
     gui_notified: Mutex<Vec<String>>,
     fetches: Mutex<Vec<(String, String)>>,
@@ -82,6 +84,24 @@ impl Backend for RecordingBackend {
             cmd.to_string(),
             cwd.to_string(),
         ));
+        Ok(())
+    }
+    fn create_rmux_session(
+        &self,
+        session_id: &str,
+        workspace: &str,
+        cmd: &str,
+        cwd: &str,
+    ) -> Result<(), String> {
+        self.rmux_sessions.lock().unwrap().push((
+            session_id.to_string(),
+            cmd.to_string(),
+            cwd.to_string(),
+        ));
+        self.rmux_workspaces
+            .lock()
+            .unwrap()
+            .push(workspace.to_string());
         Ok(())
     }
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
@@ -391,6 +411,53 @@ fn dispatch_daemon_backend_calls_create_daemon_session() {
 
     let tmux = backend.tmux_sessions.lock().unwrap();
     assert_eq!(tmux.len(), 0);
+}
+
+#[test]
+fn dispatch_rmux_backend_calls_create_rmux_session() {
+    let backend = RecordingBackend::default();
+
+    let dispatcher = SessionDispatcher {
+        task_source: Arc::new(MockTaskSource::new()),
+        on_start: None,
+        dispatch_config: DispatchConfig {
+            provider: "kiro".to_string(),
+            provider_command: "kiro-cli chat".to_string(),
+            yolo: true,
+            yolo_flag: Some("--trust-all-tools".to_string()),
+            worktree_root: "/tmp/wt".to_string(),
+            base_branch: "main".to_string(),
+            session_backend: "rmux".to_string(),
+            prompt_template: None,
+            prompt_command: None,
+            prompt_wrapper: None,
+            name_template: None,
+        },
+        project_id: "p1".to_string(),
+        project_name: "proj".to_string(),
+        project_path: "/repo".to_string(),
+    };
+
+    let task = make_task();
+    let session = dispatcher.dispatch(&task, &backend).unwrap();
+
+    // An auto-dispatched rmux task must get a real agent process, not just a row.
+    let rmux = backend.rmux_sessions.lock().unwrap();
+    assert_eq!(rmux.len(), 1, "rmux session should have been spawned");
+    assert_eq!(rmux[0].0, session.id);
+    assert!(rmux[0].1.contains("kiro-cli chat --trust-all-tools"));
+    assert_eq!(rmux[0].2, session.worktree_path);
+
+    // And no other backend should be touched.
+    assert_eq!(backend.daemon_sessions.lock().unwrap().len(), 0);
+    assert_eq!(backend.tmux_sessions.lock().unwrap().len(), 0);
+    assert_eq!(session.backend, "rmux");
+
+    // The workspace must be the task's, so a second agent on the same task joins
+    // it rather than creating a parallel one.
+    let workspaces = backend.rmux_workspaces.lock().unwrap();
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0], format!("planeai-ws-p1-{}", task.key));
 }
 
 #[test]

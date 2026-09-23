@@ -135,6 +135,12 @@ fn prepare_tab_spawn(
         .as_deref()
         .unwrap_or(project_path)
         .to_string();
+    let rmux_workspace = planeai_rmux::WorkspaceKey::for_session(
+        &session.project_id,
+        session.task_key.as_deref(),
+        &session.id,
+    )
+    .name();
     drop(conn);
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| {
@@ -160,6 +166,14 @@ fn prepare_tab_spawn(
             extra_path_dirs,
         )?
     };
+
+    tracing::info!(
+        pty_key = %pty_key,
+        backend = %session.backend,
+        has_initial_command = initial_command.is_some(),
+        resolved_command = %shell_cmd,
+        "prepare_tab_spawn"
+    );
 
     let (target, daemon_spawn) = if session.backend == "daemon" {
         #[cfg(not(windows))]
@@ -196,6 +210,30 @@ fn prepare_tab_spawn(
             },
             Some(daemon_spawn),
         )
+    } else if session.backend == planeai_rmux::BACKEND {
+        // A shell tab becomes its own window in the session's task workspace, so
+        // it persists exactly like the agent pane instead of dying with the app.
+        let owned_env: Vec<(String, String)> = env.clone();
+        let borrowed: std::collections::HashMap<&str, &str> = owned_env
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        let handle = crate::rmux_ops::spawn_resource_blocking(
+            &pty_key,
+            &session.id,
+            &rmux_workspace,
+            &shell_cmd,
+            &cwd,
+            &borrowed,
+        )?;
+        (
+            pty::PtyTarget::Rmux {
+                pty_key: pty_key.clone(),
+                workspace: rmux_workspace,
+                handle,
+            },
+            None,
+        )
     } else {
         (
             pty::PtyTarget::Shell {
@@ -217,6 +255,7 @@ fn prepare_tab_spawn(
 struct TabClosePlan {
     pty_key: String,
     daemon_backed: bool,
+    rmux_backed: bool,
 }
 
 #[tauri::command]
@@ -244,6 +283,18 @@ pub async fn close_tab(
         if let Err(error) =
             crate::daemon_client::kill_shell_tab(&planeai_ipc::daemon_socket_path(), &plan.pty_key)
                 .await
+        {
+            state.0.cancel_tab_close(&plan.pty_key);
+            return Err(error);
+        }
+    }
+
+    // An rmux shell tab is its own window, so closing the tab closes that pane
+    // and leaves the agent and sibling tabs untouched.
+    if plan.rmux_backed {
+        let pty_key = plan.pty_key.clone();
+        if let Err(error) =
+            crate::commands::blocking(move || crate::rmux_ops::close_resource(&pty_key)).await
         {
             state.0.cancel_tab_close(&plan.pty_key);
             return Err(error);
@@ -291,6 +342,7 @@ fn prepare_tab_close(
     Ok(TabClosePlan {
         pty_key: format!("{}:{}", session_id, tab_index),
         daemon_backed: session.backend == "daemon",
+        rmux_backed: session.backend == planeai_rmux::BACKEND,
     })
 }
 
@@ -307,6 +359,18 @@ pub fn increment_tab_count(session_id: String, db_state: State<DbState>) -> Resu
 #[tauri::command]
 pub fn check_tmux_available() -> bool {
     config::tmux_available()
+}
+
+/// Whether an rmux daemon binary is reachable, for the Preferences warning.
+///
+/// A bundled sidecar wins over PATH, matching how the backend resolves it.
+#[tauri::command]
+pub async fn check_rmux_available(app: tauri::AppHandle) -> bool {
+    crate::commands::blocking(move || {
+        Ok(crate::paths::resolve_rmux_daemon_binary(&app).is_file() || config::rmux_available())
+    })
+    .await
+    .unwrap_or(false)
 }
 
 #[cfg(test)]

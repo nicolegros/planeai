@@ -21,6 +21,19 @@ pub trait RestartOps {
         cwd: &str,
         extra_path_dirs: &[String],
     ) -> Result<(), String>;
+
+    /// Spawn the agent resource in its task workspace.
+    ///
+    /// `workspace` is passed in because only the caller knows the session's task
+    /// linkage, and two agents on one task must share a workspace.
+    fn spawn_rmux_session(
+        &self,
+        session_id: &str,
+        workspace: &planeai_rmux::WorkspaceName,
+        cmd: &str,
+        cwd: &str,
+        extra_path_dirs: &[String],
+    ) -> Result<(), String>;
 }
 
 #[tracing::instrument(skip(conn, config, restart_ops), fields(session_id = id))]
@@ -83,6 +96,14 @@ pub fn restart(
     };
 
     let tmux_name = session.tmux_name.as_deref();
+    // Two agents on the same task share one rmux workspace, so the key comes from
+    // the session's task linkage rather than its id.
+    let rmux_workspace = planeai_rmux::WorkspaceKey::for_session(
+        &session.project_id,
+        session.task_key.as_deref(),
+        &session.id,
+    )
+    .name();
     let try_spawn = |cmd: &str| -> Result<(), String> {
         match session.backend.as_str() {
             "tmux" => {
@@ -90,6 +111,9 @@ pub fn restart(
                 restart_ops.create_tmux_session(tn, cwd, cmd, id, &extra_path_dirs)
             }
             "daemon" => restart_ops.spawn_daemon_session(id, cmd, cwd, &extra_path_dirs),
+            planeai_rmux::BACKEND => {
+                restart_ops.spawn_rmux_session(id, &rmux_workspace, cmd, cwd, &extra_path_dirs)
+            }
             "local" => Ok(()), // PTY spawned on attach, nothing to pre-create
             other => Err(format!("unsupported backend: {other}")),
         }
@@ -156,6 +180,31 @@ pub fn real_restart_ops() -> impl RestartOps {
             }
         }
 
+        fn spawn_rmux_session(
+            &self,
+            session_id: &str,
+            workspace: &planeai_rmux::WorkspaceName,
+            cmd: &str,
+            cwd: &str,
+            extra_path_dirs: &[String],
+        ) -> Result<(), String> {
+            tracing::info!(
+                session_id = &session_id[..8.min(session_id.len())],
+                cmd,
+                cwd,
+                workspace = %workspace,
+                "restart_ops: spawning rmux resource"
+            );
+
+            let mut path_buf = String::new();
+            let env =
+                planeai_core::command::build_daemon_env(extra_path_dirs, session_id, &mut path_buf);
+            crate::rmux_ops::spawn_resource_blocking(
+                session_id, session_id, workspace, cmd, cwd, &env,
+            )
+            .map(|_| ())
+        }
+
         fn spawn_daemon_session(
             &self,
             session_id: &str,
@@ -204,6 +253,7 @@ mod tests {
     struct MockRestartOps {
         calls: RefCell<Vec<(String, String, String, String)>>,
         daemon_calls: RefCell<Vec<(String, String, String)>>,
+        rmux_calls: RefCell<Vec<(String, String, String)>>,
         fail_resume: bool,
     }
 
@@ -212,6 +262,7 @@ mod tests {
             Self {
                 calls: RefCell::new(vec![]),
                 daemon_calls: RefCell::new(vec![]),
+                rmux_calls: RefCell::new(vec![]),
                 fail_resume: false,
             }
         }
@@ -220,12 +271,28 @@ mod tests {
             Self {
                 calls: RefCell::new(vec![]),
                 daemon_calls: RefCell::new(vec![]),
+                rmux_calls: RefCell::new(vec![]),
                 fail_resume: true,
             }
         }
     }
 
     impl RestartOps for MockRestartOps {
+        fn spawn_rmux_session(
+            &self,
+            session_id: &str,
+            _workspace: &planeai_rmux::WorkspaceName,
+            cmd: &str,
+            cwd: &str,
+            _extra_path_dirs: &[String],
+        ) -> Result<(), String> {
+            self.rmux_calls.borrow_mut().push((
+                session_id.to_string(),
+                cmd.to_string(),
+                cwd.to_string(),
+            ));
+            Ok(())
+        }
         fn create_tmux_session(
             &self,
             tmux_name: &str,
@@ -401,6 +468,44 @@ mod tests {
         assert_eq!(ops.calls.borrow().len(), 0);
         assert_eq!(ops.daemon_calls.borrow().len(), 1);
         assert_eq!(ops.daemon_calls.borrow()[0].0, id);
+    }
+
+    #[test]
+    fn restart_rmux_session_spawns_in_rmux_only() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "bbbb2222-4444-5555-6666-777788889999";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "rmux-restart",
+            None,
+            "main",
+            None,
+            None,
+            planeai_rmux::BACKEND,
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        db::mark_session_exited(&conn, id).unwrap();
+
+        let cfg = Config::default();
+        let ops = MockRestartOps::new();
+        let updated = restart(&conn, id, &cfg, &ops).unwrap();
+
+        assert_eq!(updated.status, "active");
+        // An rmux restart must not reach the tmux or daemon paths.
+        assert_eq!(ops.calls.borrow().len(), 0);
+        assert_eq!(ops.daemon_calls.borrow().len(), 0);
+        assert_eq!(ops.rmux_calls.borrow().len(), 1);
+        assert_eq!(ops.rmux_calls.borrow()[0].0, id);
     }
 
     #[test]

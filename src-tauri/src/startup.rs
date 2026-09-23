@@ -129,6 +129,47 @@ pub fn reconcile_daemon_sessions(conn: &rusqlite::Connection, _cfg: &config::Con
     }
 }
 
+/// Reconcile rmux sessions: mark sessions exited when their pane is gone.
+///
+/// Pane ids are only valid for a daemon lifetime, so a restarted daemon
+/// invalidates every recorded resource. Pruning the mapping and marking the
+/// affected sessions is the equivalent of the tmux `has-session` sweep.
+pub fn reconcile_rmux_sessions(conn: &rusqlite::Connection) {
+    let sessions = match db::list_sessions(conn) {
+        Ok(sessions) => sessions,
+        Err(_) => return,
+    };
+    let active: Vec<&db::Session> = sessions
+        .iter()
+        .filter(|session| session.backend == planeai_rmux::BACKEND && session.status == "active")
+        .collect();
+    if active.is_empty() {
+        return;
+    }
+
+    tracing::info!(count = active.len(), "reconciling rmux sessions on startup");
+
+    // A dead daemon prunes everything, which is the correct outcome: no rmux
+    // session survived it.
+    let affected = match crate::rmux_ops::prune_dead_resources(conn) {
+        Ok(affected) => affected,
+        Err(error) => {
+            tracing::warn!(%error, "could not reconcile rmux resources");
+            return;
+        }
+    };
+
+    for session in active {
+        // A session with no remaining agent resource is no longer running.
+        let has_agent = crate::rmux_resources::get(conn, &session.id)
+            .map(|record| record.is_some())
+            .unwrap_or(false);
+        if !has_agent || affected.contains(&session.id) {
+            let _ = db::mark_session_exited(conn, &session.id);
+        }
+    }
+}
+
 /// Start a background task that listens for daemon exit events and marks sessions as exited.
 pub fn start_daemon_event_listener(app_handle: &tauri::AppHandle) {
     let app = app_handle.clone();

@@ -30,6 +30,7 @@
   let newProviderYoloFlag = $state("");
   let showAddProvider = $state(false);
   let tmuxAvailable = $state(true);
+  let rmuxAvailable = $state(true);
   let cliInstalled = $state(false);
   let activeTab = $state("Appearance");
   let pluginInventory = $state<PluginInventory[]>([]);
@@ -135,6 +136,14 @@
     preferences.checkTmuxAvailable().then((available) => {
       tmuxAvailable = available;
     });
+    // A failed check must not reject unhandled; assume available and simply
+    // show no warning rather than blocking the settings page.
+    preferences
+      .checkRmuxAvailable()
+      .then((available) => {
+        rmuxAvailable = available;
+      })
+      .catch(() => {});
     preferences.checkCliInstalled().then((installed) => {
       cliInstalled = installed;
     });
@@ -788,7 +797,7 @@
     <section class="space-y-3">
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Session Backend</h2>
       <div class="flex gap-2">
-        {#each [{ value: "local", label: "Local" }, { value: "tmux", label: "tmux" }, { value: "daemon", label: "Daemon (experimental)" }] as opt (opt.value)}
+        {#each [{ value: "local", label: "Local" }, { value: "tmux", label: "tmux" }, { value: "daemon", label: "Daemon (experimental)" }, { value: "rmux", label: "rmux (experimental)" }] as opt (opt.value)}
           <button
             class="px-4 py-2 rounded-md text-sm font-medium transition-colors {backendValue === opt.value ? 'bg-accent text-on-accent' : 'bg-panel-hi text-t1 hover:bg-panel-hi '}"
             onclick={() => setSessionBackend(opt.value)}
@@ -799,10 +808,14 @@
         <p class="text-xs text-amber-600">⚠ tmux not found on PATH. Sessions will fail to launch.</p>
 
       {/if}
+      {#if backendValue === "rmux" && !rmuxAvailable}
+        <p class="text-xs text-amber-600">⚠ rmux not found on PATH. Sessions will fail to launch.</p>
+      {/if}
       <p class="text-xs text-t2">
         {#if backendValue === "local"}Sessions run in-process. Restarted with resume command on focus.
         {:else if backendValue === "tmux"}Sessions persist after quitting (requires tmux).
         {:else if backendValue === "daemon"}Sessions persist after quitting (built-in daemon, experimental).
+        {:else if backendValue === "rmux"}Sessions persist after quitting (requires rmux, experimental).
         {:else}Sessions run in-process. Restarted with resume command on focus.
         {/if}
         Changes apply to new sessions only.

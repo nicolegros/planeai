@@ -311,6 +311,7 @@ pub trait PromptOps {
     fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String>;
     fn tmux_has_session(&self, tmux_name: &str) -> bool;
     fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String>;
+    fn rmux_send(&self, session_id: &str, text: &str) -> Result<(), String>;
 }
 
 pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
@@ -327,6 +328,9 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
         }
         fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String> {
             daemon_send_prompt(session_id, text)
+        }
+        fn rmux_send(&self, session_id: &str, text: &str) -> Result<(), String> {
+            crate::rmux_ops::send_prompt(session_id, text)
         }
     }
     RealPromptOps
@@ -570,6 +574,10 @@ pub fn send_prompt(
         "daemon" => {
             ops.daemon_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via daemon data connection");
+        }
+        planeai_rmux::BACKEND => {
+            ops.rmux_send(&session.id, text)?;
+            tracing::info!(session_id = %session.id, "send_prompt: sent via rmux pane input");
         }
         other => return Err(format!("unsupported backend: {other}")),
     }
@@ -858,6 +866,12 @@ mod tests {
     }
 
     impl PromptOps for MockPromptOps {
+        fn rmux_send(&self, session_id: &str, text: &str) -> Result<(), String> {
+            self.sent_socket
+                .borrow_mut()
+                .push((session_id.to_string(), text.to_string()));
+            Ok(())
+        }
         fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String> {
             self.sent_keys
                 .borrow_mut()
@@ -917,6 +931,7 @@ mod tests {
         KillOps {
             kill_tmux: Box::new(|_| Ok(())),
             kill_daemon_session: Box::new(|_| Ok(())),
+            kill_rmux_session: Box::new(|_| Ok(())),
         }
     }
 
@@ -925,6 +940,7 @@ mod tests {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
                 kill_daemon_session: Box::new(|_| Err("daemon error".to_string())),
+                kill_rmux_session: Box::new(|_| Ok(())),
             },
             remove_worktree: Box::new(|_, _| Err("locked".to_string())),
             remove_dir: Box::new(|_| Err("permission denied".to_string())),
@@ -1143,6 +1159,7 @@ mod tests {
                 Ok(())
             }),
             kill_daemon_session: Box::new(|_| Ok(())),
+            kill_rmux_session: Box::new(|_| Ok(())),
         };
 
         archive(&conn, id, &None, &ops).unwrap();
@@ -1180,6 +1197,7 @@ mod tests {
         let ops = KillOps {
             kill_tmux: Box::new(|_| panic!("should not be called for local backend")),
             kill_daemon_session: Box::new(|_| panic!("should not be called for local backend")),
+            kill_rmux_session: Box::new(|_| Ok(())),
         };
 
         archive(&conn, id, &None, &ops).unwrap();
@@ -1222,6 +1240,7 @@ mod tests {
                 KILLED.with(|k| k.borrow_mut().push(sid.to_string()));
                 Ok(())
             }),
+            kill_rmux_session: Box::new(|_| Ok(())),
         };
 
         archive(&conn, id, &None, &ops).unwrap();

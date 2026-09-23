@@ -982,7 +982,17 @@ fn main() {
                     (r, pretty, Some(key))
                 }
                 TaskAction::Delete { key, pretty, .. } => {
-                    let r = planeai::task_cli::run_task_delete(&repo, &key);
+                    let project_id = planeai::db::list_projects(&conn).ok().and_then(|projects| {
+                        projects
+                            .into_iter()
+                            .find(|candidate| candidate.prefix == prefix)
+                            .map(|candidate| candidate.id)
+                    });
+                    let r = planeai::task_cli::run_task_delete_in_project(
+                        &repo,
+                        &key,
+                        project_id.as_deref(),
+                    );
                     (r, pretty, Some(key))
                 }
             };
@@ -1264,7 +1274,7 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                             None => return emit_axi_error("tmux session has no tmux_name"),
                         };
                         // Validate cursor prefix
-                        if !cursor_str.starts_with("tmux:") {
+                        if !cursor_str.trim().trim_matches('"').starts_with("tmux:") {
                             return emit_axi_error(&format!(
                                 "invalid cursor for tmux backend: {cursor_str}"
                             ));
@@ -1278,6 +1288,26 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                                 let (output, code) = planeai::axi::session_read_cursor_output(
                                     &session.id[..8],
                                     "tmux",
+                                    &result.cursor,
+                                    result.truncated,
+                                    &result.text,
+                                );
+                                print!("{output}");
+                                code
+                            }
+                            Err(e) => emit_axi_error(&e),
+                        }
+                    }
+                    planeai_rmux::BACKEND => {
+                        match planeai::rmux_ops::read_pane_after(
+                            &session.id,
+                            &cursor_str,
+                            max_bytes,
+                        ) {
+                            Ok(result) => {
+                                let (output, code) = planeai::axi::session_read_cursor_output(
+                                    &session.id[..8],
+                                    planeai_rmux::BACKEND,
                                     &result.cursor,
                                     result.truncated,
                                     &result.text,
@@ -1309,6 +1339,10 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                         Err(e) => return emit_axi_error(&e),
                     }
                 }
+                planeai_rmux::BACKEND => match planeai::rmux_ops::read_pane(&session.id, lines) {
+                    Ok(text) => planeai::axi::session_read_output(&session.id[..8], &text),
+                    Err(e) => return emit_axi_error(&e),
+                },
                 "local" => return emit_axi_error("local backend does not support remote read"),
                 other => return emit_axi_error(&format!("unsupported backend: {other}")),
             }
@@ -1326,6 +1360,9 @@ fn emit_axi_error(msg: &str) -> i32 {
 
 /// Parse a daemon cursor string "daemon:<offset>" into the byte offset.
 fn parse_daemon_cursor(cursor: &str) -> Result<u64, String> {
+    // TOON quotes any value containing a colon, so a cursor copied verbatim from
+    // `axi session read` output arrives quoted.
+    let cursor = cursor.trim().trim_matches('"');
     let parts: Vec<&str> = cursor.splitn(2, ':').collect();
     if parts.len() != 2 || parts[0] != "daemon" {
         return Err(format!("invalid cursor for daemon backend: {cursor}"));

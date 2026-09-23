@@ -20,6 +20,7 @@ pub struct CleanupContext {
 pub struct KillOps {
     pub kill_tmux: Op1,
     pub kill_daemon_session: Op1,
+    pub kill_rmux_session: Op1,
 }
 
 /// Operations that cleanup can perform (injectable for testing).
@@ -30,7 +31,7 @@ pub struct CleanupOps {
     pub delete_branch: Op2,
 }
 
-/// Kill the backend process (tmux or daemon) for a session. Returns collected errors.
+/// Kill the backend process (tmux, daemon, or rmux) for a session. Returns collected errors.
 pub fn kill_backend(
     backend: &str,
     tmux_name: Option<&str>,
@@ -58,6 +59,16 @@ pub fn kill_backend(
                     if let Err(e) = (ops.kill_daemon_session)(&tab_id) {
                         errors.push(format!("daemon kill tab {i}: {e}"));
                     }
+                }
+            }
+        }
+        planeai_rmux::BACKEND => {
+            if let Some(id) = session_id {
+                // Closes this session's own panes — agent and shell tabs — and
+                // leaves the task workspace for any sibling agents. The workspace
+                // itself is removed only when its task is deleted (ADR-0012).
+                if let Err(e) = (ops.kill_rmux_session)(id) {
+                    errors.push(format!("rmux close: {e}"));
                 }
             }
         }
@@ -136,6 +147,7 @@ pub fn real_kill_ops() -> KillOps {
             let _ = stream.read(&mut buf);
             Ok(())
         }),
+        kill_rmux_session: Box::new(crate::rmux_ops::close_session_resources),
     }
 }
 
@@ -184,6 +196,7 @@ mod tests {
                 Ok(())
             }),
             kill_daemon_session: Box::new(|_| Ok(())),
+            kill_rmux_session: Box::new(|_| Ok(())),
         };
         let errors = kill_backend("tmux", Some("planeai-abc"), None, 1, &ops);
         assert!(errors.is_empty());
@@ -193,10 +206,49 @@ mod tests {
     }
 
     #[test]
+    fn kill_backend_rmux_kills_the_session_by_planeai_id() {
+        thread_local! {
+            static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
+        }
+        let ops = KillOps {
+            kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|_| {
+                panic!("an rmux session must not be killed through the daemon")
+            }),
+            kill_rmux_session: Box::new(|id| {
+                KILLED.with(|killed| killed.borrow_mut().push(id.to_string()));
+                Ok(())
+            }),
+        };
+
+        // tab_count > 1 must not fan out: shell tabs are not mapped in this slice,
+        // and one rmux session owns the whole PlaneAI session.
+        let errors = kill_backend(planeai_rmux::BACKEND, None, Some("sess-abc"), 3, &ops);
+
+        assert!(errors.is_empty());
+        KILLED.with(|killed| assert_eq!(killed.borrow().as_slice(), &["sess-abc"]));
+    }
+
+    #[test]
+    fn kill_backend_rmux_reports_failures() {
+        let ops = KillOps {
+            kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|_| Ok(())),
+            kill_rmux_session: Box::new(|_| Err("daemon refused".to_string())),
+        };
+
+        let errors = kill_backend(planeai_rmux::BACKEND, None, Some("sess-abc"), 1, &ops);
+
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("rmux close"));
+    }
+
+    #[test]
     fn kill_backend_local_is_noop() {
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
             kill_daemon_session: Box::new(|_| Ok(())),
+            kill_rmux_session: Box::new(|_| Ok(())),
         };
         let errors = kill_backend("local", None, None, 1, &ops);
         assert!(errors.is_empty());
@@ -209,6 +261,7 @@ mod tests {
         }
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
+            kill_rmux_session: Box::new(|_| Ok(())),
             kill_daemon_session: Box::new(|id| {
                 KILLED.with(|k| k.borrow_mut().push(id.to_string()));
                 Ok(())
@@ -232,6 +285,7 @@ mod tests {
         }
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
+            kill_rmux_session: Box::new(|_| Ok(())),
             kill_daemon_session: Box::new(|id| {
                 KILLED.with(|k| k.borrow_mut().push(id.to_string()));
                 Ok(())
@@ -254,6 +308,7 @@ mod tests {
         let ops = CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Ok(())),
+                kill_rmux_session: Box::new(|_| Ok(())),
                 kill_daemon_session: Box::new(|id| {
                     KILLED.with(|k| k.borrow_mut().push(id.to_string()));
                     Ok(())
@@ -292,6 +347,7 @@ mod tests {
                     Ok(())
                 }),
                 kill_daemon_session: Box::new(|_| Ok(())),
+                kill_rmux_session: Box::new(|_| Ok(())),
             },
             remove_worktree: Box::new(|_, _| Ok(())),
             remove_dir: Box::new(|_| Ok(())),
@@ -325,6 +381,7 @@ mod tests {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Ok(())),
                 kill_daemon_session: Box::new(|_| Ok(())),
+                kill_rmux_session: Box::new(|_| Ok(())),
             },
             remove_worktree: Box::new(|repo, wt| {
                 WT_REMOVED.with(|v| v.borrow_mut().push((repo.to_string(), wt.to_string())));
@@ -377,6 +434,7 @@ mod tests {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Ok(())),
                 kill_daemon_session: Box::new(|_| Ok(())),
+                kill_rmux_session: Box::new(|_| Ok(())),
             },
             remove_worktree: Box::new(|_, _| Err("must not remove worktree".to_string())),
             remove_dir: Box::new(|_| Err("must not remove directory".to_string())),
@@ -402,6 +460,7 @@ mod tests {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
                 kill_daemon_session: Box::new(|_| Ok(())),
+                kill_rmux_session: Box::new(|_| Ok(())),
             },
             remove_worktree: Box::new(|_, _| Err("locked".to_string())),
             remove_dir: Box::new(|_| Err("permission denied".to_string())),

@@ -21,6 +21,7 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Primitive**        | A reusable styled Svelte component in `src/components/ui/` that wraps bits-ui behavior (for complex interactives) or provides app-specific defaults (Button, Input). The building block for feature components.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | **Theme mode**       | One of three states: `system`, `light`, `dark`. Persisted in localStorage. Controls which color palette is active.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | **Daemon**           | (Experimental) A background process (`planeai-daemon`) that manages session PTYs. Spawned on-demand by the CLI or GUI. Sessions survive indefinitely as long as the daemon is running.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **rmux**             | (Experimental) An opt-in persistent session backend, selected via `session_backend: "rmux"`. Intended to eventually replace `planeai-daemon`. One rmux session per TaskWorkspace; one rmux pane per terminal tab. Destroyed only on explicit task deletion. See ADR-0012.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | **AXI**              | Agent eXperience Interface — a CLI subcommand (`planeai-cli axi`) that outputs TOON instead of JSON, optimised for autonomous agent consumption. Covers task, session, project, and loop operations.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | **TOON**             | A token-efficient text output format used by the AXI interface. Supports object fields, tabular arrays, and primitive arrays with minimal overhead. Implemented in the `planeai-toon` crate.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | **Jira integration** | Optional Jira Cloud connection managed by the bundled Jira plugin. The plugin stores its site and configured JQL sources under its own settings namespace, OAuth credentials under its backend-only secrets namespace, and sync membership/cache state in its plugin database. OAuth 2.0 (PKCE) is used for authorization. Immediate periodic configured-source sync imports Jira issues as PlaneAI tasks, updates the Jira sidebar, and queues globally departed unresolved issues for review; selecting an issue can create a child task in a PlaneAI project; Jira writeback is supported for configured lifecycle actions.                                                                                                                                                                                                             |
@@ -132,19 +133,20 @@ The AXI session read command supports two modes:
 | ------- | -------------------------- | --------------------------------------------------------------------------------------- |
 | daemon  | `daemon:<u64_byte_offset>` | Monotonic byte offset from ring buffer. O(1) incremental reads.                         |
 | tmux    | `tmux:<line_count>:<hash>` | Line count + content hash of first 5 and last 10 lines. Used to detect history rolloff. |
+| rmux    | `rmux:<line_count>:<hash>` | Same capture-based strategy as tmux — rmux exposes no byte-offset resume.               |
 | local   | —                          | Not supported. Returns an error.                                                        |
 
 **Cursor-mode TOON output**:
 
 ```
 session_id: <short_id>
-backend: daemon | tmux
+backend: daemon | tmux | rmux
 cursor: <opaque_cursor_for_next_read>
 truncated: false | true
 text: <new_output_since_cursor>
 ```
 
-- `truncated: true` means data was lost between the cursor position and the earliest available content (ring buffer eviction for daemon, history rolloff for tmux). The cursor is reset to the current position.
+- `truncated: true` means data was lost between the cursor position and the earliest available content (ring buffer eviction for daemon, history rolloff for tmux and rmux). The cursor is reset to the current position.
 - `--max-bytes` caps the returned text (0 = unlimited). The cursor advances only to cover the content actually returned, so remaining data is delivered on the next poll.
 - Agents should persist the `cursor` value and pass it back on the next `--after` call to receive only new output.
 
@@ -153,6 +155,8 @@ text: <new_output_since_cursor>
 ```bash
 # Initial read — get current output + cursor (use backend-appropriate zero cursor)
 OUTPUT=$(planeai-cli axi session read $CHILD --after "tmux:0:0")
+# TOON quotes any value containing a colon, so the printed cursor is quoted.
+# Passing it back verbatim works — the parsers strip the quotes.
 CURSOR=$(echo "$OUTPUT" | grep "^cursor:" | cut -d' ' -f2)
 
 # Poll loop — only new output each iteration
@@ -256,7 +260,40 @@ Parent/child relationships are observable via `session children` and `session tr
 
 ### Preferences UI
 
-Dropdown: Local (default) / tmux / Daemon (experimental). Inline warning if user selects tmux but binary not found.
+Dropdown: Local (default) / tmux / Daemon (experimental) / rmux (experimental). Inline warning if the selected backend's binary is not found.
+
+### rmux (experimental)
+
+`rmux` is an opt-in fourth backend intended to eventually replace `daemon`. It is wired into production code behind the `session_backend: "rmux"` setting, and the daemon binary is currently resolved from `PATH` rather than bundled — sidecar embedding (a pinned, SHA256-verified upstream prebuilt) is still outstanding. Recorded in ADR-0012. All ten spike probes pass against rmux 0.10.0 on macOS (`planeai-rmux-spike`); Windows is out of scope and unverified.
+
+rmux is used as a **process host, not a UI**: the pane output stream is byte-exactly the child process's own output (verified by byte-for-byte comparison), the pane occupies the whole window with no status row reserved, and raw control bytes — including rmux's own `0x02` prefix — reach the child rather than a key table. PlaneAI keeps rendering in xterm.
+
+| PlaneAI concept                          | rmux concept                 |
+| ---------------------------------------- | ---------------------------- |
+| TaskWorkspace (`project_id`, `task_key`) | session                      |
+| Terminal tab/resource (`pty_key`)        | window holding a single pane |
+
+A session with no task owns its workspace alone, so it stays isolated and still
+gets cleaned up. The `pty_key` → pane mapping lives in the `rmux_resources`
+table; pane ids are renewable handles valid for one daemon lifetime, so startup
+reconciliation prunes stale rows and marks the affected sessions `exited`.
+
+Ownership rules:
+
+- One rmux session per TaskWorkspace, created when its first resource is spawned, destroyed **only on explicit task deletion** (`planeai-cli task delete`). Moving a task to `Done` archives its agent panes but keeps the workspace and its rmux session.
+- A tab maps to a _window_, not a sibling pane: `Pane::resize` is a no-op for a sole pane, while `Window::resize` reaches the child process. Windows are the resizable geometry unit and tabs are independently sized.
+- Each pane is spawned with its own `cwd` — a TaskWorkspace can group agent sessions living in different worktrees.
+- Archive/delete/restart of one agent session closes only its own windows, never the shared session or a sibling agent's panes. Shell tabs are windows too, so they persist with the workspace instead of dying with the app.
+- `pty_key` stays the canonical PlaneAI identity (it is persisted in `task_workspaces.layout_json`). rmux pane IDs are renewable runtime handles held in a backend-side map and never reach the frontend or persisted layout.
+- Session cleanup policy is `Preserve` — `KillOnOwnerExit` would kill every agent when the app quits.
+- Killing the last session stops the daemon, so all paths use `connect_or_start` and treat a closed transport as restart-and-retry.
+- rmux applies no backpressure to the child: a consumer that stops draining loses output (reported via lag notices with a resume point). So the adapter drains continuously into its own bounded buffer and implements `pause()`/`resume()` PlaneAI-side, like the existing `DaemonBackend`. The read loop is performance-critical — a debug-build consumer lost 97.6% of a 6.29 MiB burst that a release build delivered intact.
+- Agent and shell commands use explicit argv, never `.shell()`, which would run the user's login shell (fish, nu) instead of `sh`.
+- `rmux-daemon` is a separate binary from `rmux` and is what gets spawned; ship it as a sidecar and point `RMUX_SDK_DAEMON_BINARY` at its absolute path.
+- xterm remains the renderer, replaying the recovery stream's `keyframe` then following its live byte events; snapshots are additive for AXI/automation only.
+- The AXI cursor is capture-based (like tmux), not a byte offset: rmux has no "resume at sequence N" input.
+- Agent state continues to come from provider hooks, identically to the local, tmux, and daemon backends. rmux events are used for exit detection only.
+- Existing sessions are never migrated in place: `backend` is recorded per session at creation.
 
 ## Worktree support
 
