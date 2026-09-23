@@ -187,7 +187,14 @@ export function selectSession(id: string, opts: { explicit?: boolean } = {}): vo
 }
 
 export function createSession(session: Session): void {
-  sessions = [...sessions, session];
+  // Replace rather than append: a `sessions-changed` reload can already have
+  // fetched this session, and a duplicate entry produces duplicate tab keys,
+  // which is a Svelte runtime error that freezes the UI.
+  const existing = sessions.findIndex((candidate) => candidate.id === session.id);
+  sessions =
+    existing === -1
+      ? [...sessions, session]
+      : sessions.map((candidate) => (candidate.id === session.id ? session : candidate));
   initSession(session.id, 1);
   selectSession(session.id, { explicit: true });
 }

@@ -170,6 +170,24 @@ describe("session-orchestrator", () => {
       expect(getSessions()).toContainEqual(s);
       expect(getActiveSessionId()).toBe("new1");
     });
+
+    it("does not duplicate a session a concurrent reload already fetched", async () => {
+      // A `sessions-changed` reload can land between launch and createSession.
+      // A duplicated session yields duplicate tab keys, and a duplicate key in a
+      // Svelte keyed `{#each}` aborts the update flush — freezing the whole UI,
+      // which looks like session selection doing nothing.
+      const existing = makeSession({ id: "dup1", name: "from reload" });
+      api.list.mockResolvedValue([existing]);
+      await loadSessions();
+
+      createSession(makeSession({ id: "dup1", name: "from launch" }));
+
+      const matching = getSessions().filter((session) => session.id === "dup1");
+      expect(matching).toHaveLength(1);
+      // The newer object wins, so the caller's data is not discarded.
+      expect(matching[0].name).toBe("from launch");
+      expect(getActiveSessionId()).toBe("dup1");
+    });
   });
 
   describe("deleteSession", () => {

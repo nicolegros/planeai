@@ -9,6 +9,7 @@ import {
   getTabCount,
   destroySession,
   setTabTitle,
+  adoptTabIndices,
 } from "../session-tabs.svelte";
 
 describe("session tabs", () => {
@@ -136,5 +137,56 @@ describe("session tabs", () => {
     setTabTitle("s1", 99, "vim");
     // Should not throw, tabs unchanged
     expect(getTabs("s1")[1].label).toBe("Shell 1");
+  });
+});
+
+describe("tab index allocation against a restored layout", () => {
+  beforeEach(() => {
+    destroySession("s1");
+  });
+
+  it("never reuses an index already held by a tab", () => {
+    // A restored layout can contain a higher index than the persisted tab count,
+    // so the allocator must look at the tabs it actually has.
+    initSession("s1", 2);
+    adoptTabIndices("s1", [1, 2]);
+
+    expect(addTab("s1")).toBe(3);
+  });
+
+  it("adopts layout indices so they appear as tabs", () => {
+    initSession("s1", 2);
+    adoptTabIndices("s1", [1, 2, 4]);
+
+    expect(getTabs("s1").map((tab) => tab.index)).toEqual([0, 1, 2, 4]);
+    // The next allocation clears the highest adopted index.
+    expect(addTab("s1")).toBe(5);
+  });
+
+  it("is idempotent so repeated layout loads do not duplicate tabs", () => {
+    initSession("s1", 2);
+    adoptTabIndices("s1", [1, 2]);
+    adoptTabIndices("s1", [1, 2]);
+
+    expect(getTabs("s1").map((tab) => tab.index)).toEqual([0, 1, 2]);
+  });
+
+  it("ignores the agent index and unknown sessions", () => {
+    initSession("s1", 1);
+    adoptTabIndices("s1", [0]);
+    expect(getTabs("s1").map((tab) => tab.index)).toEqual([0]);
+
+    // No session state yet: adopting must not create one.
+    adoptTabIndices("missing", [3]);
+    expect(getTabs("missing")).toEqual([]);
+  });
+
+  it("keeps allocating unique indices after a tab is removed", () => {
+    initSession("s1", 1);
+    adoptTabIndices("s1", [1, 2]);
+    removeTab("s1", 2);
+
+    // Reusing 2 would collide with a layout entry that may still exist.
+    expect(addTab("s1")).toBe(3);
   });
 });

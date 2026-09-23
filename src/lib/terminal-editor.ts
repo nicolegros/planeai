@@ -33,6 +33,11 @@ export async function queueTerminalEditor(queue: TerminalEditorQueue): Promise<b
   const tabIndex = queue.addTab(queue.sessionId);
   if (tabIndex === -1) return false;
 
+  // Record the command before the first await. `addTab` mutates shared tab state,
+  // which schedules the workspace reconciliation effect; that effect runs during
+  // the await below and can mount the terminal for this tab itself. If the command
+  // were registered afterwards the terminal would spawn a bare shell instead of
+  // the editor.
   const ptyKey = `${queue.sessionId}:${tabIndex}`;
   queue.pendingCommands.set(ptyKey, command);
 

@@ -41,10 +41,37 @@ export function getTabs(sessionId: string): Tab[] {
 export function addTab(sessionId: string): number {
   const s = state[sessionId];
   if (!s) return -1;
-  const index = s.nextIndex;
+  // Never hand out an index already in use. `nextIndex` is seeded from the
+  // persisted tab count, which can be lower than the highest index in a restored
+  // layout — reusing one produces a duplicate pty key, which both breaks the
+  // keyed tab list and makes a new tab silently resolve to the existing one.
+  const highest = s.tabs.reduce((max, tab) => Math.max(max, tab.index), 0);
+  const index = Math.max(s.nextIndex, highest + 1);
   s.tabs = relabel([...s.tabs, { index, label: "", icon: "terminal" }]);
   s.nextIndex = index + 1;
   return index;
+}
+
+/**
+ * Adopt shell tab indices restored from a persisted layout.
+ *
+ * The layout is the authority on which tabs exist; this state is rebuilt from the
+ * tab count at startup and would otherwise hand out an index the layout already
+ * uses. Adopting keeps the two views consistent and the allocator safe.
+ */
+export function adoptTabIndices(sessionId: string, indices: number[]): void {
+  const s = state[sessionId];
+  if (!s) return;
+  const known = new Set(s.tabs.map((tab) => tab.index));
+  const adopted = indices.filter((index) => index > 0 && !known.has(index));
+  if (adopted.length > 0) {
+    const tabs = [...s.tabs];
+    for (const index of adopted) tabs.push({ index, label: "", icon: "terminal" });
+    tabs.sort((left, right) => left.index - right.index);
+    s.tabs = relabel(tabs);
+  }
+  const highest = indices.reduce((max, index) => Math.max(max, index), 0);
+  if (highest + 1 > s.nextIndex) s.nextIndex = highest + 1;
 }
 
 export function removeTab(sessionId: string, tabIndex: number): void {

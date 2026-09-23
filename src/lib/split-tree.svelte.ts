@@ -255,6 +255,11 @@ export function addSessionToLeaf(leafId: string, tab: TabEntry): boolean {
   if (!findLeaf(tree, leafId)) return false;
   tree = mapTree(tree, (node) => {
     if (node.type === "leaf" && node.id === leafId) {
+      // Focus an existing tab rather than adding a second entry with the same
+      // key: duplicates break the keyed `{#each}` and freeze the UI.
+      if (node.tabs.some((existing) => existing.ptyKey === tab.ptyKey)) {
+        return { ...node, activeTab: tab.ptyKey };
+      }
       return { ...node, tabs: [...node.tabs, tab], activeTab: tab.ptyKey };
     }
     return node;

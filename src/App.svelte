@@ -45,7 +45,7 @@
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
-  import { getTabs, getActiveTabIndex, addTab, removeTab } from "./lib/session-tabs.svelte";
+  import { getTabs, getActiveTabIndex, addTab, removeTab, adoptTabIndices } from "./lib/session-tabs.svelte";
   import { consumePendingTerminalEditorCommand, getPendingTerminalEditorCommand, queueTerminalEditor, rollbackPendingTerminalEditor } from "./lib/terminal-editor";
   import { ptyKeyToSessionId, reconcileWorkspaceTabs, resolveRestoredLayoutSelection } from "./lib/workspace-tabs";
   import { addShellTabToLeaf, openEditorResource, openShellResourceInFocusedLeaf, openShellResourceInNewPane, toggleDiffResource } from "./lib/workspace-resources";
@@ -355,6 +355,7 @@
         const data = JSON.parse(layoutJson);
         if (isValidSerializedTree(data)) {
           splitTree.deserialize(data);
+          adoptLayoutTabIndices();
           const restoredActiveTab = splitTree.getFocusedLeaf()?.activeTab;
           const restoredSessionId = restoredActiveTab ? ptyKeyToSessionId(restoredActiveTab) : null;
           const selection = resolveRestoredLayoutSelection({
@@ -387,6 +388,30 @@
   function commitWorkspace(workspace: WorkspaceIdentity, selectedId: string): void {
     lastTreeWorkspace = workspace;
     lastFocusedWorkspaceSessionId = selectedId;
+  }
+
+  /**
+   * Teach the tab allocator about shell tabs restored from a layout.
+   *
+   * Tab state is rebuilt from the persisted tab count at startup, so without this
+   * the allocator can hand out an index the restored layout already uses. That
+   * collision makes a new tab resolve to the existing one — opening an editor
+   * would show the shell already sitting at that index.
+   */
+  function adoptLayoutTabIndices(): void {
+    const perSession = new Map<string, number[]>();
+    for (const leaf of splitTree.getAllLeaves()) {
+      for (const tab of leaf.tabs) {
+        if (tab.type !== "shell") continue;
+        const separator = tab.ptyKey.lastIndexOf(":");
+        if (separator === -1) continue;
+        const index = Number.parseInt(tab.ptyKey.slice(separator + 1), 10);
+        if (Number.isNaN(index)) continue;
+        const sessionId = tab.ptyKey.slice(0, separator);
+        perSession.set(sessionId, [...(perSession.get(sessionId) ?? []), index]);
+      }
+    }
+    for (const [sessionId, indices] of perSession) adoptTabIndices(sessionId, indices);
   }
 
   /** Validate deserialized tree structure to prevent corrupt data from crashing. */
@@ -461,6 +486,17 @@
 
   /** Build a flat resource list for the current TaskWorkspace. */
   function buildTabEntriesForWorkspace(workspace: WorkspaceIdentity): import("./lib/split-tree.svelte").TabEntry[] {
+    const seen = new Set<string>();
+    // Tab entries are rendered in a keyed `{#each}`; a duplicate ptyKey is a
+    // Svelte runtime error that aborts the flush and freezes the UI.
+    return buildWorkspaceEntries(workspace).filter((entry) => {
+      if (seen.has(entry.ptyKey)) return false;
+      seen.add(entry.ptyKey);
+      return true;
+    });
+  }
+
+  function buildWorkspaceEntries(workspace: WorkspaceIdentity): import("./lib/split-tree.svelte").TabEntry[] {
     return workspaceSessions(workspace).flatMap((session) => {
       const sessionTabs = getTabs(session.id);
       if (sessionTabs.length === 0) {
@@ -955,6 +991,12 @@
       if (project && task) {
         selectedTaskWorkspace = { project, task };
         touchWorkspaceMru(toTaskWorkspaceId(project.id, task.key));
+      } else {
+        // The task could not be resolved: done tasks are filtered out of the
+        // listing, and another project's tasks may not be loaded yet. Keeping the
+        // previous selection would pin the main pane to the wrong task, so fall
+        // back to deriving the workspace from the newly selected session.
+        selectedTaskWorkspace = null;
       }
     } else {
       selectedTaskWorkspace = null;
