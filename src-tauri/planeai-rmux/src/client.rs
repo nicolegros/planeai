@@ -296,6 +296,20 @@ impl RmuxClient {
         pane.send_text(text).await.map_err(Error::sdk("send_text"))
     }
 
+    /// Send a prompt and submit it.
+    ///
+    /// Submission lives here rather than at the call site so no caller has to
+    /// remember which byte an agent reads as Enter. See [`submit_payload`].
+    pub async fn submit_text(
+        &self,
+        workspace: &WorkspaceName,
+        handle: ResourceHandle,
+        text: &str,
+    ) -> Result<()> {
+        self.send_text(workspace, handle, &submit_payload(text))
+            .await
+    }
+
     /// Capture a resource's pane as plain text, ANSI stripped.
     ///
     /// This is what AXI reads are built on. rmux offers no byte-offset resume, so
@@ -500,6 +514,24 @@ impl RmuxClient {
     }
 }
 
+/// Append the byte an agent reads as Enter.
+///
+/// Carriage return, not line feed. Agents run their TUI in raw mode, where the
+/// terminal driver performs no CR/LF translation and Enter arrives literally as
+/// `\r` (0x0D). A `\n` is accepted into the input buffer but submits nothing, so
+/// the prompt sits on the input line while the send reports success.
+///
+/// This matches the other backends: `planeai-daemon` pushes `b'\r'` onto the
+/// input payload, and tmux's separate `send-keys Enter` resolves to CR. The
+/// `Enter` *key name* is what tmux translates — the newline in a shell string is
+/// not the same thing, which is the assumption that made this wrong at first.
+///
+/// Interior newlines are left alone: they are the caller's content, and only the
+/// trailing byte submits.
+fn submit_payload(text: &str) -> String {
+    format!("{text}\r")
+}
+
 /// Wrap a command string for the platform shell as explicit argv.
 ///
 /// `EnsureSession::shell` would hand the string to the *user's* login shell —
@@ -526,6 +558,29 @@ fn trim_trailing_blank_lines(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_submitted_prompt_ends_in_carriage_return_not_line_feed() {
+        // Agents run their TUI in raw mode, where the terminal driver does no
+        // CR/LF translation and Enter is literally `\r`. A `\n` lands in the input
+        // buffer without submitting, so the prompt sits on the line unsent while
+        // the send reports success. tmux's `send-keys Enter` and the daemon's
+        // `push(b'\r')` both emit CR; rmux has to match them.
+        assert_eq!(submit_payload("hello"), "hello\r");
+        assert!(!submit_payload("hello").ends_with('\n'));
+    }
+
+    #[test]
+    fn a_multiline_prompt_submits_once_at_the_end() {
+        // Interior newlines are the caller's content. Only the final byte submits,
+        // so a pasted multi-line prompt is not split into several submissions.
+        assert_eq!(submit_payload("first\nsecond"), "first\nsecond\r");
+    }
+
+    #[test]
+    fn an_empty_prompt_still_submits() {
+        assert_eq!(submit_payload(""), "\r");
+    }
 
     #[test]
     fn commands_are_wrapped_as_explicit_argv_not_the_login_shell() {

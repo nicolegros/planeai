@@ -475,6 +475,66 @@ async fn every_resource_receives_its_environment_not_just_the_first() {
     client.kill_workspace(&workspace).await.expect("cleanup");
 }
 
+#[tokio::test]
+#[ignore = "requires the rmux binary"]
+async fn a_submitted_prompt_delivers_carriage_return_to_a_raw_mode_pane() {
+    let runtime = tempfile::tempdir().unwrap();
+    let client = connect(runtime.path()).await;
+    let task = format!("SUBMIT-{}", unique_suffix());
+    let workspace = workspace(&task);
+    let cwd = runtime.path().display().to_string();
+
+    // A raw-mode reader is the whole point: in canonical mode the tty driver maps
+    // CR to LF on input, so both bytes would appear to work and the test would
+    // prove nothing. `stty raw` is what an agent TUI does, and there Enter is
+    // literally 0x0D. Dump the bytes as they arrive rather than interpreting them.
+    let handle = client
+        .spawn_resource(&spawn_spec(
+            &workspace,
+            "agent",
+            "stty raw -echo; printf 'READY\\n'; head -c 3 | od -An -tx1; stty sane; printf '\\nEND\\n'",
+            &cwd,
+        ))
+        .await
+        .expect("spawn raw-mode reader");
+
+    let attached = client
+        .attach_resource(&workspace, handle)
+        .await
+        .expect("attach");
+    let (_pane, _window, mut stream) = attached.into_parts();
+    let mut buffer = OutputBuffer::with_default_capacity();
+    assert!(
+        drain_until(&mut stream, &mut buffer, b"READY").await,
+        "the pane never reached raw mode"
+    );
+
+    client
+        .submit_text(&workspace, handle, "ab")
+        .await
+        .expect("submit_text");
+
+    assert!(
+        drain_until(&mut stream, &mut buffer, b"END").await,
+        "the reader never finished; output so far: {}",
+        String::from_utf8_lossy(&buffer.take())
+    );
+    let output = String::from_utf8_lossy(&buffer.take()).to_string();
+    let hex: String = output.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    // "ab" then the submit byte: 0x61 0x62 0x0d. A regression to `\n` shows as 0a.
+    assert!(
+        hex.contains("61 62 0d"),
+        "expected the prompt to end in CR (0d), got: {output}"
+    );
+    assert!(
+        !hex.contains("61 62 0a"),
+        "prompt was submitted with LF, which a raw-mode agent does not read as Enter: {output}"
+    );
+
+    client.kill_workspace(&workspace).await.expect("cleanup");
+}
+
 /// Replay a resource's output from the start and return what it printed.
 async fn read_startup_line(
     client: &RmuxClient,

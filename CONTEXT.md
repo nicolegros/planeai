@@ -287,6 +287,13 @@ are written one after the other and either can be the survivor:
 A launch that cannot record its pane closes it rather than returning an error and
 leaving it running, so a failed launch leaks nothing for the sweep to collect.
 
+Prompts are submitted with a carriage return, matching the daemon (`push(b'\r')`)
+and tmux (`send-keys Enter`, which tmux emits as CR). Agents run their TUI in raw
+mode, where the terminal driver does no CR/LF translation — a `\n` is accepted
+into the input buffer and submits nothing, so the prompt sits on the input line
+while the send reports success. `RmuxClient::submit_text` owns the byte so no call
+site has to know it.
+
 Ownership rules:
 
 - One rmux session per TaskWorkspace, created when its first resource is spawned, destroyed **only on explicit task deletion** (`planeai-cli task delete`). Moving a task to `Done` archives its agent panes but keeps the workspace and its rmux session.

@@ -116,17 +116,18 @@ fn live_handle(pty_key: &str) -> Option<ResourceHandle> {
     live.contains(&record.pane_id).then(|| record.handle())
 }
 
-/// Send a prompt to a session's agent pane.
+/// Send a prompt to a session's agent pane and submit it.
 ///
 /// `send_text` is the literal `send-keys -l` path, so the text reaches the tty
-/// unmodified; the trailing newline submits it, matching `tmux send-keys` usage.
+/// unmodified. The submit byte is the client's concern — agents read raw-mode
+/// Enter as `\r`, not `\n`.
 pub fn send_prompt(session_id: &str, text: &str) -> Result<(), String> {
     let (workspace, handle) = resolve(&db()?, session_id)?;
-    let text = format!("{text}\n");
+    let text = text.to_string();
     blocking(move |client| {
         let workspace = workspace.clone();
         let text = text.clone();
-        async move { client.send_text(&workspace, handle, &text).await }
+        async move { client.submit_text(&workspace, handle, &text).await }
     })
 }
 
