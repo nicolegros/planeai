@@ -14,6 +14,7 @@ use crate::session_backend::{SessionBackend, WriteAck};
 use planeai_pty::FlowControl;
 
 /// Describes what command to run inside the PTY.
+#[derive(Debug)]
 pub enum PtyTarget {
     /// Attach to an existing tmux session.
     TmuxAttach { tmux_name: String },
