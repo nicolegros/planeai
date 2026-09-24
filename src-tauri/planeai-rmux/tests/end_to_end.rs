@@ -768,6 +768,68 @@ async fn attaching_replays_earlier_output_through_a_recovery_keyframe() {
     client.kill_workspace(&workspace).await.expect("cleanup");
 }
 
+#[tokio::test]
+#[ignore = "requires the rmux binary"]
+async fn closing_a_workspaces_last_pane_removes_the_workspace() {
+    // The orphan sweep depends on this: it closes panes, never workspaces, and is
+    // only complete because rmux drops a session once its last window goes. If a
+    // future rmux retained empty sessions instead, collecting orphaned panes would
+    // start leaving empty workspaces behind and the sweep would need a second pass.
+    let runtime = tempfile::tempdir().unwrap();
+    let client = connect(runtime.path()).await;
+    let task = format!("LASTPANE-{}", unique_suffix());
+    let workspace = workspace(&task);
+    let cwd = runtime.path().display().to_string();
+
+    // A second workspace keeps the daemon alive: it exits with its last session,
+    // which would otherwise be indistinguishable from the behaviour under test.
+    let keepalive = self::workspace(&format!("KEEPALIVE-{}", unique_suffix()));
+    client
+        .spawn_resource(&spawn_spec(&keepalive, "agent", "sleep 600", &cwd))
+        .await
+        .expect("spawn keepalive");
+
+    let handle = client
+        .spawn_resource(&spawn_spec(&workspace, "agent", "sleep 600", &cwd))
+        .await
+        .expect("spawn");
+    assert!(
+        client
+            .live_workspaces()
+            .await
+            .expect("live_workspaces")
+            .contains(&workspace.as_str().to_string()),
+        "the workspace should exist while it holds a pane"
+    );
+
+    client
+        .close_resource(&workspace, handle)
+        .await
+        .expect("close the only resource");
+
+    // The workspace goes with its last window — no empty session is left behind.
+    assert!(
+        !client
+            .live_workspaces()
+            .await
+            .expect("live_workspaces")
+            .contains(&workspace.as_str().to_string()),
+        "closing the last pane should remove the workspace"
+    );
+    // The sibling workspace is untouched, so this is the last window's doing and
+    // not the daemon shutting down.
+    assert!(
+        client
+            .live_workspaces()
+            .await
+            .expect("live_workspaces")
+            .contains(&keepalive.as_str().to_string()),
+        "an unrelated workspace must survive"
+    );
+
+    client.kill_workspace(&keepalive).await.expect("cleanup");
+}
+
 /// Replay a resource's output from the start and return what it printed.
 async fn read_startup_line(
     client: &RmuxClient,

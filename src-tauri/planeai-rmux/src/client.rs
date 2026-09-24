@@ -452,10 +452,14 @@ impl RmuxClient {
         Ok(String::from_utf8_lossy(&capture.stdout).to_string())
     }
 
-    /// Close one resource, leaving the workspace and its siblings running.
+    /// Close one resource, leaving sibling resources running.
     ///
-    /// Closing the workspace's last window would take the session with it, so
-    /// removing an agent must not be confused with removing the workspace.
+    /// Note what this does *not* protect against: rmux drops a session once its
+    /// last window closes, so closing the only remaining resource removes the
+    /// workspace too (measured by `closing_a_workspaces_last_pane_removes_the_workspace`).
+    /// The orphan sweep relies on that — it closes panes and never workspaces, and
+    /// is complete only because the workspace goes with them. A caller that needs
+    /// the workspace to survive has to keep a resource in it.
     pub async fn close_resource(
         &self,
         workspace: &WorkspaceName,
@@ -545,6 +549,25 @@ impl RmuxClient {
                 workspace_key: pane.session_name.as_ref().to_string(),
                 pane_id: pane.pane_id.as_u32(),
             })
+            .collect())
+    }
+
+    /// Every workspace the daemon currently hosts for PlaneAI.
+    ///
+    /// Distinct from [`Self::live_panes`] because a workspace can outlive its last
+    /// pane: closing a resource deliberately leaves the session standing, so an
+    /// emptied workspace has no panes to discover but is still hosted.
+    pub async fn live_workspaces(&self) -> Result<Vec<String>> {
+        let sessions = self
+            .rmux
+            .find_sessions()
+            .all()
+            .await
+            .map_err(Error::sdk("find_sessions"))?;
+        Ok(sessions
+            .iter()
+            .map(|session| session.name.as_ref().to_string())
+            .filter(|name| naming::is_planeai_session(name))
             .collect())
     }
 
