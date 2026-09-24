@@ -27,6 +27,13 @@ export interface WorkspaceTabReconcile {
    * queued, so the file would never open.
    */
   reservedPtyKeys?: { has: (ptyKey: string) => boolean };
+  /**
+   * Tab the workspace was loaded for. It wins when it is among the tabs added
+   * here, or when the leaf has no active tab of its own (a restored layout can
+   * carry an empty `activeTab`); otherwise the leaf keeps its active tab so
+   * unrelated sessions appearing later cannot move the user.
+   */
+  preferredActiveTab?: string;
   tree: WorkspaceTabTree;
 }
 
@@ -45,8 +52,14 @@ export function reconcileWorkspaceTabs(reconcile: WorkspaceTabReconcile): void {
   );
   const focusedLeaf = tree.getFocusedLeaf() ?? tree.getAllLeaves()[0];
   if (focusedLeaf && missingEntries.length > 0) {
-    const activeTab = focusedLeaf.activeTab;
+    const previousActiveTab = focusedLeaf.activeTab;
     for (const entry of missingEntries) tree.addSessionToLeaf(focusedLeaf.id, entry);
+    // A tab just added for the preferred session wins over the remembered one:
+    // the workspace was loaded for that session, and keeping the remembered tab
+    // active would strand selection and visible tab in disagreement.
+    const preferred = reconcile.preferredActiveTab;
+    const preferredWasAdded = !!preferred && missingEntries.some((e) => e.ptyKey === preferred);
+    const activeTab = preferredWasAdded ? preferred : previousActiveTab || preferred;
     if (activeTab) tree.setLeafActiveTab(focusedLeaf.id, activeTab);
   }
 
@@ -59,4 +72,45 @@ export function reconcileWorkspaceTabs(reconcile: WorkspaceTabReconcile): void {
     }
   }
   for (const key of stalePtyKeys) tree.removeSessionFromLeaf(key);
+}
+
+/**
+ * What a restored layout implies for the session selection. Its saved active tab
+ * is the memory of which agent you were last on, and need not be the session the
+ * load started for. The two must not be left disagreeing: nothing later
+ * reconciles them, and while they disagree no terminal pane qualifies as focused
+ * (see `isTerminalPaneFocused` in ./terminal-focus).
+ */
+export type RestoredLayoutSelection =
+  | { kind: "keep_selection" }
+  | { kind: "focus_selected_session" }
+  | { kind: "adopt_restored_session"; sessionId: string };
+
+export function resolveRestoredLayoutSelection(input: {
+  /**
+   * Session of the restored layout's active tab, but only when it still exists in
+   * this workspace. A remembered session that is gone must never be adopted: it
+   * would select a session nothing can resolve, stalling every later repair.
+   */
+  liveRestoredSessionId: string | null;
+  selectedSessionId: string;
+  restoredTreeHasTabForSelectedSession: boolean;
+  /**
+   * A user choice, rather than an arbitrary entry point: `selectWorkspaceTask`
+   * passes the *first* session linked to the task purely so there is something to
+   * load, and treating that as a choice always lands on the task's first session.
+   */
+  selectionIsExplicit: boolean;
+}): RestoredLayoutSelection {
+  const selectionWins: RestoredLayoutSelection = input.restoredTreeHasTabForSelectedSession
+    ? { kind: "focus_selected_session" }
+    : // No tab yet — reconcileWorkspaceTabs will add one, and `preferredActiveTab`
+      // makes it active. Adopting here would silently discard the selection.
+      { kind: "keep_selection" };
+
+  if (input.liveRestoredSessionId === input.selectedSessionId) return { kind: "keep_selection" };
+  if (input.liveRestoredSessionId === null) return selectionWins;
+  // A real user choice is never overridden by the remembered tab.
+  if (input.selectionIsExplicit) return selectionWins;
+  return { kind: "adopt_restored_session", sessionId: input.liveRestoredSessionId };
 }

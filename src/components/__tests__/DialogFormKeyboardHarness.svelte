@@ -3,12 +3,13 @@
 
   interface Props {
     preventOpenAutoFocus?: boolean;
+    open?: boolean;
   }
 
-  let { preventOpenAutoFocus = false }: Props = $props();
+  let { preventOpenAutoFocus = false, open = true }: Props = $props();
 </script>
 
-<Dialog open={true} title="Harness" {preventOpenAutoFocus}>
+<Dialog {open} title="Harness" {preventOpenAutoFocus} initialFocusSelector="[data-form-keyboard]">
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div tabindex="-1" data-form-keyboard data-testid="fk-wrapper">
     <input data-testid="first-field" />

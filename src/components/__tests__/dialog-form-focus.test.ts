@@ -6,8 +6,8 @@
  *   - for SessionForm, auto-opens the Project combobox because its input opens
  *     the dropdown on focus.
  */
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { mount, flushSync, tick } from "svelte";
+import { describe, it, expect, vi, afterEach, afterAll } from "vitest";
+import { mount, unmount, flushSync, tick } from "svelte";
 import { stubLayoutAsVisible, flushFrames } from "./dom-visibility";
 
 vi.mock("../../lib/api", () => ({
@@ -25,14 +25,29 @@ vi.mock("../../lib/settings.svelte", () => ({
 }));
 
 import DialogFormKeyboardHarness from "./DialogFormKeyboardHarness.svelte";
+import { hasOpenDialog, releaseTerminalDomFocus } from "../../lib/terminal-focus";
+import { createDialogOpenState } from "./dialog-open-state.svelte";
 import SessionFormDialogHarness from "./SessionFormDialogHarness.svelte";
 import NewItemToSessionHarness from "./NewItemToSessionHarness.svelte";
 import TaskFormDialogHarness from "./TaskFormDialogHarness.svelte";
 import { createDialogHandoff } from "./dialog-handoff-state.svelte";
 
-stubLayoutAsVisible();
+const restoreLayoutStubs = stubLayoutAsVisible();
+afterAll(restoreLayoutStubs);
+
+/**
+ * Mounted components are unmounted rather than only cleared from the DOM: their
+ * effects would otherwise keep running across tests.
+ */
+const mounted: Record<string, unknown>[] = [];
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mountTracked(component: any, options: any): void {
+  mounted.push(mount(component, options) as Record<string, unknown>);
+}
 
 afterEach(() => {
+  while (mounted.length) unmount(mounted.pop()!, { outro: false });
   document.body.innerHTML = "";
 });
 
@@ -49,7 +64,7 @@ const wrapperEl = () => document.querySelector<HTMLElement>("[data-form-keyboard
 
 describe("Dialog initial focus", () => {
   it("hands initial focus to a form-keyboard wrapper instead of the first field", async () => {
-    mount(DialogFormKeyboardHarness, { target: document.body, props: {} });
+    mountTracked(DialogFormKeyboardHarness, { target: document.body, props: {} });
     flushSync();
     await flushFrames();
 
@@ -58,8 +73,53 @@ describe("Dialog initial focus", () => {
     );
   });
 
+  it("is detectable by hasOpenDialog, pinning the selector against a real dialog", async () => {
+    // terminal-focus.ts relies on this to release xterm focus behind dialogs whose
+    // open state App does not model; a bits-ui attribute rename must fail here.
+    expect(hasOpenDialog()).toBe(false);
+    mountTracked(DialogFormKeyboardHarness, { target: document.body, props: {} });
+    flushSync();
+    await flushFrames();
+
+    expect(hasOpenDialog()).toBe(true);
+  });
+
+  it("stops reporting open the moment it closes, before bits-ui unmounts it", async () => {
+    // bits-ui keeps the content node mounted for a frame after closing with
+    // role/aria-modal still set. Reporting it as open there blurs the terminal
+    // that is being handed focus back, and nothing re-focuses it.
+    const openState = createDialogOpenState();
+    mountTracked(DialogFormKeyboardHarness, {
+      target: document.body,
+      props: {
+        get open() {
+          return openState.open;
+        },
+      },
+    });
+    flushSync();
+    await flushFrames();
+    expect(hasOpenDialog()).toBe(true);
+
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    const textarea = document.createElement("textarea");
+    xterm.append(textarea);
+    document.body.append(xterm);
+
+    openState.open = false;
+    flushSync();
+    textarea.focus();
+
+    expect(document.querySelector("[data-dialog-content]")).not.toBeNull();
+    expect(hasOpenDialog()).toBe(false);
+
+    releaseTerminalDomFocus({ zone: "terminal", modalOpen: false, pluginOverlayActive: false });
+    expect(document.activeElement).toBe(textarea);
+  });
+
   it("still honours preventOpenAutoFocus", async () => {
-    mount(DialogFormKeyboardHarness, {
+    mountTracked(DialogFormKeyboardHarness, {
       target: document.body,
       props: { preventOpenAutoFocus: true },
     });
@@ -73,7 +133,7 @@ describe("Dialog initial focus", () => {
 describe("New Session dialog initial focus", () => {
   function mountSessionDialog() {
     const props = sessionFormProps();
-    mount(SessionFormDialogHarness, { target: document.body, props });
+    mountTracked(SessionFormDialogHarness, { target: document.body, props });
     flushSync();
     return props;
   }
@@ -126,7 +186,7 @@ describe("New Session dialog initial focus", () => {
     terminal.focus();
 
     const handoff = createDialogHandoff();
-    mount(NewItemToSessionHarness, {
+    mountTracked(NewItemToSessionHarness, {
       target: document.body,
       props: { handoff, form: sessionFormProps() },
     });
@@ -147,7 +207,7 @@ describe("New Task dialog initial focus", () => {
   // TaskForm deliberately claims its own first input, so it must stay in INSERT
   // mode on the title field even though the dialog now seeds the wrapper first.
   it("still lands on the title field", async () => {
-    mount(TaskFormDialogHarness, {
+    mountTracked(TaskFormDialogHarness, {
       target: document.body,
       props: {
         mode: "create",

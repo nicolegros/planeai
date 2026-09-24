@@ -1,38 +1,38 @@
+import type { FocusZone } from "./focus.svelte";
+
 /**
- * Terminal pane focus rules, extracted from App.svelte markup so the competing
- * invariants are testable in one place.
+ * Which terminal pane owns keyboard focus, and when xterm must give up DOM focus.
  *
- * Two rules are in tension:
- *
- * 1. A pane must only take focus when it belongs to the currently selected
- *    session. While a workspace layout is being swapped, the split tree still
- *    holds the previous workspace's tabs, and without this check the outgoing
- *    terminal reclaims focus mid-transition.
- *
- * 2. Terminal.svelte blurs xterm only when `focused` transitions true -> false.
- *    So if rule 1 leaves *no* pane focused while a terminal still owns DOM
- *    focus, that transition never fires and the terminal keeps swallowing keys
- *    forever — xterm calls stopPropagation(), so sidebar navigation never even
- *    reaches its window key handler.
- *
- * Rule 1 is safe only while the disagreement is transient. `reconcileRestoredLayout`
- * keeps it transient, and `shouldReleaseTerminalDomFocus` enforces rule 2
- * directly rather than relying on a prop transition that may never happen.
+ * Two rules are in tension. A pane only takes focus when it belongs to the
+ * selected session, otherwise the outgoing terminal reclaims focus while a
+ * workspace layout is being swapped. But Terminal.svelte blurs xterm only on a
+ * `focused` true -> false transition, so when that guard leaves *no* pane focused
+ * the terminal keeps DOM focus forever — and xterm calls stopPropagation() on
+ * keys it consumes, so sidebar navigation never reaches its window key handler.
+ * `releaseTerminalDomFocus` therefore enforces the release directly.
  */
 
-export interface TerminalPaneFocusInput {
+/** Conditions under which the terminal is allowed to own the keyboard at all. */
+export interface TerminalKeyboardOwnership {
+  /** The app-level keyboard focus zone. */
+  zone: FocusZone;
+  /** Any modal that must own the keyboard is open. */
+  modalOpen: boolean;
+  /** A plugin workspace is covering the workspace. */
+  pluginOverlayActive: boolean;
+}
+
+export function terminalMayOwnKeyboard(ownership: TerminalKeyboardOwnership): boolean {
+  return ownership.zone === "terminal" && !ownership.modalOpen && !ownership.pluginOverlayActive;
+}
+
+export interface TerminalPaneFocusInput extends TerminalKeyboardOwnership {
   /** This tab is the active tab of its leaf. */
   isActiveTabInLeaf: boolean;
   /** This tab's leaf is the focused leaf of the split tree. */
   isFocusedLeaf: boolean;
   /** This tab's session is the selected session (guards layout transitions). */
   belongsToActiveSession: boolean;
-  /** The app-level keyboard focus zone. */
-  zone: string;
-  /** A plugin workspace is covering the workspace. */
-  pluginOverlayActive: boolean;
-  /** Any modal that must own the keyboard is open. */
-  modalOpen: boolean;
 }
 
 export function isTerminalPaneFocused(input: TerminalPaneFocusInput): boolean {
@@ -40,69 +40,43 @@ export function isTerminalPaneFocused(input: TerminalPaneFocusInput): boolean {
     input.isActiveTabInLeaf &&
     input.belongsToActiveSession &&
     input.isFocusedLeaf &&
-    input.zone === "terminal" &&
-    !input.pluginOverlayActive &&
-    !input.modalOpen
+    terminalMayOwnKeyboard(input)
   );
 }
 
 /**
- * Whether a terminal currently holding DOM focus must be blurred.
+ * Give up xterm's DOM focus when the terminal may not own the keyboard.
+ * Independent of any pane's `focused` prop, which may never transition.
  *
- * Deliberately independent of any pane's `focused` prop: the bug this guards
- * against is precisely the case where no pane is focused, so no prop transition
- * is available to trigger the blur.
+ * Must run on ownership change *and* on focus arrival: Terminal.svelte's
+ * focusRequest effect focuses xterm regardless of `focused` and suppresses the
+ * focusin that would move the zone, so focus can land in a terminal behind an
+ * open modal or while the zone is already elsewhere.
  */
-export function shouldReleaseTerminalDomFocus(input: {
-  zone: string;
-  domFocusInsideTerminal: boolean;
-}): boolean {
-  return input.zone !== "terminal" && input.domFocusInsideTerminal;
-}
-
-export interface RestoredLayoutReconciliation {
-  /** Focus the tab belonging to the explicitly selected session. */
-  focusTabForSession: boolean;
-  /** Adopt the restored layout's active tab as the selected session. */
-  adoptRestoredTabSession: boolean;
+export function releaseTerminalDomFocus(
+  ownership: TerminalKeyboardOwnership,
+  root: Document = document,
+): void {
+  // The DOM probe catches keyboard-owning dialogs whose open state App does not
+  // model, such as the BranchCompare form or Preferences; a hand-maintained list
+  // of flags drifts as dialogs are added.
+  if (terminalMayOwnKeyboard(ownership) && !hasOpenDialog(root)) return;
+  const active = root.activeElement;
+  if (active instanceof HTMLElement && active.closest(".xterm")) active.blur();
 }
 
 /**
- * A restored layout carries the active tab from when it was last saved — the
- * memory of which agent session you were last on in that task.
+ * Any modal dialog is open, whoever owns its state. Covers both bits-ui dialogs
+ * and hand-rolled `role="dialog"` overlays such as the sidebar's task modal, which
+ * have no bits-ui attributes at all.
  *
- * `selectionIsExplicit` distinguishes a real user choice (clicking a session row
- * or tab) from an arbitrary entry point: `selectWorkspaceTask` passes the *first*
- * session linked to the task purely so there is something to load. Treating that
- * as a choice overrides the remembered tab, so returning to a task always lands
- * on its first session.
- *
- * Whichever side wins, the selected session and the visible tab must end up in
- * agreement — leaving them disagreeing strands the app in a state nothing later
- * reconciles.
+ * bits-ui sets role/aria-modal unconditionally and keeps its content node mounted
+ * for a frame after closing, so `data-state` is authoritative for those nodes and
+ * the role-based clauses must exclude them — otherwise closing a dialog blurs the
+ * terminal that is being handed focus back.
  */
-export function reconcileRestoredLayout(input: {
-  restoredActiveTabSessionId: string | null;
-  selectedSessionId: string;
-  restoredTreeHasTabForSelectedSession: boolean;
-  selectionIsExplicit: boolean;
-}): RestoredLayoutReconciliation {
-  const none = { focusTabForSession: false, adoptRestoredTabSession: false };
-  if (input.restoredActiveTabSessionId === input.selectedSessionId) return none;
-
-  if (input.restoredActiveTabSessionId === null) {
-    // Nothing remembered — fall back to the selection if it has a tab.
-    return input.restoredTreeHasTabForSelectedSession
-      ? { focusTabForSession: true, adoptRestoredTabSession: false }
-      : none;
-  }
-
-  // An arbitrary entry point never overrides the remembered tab.
-  if (!input.selectionIsExplicit) {
-    return { focusTabForSession: false, adoptRestoredTabSession: true };
-  }
-
-  return input.restoredTreeHasTabForSelectedSession
-    ? { focusTabForSession: true, adoptRestoredTabSession: false }
-    : { focusTabForSession: false, adoptRestoredTabSession: true };
+export function hasOpenDialog(root: Document = document): boolean {
+  return !!root.querySelector(
+    '[data-dialog-content][data-state="open"], [role="dialog"][aria-modal="true"]:not([data-dialog-content]), [role="alertdialog"][aria-modal="true"]:not([data-dialog-content]), dialog[open]',
+  );
 }

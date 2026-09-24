@@ -8,14 +8,19 @@
  * B kept DOM focus through every zone change, and xterm's stopPropagation() meant
  * `k` never reached the sidebar's window key handler.
  */
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import {
+  hasOpenDialog,
   isTerminalPaneFocused,
-  reconcileRestoredLayout,
-  shouldReleaseTerminalDomFocus,
+  releaseTerminalDomFocus,
+  terminalMayOwnKeyboard,
 } from "../terminal-focus";
+import type { TerminalPaneFocusInput } from "../terminal-focus";
+import type { FocusZone } from "../focus.svelte";
 
-const base = {
+const nonTerminalZones: FocusZone[] = ["sidebar", "editor", "explorer", "none"];
+
+const base: TerminalPaneFocusInput = {
   isActiveTabInLeaf: true,
   isFocusedLeaf: true,
   belongsToActiveSession: true,
@@ -30,7 +35,7 @@ describe("isTerminalPaneFocused", () => {
   });
 
   it("releases focus for every non-terminal zone", () => {
-    for (const zone of ["sidebar", "editor", "explorer", "none"]) {
+    for (const zone of nonTerminalZones) {
       expect(isTerminalPaneFocused({ ...base, zone })).toBe(false);
     }
   });
@@ -52,128 +57,137 @@ describe("isTerminalPaneFocused", () => {
   });
 });
 
-describe("shouldReleaseTerminalDomFocus", () => {
-  it("releases xterm's DOM focus when the zone is not the terminal", () => {
-    for (const zone of ["sidebar", "editor", "explorer", "none"]) {
-      expect(shouldReleaseTerminalDomFocus({ zone, domFocusInsideTerminal: true })).toBe(true);
+describe("terminalMayOwnKeyboard", () => {
+  const owned = { zone: "terminal" as FocusZone, modalOpen: false, pluginOverlayActive: false };
+
+  it("allows ownership only in the terminal zone with nothing covering it", () => {
+    expect(terminalMayOwnKeyboard(owned)).toBe(true);
+  });
+
+  it("denies ownership for every non-terminal zone", () => {
+    for (const zone of nonTerminalZones) {
+      expect(terminalMayOwnKeyboard({ ...owned, zone })).toBe(false);
     }
   });
 
-  it("leaves DOM focus alone while the terminal zone is active", () => {
-    expect(shouldReleaseTerminalDomFocus({ zone: "terminal", domFocusInsideTerminal: true })).toBe(
-      false,
-    );
+  it("denies ownership behind a modal or plugin overlay even in the terminal zone", () => {
+    // A modal opening during an async layout load can otherwise be handed DOM
+    // focus by the trailing focus request, and xterm then swallows its keys.
+    expect(terminalMayOwnKeyboard({ ...owned, modalOpen: true })).toBe(false);
+    expect(terminalMayOwnKeyboard({ ...owned, pluginOverlayActive: true })).toBe(false);
   });
 
-  it("does nothing when no terminal holds DOM focus", () => {
-    expect(shouldReleaseTerminalDomFocus({ zone: "sidebar", domFocusInsideTerminal: false })).toBe(
-      false,
-    );
-  });
-
-  it("releases focus even when the layout-transition guard leaves no pane focused", () => {
-    // This is the bug. The pane owning DOM focus belongs to a different session
-    // than the selected one, so `focused` is already false and stays false —
-    // there is no true -> false transition for Terminal.svelte to act on.
-    const strandedPane = { ...base, belongsToActiveSession: false };
-    expect(isTerminalPaneFocused({ ...strandedPane, zone: "terminal" })).toBe(false);
-    expect(isTerminalPaneFocused({ ...strandedPane, zone: "sidebar" })).toBe(false);
-
-    // Releasing DOM focus must therefore not depend on that transition.
-    expect(shouldReleaseTerminalDomFocus({ zone: "sidebar", domFocusInsideTerminal: true })).toBe(
-      true,
-    );
-  });
-});
-
-describe("reconcileRestoredLayout", () => {
-  const explicit = { selectionIsExplicit: true };
-  const implicit = { selectionIsExplicit: false };
-
-  it("does nothing when the restored tab already matches the selection", () => {
-    expect(
-      reconcileRestoredLayout({
-        restoredActiveTabSessionId: "a",
-        selectedSessionId: "a",
-        restoredTreeHasTabForSelectedSession: true,
-        ...explicit,
-      }),
-    ).toEqual({ focusTabForSession: false, adoptRestoredTabSession: false });
-  });
-
-  it("honours an explicit session pick over the remembered tab", () => {
-    // Clicking a specific session row while another task workspace is loaded.
-    expect(
-      reconcileRestoredLayout({
-        restoredActiveTabSessionId: "b",
-        selectedSessionId: "a",
-        restoredTreeHasTabForSelectedSession: true,
-        ...explicit,
-      }),
-    ).toEqual({ focusTabForSession: true, adoptRestoredTabSession: false });
-  });
-
-  it("keeps the remembered tab when the session was only an arbitrary entry point", () => {
-    // selectWorkspaceTask picks sessions.find(...) — the first session linked to
-    // the task — purely to have something to load. That is not a user choice, so
-    // the layout's remembered tab must win, otherwise returning to a task always
-    // lands on its first session.
-    expect(
-      reconcileRestoredLayout({
-        restoredActiveTabSessionId: "b",
-        selectedSessionId: "a",
-        restoredTreeHasTabForSelectedSession: true,
-        ...implicit,
-      }),
-    ).toEqual({ focusTabForSession: false, adoptRestoredTabSession: true });
-  });
-
-  it("adopts the restored tab's session when an explicit selection has no tab", () => {
-    expect(
-      reconcileRestoredLayout({
-        restoredActiveTabSessionId: "b",
-        selectedSessionId: "a",
-        restoredTreeHasTabForSelectedSession: false,
-        ...explicit,
-      }),
-    ).toEqual({ focusTabForSession: false, adoptRestoredTabSession: true });
-  });
-
-  it("falls back to the selection when the restored layout has no active tab", () => {
-    expect(
-      reconcileRestoredLayout({
-        restoredActiveTabSessionId: null,
-        selectedSessionId: "a",
-        restoredTreeHasTabForSelectedSession: true,
-        ...implicit,
-      }),
-    ).toEqual({ focusTabForSession: true, adoptRestoredTabSession: false });
-  });
-
-  it("does nothing when there is neither a restored tab nor a tab for the selection", () => {
-    expect(
-      reconcileRestoredLayout({
-        restoredActiveTabSessionId: null,
-        selectedSessionId: "a",
-        restoredTreeHasTabForSelectedSession: false,
-        ...implicit,
-      }),
-    ).toEqual({ focusTabForSession: false, adoptRestoredTabSession: false });
-  });
-
-  it("never reports both actions at once", () => {
-    for (const restored of ["a", "b", null]) {
-      for (const hasTab of [true, false]) {
-        for (const isExplicit of [true, false]) {
-          const result = reconcileRestoredLayout({
-            restoredActiveTabSessionId: restored,
-            selectedSessionId: "a",
-            restoredTreeHasTabForSelectedSession: hasTab,
-            selectionIsExplicit: isExplicit,
-          });
-          expect(result.focusTabForSession && result.adoptRestoredTabSession).toBe(false);
+  it("shares its conditions with isTerminalPaneFocused so the two cannot drift", () => {
+    for (const modalOpen of [true, false]) {
+      for (const pluginOverlayActive of [true, false]) {
+        for (const zone of ["terminal", ...nonTerminalZones] as FocusZone[]) {
+          const ownership = { zone, modalOpen, pluginOverlayActive };
+          const focused = isTerminalPaneFocused({ ...base, ...ownership });
+          if (!terminalMayOwnKeyboard(ownership)) expect(focused).toBe(false);
         }
       }
     }
+  });
+});
+
+describe("releaseTerminalDomFocus", () => {
+  function mountTerminalWithFocus(): HTMLTextAreaElement {
+    document.body.innerHTML = "";
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    const textarea = document.createElement("textarea");
+    textarea.className = "xterm-helper-textarea";
+    xterm.append(textarea);
+    document.body.append(xterm);
+    textarea.focus();
+    return textarea;
+  }
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("blurs an xterm textarea when the zone has moved to the sidebar", () => {
+    const textarea = mountTerminalWithFocus();
+    expect(document.activeElement).toBe(textarea);
+
+    releaseTerminalDomFocus({ zone: "sidebar", modalOpen: false, pluginOverlayActive: false });
+
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("leaves the xterm textarea focused while the terminal zone is active", () => {
+    const textarea = mountTerminalWithFocus();
+
+    releaseTerminalDomFocus({ zone: "terminal", modalOpen: false, pluginOverlayActive: false });
+
+    expect(document.activeElement).toBe(textarea);
+  });
+
+  it("leaves focus alone when it is outside any terminal", () => {
+    document.body.innerHTML = "";
+    const input = document.createElement("input");
+    document.body.append(input);
+    input.focus();
+
+    releaseTerminalDomFocus({ zone: "sidebar", modalOpen: false, pluginOverlayActive: false });
+
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("blurs a terminal that was handed focus behind an open modal", () => {
+    const textarea = mountTerminalWithFocus();
+
+    releaseTerminalDomFocus({ zone: "terminal", modalOpen: true, pluginOverlayActive: false });
+
+    expect(document.activeElement).not.toBe(textarea);
+  });
+
+  it("does nothing when nothing is focused", () => {
+    document.body.innerHTML = "";
+    expect(() =>
+      releaseTerminalDomFocus({ zone: "sidebar", modalOpen: false, pluginOverlayActive: false }),
+    ).not.toThrow();
+  });
+});
+
+describe("hasOpenDialog", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("detects an open bits-ui dialog", () => {
+    document.body.innerHTML = '<div data-dialog-content data-state="open"></div>';
+    expect(hasOpenDialog()).toBe(true);
+  });
+
+  it("ignores a closed dialog", () => {
+    document.body.innerHTML = '<div data-dialog-content data-state="closed"></div>';
+    expect(hasOpenDialog()).toBe(false);
+  });
+
+  it("detects a hand-rolled modal overlay with no bits-ui attributes", () => {
+    // The sidebar's task modal is a plain div with role/aria-modal only.
+    document.body.innerHTML = '<div role="dialog" aria-modal="true" tabindex="-1"></div>';
+    expect(hasOpenDialog()).toBe(true);
+  });
+
+  it("ignores a non-modal role=dialog element", () => {
+    document.body.innerHTML = '<div role="dialog"></div>';
+    expect(hasOpenDialog()).toBe(false);
+  });
+
+  it("releases terminal focus for a dialog App does not model, even in the terminal zone", () => {
+    // A hand-maintained list of App flags drifts as dialogs are added, and xterm
+    // would swallow the keys the dialog needs.
+    document.body.innerHTML =
+      '<div data-dialog-content data-state="open"></div><div class="xterm"><textarea></textarea></div>';
+    const textarea = document.querySelector("textarea")!;
+    textarea.focus();
+    expect(document.activeElement).toBe(textarea);
+
+    releaseTerminalDomFocus({ zone: "terminal", modalOpen: false, pluginOverlayActive: false });
+
+    expect(document.activeElement).not.toBe(textarea);
   });
 });

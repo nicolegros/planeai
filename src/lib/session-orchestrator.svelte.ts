@@ -69,7 +69,7 @@ let reviewReady = $state<Record<string, boolean>>({});
 export function _resetForTests(): void {
   for (const s of sessions) destroyTabState(s.id);
   sessions = [];
-  activeSessionId = null;
+  setActiveSession(null);
   agentStates = {};
   symphonyStatus = null;
   reviewReady = {};
@@ -132,14 +132,35 @@ export async function loadSessions(): Promise<void> {
   }
 }
 
-export function selectSession(id: string): void {
+/**
+ * Session the user explicitly asked for, as opposed to an arbitrary entry point
+ * such as boot or the post-delete fallback. A restored workspace layout keeps its
+ * remembered tab unless the selection was explicit.
+ */
+let explicitlySelectedSessionId = $state<string | null>(null);
+
+export function isSelectionExplicit(sessionId: string): boolean {
+  return explicitlySelectedSessionId === sessionId;
+}
+
+/**
+ * Sole writer of the active session, so the explicit mark is always either the
+ * current selection or absent. Fallbacks (delete/archive/park/project removal)
+ * pass no options and therefore clear it.
+ */
+function setActiveSession(id: string | null, opts: { explicit?: boolean } = {}): void {
+  explicitlySelectedSessionId = opts.explicit && id ? id : null;
+  activeSessionId = id;
+}
+
+export function selectSession(id: string, opts: { explicit?: boolean } = {}): void {
   console.log(`[DEBUG-lsr1] selectSession called`, {
     id,
     foundInSessions: sessions.some((s) => s.id === id),
     sessionCount: sessions.length,
     timestamp: Date.now(),
   });
-  activeSessionId = id;
+  setActiveSession(id, opts);
   const session = sessions.find((s) => s.id === id);
   if (session?.status === "exited") {
     // Await restart before activating the terminal pool. Without this,
@@ -168,7 +189,7 @@ export function selectSession(id: string): void {
 export function createSession(session: Session): void {
   sessions = [...sessions, session];
   initSession(session.id, 1);
-  selectSession(session.id);
+  selectSession(session.id, { explicit: true });
 }
 
 export async function deleteSession(s: Session): Promise<void> {
@@ -182,7 +203,7 @@ export async function deleteSession(s: Session): Promise<void> {
   tabLayoutCleanup(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
-    activeSessionId = sessions[0]?.id ?? null;
+    setActiveSession(sessions[0]?.id ?? null);
     if (activeSessionId) poolActivate(activeSessionId);
   }
 }
@@ -196,7 +217,7 @@ export async function archiveSession(s: Session): Promise<void> {
   poolRemove(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
-    activeSessionId = sessions[0]?.id ?? null;
+    setActiveSession(sessions[0]?.id ?? null);
     if (activeSessionId) poolActivate(activeSessionId);
   }
 }
@@ -210,8 +231,9 @@ export async function parkSession(s: Session): Promise<void> {
   poolRemove(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
-    activeSessionId =
-      sessions.find((x) => x.project_id === s.project_id && x.task_key === s.task_key)?.id ?? null;
+    setActiveSession(
+      sessions.find((x) => x.project_id === s.project_id && x.task_key === s.task_key)?.id ?? null,
+    );
     if (activeSessionId) poolActivate(activeSessionId);
   }
 }
@@ -219,11 +241,11 @@ export async function parkSession(s: Session): Promise<void> {
 export async function restartSession(s: Session): Promise<void> {
   const updated = await sessionsApi.restart(s.id);
   sessions = sessions.map((x) => (x.id === s.id ? updated : x));
-  selectSession(s.id);
+  selectSession(s.id, { explicit: true });
 }
 
 export function jumpToSession(index: number): void {
-  if (index < sessions.length) selectSession(sessions[index].id);
+  if (index < sessions.length) selectSession(sessions[index].id, { explicit: true });
 }
 
 // ─── State setters ───────────────────────────────────────────────────────────
@@ -255,7 +277,7 @@ export function removeProjectSessions(projectId: string): string[] {
   }
   sessions = sessions.filter((s) => s.project_id !== projectId);
   if (activeSessionId && ids.includes(activeSessionId)) {
-    activeSessionId = getMruList()[0] ?? null;
+    setActiveSession(getMruList()[0] ?? null);
     if (activeSessionId) poolActivate(activeSessionId);
   }
   return ids;

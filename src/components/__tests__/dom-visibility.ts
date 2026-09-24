@@ -3,8 +3,21 @@
  * library that bits-ui's focus scope relies on treats zero-sized elements as
  * untabbable, which makes the focus scope take a fallback path that never runs
  * in a real browser. Stubbing layout keeps focus-behaviour tests honest.
+ *
+ * Returns a restore function: these are prototype-level patches, so a test file
+ * that installs them must undo them rather than relying on vitest's per-file
+ * isolation staying enabled.
  */
-export function stubLayoutAsVisible(): void {
+export function stubLayoutAsVisible(): () => void {
+  const originals = {
+    getClientRects: Object.getOwnPropertyDescriptor(Element.prototype, "getClientRects"),
+    getBoundingClientRect: Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "getBoundingClientRect",
+    ),
+    offsetParent: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetParent"),
+  };
+
   const rect = {
     x: 0,
     y: 0,
@@ -36,6 +49,22 @@ export function stubLayoutAsVisible(): void {
       return this.parentElement;
     },
   });
+
+  return () => {
+    if (originals.getClientRects) {
+      Object.defineProperty(Element.prototype, "getClientRects", originals.getClientRects);
+    }
+    if (originals.getBoundingClientRect) {
+      Object.defineProperty(
+        Element.prototype,
+        "getBoundingClientRect",
+        originals.getBoundingClientRect,
+      );
+    }
+    if (originals.offsetParent) {
+      Object.defineProperty(HTMLElement.prototype, "offsetParent", originals.offsetParent);
+    }
+  };
 }
 
 /** Resolve after `frames` animation frames, letting deferred focus work settle. */

@@ -67,6 +67,8 @@ import {
   parkSession,
   removeProjectSessions,
   restartSession,
+  jumpToSession,
+  isSelectionExplicit,
   getUnifiedTabs,
   getUnifiedActiveIndex,
   selectUnifiedTab,
@@ -630,5 +632,56 @@ describe("session-orchestrator", () => {
 
       expect(getReviewReady()["s1"]).toBeUndefined();
     });
+  });
+});
+
+describe("selection explicitness", () => {
+  // Without its own reset this suite would run against state leaked from the
+  // suite above, and two of these tests would pass by id coincidence.
+  beforeEach(() => {
+    _resetForTests();
+  });
+
+  // A restored workspace layout keeps its remembered tab unless the selection was
+  // an explicit user choice, so every entry point must classify itself correctly.
+  it("marks a created session explicit", () => {
+    createSession(makeSession({ id: "s1" }));
+    expect(isSelectionExplicit("s1")).toBe(true);
+  });
+
+  it("marks a jump-to-index explicit", () => {
+    createSession(makeSession({ id: "s1" }));
+    createSession(makeSession({ id: "s2" }));
+    jumpToSession(0);
+    expect(isSelectionExplicit("s1")).toBe(true);
+  });
+
+  it("treats a plain selection as an arbitrary entry point", () => {
+    createSession(makeSession({ id: "s1" }));
+    selectSession("s1");
+    expect(isSelectionExplicit("s1")).toBe(false);
+  });
+
+  it("clears the mark when the selection moves to another session", () => {
+    createSession(makeSession({ id: "s1" }));
+    createSession(makeSession({ id: "s2" }));
+    selectSession("s1");
+    expect(isSelectionExplicit("s2")).toBe(false);
+    expect(isSelectionExplicit("s1")).toBe(false);
+  });
+
+  it("does not leak an explicit mark onto a fallback selection", async () => {
+    // Deleting the explicitly chosen session falls back to sessions[0]; treating
+    // that as a choice would override the remembered tab on the next load.
+    createSession(makeSession({ id: "s1" }));
+    const second = makeSession({ id: "s2" });
+    createSession(second);
+    expect(isSelectionExplicit("s2")).toBe(true);
+
+    await deleteSession(second);
+
+    const active = getActiveSessionId();
+    expect(active).toBe("s1");
+    expect(isSelectionExplicit(active!)).toBe(false);
   });
 });
