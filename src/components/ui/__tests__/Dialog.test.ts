@@ -6,10 +6,9 @@ describe("Dialog focus styling", () => {
     expect(dialogSource).toMatch(/<Dialog\.Content\s+class="[^"]*overflow-hidden[^"]*outline-none/);
   });
 
-  it("can suppress automatic dialog focus for an explicitly managed child target", () => {
+  it("exposes a prop to suppress automatic dialog focus for a managed child target", () => {
+    // Behaviour is covered by src/components/__tests__/dialog-form-focus.test.ts,
+    // which mounts the real Dialog; only the prop contract is pinned here.
     expect(dialogSource).toContain("preventOpenAutoFocus?: boolean;");
-    expect(dialogSource).toContain(
-      "onOpenAutoFocus={(e) => { if (preventOpenAutoFocus) e.preventDefault(); }}",
-    );
   });
 });

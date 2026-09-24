@@ -1,4 +1,10 @@
 import { describe, expect, it } from "vitest";
+/**
+ * These assertions read App.svelte as text, which only pins wiring that cannot be
+ * extracted from the component. Prefer a behavioural test: the decisions this file
+ * used to cover now live in workspace-tabs.ts, terminal-focus.ts and the
+ * orchestrator, each with real unit tests. Add here only as a last resort.
+ */
 import appSource from "../../App.svelte?raw";
 
 describe("TaskWorkspace session selection", () => {
@@ -27,14 +33,47 @@ describe("TaskWorkspace session selection", () => {
   });
 
   it("does not let a terminal from the previous layout reclaim focus during selection", () => {
+    // The guard now lives in the tested `isTerminalPaneFocused` predicate; see
+    // src/lib/__tests__/terminal-focus.test.ts for its behaviour.
     expect(appSource).toMatch(
-      /focused=\{isActiveInLeaf && sessionId === activeSessionId && !activePluginId/,
+      /focused=\{isTerminalPaneFocused\(\{[\s\S]*?belongsToActiveSession: sessionId === activeSessionId,/,
     );
+  });
+
+  it("releases xterm DOM focus on both ownership change and focus arrival", () => {
+    // Behaviour lives in releaseTerminalDomFocus (see terminal-focus.test.ts).
+    // Only the two trigger points are pinned here: a reactive-only release misses
+    // programmatic focus requests, which suppress the focusin that moves the zone.
+    expect(appSource).toMatch(/releaseTerminalDomFocus\(terminalKeyboardOwnership\)/);
+    expect(appSource).toMatch(/addEventListener\("focusin"/);
+    expect(appSource).toMatch(/removeEventListener\("focusin"/);
+  });
+
+  it("reconciles a restored layout whose active tab is not the selected session", () => {
+    expect(appSource).toMatch(/resolveRestoredLayoutSelection\(\{[\s\S]*?liveRestoredSessionId:/);
+    expect(appSource).toMatch(
+      /commitWorkspace\(workspace, adoptedSessionId \?\? focusedSessionId\)/,
+    );
+  });
+
+  it("applies an adopted session from the caller, not from inside the layout loader", () => {
+    expect(appSource).toMatch(
+      /await loadLayoutForWorkspace\([\s\S]*?if \(adoptedSessionId\) orchestrator\.selectSession\(adoptedSessionId\)/,
+    );
+  });
+
+  it("treats the task workspace's first linked session as an arbitrary entry point", () => {
+    // Otherwise it overrides the restored layout's remembered tab and returning
+    // to a task always lands on its first session.
+    expect(appSource).toMatch(
+      /const linked = sessions\.find\([\s\S]*?selectWorkspaceSession\(linked\.id, \{ explicit: false \}\);/,
+    );
+    expect(appSource).toMatch(/orchestrator\.selectSession\(sessionId, \{ explicit:/);
   });
 
   it("requests focus for the restored active terminal after loading a workspace layout", () => {
     expect(appSource).toMatch(
-      /if \(isValidSerializedTree\(data\)\) \{[\s\S]*?splitTree\.deserialize\(data\);[\s\S]*?loadingLayout = false;[\s\S]*?requestFocusedTerminalFocus\(\);/,
+      /if \(isValidSerializedTree\(data\)\) \{[\s\S]*?splitTree\.deserialize\(data\);[\s\S]*?commitWorkspace\([\s\S]*?requestFocusedTerminalFocus\(\);/,
     );
     expect(appSource).toMatch(
       /function requestFocusedTerminalFocus\(\): void \{[\s\S]*?getActiveTabEntry\(leaf\)[\s\S]*?requestTerminalFocus\(activeTab\.ptyKey\)/,

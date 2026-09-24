@@ -6,6 +6,7 @@
   import { sessions as sessionsApi, pty, notify, sessionLogs, editor as editorApi, updater } from "./lib/api";
   import type { Session, Project, TaskItem } from "./lib/types";
   import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
+  import { isTerminalPaneFocused, releaseTerminalDomFocus } from "./lib/terminal-focus";
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
   import { installKeyboardRouter, matchChord, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT } from "./lib/keyboard";
@@ -46,7 +47,7 @@
   import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { getTabs, getActiveTabIndex, addTab, removeTab } from "./lib/session-tabs.svelte";
   import { consumePendingTerminalEditorCommand, getPendingTerminalEditorCommand, queueTerminalEditor, rollbackPendingTerminalEditor } from "./lib/terminal-editor";
-  import { ptyKeyToSessionId, reconcileWorkspaceTabs } from "./lib/workspace-tabs";
+  import { ptyKeyToSessionId, reconcileWorkspaceTabs, resolveRestoredLayoutSelection } from "./lib/workspace-tabs";
   import { addShellTabToLeaf, openEditorResource, openShellResourceInFocusedLeaf, openShellResourceInNewPane, toggleDiffResource } from "./lib/workspace-resources";
   import { saveActiveEditorResource } from "./lib/editor-resources";
   import { getMruList, isMounted as poolIsMounted } from "./lib/mru.svelte";
@@ -204,6 +205,37 @@
     return [...shellTabs, ...extra];
   });
 
+  // ─── Terminal DOM focus ─────────────────────────────────────────────────────
+
+  // Every dialog that owns the keyboard, not only those that gated `focused`
+  // before: a trailing focus request would otherwise hand xterm DOM focus behind
+  // one, and xterm swallows the keys the dialog needs. Dialogs App does not model
+  // are caught by the DOM probe inside releaseTerminalDomFocus.
+  const keyboardModalOpen = $derived(
+    showNewItemModal || !!sessionToDelete || showTaskForm || showProjectForm || !!modalPluginId
+      || showSessionForm || showLoopForm || commandMenuOpen || showShortcuts
+      || !!projectToDelete || !!loopToDelete || showQuitConfirm,
+  );
+  const terminalKeyboardOwnership = $derived({
+    zone,
+    modalOpen: keyboardModalOpen,
+    pluginOverlayActive: !!activePluginId,
+  });
+
+  // See releaseTerminalDomFocus: a stranded terminal silently swallows sidebar
+  // navigation, so release when ownership is lost...
+  $effect(() => {
+    releaseTerminalDomFocus(terminalKeyboardOwnership);
+  });
+
+  // ...and on focus arrival. Bubble phase, so a genuine click has already run
+  // Terminal's onFocused -> focusTerminal() and ownership reads true by now.
+  $effect(() => {
+    const onFocusIn = (): void => releaseTerminalDomFocus(terminalKeyboardOwnership);
+    window.addEventListener("focusin", onFocusIn);
+    return () => window.removeEventListener("focusin", onFocusIn);
+  });
+
   // ─── Split tree ─────────────────────────────────────────────────────────────
   const splitTreeNode = $derived(splitTree.getTree());
   const hasMultiplePanes = $derived(splitTreeNode !== null && splitTreeNode.type === "split");
@@ -257,6 +289,7 @@
     if (!activeSessionId || !splitTreeInitialized) return;
     const workspace = workspaceForSession(activeSessionId);
     if (!workspace) return;
+    const selectionIsExplicit = orchestrator.isSelectionExplicit(activeSessionId);
     const focusedSessionChanged = activeSessionId !== lastFocusedWorkspaceSessionId;
     if (workspace.key === lastTreeWorkspace?.key) {
       if (!focusedSessionChanged) return;
@@ -273,37 +306,87 @@
     }
 
     if (lastTreeWorkspace) saveSplitTreeToDb();
-    loadLayoutForWorkspace(workspace, activeSessionId);
+    void applyWorkspaceLayout(workspace, activeSessionId, selectionIsExplicit);
   });
 
-  async function loadLayoutForWorkspace(workspace: WorkspaceIdentity, focusedSessionId: string): Promise<void> {
+  /** Load a layout, then apply the session selection it implies (kept out of the loader). */
+  async function applyWorkspaceLayout(
+    workspace: WorkspaceIdentity,
+    focusedSessionId: string,
+    selectionIsExplicit: boolean,
+  ): Promise<void> {
+    const adoptedSessionId = await loadLayoutForWorkspace(
+      workspace,
+      focusedSessionId,
+      selectionIsExplicit,
+    );
+    if (adoptedSessionId) orchestrator.selectSession(adoptedSessionId);
+  }
+
+  /** Returns the session id the restored layout wants selected, or null. */
+  async function loadLayoutForWorkspace(
+    workspace: WorkspaceIdentity,
+    focusedSessionId: string,
+    selectionIsExplicit: boolean,
+  ): Promise<string | null> {
     loadingLayout = true;
     const gen = ++loadGeneration;
+    try {
+      return await restoreOrBuildLayout(workspace, focusedSessionId, selectionIsExplicit, gen);
+    } finally {
+      // Only the newest load may clear the flag; an older one finishing late would
+      // otherwise re-enable autosave and tab reconciliation against stale state.
+      if (gen === loadGeneration) loadingLayout = false;
+    }
+  }
+
+  async function restoreOrBuildLayout(
+    workspace: WorkspaceIdentity,
+    focusedSessionId: string,
+    selectionIsExplicit: boolean,
+    gen: number,
+  ): Promise<string | null> {
     try {
       const layoutJson = workspace.taskKey
         ? await sessionsApi.getTaskWorkspaceLayout(workspace.projectId, workspace.taskKey)
         : await sessionsApi.getLayout(focusedSessionId);
-      if (gen !== loadGeneration) { loadingLayout = false; return; }
+      if (gen !== loadGeneration) return null;
       if (layoutJson) {
         const data = JSON.parse(layoutJson);
         if (isValidSerializedTree(data)) {
           splitTree.deserialize(data);
-          lastTreeWorkspace = workspace;
-          lastFocusedWorkspaceSessionId = focusedSessionId;
-          loadingLayout = false;
+          const restoredActiveTab = splitTree.getFocusedLeaf()?.activeTab;
+          const restoredSessionId = restoredActiveTab ? ptyKeyToSessionId(restoredActiveTab) : null;
+          const selection = resolveRestoredLayoutSelection({
+            liveRestoredSessionId:
+              restoredSessionId && workspaceForSession(restoredSessionId)?.key === workspace.key
+                ? restoredSessionId
+                : null,
+            selectedSessionId: focusedSessionId,
+            restoredTreeHasTabForSelectedSession: !!splitTree.findTab(focusedSessionId),
+            selectionIsExplicit,
+          });
+          if (selection.kind === "focus_selected_session") splitTree.focusTab(focusedSessionId);
+          const adoptedSessionId =
+            selection.kind === "adopt_restored_session" ? selection.sessionId : null;
+          commitWorkspace(workspace, adoptedSessionId ?? focusedSessionId);
           requestFocusedTerminalFocus();
-          return;
+          return adoptedSessionId;
         }
       }
     } catch (e) {
       console.warn("Failed to load workspace layout", workspace.key, e);
     }
-    if (gen !== loadGeneration) { loadingLayout = false; return; }
+    if (gen !== loadGeneration) return null;
     const entries = buildTabEntriesForWorkspace(workspace);
     if (!splitTree.replaceRootLeafTabs(entries, focusedSessionId)) splitTree.initTree(entries, focusedSessionId);
+    commitWorkspace(workspace, focusedSessionId);
+    return null;
+  }
+
+  function commitWorkspace(workspace: WorkspaceIdentity, selectedId: string): void {
     lastTreeWorkspace = workspace;
-    lastFocusedWorkspaceSessionId = focusedSessionId;
-    loadingLayout = false;
+    lastFocusedWorkspaceSessionId = selectedId;
   }
 
   /** Validate deserialized tree structure to prevent corrupt data from crashing. */
@@ -407,6 +490,9 @@
       workspaceEntries: buildTabEntriesForWorkspace(lastTreeWorkspace),
       validSessionIds: new Set(workspaceSessions(lastTreeWorkspace).map((session) => session.id)),
       reservedPtyKeys: pendingShellCommands,
+      // Tracks the workspace's current selection rather than a load-time snapshot,
+      // so a session added later still becomes the visible tab.
+      preferredActiveTab: lastFocusedWorkspaceSessionId ?? undefined,
       tree: splitTree,
     });
   });
@@ -861,7 +947,7 @@
     activeContributionId = contributionId;
   }
 
-  function selectWorkspaceSession(sessionId: string): void {
+  function selectWorkspaceSession(sessionId: string, opts: { explicit?: boolean } = {}): void {
     const session = sessions.find((candidate) => candidate.id === sessionId);
     if (session?.task_key) {
       const project = projects.find((candidate) => candidate.id === session.project_id);
@@ -875,7 +961,9 @@
     }
     leavePluginWorkspace();
     loopStore.setActiveLoopId(null);
-    orchestrator.selectSession(sessionId);
+    // `selectWorkspaceTask` passes explicit: false — its first-linked session is an
+    // arbitrary entry point and must not override a remembered tab.
+    orchestrator.selectSession(sessionId, { explicit: opts.explicit ?? true });
     requestTerminalFocus(sessionId);
   }
 
@@ -893,12 +981,12 @@
     const linked = sessions.find((session) => session.project_id === project.id && session.task_key === task.key);
     if (linked) {
       const alreadyActive = linked.id === activeSessionId;
-      selectWorkspaceSession(linked.id);
+      selectWorkspaceSession(linked.id, { explicit: false });
       // The active session ID does not change when returning from an empty
       // TaskWorkspace. Reload its layout because the empty workspace reset the tree.
       if (alreadyActive) {
         const workspace = workspaceForSession(linked.id);
-        if (workspace) void loadLayoutForWorkspace(workspace, linked.id);
+        if (workspace) void applyWorkspaceLayout(workspace, linked.id, false);
       }
       // Keep the routed task authoritative even if session/task-store reconciliation lags.
       selectedTaskWorkspace = { task, project };
@@ -1483,7 +1571,12 @@
                   focusRequest={terminalFocusRequest}
                   sessionId={tabEntry.ptyKey}
                   visible={isActiveInLeaf && !activeLoopId && !activePluginId}
-                  focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !modalPluginId}
+                  focused={isTerminalPaneFocused({
+                    ...terminalKeyboardOwnership,
+                    isActiveTabInLeaf: isActiveInLeaf,
+                    isFocusedLeaf: leaf.id === splitTree.getFocusedLeafId(),
+                    belongsToActiveSession: sessionId === activeSessionId,
+                  })}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
                   initialCommand={tabEntry.type === "shell" ? getPendingTerminalEditorCommand({ ptyKey: tabEntry.ptyKey, pendingCommands: pendingShellCommands }) : undefined}
