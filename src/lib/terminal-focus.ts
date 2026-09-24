@@ -57,12 +57,16 @@ export function releaseTerminalDomFocus(
   ownership: TerminalKeyboardOwnership,
   root: Document = document,
 ): void {
+  // Cheapest discriminating check first: this runs on every focusin in the app,
+  // and `closest` walks up from one node while `hasOpenDialog` scans the whole
+  // document — which grows with the number of mounted terminals.
+  const active = root.activeElement;
+  if (!(active instanceof HTMLElement) || !active.closest(".xterm")) return;
   // The DOM probe catches keyboard-owning dialogs whose open state App does not
   // model, such as the BranchCompare form or Preferences; a hand-maintained list
   // of flags drifts as dialogs are added.
   if (terminalMayOwnKeyboard(ownership) && !hasOpenDialog(root)) return;
-  const active = root.activeElement;
-  if (active instanceof HTMLElement && active.closest(".xterm")) active.blur();
+  active.blur();
 }
 
 /**

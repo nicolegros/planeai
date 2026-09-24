@@ -8,7 +8,7 @@
  * B kept DOM focus through every zone change, and xterm's stopPropagation() meant
  * `k` never reached the sidebar's window key handler.
  */
-import { afterEach, describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   hasOpenDialog,
   isTerminalPaneFocused,
@@ -189,5 +189,42 @@ describe("hasOpenDialog", () => {
     releaseTerminalDomFocus({ zone: "terminal", modalOpen: false, pluginOverlayActive: false });
 
     expect(document.activeElement).not.toBe(textarea);
+  });
+});
+
+describe("releaseTerminalDomFocus cost", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("does not scan the document when focus is outside a terminal", () => {
+    // Runs on every focusin in the app. `zone: "terminal"` is the case that does
+    // NOT short-circuit on ownership, so without the cheap gate every focus move
+    // between non-terminal elements scanned the whole document — a scan that
+    // grows with the number of mounted terminals.
+    document.body.innerHTML =
+      '<div class="xterm"><textarea></textarea></div><input id="outside" />';
+    (document.querySelector("#outside") as HTMLInputElement).focus();
+
+    const querySelector = vi.spyOn(Document.prototype, "querySelector");
+    try {
+      releaseTerminalDomFocus({ zone: "terminal", modalOpen: false, pluginOverlayActive: false });
+      expect(querySelector).not.toHaveBeenCalled();
+    } finally {
+      querySelector.mockRestore();
+    }
+  });
+
+  it("still scans when focus is inside a terminal that may own the keyboard", () => {
+    document.body.innerHTML = '<div class="xterm"><textarea></textarea></div>';
+    (document.querySelector("textarea") as HTMLTextAreaElement).focus();
+
+    const querySelector = vi.spyOn(Document.prototype, "querySelector");
+    try {
+      releaseTerminalDomFocus({ zone: "terminal", modalOpen: false, pluginOverlayActive: false });
+      expect(querySelector).toHaveBeenCalled();
+    } finally {
+      querySelector.mockRestore();
+    }
   });
 });
