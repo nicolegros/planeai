@@ -38,17 +38,36 @@ fn config(app: Option<&tauri::AppHandle>) -> RmuxConfig {
 /// by the time it is used.
 pub async fn client_with(app: Option<&tauri::AppHandle>) -> Result<Arc<RmuxClient>, String> {
     let cell = CLIENT.get_or_init(|| async { Mutex::new(None) }).await;
-    let mut guard = cell.lock().await;
-    if let Some(existing) = guard.as_ref() {
-        return Ok(existing.clone());
+    {
+        // Fast path: reading a cached client is an in-memory clone, so the lock is
+        // held only for that.
+        let guard = cell.lock().await;
+        if let Some(existing) = guard.as_ref() {
+            return Ok(existing.clone());
+        }
     }
 
-    let client = RmuxClient::connect(config(app))
-        .await
-        .map_err(|error| error.to_string())?;
-    let client = Arc::new(client);
-    *guard = Some(client.clone());
-    Ok(client)
+    // Connecting can start the daemon, which is slow. Doing it with the lock
+    // released keeps one slow start from serialising every other caller behind it
+    // (AGENTS.md: release Mutex locks before `.await`).
+    let connected = Arc::new(
+        RmuxClient::connect(config(app))
+            .await
+            .map_err(|error| error.to_string())?,
+    );
+
+    // Two callers that both missed the fast path each connect. The first to
+    // publish wins and the loser's connection is simply dropped: the daemon
+    // accepts many clients, whereas replacing an already-published client would
+    // leave callers holding different connections to the same daemon.
+    let mut guard = cell.lock().await;
+    match guard.as_ref() {
+        Some(existing) => Ok(existing.clone()),
+        None => {
+            *guard = Some(connected.clone());
+            Ok(connected)
+        }
+    }
 }
 
 /// Drop the cached connection so the next call reconnects and restarts the daemon.

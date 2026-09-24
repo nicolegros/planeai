@@ -9,8 +9,8 @@
 use std::collections::HashSet;
 
 use rmux_sdk::{
-    EnsureSession, Pane, PaneId, PaneOutputStart, PaneOutputStream, Rmux, Session, SessionName,
-    TerminalSizeSpec, Window,
+    EnsureSession, Pane, PaneId, PaneRecoveryStream, Rmux, Session, SessionName, TerminalSizeSpec,
+    Window,
 };
 
 use crate::config::{Endpoint, RmuxConfig};
@@ -76,11 +76,11 @@ pub struct LivePane {
 pub struct AttachedPane {
     pane: Pane,
     window: Window,
-    stream: PaneOutputStream,
+    stream: PaneRecoveryStream,
 }
 
 impl AttachedPane {
-    pub fn into_parts(self) -> (Pane, Window, PaneOutputStream) {
+    pub fn into_parts(self) -> (Pane, Window, PaneRecoveryStream) {
         (self.pane, self.window, self.stream)
     }
 }
@@ -159,13 +159,88 @@ impl RmuxClient {
         &self.config
     }
 
+    /// The pane hosting `pty_key` in this workspace, if the daemon still has it.
+    ///
+    /// Correlates on the window name, which [`Self::spawn_resource`] sets at
+    /// creation time for every resource. This is what makes a spawn safe to
+    /// repeat: `rmux_client::with_retry` re-runs an operation when the transport
+    /// dies, and a transport failure cannot distinguish "the daemon never saw the
+    /// request" from "the daemon spawned the pane and the reply was lost". Without
+    /// correlation the retry adds a second pane and abandons the first, which is
+    /// the orphan probe 5 produced (ADR-0012).
+    ///
+    /// Costs one round trip per pane in the workspace, which is why it is on the
+    /// spawn path and not the hot path.
+    pub async fn find_resource(
+        &self,
+        workspace: &WorkspaceName,
+        pty_key: &str,
+    ) -> Result<Option<ResourceHandle>> {
+        let name = self.workspace_name(workspace)?;
+        let panes = match self.rmux.find_panes().session(name.as_ref()).all().await {
+            Ok(panes) => panes,
+            Err(source) => {
+                let error = Error::Sdk {
+                    operation: "find_panes",
+                    source,
+                };
+                // No workspace means no resource, which is an answer rather than
+                // a failure: the caller is about to create it.
+                return if error.means_session_absent() {
+                    Ok(None)
+                } else {
+                    Err(error)
+                };
+            }
+        };
+        if panes.is_empty() {
+            return Ok(None);
+        }
+
+        let session = self.session(&name).await?;
+        for discovered in panes {
+            // Resolve through the pane rather than a window index so no
+            // assumption about index bases is baked in (ADR-0012 records that
+            // rmux's own reference was wrong about this).
+            let Ok(pane) = session.pane_by_id(discovered.pane_id).await else {
+                continue;
+            };
+            let Ok(snapshot) = pane.info().await else {
+                continue;
+            };
+            let names_this_resource = snapshot
+                .windows
+                .iter()
+                .any(|window| window.name.as_deref() == Some(pty_key));
+            if names_this_resource {
+                return Ok(Some(ResourceHandle {
+                    pane_id: discovered.pane_id,
+                }));
+            }
+        }
+        Ok(None)
+    }
+
     /// Create a terminal resource, materialising its workspace if needed.
+    ///
+    /// Idempotent per `pty_key`: a resource that already exists is adopted rather
+    /// than duplicated, so this is safe to retry after an ambiguous failure. See
+    /// [`Self::find_resource`].
     ///
     /// No `OwnedSession` lease is taken: probe 1 (ADR-0012) showed sessions made
     /// this way already outlive the client that created them, which is the
     /// persistence this backend exists for. A lease would only add a way to kill
     /// them by accident.
     pub async fn spawn_resource(&self, spawn: &ResourceSpawn) -> Result<ResourceHandle> {
+        if let Some(existing) = self.find_resource(&spawn.workspace, &spawn.pty_key).await? {
+            tracing::info!(
+                pty_key = %spawn.pty_key,
+                pane_id = existing.as_u32(),
+                "adopting the rmux pane already hosting this resource instead of spawning a second"
+            );
+            return Ok(existing);
+        }
+
         let name = self.workspace_name(&spawn.workspace)?;
         let size = TerminalSizeSpec::new(spawn.cols, spawn.rows);
 
@@ -180,6 +255,10 @@ impl RmuxClient {
                     .argv(shell_argv(&spawn.command))
                     .working_directory(spawn.cwd.clone())
                     .environment(spawn.env.clone())
+                    // Named here rather than renamed afterwards so the name a
+                    // retry correlates on is set by the same request that creates
+                    // the window. A later rename can be lost with the reply.
+                    .window_name(spawn.pty_key.clone())
                     .size(size),
             )
             .await
@@ -190,8 +269,6 @@ impl RmuxClient {
         // spawning a second copy.
         if session.was_created() {
             let adopted = self.first_pane_id(&name).await?;
-            self.rename_window_for(&session, adopted, &spawn.pty_key)
-                .await;
             tracing::info!(
                 workspace = %name.as_ref(),
                 pty_key = %spawn.pty_key,
@@ -261,13 +338,18 @@ impl RmuxClient {
             .await
             .map_err(Error::sdk("pane_by_id"))?;
         let window = session.window(found.window_index);
-        // Start at the oldest retained output so a terminal attaching after the
-        // agent has already produced output still renders it — the daemon backend
-        // replays its ring buffer for the same reason.
+        // The recovery stream, not a raw stream anchored at `Oldest`. Both replay
+        // earlier output, but only this one opens with a `Rebase` carrying an
+        // authoritative keyframe — ANSI bytes that reset and reconstruct the screen,
+        // including the alternate buffer and title — and re-issues one whenever
+        // continuation breaks (lag, resize, clear-history, terminal reset, a new
+        // process generation). Replaying raw retained bytes can only reconstruct
+        // while the whole transcript is still retained, and silently diverges once
+        // it is not (ADR-0012).
         let stream = pane
-            .output_stream_starting_at(PaneOutputStart::Oldest)
+            .recover_output()
             .await
-            .map_err(Error::sdk("output_stream"))?;
+            .map_err(Error::sdk("recover_output"))?;
 
         Ok(AttachedPane {
             pane,
@@ -342,6 +424,32 @@ impl RmuxClient {
             .map_err(Error::sdk("capture_pane"))?;
         let text = String::from_utf8_lossy(&capture.stdout);
         Ok(trim_trailing_blank_lines(&text))
+    }
+
+    /// The capture exactly as the daemon returned it, before trimming.
+    ///
+    /// Exists so a test can assert what rmux actually sends — that an unfilled
+    /// pane really is padded, and that lines really are newline-terminated —
+    /// rather than those remaining assumptions inherited from tmux.
+    #[doc(hidden)]
+    pub async fn capture_raw_for_test(
+        &self,
+        workspace: &WorkspaceName,
+        handle: ResourceHandle,
+    ) -> Result<String> {
+        let name = self.workspace_name(workspace)?;
+        let session = self.session(&name).await?;
+        let pane = session
+            .pane_by_id(handle.pane_id)
+            .await
+            .map_err(Error::sdk("pane_by_id"))?;
+        let capture = pane
+            .capture_pane()
+            .escape_sequences(false)
+            .start(-SCROLLBACK_LINES)
+            .await
+            .map_err(Error::sdk("capture_pane"))?;
+        Ok(String::from_utf8_lossy(&capture.stdout).to_string())
     }
 
     /// Close one resource, leaving the workspace and its siblings running.
@@ -460,26 +568,6 @@ impl RmuxClient {
                     Err(error)
                 }
             }
-        }
-    }
-
-    /// Give the adopted initial window the resource's name, best effort: the name
-    /// is for human inspection, so failing to set it must not fail the spawn.
-    async fn rename_window_for(&self, session: &Session, pane_id: PaneId, pty_key: &str) {
-        let Ok(panes) = self
-            .rmux
-            .find_panes()
-            .session(session.name().as_ref())
-            .all()
-            .await
-        else {
-            return;
-        };
-        let Some(found) = panes.iter().find(|pane| pane.pane_id == pane_id) else {
-            return;
-        };
-        if let Err(error) = session.window(found.window_index).rename(pty_key).await {
-            tracing::debug!(%error, pty_key, "could not name rmux window");
         }
     }
 

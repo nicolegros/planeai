@@ -287,6 +287,14 @@ are written one after the other and either can be the survivor:
 A launch that cannot record its pane closes it rather than returning an error and
 leaving it running, so a failed launch leaks nothing for the sweep to collect.
 
+Terminal attach consumes rmux's **recovery stream**, not a raw stream anchored at
+`Oldest`. It opens with a `Rebase` whose keyframe is ANSI bytes that reset and
+reconstruct the screen — alternate buffer, title, geometry included — and the
+daemon re-issues one whenever continuation breaks: lag, resize, cleared history, a
+terminal reset, or a new process generation. A rebase _replaces_ undelivered bytes
+rather than appending to them, because epochs must never be stitched together. A
+keyframe that could not carry every retained row reports the shortfall as a gap.
+
 Prompts are submitted with a carriage return, matching the daemon (`push(b'\r')`)
 and tmux (`send-keys Enter`, which tmux emits as CR). Agents run their TUI in raw
 mode, where the terminal driver does no CR/LF translation — a `\n` is accepted

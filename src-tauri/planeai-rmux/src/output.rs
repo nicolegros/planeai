@@ -19,12 +19,42 @@ pub enum GapCause {
     Transport { missed_events: u64 },
     /// This buffer discarded the oldest bytes to stay within its cap.
     LocalOverflow { dropped_bytes: u64 },
+    /// A recovery keyframe could not carry all retained scrollback, so rows above
+    /// the reconstructed screen are gone.
+    HistoryTruncated { rows: u64 },
 }
 
 /// A coalesced gap notice awaiting delivery to the frontend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Gap {
     pub cause: GapCause,
+}
+
+impl Gap {
+    /// The notice to splice into the terminal stream where output is missing.
+    ///
+    /// A gap is rendered inline rather than raised as a UI event because the
+    /// terminal is the only place that can show *where* the discontinuity fell.
+    /// ADR-0012 requires a drop never be silent, and a log line the user cannot
+    /// see does not satisfy that: the scrollback would simply appear to jump.
+    ///
+    /// Written as its own line in dim SGR so it cannot be mistaken for the
+    /// child's own output, and CR-prefixed because the child may have left the
+    /// cursor mid-row.
+    pub fn notice(&self) -> Vec<u8> {
+        let detail = match self.cause {
+            GapCause::Transport { missed_events } => format!(
+                "{missed_events} output event(s) dropped by the rmux daemon — this session fell behind"
+            ),
+            GapCause::LocalOverflow { dropped_bytes } => format!(
+                "{dropped_bytes} byte(s) of output discarded — buffered output exceeded its cap"
+            ),
+            GapCause::HistoryTruncated { rows } => format!(
+                "{rows} row(s) of scrollback above this point could not be recovered"
+            ),
+        };
+        format!("\r\n\x1b[2m[planeai] output gap: {detail}\x1b[0m\r\n").into_bytes()
+    }
 }
 
 /// A byte buffer that never grows past `capacity`, dropping the oldest bytes and
@@ -43,10 +73,23 @@ impl OutputBuffer {
     /// session. Matches the existing daemon adapter's 1 MiB ceiling.
     pub const DEFAULT_CAPACITY: usize = 1_048_576;
 
+    /// Capacity kept across flushes so the hot path does not reallocate.
+    ///
+    /// The reader must not allocate per chunk: probe 8 (ADR-0012) showed a
+    /// consumer that falls behind has its output dropped by the daemon, so the
+    /// cost of a `malloc` per chunk is paid in lost bytes, not just cycles.
+    /// `take()` hands its allocation to the frontend, so without a reserve the
+    /// next `push` starts from nothing and grows by repeated reallocation.
+    ///
+    /// Sized for a burst of ordinary chunks rather than the full cap: reserving
+    /// `DEFAULT_CAPACITY` per session would cost a megabyte for every idle
+    /// terminal, and a session that genuinely needs more grows once and keeps it.
+    const RETAINED_CAPACITY: usize = 64 * 1024;
+
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            bytes: Vec::new(),
+            bytes: Vec::with_capacity(capacity.min(Self::RETAINED_CAPACITY)),
             pending_gap: None,
             dropped_bytes: 0,
             missed_events: 0,
@@ -102,6 +145,27 @@ impl OutputBuffer {
         });
     }
 
+    /// Record scrollback a recovery keyframe could not carry.
+    pub fn record_history_shortfall(&mut self, rows: u64) {
+        if rows == 0 {
+            return;
+        }
+        self.pending_gap = Some(Gap {
+            cause: GapCause::HistoryTruncated { rows },
+        });
+    }
+
+    /// Discard everything undelivered and start again from a recovery keyframe.
+    ///
+    /// A rebase is an atomic replacement of the screen, and the SDK is explicit
+    /// that state must never be stitched across epochs. Bytes still queued belong
+    /// to the previous epoch, so delivering them after the keyframe would render
+    /// output the keyframe has already accounted for.
+    pub fn replace_with_keyframe(&mut self, keyframe: &[u8]) {
+        self.bytes.clear();
+        self.push(keyframe);
+    }
+
     fn record_local_drop(&mut self, dropped: u64) {
         self.dropped_bytes = self.dropped_bytes.saturating_add(dropped);
         if !matches!(
@@ -117,8 +181,16 @@ impl OutputBuffer {
     }
 
     /// Remove and return the buffered bytes.
+    ///
+    /// Replaces the buffer with a fresh one that already has
+    /// [`Self::RETAINED_CAPACITY`], rather than the empty `Vec` `mem::take` would
+    /// leave behind: the flusher calls this on every delivery, so a zero-capacity
+    /// replacement puts an allocation back on the hot path for each one.
     pub fn take(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.bytes)
+        std::mem::replace(
+            &mut self.bytes,
+            Vec::with_capacity(self.capacity.min(Self::RETAINED_CAPACITY)),
+        )
     }
 
     /// Remove and return a pending gap notice, if one has accumulated.
@@ -131,6 +203,15 @@ impl OutputBuffer {
         self.dropped_bytes
     }
 
+    /// Room allocated for buffered bytes, whether used or not.
+    ///
+    /// Exposed so tests can assert the hot path stays allocation-free; callers
+    /// have no reason to care.
+    #[doc(hidden)]
+    pub fn allocated_capacity(&self) -> usize {
+        self.bytes.capacity()
+    }
+
     /// Total events the daemon reported as dropped for this subscriber.
     pub fn missed_events(&self) -> u64 {
         self.missed_events
@@ -140,6 +221,111 @@ impl OutputBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_flush_leaves_capacity_behind_so_the_hot_path_does_not_reallocate() {
+        // The reader must not allocate per chunk: a consumer that falls behind has
+        // its output dropped by the daemon (ADR-0012 probe 8), so an allocation on
+        // this path is paid in lost bytes. `take()` hands its buffer to the
+        // frontend, so it has to leave a pre-sized one in its place.
+        let mut buffer = OutputBuffer::with_default_capacity();
+        let reserved = buffer.allocated_capacity();
+        assert!(
+            reserved > 0,
+            "a new buffer should start with room to push into"
+        );
+
+        buffer.push(b"some output");
+        let taken = buffer.take();
+        assert_eq!(taken, b"some output");
+
+        // The replacement must be ready to accept the next chunk without growing.
+        assert_eq!(
+            buffer.allocated_capacity(),
+            reserved,
+            "take() left a smaller buffer, so the next push reallocates"
+        );
+        buffer.push(b"more output");
+        assert_eq!(
+            buffer.allocated_capacity(),
+            reserved,
+            "pushing within the retained capacity must not reallocate"
+        );
+    }
+
+    #[test]
+    fn a_tiny_cap_does_not_reserve_more_than_it_will_ever_hold() {
+        // The reserve is bounded by the cap so a small buffer stays small.
+        let buffer = OutputBuffer::new(8);
+        assert_eq!(buffer.allocated_capacity(), 8);
+    }
+
+    #[test]
+    fn a_rebase_replaces_undelivered_bytes_rather_than_appending_to_them() {
+        // Epochs must never be stitched together: bytes still queued belong to the
+        // screen the keyframe supersedes, so delivering both would render output
+        // the keyframe already accounts for.
+        let mut buffer = OutputBuffer::with_default_capacity();
+        buffer.push(b"stale output from the previous epoch");
+
+        buffer.replace_with_keyframe(b"KEYFRAME");
+
+        assert_eq!(buffer.take(), b"KEYFRAME");
+    }
+
+    #[test]
+    fn a_truncated_keyframe_reports_the_rows_it_could_not_carry() {
+        let mut buffer = OutputBuffer::with_default_capacity();
+        buffer.record_history_shortfall(120);
+
+        let gap = buffer.take_gap().expect("a shortfall is a gap");
+        assert_eq!(gap.cause, GapCause::HistoryTruncated { rows: 120 });
+        let notice = String::from_utf8(gap.notice()).unwrap();
+        assert!(notice.contains("120 row(s) of scrollback"), "{notice}");
+    }
+
+    #[test]
+    fn a_keyframe_that_carried_everything_is_not_a_gap() {
+        let mut buffer = OutputBuffer::with_default_capacity();
+        buffer.record_history_shortfall(0);
+        assert!(buffer.take_gap().is_none());
+    }
+
+    #[test]
+    fn a_transport_gap_notice_names_the_daemon_as_the_source() {
+        // The user has to be able to tell "the daemon dropped output because I fell
+        // behind" from "PlaneAI discarded output to stay within its cap" — the two
+        // have different fixes.
+        let gap = Gap {
+            cause: GapCause::Transport { missed_events: 12 },
+        };
+        let notice = String::from_utf8(gap.notice()).unwrap();
+
+        assert!(
+            notice.contains("12 output event(s) dropped by the rmux daemon"),
+            "{notice}"
+        );
+        assert!(notice.contains("[planeai] output gap"), "{notice}");
+        // Its own line, in dim SGR, so it cannot be mistaken for child output.
+        assert!(notice.starts_with("\r\n\x1b[2m"), "{notice:?}");
+        assert!(notice.ends_with("\x1b[0m\r\n"), "{notice:?}");
+    }
+
+    #[test]
+    fn a_local_overflow_notice_reports_bytes_rather_than_events() {
+        let gap = Gap {
+            cause: GapCause::LocalOverflow {
+                dropped_bytes: 2048,
+            },
+        };
+        let notice = String::from_utf8(gap.notice()).unwrap();
+
+        assert!(
+            notice.contains("2048 byte(s) of output discarded"),
+            "{notice}"
+        );
+        assert!(!notice.contains("rmux daemon"), "{notice}");
+    }
 
     #[test]
     fn accumulates_below_capacity_without_reporting_a_gap() {

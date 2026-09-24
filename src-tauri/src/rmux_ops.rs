@@ -62,14 +62,11 @@ pub fn spawn_resource_blocking(
     cwd: &str,
     env: &HashMap<&str, &str>,
 ) -> Result<ResourceHandle, String> {
-    // Reuse a resource that is still alive. Without this a second launch attempt
-    // would add another window running the same agent, because the workspace
-    // already exists and every spawn creates a window.
-    if let Some(existing) = live_handle(pty_key) {
-        tracing::info!(pty_key, "rmux resource already live; reusing");
-        return Ok(existing);
-    }
-
+    // Reuse is the client's job: `spawn_resource` correlates on the window name
+    // and adopts a pane that already hosts this `pty_key`. Checking the recorded
+    // pane id here instead would trust the database over the daemon, and would
+    // miss exactly the case that matters — a pane created by a spawn whose reply
+    // was lost, which has no record at all.
     let spawn = ResourceSpawn {
         workspace: workspace.clone(),
         pty_key: pty_key.to_string(),
@@ -106,14 +103,6 @@ pub fn spawn_resource_blocking(
         },
     )?;
     Ok(handle)
-}
-
-/// The recorded handle for a resource, if its pane is still on the daemon.
-fn live_handle(pty_key: &str) -> Option<ResourceHandle> {
-    let conn = db().ok()?;
-    let record = crate::rmux_resources::get(&conn, pty_key).ok()??;
-    let live = blocking(|client| async move { client.live_pane_ids().await }).ok()?;
-    live.contains(&record.pane_id).then(|| record.handle())
 }
 
 /// Send a prompt to a session's agent pane and submit it.
@@ -214,7 +203,22 @@ pub fn close_session_resources(session_id: &str) -> Result<(), String> {
     result
 }
 
-/// Remove a task's whole workspace and every resource inside it.
+/// Tear down a task's whole workspace: rmux session, metadata, and mappings.
+///
+/// ADR-0012 specifies this as an explicit, idempotent, crash-safe sequence —
+/// delete the rmux session, then the workspace metadata, then the task — because
+/// `task_workspaces` cannot foreign-key to tasks held in task-manager storage, so
+/// nothing cascades. Running it twice is harmless, which is what makes a crash
+/// between the steps recoverable: the next delete finishes the job.
+///
+/// Killing the session is best effort. A task must stay deletable with no rmux
+/// daemon running, which is the normal case for every other backend, and a pane
+/// left behind by an unreachable daemon is collected by the orphan sweep. The
+/// local deletions are not best effort: they cannot fail for want of a daemon, so
+/// a failure there is real and is reported rather than leaving rows behind a task
+/// that no longer exists.
+// Reached from the library by `task_cli`; the Tauri binary compiles its own copy
+// of this module where that caller is absent.
 #[allow(dead_code)]
 pub fn delete_workspace(project_id: &str, task_key: &str) -> Result<(), String> {
     let workspace = WorkspaceKey::Task {
@@ -222,10 +226,33 @@ pub fn delete_workspace(project_id: &str, task_key: &str) -> Result<(), String> 
         task_key: task_key.to_string(),
     }
     .name();
-    blocking(move |client| {
+
+    let kill = {
         let workspace = workspace.clone();
-        async move { client.kill_workspace(&workspace).await }
-    })
+        blocking(move |client| {
+            let workspace = workspace.clone();
+            async move { client.kill_workspace(&workspace).await }
+        })
+    };
+    if let Err(error) = &kill {
+        tracing::debug!(task_key, %error, "no rmux workspace killed for task");
+    }
+
+    let conn = db()?;
+    conn.execute(
+        "DELETE FROM task_workspaces WHERE project_id = ?1 AND task_key = ?2",
+        rusqlite::params![project_id, task_key],
+    )
+    .map_err(|error| error.to_string())?;
+    let forgotten = crate::rmux_resources::remove_for_workspace(&conn, &workspace)
+        .map_err(|error| error.to_string())?;
+    tracing::info!(
+        task_key,
+        forgotten,
+        killed = kill.is_ok(),
+        "removed task workspace"
+    );
+    Ok(())
 }
 
 /// Drop recorded panes the daemon no longer has, returning affected sessions.
@@ -235,28 +262,33 @@ pub fn prune_dead_resources(conn: &Connection) -> Result<Vec<String>, String> {
     crate::rmux_resources::prune_missing(conn, &live).map_err(|error| error.to_string())
 }
 
-/// Close live panes PlaneAI has no session for, and forget their records.
+/// Live panes PlaneAI has no session for, as a proposal rather than an action.
 ///
-/// The counterpart to [`prune_dead_resources`], which only handles the other
-/// direction. Returns how many panes were closed.
-///
-/// Safe only during startup reconciliation, before anything can spawn: a pane is
-/// legitimately unaccounted for during the window between its spawn and the write
-/// that records it, so sweeping alongside a launch could close a pane that was
-/// about to become valid.
-pub fn sweep_orphan_panes(
+/// Separated from [`sweep_orphan_panes`] so the decision can be taken twice and
+/// compared before anything is closed.
+pub fn orphan_candidates(
     conn: &Connection,
     known_session_ids: &std::collections::HashSet<String>,
-) -> Result<usize, String> {
-    // An unreachable daemon hosts nothing, so there is nothing to close. Records
+) -> Result<crate::rmux_resources::OrphanSweep, String> {
+    // An unreachable daemon hosts nothing, so there is nothing to propose. Records
     // are left alone: `prune_dead_resources` owns that direction and can tell a
     // dead daemon from a missing pane.
     let Ok(live) = blocking(|client| async move { client.live_panes().await }) else {
-        return Ok(0);
+        return Ok(crate::rmux_resources::OrphanSweep::default());
     };
+    crate::rmux_resources::orphaned_panes(conn, &live, known_session_ids)
+        .map_err(|error| error.to_string())
+}
 
-    let sweep = crate::rmux_resources::orphaned_panes(conn, &live, known_session_ids)
-        .map_err(|error| error.to_string())?;
+/// Close the given panes and forget the given records. Returns how many closed.
+///
+/// The counterpart to [`prune_dead_resources`], which only handles the other
+/// direction: that drops records whose pane died, this closes panes that outlived
+/// their record.
+pub fn sweep_orphan_panes(
+    conn: &Connection,
+    sweep: &crate::rmux_resources::OrphanSweep,
+) -> Result<usize, String> {
     if sweep.is_empty() {
         return Ok(0);
     }

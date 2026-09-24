@@ -535,6 +535,239 @@ async fn a_submitted_prompt_delivers_carriage_return_to_a_raw_mode_pane() {
     client.kill_workspace(&workspace).await.expect("cleanup");
 }
 
+#[tokio::test]
+#[ignore = "requires the rmux binary"]
+async fn respawning_a_resource_adopts_its_pane_instead_of_creating_a_second() {
+    let runtime = tempfile::tempdir().unwrap();
+    let client = connect(runtime.path()).await;
+    let task = format!("IDEMPOTENT-{}", unique_suffix());
+    let workspace = workspace(&task);
+    let cwd = runtime.path().display().to_string();
+
+    // `with_retry` re-runs an operation when the transport dies, and a transport
+    // failure cannot tell "the daemon never saw it" from "the daemon spawned it and
+    // the reply was lost". Repeating the spawn stands in for that retry: it must
+    // adopt the existing pane, or the first one becomes an orphan (ADR-0012 probe 5).
+    let first = client
+        .spawn_resource(&spawn_spec(&workspace, "agent", "sleep 600", &cwd))
+        .await
+        .expect("first spawn");
+    let again = client
+        .spawn_resource(&spawn_spec(&workspace, "agent", "sleep 600", &cwd))
+        .await
+        .expect("repeat spawn");
+
+    assert_eq!(first, again, "a repeated spawn must adopt the same pane");
+    let live: Vec<u32> = client
+        .live_panes()
+        .await
+        .expect("live_panes")
+        .into_iter()
+        .filter(|pane| pane.workspace_key == workspace.as_str())
+        .map(|pane| pane.pane_id)
+        .collect();
+    assert_eq!(
+        live,
+        vec![first.as_u32()],
+        "a second pane was created: {live:?}"
+    );
+
+    // The same must hold for a shell tab joining an existing workspace, which
+    // takes the other branch of spawn_resource.
+    let tab = client
+        .spawn_resource(&spawn_spec(&workspace, "agent:1", "sleep 600", &cwd))
+        .await
+        .expect("spawn shell tab");
+    let tab_again = client
+        .spawn_resource(&spawn_spec(&workspace, "agent:1", "sleep 600", &cwd))
+        .await
+        .expect("repeat shell tab spawn");
+
+    assert_eq!(tab, tab_again);
+    assert_ne!(tab, first, "the shell tab must be its own pane");
+    let mut live: Vec<u32> = client
+        .live_panes()
+        .await
+        .expect("live_panes")
+        .into_iter()
+        .filter(|pane| pane.workspace_key == workspace.as_str())
+        .map(|pane| pane.pane_id)
+        .collect();
+    live.sort_unstable();
+    let mut expected = vec![first.as_u32(), tab.as_u32()];
+    expected.sort_unstable();
+    assert_eq!(live, expected, "workspace should hold exactly two panes");
+
+    // find_resource is the correlator the retry path depends on.
+    assert_eq!(
+        client.find_resource(&workspace, "agent").await.unwrap(),
+        Some(first)
+    );
+    assert_eq!(
+        client.find_resource(&workspace, "agent:1").await.unwrap(),
+        Some(tab)
+    );
+    assert_eq!(
+        client
+            .find_resource(&workspace, "never-spawned")
+            .await
+            .unwrap(),
+        None
+    );
+
+    client.kill_workspace(&workspace).await.expect("cleanup");
+}
+
+#[tokio::test]
+#[ignore = "requires the rmux binary"]
+async fn find_resource_reports_nothing_for_a_workspace_that_does_not_exist() {
+    let runtime = tempfile::tempdir().unwrap();
+    let client = connect(runtime.path()).await;
+    let workspace = workspace(&format!("ABSENT-{}", unique_suffix()));
+
+    // An absent workspace is an answer, not a failure: the caller is about to
+    // create it, and a spawn must not be blocked by the correlation query.
+    assert_eq!(
+        client.find_resource(&workspace, "agent").await.unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires the rmux binary"]
+async fn capture_pads_an_unfilled_pane_and_uses_bare_newlines() {
+    // Measures the two capture assumptions the cursor strategy inherited from
+    // tmux, rather than trusting that rmux shares them. If either is wrong the
+    // line-count-and-hash cursor silently misbehaves: padding that is kept holds
+    // the line count constant while content changes, and a CR or CRLF terminator
+    // would change how many lines the cursor thinks it delivered.
+    let runtime = tempfile::tempdir().unwrap();
+    let client = connect(runtime.path()).await;
+    let task = format!("CAPFORM-{}", unique_suffix());
+    let workspace = workspace(&task);
+    let cwd = runtime.path().display().to_string();
+
+    let handle = client
+        .spawn_resource(&spawn_spec(
+            &workspace,
+            "agent",
+            "printf 'ALPHA\\nBETA\\n'; sleep 600",
+            &cwd,
+        ))
+        .await
+        .expect("spawn");
+
+    // Wait for both lines to land before capturing.
+    let printed = read_startup_line(&client, &workspace, handle, b"BETA").await;
+    assert!(printed.contains("BETA"), "pane never printed: {printed:?}");
+
+    let raw = client
+        .capture_raw_for_test(&workspace, handle)
+        .await
+        .expect("raw capture");
+
+    // 1. Line endings: the cursor splits on `lines()`, which treats a lone CR as
+    //    part of the line. A CR-terminated capture would break line counting.
+    assert!(
+        !raw.contains('\r'),
+        "capture contains CR, so the cursor's line splitting is unsafe: {:?}",
+        raw.chars().take(200).collect::<String>()
+    );
+
+    // 2. Padding: the pane is 30 rows (spawn_spec) holding two lines of output, so
+    //    a fixed-height grid capture must come back with trailing blank rows. If
+    //    rmux did NOT pad, trimming them would be discarding real content.
+    let trailing_blanks = raw
+        .lines()
+        .rev()
+        .take_while(|line| line.trim().is_empty())
+        .count();
+    assert!(
+        trailing_blanks > 0,
+        "capture was not padded, so trailing-blank trimming is unjustified: {raw:?}"
+    );
+
+    // And the trimmed form the cursor actually consumes keeps the content.
+    let trimmed = client
+        .capture_resource_text(&workspace, handle)
+        .await
+        .expect("capture");
+    assert!(
+        trimmed.contains("ALPHA") && trimmed.contains("BETA"),
+        "{trimmed:?}"
+    );
+    assert!(
+        !trimmed.ends_with('\n') && !trimmed.ends_with(' '),
+        "trimmed capture still ends in blank padding: {trimmed:?}"
+    );
+
+    client.kill_workspace(&workspace).await.expect("cleanup");
+}
+
+#[tokio::test]
+#[ignore = "requires the rmux binary"]
+async fn attaching_replays_earlier_output_through_a_recovery_keyframe() {
+    // ADR-0012 requires attach to replay through the recovery stream's keyframe
+    // rather than raw retained bytes. The distinguishing property: the stream opens
+    // with an Initial rebase whose keyframe already reconstructs the screen, so
+    // output produced before the terminal ever attached is present.
+    let runtime = tempfile::tempdir().unwrap();
+    let client = connect(runtime.path()).await;
+    let task = format!("REPLAY-{}", unique_suffix());
+    let workspace = workspace(&task);
+    let cwd = runtime.path().display().to_string();
+
+    let handle = client
+        .spawn_resource(&spawn_spec(
+            &workspace,
+            "agent",
+            "printf 'BEFORE-ATTACH\\n'; sleep 600",
+            &cwd,
+        ))
+        .await
+        .expect("spawn");
+
+    // Let the output land before attaching at all.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    let attached = client
+        .attach_resource(&workspace, handle)
+        .await
+        .expect("attach");
+    let (_pane, _window, mut stream) = attached.into_parts();
+
+    let first = stream
+        .next()
+        .await
+        .expect("stream open")
+        .expect("an event is delivered");
+    let rmux_sdk::PaneRecoveryEvent::Rebase(rebase) = first else {
+        panic!("a recovery stream must open with a rebase, got {first:?}");
+    };
+    assert_eq!(
+        rebase.reason,
+        rmux_sdk::PaneRecoveryRebaseReason::Initial,
+        "the opening rebase should be the initial one"
+    );
+    assert_eq!(rebase.cols, 100, "keyframe should report the spawned width");
+    assert_eq!(rebase.rows, 30, "keyframe should report the spawned height");
+
+    // The keyframe alone must carry output produced before this attach existed.
+    let keyframe = String::from_utf8_lossy(&rebase.keyframe);
+    assert!(
+        keyframe.contains("BEFORE-ATTACH"),
+        "keyframe did not reconstruct earlier output: {keyframe:?}"
+    );
+    // Coverage is what the cursor's truncation signal is built on.
+    assert!(
+        rebase.coverage.history_complete(),
+        "a short-lived pane's history should be complete: {:?}",
+        rebase.coverage
+    );
+
+    client.kill_workspace(&workspace).await.expect("cleanup");
+}
+
 /// Replay a resource's output from the start and return what it printed.
 async fn read_startup_line(
     client: &RmuxClient,
@@ -553,8 +786,11 @@ async fn read_startup_line(
 }
 
 /// Drain into the buffer until `needle` appears in the accumulated output.
+///
+/// Mirrors the production reader in `pty.rs`: a rebase replaces what has been
+/// seen rather than appending to it, because epochs must not be stitched together.
 async fn drain_until(
-    stream: &mut rmux_sdk::PaneOutputStream,
+    stream: &mut rmux_sdk::PaneRecoveryStream,
     buffer: &mut OutputBuffer,
     needle: &[u8],
 ) -> bool {
@@ -570,19 +806,27 @@ async fn drain_until(
             Ok(Ok(next)) => next,
             Ok(Err(_)) | Err(_) => return false,
         };
-        match next {
+        let fed: Vec<u8> = match next {
             None => return false,
-            Some(rmux_sdk::PaneOutputChunk::Bytes { bytes, .. }) => {
-                buffer.push(&bytes);
-                seen.extend_from_slice(&bytes);
-                if seen.windows(needle.len()).any(|window| window == needle) {
-                    return true;
+            Some(rmux_sdk::PaneRecoveryEvent::Rebase(rebase)) => {
+                if rebase.reason == rmux_sdk::PaneRecoveryRebaseReason::Initial {
+                    buffer.push(&rebase.keyframe);
+                } else {
+                    seen.clear();
+                    buffer.replace_with_keyframe(&rebase.keyframe);
                 }
+                rebase.keyframe
             }
-            Some(rmux_sdk::PaneOutputChunk::Lag(notice)) => {
-                buffer.record_transport_gap(notice.missed_events);
+            Some(rmux_sdk::PaneRecoveryEvent::Bytes { bytes, .. }) => {
+                buffer.push(&bytes);
+                bytes
             }
-            Some(_) => {}
+            Some(rmux_sdk::PaneRecoveryEvent::End(_)) => return false,
+            Some(_) => continue,
+        };
+        seen.extend_from_slice(&fed);
+        if seen.windows(needle.len()).any(|window| window == needle) {
+            return true;
         }
     }
 }

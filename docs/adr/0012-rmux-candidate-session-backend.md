@@ -93,6 +93,27 @@ All ten probes pass. The findings below are empirical and correct several assump
 | 9 — concurrent panes                     | soft | **pass** — 12 panes streaming simultaneously all complete, no starvation (14–16 KB each), zero lag notices                                                            |
 | 10 — exit detection via stream end       | hard | **pass** — output written before exit is delivered, and the pane output stream closes when the child exits rather than hanging                                        |
 
+### Capture shape: padded rows, bare newlines (measured)
+
+The capture cursor was carried over from the tmux backend, which meant two tmux
+behaviours were assumed rather than verified. Both were measured against rmux
+0.10.0 and hold, and `capture_pads_an_unfilled_pane_and_uses_bare_newlines` in
+`planeai-rmux/tests/end_to_end.rs` now pins them so a future rmux release cannot
+change them silently:
+
+- **An unfilled pane is padded to its full row count.** Trailing blank rows are
+  therefore grid padding, not output, and trimming them is what keeps the line
+  count tracking content. Without the trim every incremental read would look like
+  a history rewrite and redeliver everything.
+- **Lines are terminated with a bare `\n`.** No CR appears in a capture, so
+  splitting on `lines()` and rejoining with `\n` neither loses nor invents a
+  line boundary.
+
+This is the same class of assumption as the prompt submit byte, where the tmux
+`send-keys Enter` habit was mistranslated into a shell newline and every rmux
+prompt silently failed to submit. Inherited semantics are checked here rather
+than assumed.
+
 Five consecutive `attended` runs pass with no flakes.
 
 ### Embedding: rmux is a process host, not a UI (probe 6)

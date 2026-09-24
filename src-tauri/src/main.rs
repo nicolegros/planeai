@@ -174,8 +174,9 @@ fn main() {
             // Reconcile daemon sessions (mark dead ones as exited)
             startup::reconcile_daemon_sessions(&conn, &cfg);
 
-            // Reconcile rmux sessions (the daemon exits with its last session)
-            startup::reconcile_rmux_sessions(&conn);
+            // Reconcile rmux sessions (the daemon exits with its last session).
+            // Backgrounded: it talks to the rmux daemon and must not block setup.
+            startup::spawn_rmux_reconciliation();
 
             // Reconcile local sessions (cannot survive app restart)
             startup::reconcile_local_sessions(&conn);

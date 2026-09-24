@@ -129,12 +129,43 @@ pub fn reconcile_daemon_sessions(conn: &rusqlite::Connection, _cfg: &config::Con
     }
 }
 
+/// Run rmux reconciliation on a background thread with its own connection.
+///
+/// Reconciliation connects to the rmux daemon, enumerates panes, and may close
+/// some. That is network and process work, and AGENTS.md forbids it on the main
+/// thread: on macOS WKWebView dispatches Tauri IPC there, so blocking it stalls
+/// PTY delivery and keystrokes for every session. It is fire-and-forget because
+/// nothing in startup depends on its result — the session rows it corrects are
+/// re-read by the UI when it refreshes.
+pub fn spawn_rmux_reconciliation() {
+    let db_path = planeai_paths::db_path();
+    std::thread::spawn(move || {
+        let conn = match rusqlite::Connection::open(&db_path) {
+            Ok(conn) => conn,
+            Err(error) => {
+                tracing::warn!(%error, "rmux reconciliation: failed to open db");
+                return;
+            }
+        };
+        reconcile_rmux_sessions(&conn);
+    });
+}
+
+/// How long to wait before confirming that a pane really is orphaned.
+///
+/// Long enough for an in-flight launch to commit the row that claims its pane,
+/// short enough that startup reconciliation still finishes promptly.
+const ORPHAN_CONFIRMATION_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Reconcile rmux sessions: mark sessions exited when their pane is gone, and
 /// close panes no session owns.
 ///
 /// Pane ids are only valid for a daemon lifetime, so a restarted daemon
 /// invalidates every recorded resource. Pruning the mapping and marking the
 /// affected sessions is the equivalent of the tmux `has-session` sweep.
+///
+/// Talks to the rmux daemon, so callers must not run it on the main thread; see
+/// [`spawn_rmux_reconciliation`].
 pub fn reconcile_rmux_sessions(conn: &rusqlite::Connection) {
     let sessions = match db::list_sessions(conn) {
         Ok(sessions) => sessions,
@@ -179,14 +210,56 @@ pub fn reconcile_rmux_sessions(conn: &rusqlite::Connection) {
 /// live pane would look orphaned — killing a user's running agents on the
 /// strength of an empty database is far worse than leaking panes, which the next
 /// sweep can still collect.
+///
+/// Requires two passes to agree before closing anything. See
+/// [`rmux_resources::OrphanSweep::confirmed_by`].
 fn sweep_orphan_rmux_panes(conn: &rusqlite::Connection, sessions: &[db::Session]) {
     if sessions.is_empty() {
         return;
     }
-    let known_session_ids: std::collections::HashSet<String> =
-        sessions.iter().map(|session| session.id.clone()).collect();
+    let known_session_ids = |rows: &[db::Session]| -> std::collections::HashSet<String> {
+        rows.iter().map(|session| session.id.clone()).collect()
+    };
 
-    match crate::rmux_ops::sweep_orphan_panes(conn, &known_session_ids) {
+    let proposed = match crate::rmux_ops::orphan_candidates(conn, &known_session_ids(sessions)) {
+        Ok(sweep) if sweep.is_empty() => return,
+        Ok(sweep) => sweep,
+        Err(error) => {
+            tracing::warn!(%error, "could not look for orphaned rmux panes");
+            return;
+        }
+    };
+
+    // Re-read the sessions too: a launch that completed during the delay records
+    // both a session row and a pane, and only a fresh read sees it.
+    std::thread::sleep(ORPHAN_CONFIRMATION_DELAY);
+    let sessions = match db::list_sessions(conn) {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            tracing::warn!(%error, "could not confirm orphaned rmux panes");
+            return;
+        }
+    };
+    if sessions.is_empty() {
+        return;
+    }
+    let later = match crate::rmux_ops::orphan_candidates(conn, &known_session_ids(&sessions)) {
+        Ok(sweep) => sweep,
+        Err(error) => {
+            tracing::warn!(%error, "could not confirm orphaned rmux panes");
+            return;
+        }
+    };
+
+    let confirmed = proposed.confirmed_by(&later);
+    if confirmed.is_empty() {
+        tracing::info!(
+            proposed = proposed.panes.len(),
+            "rmux panes looked orphaned but were accounted for on a second pass"
+        );
+        return;
+    }
+    match crate::rmux_ops::sweep_orphan_panes(conn, &confirmed) {
         Ok(0) => {}
         Ok(closed) => tracing::info!(closed, "closed orphaned rmux panes on startup"),
         Err(error) => tracing::warn!(%error, "could not sweep orphaned rmux panes"),

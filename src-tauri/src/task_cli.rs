@@ -141,11 +141,11 @@ pub fn run_task_delete_in_project(
 ) -> Result<String, String> {
     tracing::info!(key, "deleting task");
     if let Some(project_id) = project_id {
-        if let Err(error) = crate::rmux_ops::delete_workspace(project_id, key) {
-            // Best effort: a task must still be deletable when no rmux daemon is
-            // running, which is the common case for other backends.
-            tracing::debug!(key, %error, "no rmux workspace removed for task");
-        }
+        // Reported rather than swallowed: `delete_workspace` already treats an
+        // absent daemon as success, so an error here is a local database failure.
+        // Deleting the task anyway would strand the workspace metadata and pane
+        // mappings behind a task that no longer exists to clean them up.
+        crate::rmux_ops::delete_workspace(project_id, key)?;
     }
     repo.delete(key).map_err(|e| e.to_string())?;
     Ok(format!("{{\"deleted\":\"{key}\"}}"))

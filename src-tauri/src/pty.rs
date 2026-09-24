@@ -512,7 +512,18 @@ impl PtyManager {
                         let mut buffer = lock.lock().unwrap();
                         while buffer.is_empty() {
                             if done_f.load(Ordering::Acquire) {
-                                let chunk = buffer.take();
+                                // A gap recorded just before the stream closed is
+                                // still owed to the terminal: exiting without it
+                                // would make the scrollback silently jump.
+                                let (chunk, gap) = (buffer.take(), buffer.take_gap());
+                                if let Some(gap) = gap {
+                                    tracing::warn!(
+                                        session_id = %exit_key,
+                                        cause = ?gap.cause,
+                                        "rmux output gap"
+                                    );
+                                    let _ = on_data.send(Response::new(gap.notice()));
+                                }
                                 if !chunk.is_empty() {
                                     let _ = on_data.send(Response::new(chunk));
                                 }
@@ -545,6 +556,11 @@ impl PtyManager {
                             cause = ?gap.cause,
                             "rmux output gap"
                         );
+                        // Sent as its own message so the common path never copies
+                        // the chunk to prepend a notice to it.
+                        if on_data.send(Response::new(gap.notice())).is_err() {
+                            break;
+                        }
                     }
                     if chunk.is_empty() {
                         continue;
@@ -565,20 +581,57 @@ impl PtyManager {
                     break;
                 }
                 match stream.next().await {
-                    Ok(Some(rmux_sdk::PaneOutputChunk::Bytes { bytes, .. })) => {
+                    Ok(Some(rmux_sdk::PaneRecoveryEvent::Rebase(rebase))) => {
+                        // A rebase is the authoritative screen. Its keyframe already
+                        // carries the reset sequences, so feeding it rebuilds the
+                        // terminal; what must not happen is stitching it onto bytes
+                        // from the previous epoch, so anything still buffered and
+                        // undelivered is discarded first.
+                        let first = rebase.reason == rmux_sdk::PaneRecoveryRebaseReason::Initial;
+                        if !first {
+                            tracing::info!(
+                                session_id = %sid,
+                                reason = ?rebase.reason,
+                                epoch = rebase.epoch,
+                                "rmux pane rebased; replacing the rendered screen"
+                            );
+                        }
+                        observer.on_output(&sid, rebase.keyframe.len());
+                        let (lock, cv) = &*pending;
+                        {
+                            let mut buffer = lock.lock().unwrap();
+                            if !first {
+                                // Only a lag rebase means output was lost; the rest
+                                // are faithful re-syncs and need no gap notice.
+                                if rebase.reason == rmux_sdk::PaneRecoveryRebaseReason::Lag {
+                                    buffer.record_transport_gap(1);
+                                }
+                                buffer.replace_with_keyframe(&rebase.keyframe);
+                            } else {
+                                buffer.push(&rebase.keyframe);
+                            }
+                            if !rebase.coverage.history_complete() {
+                                // The keyframe could not carry every retained row,
+                                // so scrollback above it is genuinely missing.
+                                buffer.record_history_shortfall(
+                                    rebase
+                                        .coverage
+                                        .history_rows_total
+                                        .saturating_sub(rebase.coverage.history_rows_included),
+                                );
+                            }
+                        }
+                        cv.notify_one();
+                    }
+                    Ok(Some(rmux_sdk::PaneRecoveryEvent::Bytes { bytes, .. })) => {
                         observer.on_output(&sid, bytes.len());
                         let (lock, cv) = &*pending;
                         lock.lock().unwrap().push(&bytes);
                         cv.notify_one();
                     }
-                    Ok(Some(rmux_sdk::PaneOutputChunk::Lag(notice))) => {
-                        // The daemon dropped output for this subscriber. Record it
-                        // so the gap is reported rather than silently rendered.
-                        let (lock, cv) = &*pending;
-                        lock.lock()
-                            .unwrap()
-                            .record_transport_gap(notice.missed_events);
-                        cv.notify_one();
+                    Ok(Some(rmux_sdk::PaneRecoveryEvent::End(reason))) => {
+                        tracing::debug!(session_id = %sid, ?reason, "rmux recovery stream ended");
+                        break;
                     }
                     Ok(Some(_)) => {}
                     Ok(None) => break,

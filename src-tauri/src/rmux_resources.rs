@@ -124,6 +124,23 @@ pub fn remove_for_session(conn: &Connection, session_id: &str) -> rusqlite::Resu
     Ok(())
 }
 
+/// Forget every resource recorded in a workspace, whichever session owns it.
+///
+/// Task deletion removes a whole workspace, and its panes can belong to several
+/// agent sessions, so the records cannot be found by session id alone.
+// Only task deletion needs this, which the Tauri binary's copy of the module does
+// not reach.
+#[allow(dead_code)]
+pub fn remove_for_workspace(
+    conn: &Connection,
+    workspace: &WorkspaceName,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM rmux_resources WHERE workspace_key = ?1",
+        params![workspace.as_str()],
+    )
+}
+
 /// Drop records whose pane is no longer on the daemon.
 ///
 /// Returns the session ids that lost at least one resource, so the caller can
@@ -177,6 +194,36 @@ pub struct OrphanSweep {
 impl OrphanSweep {
     pub fn is_empty(&self) -> bool {
         self.panes.is_empty() && self.stale_records.is_empty()
+    }
+
+    /// Keep only what a second, independent pass also judged orphaned.
+    ///
+    /// A pane is legitimately unaccounted for in the window between its spawn and
+    /// the write that records it, so a single snapshot cannot distinguish a leak
+    /// from a launch in progress. Reconciliation runs on a background thread — it
+    /// must not stall app startup — which means a launch really can overlap it.
+    /// Requiring two passes to agree makes the in-flight case resolve itself
+    /// (the record lands, the pane stops looking orphaned) while a genuine leak,
+    /// which is permanent, still gets collected.
+    pub fn confirmed_by(&self, later: &OrphanSweep) -> OrphanSweep {
+        let still_orphaned: std::collections::HashSet<u32> =
+            later.panes.iter().map(|pane| pane.pane_id).collect();
+        let still_stale: std::collections::HashSet<&str> =
+            later.stale_records.iter().map(String::as_str).collect();
+        OrphanSweep {
+            panes: self
+                .panes
+                .iter()
+                .filter(|pane| still_orphaned.contains(&pane.pane_id))
+                .cloned()
+                .collect(),
+            stale_records: self
+                .stale_records
+                .iter()
+                .filter(|pty_key| still_stale.contains(pty_key.as_str()))
+                .cloned()
+                .collect(),
+        }
     }
 }
 
@@ -547,6 +594,122 @@ mod tests {
                 "session-a:2".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn a_pane_claimed_between_passes_is_spared() {
+        // The launch-in-flight case: the first pass saw a pane with no record, the
+        // second sees it recorded. Closing it would kill a session the user just
+        // started.
+        let proposed = OrphanSweep {
+            panes: vec![live(7), live(9)],
+            stale_records: vec!["gone".to_string()],
+        };
+        let later = OrphanSweep {
+            panes: vec![live(9)],
+            stale_records: vec!["gone".to_string()],
+        };
+
+        let confirmed = proposed.confirmed_by(&later);
+
+        assert_eq!(confirmed.panes, vec![live(9)]);
+        assert_eq!(confirmed.stale_records, vec!["gone".to_string()]);
+    }
+
+    #[test]
+    fn a_record_that_reappears_between_passes_is_not_forgotten() {
+        let proposed = OrphanSweep {
+            panes: Vec::new(),
+            stale_records: vec!["claimed".to_string(), "gone".to_string()],
+        };
+        let later = OrphanSweep {
+            panes: Vec::new(),
+            stale_records: vec!["gone".to_string()],
+        };
+
+        let confirmed = proposed.confirmed_by(&later);
+
+        assert_eq!(confirmed.stale_records, vec!["gone".to_string()]);
+    }
+
+    #[test]
+    fn a_second_pass_finding_nothing_cancels_the_whole_sweep() {
+        let proposed = OrphanSweep {
+            panes: vec![live(7)],
+            stale_records: vec!["gone".to_string()],
+        };
+
+        let confirmed = proposed.confirmed_by(&OrphanSweep::default());
+
+        assert!(confirmed.is_empty(), "{confirmed:?}");
+    }
+
+    #[test]
+    fn a_pane_orphaned_in_both_passes_is_confirmed() {
+        // A genuine leak is permanent, so it survives confirmation.
+        let sweep = OrphanSweep {
+            panes: vec![live(7)],
+            stale_records: vec!["gone".to_string()],
+        };
+
+        let confirmed = sweep.confirmed_by(&sweep.clone());
+
+        assert_eq!(confirmed, sweep);
+    }
+
+    #[test]
+    fn removing_a_workspace_forgets_every_session_inside_it() {
+        let conn = setup();
+        // A task workspace hosts several agent sessions, so its records cannot be
+        // found by session id alone (ADR-0012: one workspace per TaskWorkspace).
+        let task_workspace = planeai_rmux::WorkspaceKey::Task {
+            project_id: "proj-1".to_string(),
+            task_key: "PLA-42".to_string(),
+        }
+        .name();
+        for (pty_key, session_id, pane) in [
+            ("session-a", "session-a", 1u32),
+            ("session-a:1", "session-a", 2),
+            ("session-b", "session-b", 3),
+        ] {
+            put(
+                &conn,
+                pty_key,
+                session_id,
+                &task_workspace,
+                ResourceHandle::from_u32(pane),
+            )
+            .unwrap();
+        }
+        // A different task's workspace must be untouched.
+        let other = planeai_rmux::WorkspaceKey::Task {
+            project_id: "proj-1".to_string(),
+            task_key: "PLA-43".to_string(),
+        }
+        .name();
+        put(
+            &conn,
+            "session-c",
+            "session-c",
+            &other,
+            ResourceHandle::from_u32(4),
+        )
+        .unwrap();
+
+        let forgotten = remove_for_workspace(&conn, &task_workspace).unwrap();
+
+        assert_eq!(forgotten, 3);
+        assert!(list_for_session(&conn, "session-a").unwrap().is_empty());
+        assert!(list_for_session(&conn, "session-b").unwrap().is_empty());
+        assert_eq!(list_for_session(&conn, "session-c").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn removing_an_absent_workspace_is_not_an_error() {
+        // Teardown has to be repeatable: a crash between steps leaves the next
+        // delete to finish the job (ADR-0012).
+        let conn = setup();
+        assert_eq!(remove_for_workspace(&conn, &workspace()).unwrap(), 0);
     }
 
     #[test]
