@@ -27,8 +27,35 @@ describe("TaskWorkspace session selection", () => {
   });
 
   it("does not let a terminal from the previous layout reclaim focus during selection", () => {
+    // The guard now lives in the tested `isTerminalPaneFocused` predicate; see
+    // src/lib/__tests__/terminal-focus.test.ts for its behaviour.
     expect(appSource).toMatch(
-      /focused=\{isActiveInLeaf && sessionId === activeSessionId && !activePluginId/,
+      /focused=\{isTerminalPaneFocused\(\{[\s\S]*?belongsToActiveSession: sessionId === activeSessionId,/,
+    );
+  });
+
+  it("releases xterm DOM focus when the keyboard zone leaves the terminal", () => {
+    // Without this, a pane stranded by the guard above keeps DOM focus and
+    // swallows sidebar navigation keys, because xterm stops their propagation.
+    expect(appSource).toMatch(
+      /shouldReleaseTerminalDomFocus\(\{\s*zone,\s*domFocusInsideTerminal: !!active\?\.closest\("\.xterm"\),\s*\}\)\s*\)\s*\{\s*active\?\.blur\(\);/,
+    );
+  });
+
+  it("reconciles a restored layout whose active tab is not the selected session", () => {
+    expect(appSource).toMatch(
+      /reconcileRestoredLayout\(\{[\s\S]*?restoredActiveTabSessionId:[\s\S]*?selectedSessionId: focusedSessionId,[\s\S]*?restoredTreeHasTabForSelectedSession: !!splitTree\.findTab\(focusedSessionId\),[\s\S]*?selectionIsExplicit: pendingSessionSelectionIsExplicit,/,
+    );
+  });
+
+  it("treats the task workspace's first linked session as an arbitrary entry point", () => {
+    // Otherwise it overrides the restored layout's remembered tab and returning
+    // to a task always lands on its first session.
+    expect(appSource).toMatch(
+      /const linked = sessions\.find\([\s\S]*?selectWorkspaceSession\(linked\.id, \{ explicit: false \}\);/,
+    );
+    expect(appSource).toMatch(
+      /function selectWorkspaceSession\(sessionId: string, opts: \{ explicit\?: boolean \} = \{\}\): void \{[\s\S]*?pendingSessionSelectionIsExplicit = opts\.explicit \?\? true;/,
     );
   });
 

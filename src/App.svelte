@@ -6,6 +6,7 @@
   import { sessions as sessionsApi, pty, notify, sessionLogs, editor as editorApi, updater } from "./lib/api";
   import type { Session, Project, TaskItem } from "./lib/types";
   import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
+  import { isTerminalPaneFocused, reconcileRestoredLayout, shouldReleaseTerminalDomFocus } from "./lib/terminal-focus";
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
   import { installKeyboardRouter, matchChord, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT } from "./lib/keyboard";
@@ -109,6 +110,25 @@
   const editorModified = $derived(orchestrator.getEditorModified());
   const symphonyStatus = $derived(orchestrator.getSymphonyStatus());
   const zone = $derived(getActiveZone());
+
+  // Terminal.svelte blurs xterm only when its `focused` prop transitions
+  // true -> false. While the split tree and the selected session disagree (for
+  // instance mid layout swap) no pane is focused, so that transition is
+  // unavailable and a terminal holding DOM focus would swallow every keystroke
+  // aimed at another zone — xterm calls stopPropagation(), so sidebar
+  // navigation never reaches its window key handler. Release DOM focus from the
+  // zone change itself, which always happens.
+  $effect(() => {
+    const active = document.activeElement as HTMLElement | null;
+    if (
+      shouldReleaseTerminalDomFocus({
+        zone,
+        domFocusInsideTerminal: !!active?.closest(".xterm"),
+      })
+    ) {
+      active?.blur();
+    }
+  });
   const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
   const activeTaskWorkspace = $derived.by(() => {
     if (selectedTaskWorkspace) return selectedTaskWorkspace;
@@ -232,6 +252,8 @@
   type WorkspaceIdentity = { key: string; projectId: string; taskKey: string | null };
   let lastTreeWorkspace = $state<WorkspaceIdentity | null>(null);
   let lastFocusedWorkspaceSessionId: string | null = null;
+  /** Whether the pending session selection reflects a user choice rather than an arbitrary entry point. */
+  let pendingSessionSelectionIsExplicit = true;
   let loadGeneration = 0; // not reactive - just a counter for staleness
   let loadingLayout = $state(false); // suppress auto-save and stale-tab cleanup during load
 
@@ -288,9 +310,28 @@
         const data = JSON.parse(layoutJson);
         if (isValidSerializedTree(data)) {
           splitTree.deserialize(data);
+          // A restored layout carries the active tab from when it was saved,
+          // which need not be the session that was just selected. Leaving them
+          // disagreeing is permanent: the reconciling $effect below keys off
+          // lastFocusedWorkspaceSessionId and would see no change to act on.
+          const restoredLeaf = splitTree.getFocusedLeaf();
+          const restoredActiveTab = restoredLeaf?.activeTab ?? null;
+          const { focusTabForSession, adoptRestoredTabSession } = reconcileRestoredLayout({
+            restoredActiveTabSessionId: restoredActiveTab ? ptyKeyToSessionId(restoredActiveTab) : null,
+            selectedSessionId: focusedSessionId,
+            restoredTreeHasTabForSelectedSession: !!splitTree.findTab(focusedSessionId),
+            selectionIsExplicit: pendingSessionSelectionIsExplicit,
+          });
+          if (focusTabForSession) splitTree.focusTab(focusedSessionId);
           lastTreeWorkspace = workspace;
-          lastFocusedWorkspaceSessionId = focusedSessionId;
+          lastFocusedWorkspaceSessionId =
+            adoptRestoredTabSession && restoredActiveTab
+              ? ptyKeyToSessionId(restoredActiveTab)
+              : focusedSessionId;
           loadingLayout = false;
+          if (adoptRestoredTabSession && restoredActiveTab) {
+            orchestrator.selectSession(ptyKeyToSessionId(restoredActiveTab));
+          }
           requestFocusedTerminalFocus();
           return;
         }
@@ -861,7 +902,11 @@
     activeContributionId = contributionId;
   }
 
-  function selectWorkspaceSession(sessionId: string): void {
+  function selectWorkspaceSession(sessionId: string, opts: { explicit?: boolean } = {}): void {
+    // `selectWorkspaceTask` selects an arbitrary first session just to have
+    // something to load, which must not override a restored layout's
+    // remembered tab. Every other caller reflects a real user choice.
+    pendingSessionSelectionIsExplicit = opts.explicit ?? true;
     const session = sessions.find((candidate) => candidate.id === sessionId);
     if (session?.task_key) {
       const project = projects.find((candidate) => candidate.id === session.project_id);
@@ -893,7 +938,7 @@
     const linked = sessions.find((session) => session.project_id === project.id && session.task_key === task.key);
     if (linked) {
       const alreadyActive = linked.id === activeSessionId;
-      selectWorkspaceSession(linked.id);
+      selectWorkspaceSession(linked.id, { explicit: false });
       // The active session ID does not change when returning from an empty
       // TaskWorkspace. Reload its layout because the empty workspace reset the tree.
       if (alreadyActive) {
@@ -1483,7 +1528,14 @@
                   focusRequest={terminalFocusRequest}
                   sessionId={tabEntry.ptyKey}
                   visible={isActiveInLeaf && !activeLoopId && !activePluginId}
-                  focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !modalPluginId}
+                  focused={isTerminalPaneFocused({
+                    isActiveTabInLeaf: isActiveInLeaf,
+                    isFocusedLeaf: leaf.id === splitTree.getFocusedLeafId(),
+                    belongsToActiveSession: sessionId === activeSessionId,
+                    zone,
+                    pluginOverlayActive: !!activePluginId,
+                    modalOpen: showNewItemModal || !!sessionToDelete || showTaskForm || showProjectForm || !!modalPluginId,
+                  })}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
                   initialCommand={tabEntry.type === "shell" ? getPendingTerminalEditorCommand({ ptyKey: tabEntry.ptyKey, pendingCommands: pendingShellCommands }) : undefined}
