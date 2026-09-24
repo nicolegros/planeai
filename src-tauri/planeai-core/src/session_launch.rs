@@ -10,6 +10,7 @@ pub enum SessionTarget {
     Local,
     Daemon,
     Tmux,
+    Rmux,
 }
 
 // ─── Shared config types (UI-neutral) ────────────────────────────────────────
@@ -286,10 +287,16 @@ pub fn resolve_from_config(
     let mut seen = std::collections::HashSet::new();
     extra_path_dirs.retain(|d| seen.insert(d.clone()));
 
-    // Session target: CLI > config > default (daemon)
+    // Session target: CLI > config > default (daemon).
+    //
+    // Every known backend is named explicitly. Falling through to `Daemon` for a
+    // configured-but-unlisted backend is how `rmux` was silently launched on the
+    // daemon: the string is matched here, but `planeai-core` cannot see
+    // `planeai_rmux::BACKEND`, so a new backend has to be added in both places.
     let config_target = match config.session_backend.as_deref() {
         Some("tmux") => SessionTarget::Tmux,
         Some("local") => SessionTarget::Local,
+        Some("rmux") => SessionTarget::Rmux,
         _ => SessionTarget::Daemon,
     };
     let session_target = overrides.session_target.clone().unwrap_or(config_target);
@@ -419,6 +426,65 @@ mod tests {
             rows: 24,
             durable_logs: false,
         }
+    }
+
+    /// A config that only names a backend; provider defaults supply the command.
+    fn config_for_backend(backend: Option<&str>) -> LaunchConfig {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "kiro".to_string(),
+            ProviderConfig {
+                command: "kiro-cli chat".to_string(),
+                yolo_flag: None,
+                prompt_command: None,
+            },
+        );
+        LaunchConfig {
+            providers,
+            default_provider: "kiro".to_string(),
+            session_backend: backend.map(str::to_string),
+            session_log_dir: None,
+            extra_path_dirs: Vec::new(),
+        }
+    }
+
+    fn resolved_target(backend: Option<&str>) -> SessionTarget {
+        let overrides = SessionLaunchOverrides {
+            cwd: Some(env::temp_dir()),
+            ..Default::default()
+        };
+        resolve_from_config(&config_for_backend(backend), &overrides)
+            .expect("resolution should succeed")
+            .request
+            .session_target
+    }
+
+    #[test]
+    fn every_configured_backend_resolves_to_its_own_target() {
+        // `rmux` previously fell through to `Daemon`, which launches an agent on
+        // the wrong backend without reporting anything. Each name must map to
+        // itself, so adding a backend to the config without adding it here fails.
+        assert_eq!(resolved_target(Some("tmux")), SessionTarget::Tmux);
+        assert_eq!(resolved_target(Some("local")), SessionTarget::Local);
+        assert_eq!(resolved_target(Some("rmux")), SessionTarget::Rmux);
+        assert_eq!(resolved_target(Some("daemon")), SessionTarget::Daemon);
+    }
+
+    #[test]
+    fn an_absent_backend_still_defaults_to_the_daemon() {
+        assert_eq!(resolved_target(None), SessionTarget::Daemon);
+    }
+
+    #[test]
+    fn an_explicit_override_outranks_the_configured_backend() {
+        let overrides = SessionLaunchOverrides {
+            cwd: Some(env::temp_dir()),
+            session_target: Some(SessionTarget::Rmux),
+            ..Default::default()
+        };
+        let resolved = resolve_from_config(&config_for_backend(Some("tmux")), &overrides)
+            .expect("resolution should succeed");
+        assert_eq!(resolved.request.session_target, SessionTarget::Rmux);
     }
 
     #[test]
