@@ -264,7 +264,7 @@ Dropdown: Local (default) / tmux / Daemon (experimental) / rmux (experimental). 
 
 ### rmux (experimental)
 
-`rmux` is an opt-in fourth backend intended to eventually replace `daemon`. It is wired into production code behind the `session_backend: "rmux"` setting, and the daemon binary is currently resolved from `PATH` rather than bundled — sidecar embedding (a pinned, SHA256-verified upstream prebuilt) is still outstanding. Recorded in ADR-0012. All ten spike probes pass against rmux 0.10.0 on macOS (`planeai-rmux-spike`); Windows is out of scope and unverified.
+`rmux` is an opt-in fourth backend intended to eventually replace `daemon`. It is wired into production code behind the `session_backend: "rmux"` setting, and the daemon binary is currently resolved from `PATH` rather than bundled — sidecar embedding (a pinned, SHA256-verified upstream prebuilt) is deliberately deferred until the backend is at parity with the others. All ten spike probes pass against rmux 0.10.0 on macOS (`planeai-rmux-spike`); Windows is out of scope and unverified.
 
 rmux is used as a **process host, not a UI**: the pane output stream is byte-exactly the child process's own output (verified by byte-for-byte comparison), the pane occupies the whole window with no status row reserved, and raw control bytes — including rmux's own `0x02` prefix — reach the child rather than a key table. PlaneAI keeps rendering in xterm.
 

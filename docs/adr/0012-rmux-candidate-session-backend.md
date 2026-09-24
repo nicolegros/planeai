@@ -4,7 +4,7 @@
 
 Accepted — implemented as an opt-in experimental backend. The decisions below define how the rmux backend is built and what it had to prove. All ten spike probes pass against rmux 0.10.0 on macOS arm64, including the five hard gates, with the constraints recorded under "Probe results". Windows/ConPTY is out of scope and unverified. `planeai-daemon` is not retired by this ADR, and rmux does not become the default: it is selected by `session_backend: "rmux"`.
 
-Outstanding before it can be recommended: the daemon binary is resolved from `PATH` rather than bundled as a pinned, SHA256-verified sidecar, and there is no durable session log writer for rmux sessions.
+`rmux-daemon` is resolved from `PATH` rather than bundled, deliberately deferred: see "Sidecar (deferred)" below for the plan and why it is not done yet. Outstanding: there is no durable session log writer for rmux sessions, so the dogfood log viewer shows nothing for them.
 
 ## Context
 
@@ -32,9 +32,45 @@ Separately, `feat(tasks): support multiple agent sessions` introduced **TaskWork
 - A TaskWorkspace owns exactly one PlaneAI-owned rmux session, created when the workspace is first materialised and explicitly destroyed **only when its task is deleted**. Moving a task to `Done` archives its agent panes but retains the workspace and its rmux session — provided a sibling resource remains. Measured behaviour: rmux drops a session when its last window closes, so archiving the only agent on a task removes the workspace too, and the next spawn re-creates it from the same derived name. The orphan sweep relies on this, closing panes and never workspaces.
 - Because tasks live in task-manager storage rather than PlaneAI's own tables, `task_workspaces` cannot foreign-key to tasks and task deletion currently emits no lifecycle event. rmux teardown is therefore an explicit, idempotent, crash-safe workflow shared by GUI, CLI, and AXI: resolve `(project_id, task_key)` → delete the rmux session → delete workspace metadata → delete the task.
 
+### Sidecar (deferred)
+
+**Not implemented in this slice.** rmux is resolved from `PATH`, so the backend only
+works for someone who has already installed rmux — acceptable for a fourth,
+opt-in, experimental backend, and revisited once it is at parity with the others.
+
+The plan, when this is picked up: vendor the daemon **from the upstream release,
+not built from source.** Upstream publishes SHA256 checksums, a Sigstore bundle,
+and SLSA Build Level 2 provenance against an immutable signed release;
+reproducing the build locally would trade that provenance for a longer CI matrix,
+since rmux is a large Rust project and the release covers five targets.
+`daemon_binary_path` in the release archive's own `share/rmux/artifact-metadata.json`
+should be read rather than assumed, because the layout is not uniform: the daemon
+sits at `bin/rmux-daemon` on Unix and at the archive root on Windows.
+
+Facts already measured against the real prebuilt, worth keeping so the eventual
+implementation does not re-derive them:
+
+- The prebuilt carries three binaries — a 2.3 MB dispatcher `bin/rmux`, the 12 MB
+  `bin/rmux-daemon`, and a 15 MB helper at `libexec/rmux/rmux`. Bundling the daemon
+  alone is sufficient: the end-to-end suite passes with rmux absent from `PATH`
+  and only an isolated `rmux-daemon` reachable via `RMUX_SDK_DAEMON_BINARY`.
+- That holds only while nothing uses the SDK's `Rmux::cmd()` escape hatch. Daemon
+  startup and `cmd()` read the same `RMUX_SDK_DAEMON_BINARY` override, and
+  `rmux-daemon` refuses CLI invocation with `rmux-daemon is internal; launch it
+through 'rmux', not directly` — reporting success while doing nothing. A caller
+  that needs `cmd()` would have to bundle the 15 MB helper as `rmux`, not the
+  dispatcher, which cannot find its own helper from a flat sidecar directory.
+- Tauri places `externalBin` beside the executable — `Contents/MacOS/` in a macOS
+  bundle, not `Contents/Resources/` — and strips the target-triple suffix, so
+  `paths.rs::resolve_rmux_daemon_binary` would resolve a bundled binary through its
+  exe-sibling branch, confirmed against a real built `.app`.
+- The bundled daemon version and the `rmux-sdk` pin must match: rmux is not
+  wire-compatible across minor versions, so a drift there is a protocol break that
+  should fail the build, not degrade at runtime.
+
 ### Runtime and process model
 
-- rmux is bundled as a Tauri sidecar using **embedded upstream prebuilt release binaries**, pinned to an exact version, SHA256-verified, vendored into PlaneAI-controlled storage rather than fetched from a mutable URL at build time, with `rmux-sdk` pinned to the matching version and the bundle re-signed/notarised.
+- rmux is resolved from `PATH`, matching the existing tmux backend's requirement — the user installs rmux themselves. Bundling it as a Tauri sidecar (embedded upstream prebuilt release binaries, pinned to an exact version, SHA256-verified) is deferred until the backend is at parity with the others; see "Sidecar (deferred)" above for the plan.
 - The daemon is **app-private**: its own endpoint, config, and session namespace, started via `connect_or_start`. PlaneAI never attaches to a user's own rmux server or inherits their `rmux.conf`/`tmux.conf`.
 - TaskWorkspace sessions use `CleanupPolicy::Preserve` (or `detach_owned`). `KillOnOwnerExit` is reserved for genuinely ephemeral panes such as verifier commands, because a lease-based policy on workspace sessions would kill every agent when the app quits — destroying the property that motivates the backend. Probe 1 confirmed `Preserve` sessions and their panes survive the owner exiting, with no lease reaping and no idle auto-shutdown over 35s.
 - Killing a session's **last** remaining session terminates the daemon and removes its socket (observed in probe work, and matching tmux and `planeai-daemon`). Every path must therefore use `connect_or_start` and treat a closed transport as "restart and retry" rather than a fatal error — deleting the final TaskWorkspace will stop the daemon.

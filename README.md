@@ -45,6 +45,7 @@ Download the latest release for your platform:
 
 - At least one AI agent CLI on PATH (e.g., `kiro-cli`, `claude`, `gh copilot`)
 - tmux (optional, for persistent sessions via tmux backend — `brew install tmux` on macOS)
+- rmux (optional, for persistent sessions via the experimental rmux backend — see [rmux.io](https://rmux.io))
 
 ## Configuration
 
