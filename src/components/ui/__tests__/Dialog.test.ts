@@ -9,7 +9,7 @@ describe("Dialog focus styling", () => {
   it("can suppress automatic dialog focus for an explicitly managed child target", () => {
     expect(dialogSource).toContain("preventOpenAutoFocus?: boolean;");
     expect(dialogSource).toContain(
-      "onOpenAutoFocus={(e) => { if (preventOpenAutoFocus) e.preventDefault(); }}",
+      "onOpenAutoFocus={(e) => { if (preventOpenAutoFocus) { e.preventDefault(); return; } claimFormKeyboardFocus(e); }}",
     );
   });
 });
