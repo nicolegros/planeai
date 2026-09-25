@@ -511,7 +511,7 @@
       }
       return sessionTabs.map((tab) => ({
         ptyKey: tab.index === 0 ? session.id : `${session.id}:${tab.index}`,
-        label: tab.index === 0 ? (session.name || session.branch || "Agent") : `${session.name || session.branch || "Agent"} · ${tab.customTitle ? tab.label : "Shell"}`,
+        label: tab.index === 0 ? (session.name || session.branch || "Agent") : (tab.customTitle ? tab.label : "Shell"),
         icon: tab.index === 0 ? (session.provider ? "bot" : "terminal") : "terminal",
         type: (tab.index === 0 ? "agent" : "shell") as "agent" | "shell",
         customTitle: tab.customTitle,
@@ -1032,7 +1032,7 @@
 
   /** Generic "new session" entry points start from the focused task, if any. */
   function openNewSessionForm(): void {
-    if (activeTaskWorkspace) { openSessionForTask(activeTaskWorkspace.task, activeTaskWorkspace.project); return; }
+    if (activeTaskWorkspace && !activeLoopId && !activePluginId) { openSessionForTask(activeTaskWorkspace.task, activeTaskWorkspace.project); return; }
     taskPrefill = null;
     showSessionForm = true;
   }

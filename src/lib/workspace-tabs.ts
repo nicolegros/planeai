@@ -74,8 +74,10 @@ export function reconcileWorkspaceTabs(reconcile: WorkspaceTabReconcile): void {
   }
   for (const key of stalePtyKeys) tree.removeSessionFromLeaf(key);
 
-  // Labels are copied into the tree (and persisted layout) when a tab is added.
-  tree.relabelTabs(new Map(reconcile.workspaceEntries.map((entry) => [entry.ptyKey, entry.label])));
+  // Agent tab labels are the session name, copied into the tree (and persisted
+  // layout) when the tab is added. Shell tabs keep the label they were opened with.
+  const agentLabels = reconcile.workspaceEntries.filter((entry) => entry.type === "agent");
+  tree.relabelTabs(new Map(agentLabels.map((entry) => [entry.ptyKey, entry.label])));
 }
 
 /**

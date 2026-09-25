@@ -28,7 +28,7 @@
   let mode = $state<"task">("task");
   // svelte-ignore state_referenced_locally
   let sessionName = $state(taskPrefill?.name ?? "");
-  /** A typed name wins over the default derived from the selected task. */
+  /** A name typed before the prefilled task loads must survive that load. */
   let nameEdited = false;
   // svelte-ignore state_referenced_locally
   let taskKey = $state(taskPrefill?.key ?? "");
@@ -79,7 +79,7 @@
           if (taskPrefill?.key) {
             taskSearchValue = taskPrefill.key;
             if (items.some((t) => t.key === taskPrefill.key)) {
-              onTaskSelected(taskPrefill.key);
+              onTaskSelected(taskPrefill.key, { keepTypedName: true });
             }
           }
         },
@@ -94,14 +94,14 @@
     return config.task_management?.templates;
   }
 
-  function onTaskSelected(key: string) {
+  function onTaskSelected(key: string, { keepTypedName = false } = {}) {
     const task = taskItems.find((t) => t.key === key);
     if (!task) return;
     taskKey = task.key;
     taskSearchValue = task.key;
     const agentOrdinal = sessions.filter((session) => session.task_key === task.key).length + 1;
     const templates = getTaskManagerTemplates();
-    if (!nameEdited) sessionName = agentOrdinal === 1 ? task.title : `${task.title} (${agentOrdinal})`;
+    if (!(keepTypedName && nameEdited)) sessionName = agentOrdinal === 1 ? task.title : `${task.title} (${agentOrdinal})`;
     taskPrompt = templates?.prompt ? renderTemplate(templates.prompt, task) : (task.description ? `Implement task ${task.key}: ${task.title}\n\n${task.description}` : `Implement task ${task.key}: ${task.title}`);
     const baseTaskBranch = templates?.branch ? renderTemplate(templates.branch, task) : `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-/]/g, "")}`;
     const taskBranch = agentOrdinal === 1 ? baseTaskBranch : `${baseTaskBranch}--${agentOrdinal}`;
@@ -217,7 +217,7 @@
     <Select
       items={taskSelectItems}
       bind:value={taskSearchValue}
-      onValueChange={onTaskSelected}
+      onValueChange={(key) => onTaskSelected(key)}
       onkeydown={metaEnter}
       placeholder="Search tasks..."
       emptyText="No tasks found"
