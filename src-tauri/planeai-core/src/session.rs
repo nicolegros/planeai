@@ -22,6 +22,17 @@ pub trait Backend: Send + Sync {
         session_id: &str,
     ) -> Result<(), String>;
     fn create_daemon_session(&self, session_id: &str, cmd: &str, cwd: &str) -> Result<(), String>;
+    /// Spawn the agent in PlaneAI's private rmux daemon.
+    ///
+    /// `workspace` is the rmux session name shared by every resource of this
+    /// task, so two agents on one task land in the same workspace.
+    fn create_rmux_session(
+        &self,
+        session_id: &str,
+        workspace: &str,
+        cmd: &str,
+        cwd: &str,
+    ) -> Result<(), String>;
     fn insert_session(&self, session: &NewSession) -> Result<(), String>;
     fn notify_gui(&self, session_id: &str) -> Result<(), String>;
     fn kill_session(&self, session: &NewSession) -> Result<(), String>;
@@ -151,10 +162,17 @@ impl SessionDispatcher {
 
         // Create tmux session
         let tmux_name = format!("planeai-{}-{}", self.project_name, short_id);
-        if self.dispatch_config.session_backend == "tmux" {
-            backend.create_tmux_session(&tmux_name, &wt_path, &cmd, &session_id)?;
-        } else if self.dispatch_config.session_backend == "daemon" {
-            backend.create_daemon_session(&session_id, &cmd, &wt_path)?;
+        // A backend that spawns nothing here would insert a session row with no
+        // agent behind it, so every persistent backend must be handled.
+        match self.dispatch_config.session_backend.as_str() {
+            "tmux" => backend.create_tmux_session(&tmux_name, &wt_path, &cmd, &session_id)?,
+            "daemon" => backend.create_daemon_session(&session_id, &cmd, &wt_path)?,
+            "rmux" => {
+                let workspace = rmux_workspace_name(&self.project_id, &task.key);
+                backend.create_rmux_session(&session_id, &workspace, &cmd, &wt_path)?
+            }
+            // `local` sessions spawn their PTY on attach.
+            _ => {}
         }
 
         let session_name = if let Some(tpl) = &self.dispatch_config.name_template {
@@ -199,4 +217,22 @@ impl SessionDispatcher {
 
         Ok(new_session)
     }
+}
+
+/// The rmux session name for a task workspace.
+///
+/// Mirrors `planeai_rmux::WorkspaceKey::name` without depending on that crate, so
+/// the orchestrator stays free of backend types. The two must agree, which the
+/// parity test in `session_test.rs` asserts.
+fn rmux_workspace_name(project_id: &str, task_key: &str) -> String {
+    fn sanitize(value: &str) -> String {
+        value
+            .chars()
+            .map(|character| match character {
+                ':' | '.' => '_',
+                other => other,
+            })
+            .collect()
+    }
+    format!("planeai-ws-{}-{}", sanitize(project_id), sanitize(task_key))
 }

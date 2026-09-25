@@ -21,6 +21,9 @@ mod plugin_packages;
 mod plugins;
 mod pty;
 mod pty_planeai_core_adapter;
+mod rmux_client;
+mod rmux_ops;
+mod rmux_resources;
 mod session_backend;
 mod session_logs;
 mod session_ops;
@@ -170,6 +173,10 @@ fn main() {
 
             // Reconcile daemon sessions (mark dead ones as exited)
             startup::reconcile_daemon_sessions(&conn, &cfg);
+
+            // Reconcile rmux sessions (the daemon exits with its last session).
+            // Backgrounded: it talks to the rmux daemon and must not block setup.
+            startup::spawn_rmux_reconciliation();
 
             // Reconcile local sessions (cannot survive app restart)
             startup::reconcile_local_sessions(&conn);
@@ -355,6 +362,7 @@ fn main() {
             close_tab,
             increment_tab_count,
             check_tmux_available,
+            check_rmux_available,
             save_session_layout,
             get_session_layout,
             save_task_workspace_layout,

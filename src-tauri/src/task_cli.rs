@@ -125,7 +125,28 @@ pub fn run_task_edit(repo: &dyn TaskProvider, params: EditParams) -> Result<Stri
 }
 
 pub fn run_task_delete(repo: &dyn TaskProvider, key: &str) -> Result<String, String> {
+    run_task_delete_in_project(repo, key, None)
+}
+
+/// Delete a task and, when its project is known, the rmux workspace it owned.
+///
+/// A task workspace is the only thing whose lifetime is the task's own
+/// (ADR-0012): archiving agents closes their panes, but the workspace itself
+/// survives until the task is deleted. Cleanup runs before the delete so a
+/// failure cannot orphan a workspace whose task is already gone.
+pub fn run_task_delete_in_project(
+    repo: &dyn TaskProvider,
+    key: &str,
+    project_id: Option<&str>,
+) -> Result<String, String> {
     tracing::info!(key, "deleting task");
+    if let Some(project_id) = project_id {
+        // Reported rather than swallowed: `delete_workspace` already treats an
+        // absent daemon as success, so an error here is a local database failure.
+        // Deleting the task anyway would strand the workspace metadata and pane
+        // mappings behind a task that no longer exists to clean them up.
+        crate::rmux_ops::delete_workspace(project_id, key)?;
+    }
     repo.delete(key).map_err(|e| e.to_string())?;
     Ok(format!("{{\"deleted\":\"{key}\"}}"))
 }

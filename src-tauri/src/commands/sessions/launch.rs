@@ -185,17 +185,30 @@ pub async fn launch_session(
         None
     };
 
-    // Phase 3: async daemon work — no locks held
-    if backend == "daemon" {
-        let spawn_result = spawn_in_daemon(
-            &app,
-            &session_id,
-            &working_dir,
-            &cmd,
-            &extra_path_dirs,
-            scrollback_bytes,
-        )
-        .await;
+    // Phase 3: async backend spawn — no locks held
+    if backend == "daemon" || backend == planeai_rmux::BACKEND {
+        let spawn_result = if backend == planeai_rmux::BACKEND {
+            spawn_in_rmux(
+                &app,
+                &session_id,
+                &project_id,
+                Some(task_key.as_str()),
+                &working_dir,
+                &cmd,
+                &extra_path_dirs,
+            )
+            .await
+        } else {
+            spawn_in_daemon(
+                &app,
+                &session_id,
+                &working_dir,
+                &cmd,
+                &extra_path_dirs,
+                scrollback_bytes,
+            )
+            .await
+        };
 
         if let Err(e) = spawn_result {
             {
@@ -212,7 +225,11 @@ pub async fn launch_session(
                 })
                 .await;
             }
-            // Clear the stale daemon connection so next attempt reconnects automatically
+            // Clear the stale daemon connection so next attempt reconnects automatically.
+            // The rmux backend needs no special case here: every rmux operation
+            // already reconnects and retries once via `rmux_client::with_retry`, so
+            // a failure that reaches this point is a real one worth reporting
+            // verbatim.
             if e.contains("Broken pipe")
                 || e.contains("Connection refused")
                 || e.contains("No such file")
@@ -375,6 +392,82 @@ async fn spawn_in_daemon(
         }
         Err(e) => Err(e),
     }
+}
+
+/// Spawn the agent in PlaneAI's private rmux daemon.
+///
+/// Reuses the shared launch service so the command, cwd, and augmented PATH are
+/// built exactly as they are for every other backend.
+async fn spawn_in_rmux(
+    app: &AppHandle,
+    session_id: &str,
+    project_id: &str,
+    task_key: Option<&str>,
+    working_dir: &str,
+    cmd: &str,
+    extra_path_dirs: &[String],
+) -> Result<(), String> {
+    let launch_req = planeai_core::session_launch::CreateSessionRequest {
+        session_id: session_id.to_string(),
+        project_cwd: std::path::PathBuf::from(working_dir),
+        session_target: planeai_core::session_launch::SessionTarget::Daemon,
+        agent_command: cmd.to_string(),
+        env: std::collections::HashMap::new(),
+        extra_path_dirs: extra_path_dirs.to_vec(),
+        cols: crate::rmux_ops::DEFAULT_COLS,
+        rows: crate::rmux_ops::DEFAULT_ROWS,
+        durable_logs: std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok(),
+    };
+    let launch_result =
+        planeai_core::session_launch::prepare_session(&launch_req).map_err(|e| e.to_string())?;
+
+    // Every agent on the same task shares one rmux workspace.
+    let workspace =
+        planeai_rmux::WorkspaceKey::for_session(project_id, task_key, session_id).name();
+
+    tracing::info!(
+        caller = "tauri",
+        shared_launch_service = true,
+        target = "rmux",
+        cwd = %launch_result.cwd.display(),
+        command_label = %launch_result.command_label,
+        workspace = %workspace,
+        "session created via shared launch service"
+    );
+
+    // Warm the connection with the bundled sidecar before the blocking spawn, so
+    // the sidecar is preferred over anything on PATH.
+    let _ = crate::rmux_client::client_with(Some(app)).await?;
+
+    let env: std::collections::HashMap<&str, &str> = launch_result
+        .env
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    let session_id = session_id.to_string();
+    let command = cmd.to_string();
+    let working_dir = working_dir.to_string();
+    let owned_env: Vec<(String, String)> = env
+        .iter()
+        .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+        .collect();
+
+    crate::commands::blocking(move || {
+        let env: std::collections::HashMap<&str, &str> = owned_env
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        crate::rmux_ops::spawn_resource_blocking(
+            &session_id,
+            &session_id,
+            &workspace,
+            &command,
+            &working_dir,
+            &env,
+        )
+        .map(|_| ())
+    })
+    .await
 }
 
 /// Roll back only branch/worktree resources created by this launch.

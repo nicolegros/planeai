@@ -172,6 +172,27 @@ impl Backend for TauriBackend {
         crate::daemon::spawn_session(session_id, program, &args_refs, cwd, Some(&env))
     }
 
+    fn create_rmux_session(
+        &self,
+        session_id: &str,
+        workspace: &str,
+        cmd: &str,
+        cwd: &str,
+    ) -> Result<(), String> {
+        let workspace = planeai_rmux::WorkspaceName::from_stored(workspace)
+            .ok_or_else(|| format!("not a PlaneAI rmux workspace: {workspace}"))?;
+        let extra_path_dirs = {
+            let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
+            let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
+            cfg.resolved_extra_path_dirs()
+        };
+        let mut path_buf = String::new();
+        let env =
+            planeai_core::command::build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+        crate::rmux_ops::spawn_resource_blocking(session_id, session_id, &workspace, cmd, cwd, &env)
+            .map(|_| ())
+    }
+
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| e.to_string())?;
         crate::db::create_session_with_id(

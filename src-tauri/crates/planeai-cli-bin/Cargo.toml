@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 planeai = { path = "../.." }
 planeai-core = { path = "../../planeai-core" }
+planeai-rmux = { path = "../../planeai-rmux" }
 planeai-tasks = { path = "../../planeai-tasks" }
 planeai-toon = { path = "../../planeai-toon" }
 planeai-ipc = { path = "../../planeai-ipc", features = ["async"] }

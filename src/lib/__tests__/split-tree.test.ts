@@ -592,3 +592,116 @@ describe("replaceRootLeafTabs", () => {
     expect(replaceRootLeafTabs([tab("s1")])).toBe(false);
   });
 });
+
+describe("duplicate tab keys", () => {
+  // Tabs render in a keyed `{#each leaf.tabs as tabEntry (tabEntry.ptyKey)}`.
+  // A duplicate key is a Svelte runtime error that aborts the update flush, so
+  // the whole UI freezes on whatever was rendered last — it presents as "session
+  // selection does nothing".
+  it("focuses an existing tab instead of adding a second entry with the same key", () => {
+    initTree([tab("s1")]);
+    const leafId = getFocusedLeafId()!;
+
+    addSessionToLeaf(leafId, tab("s2"));
+    addSessionToLeaf(leafId, tab("s2"));
+
+    const leaf = getAllLeaves()[0];
+    expect(leaf.tabs.map((entry) => entry.ptyKey)).toEqual(["s1", "s2"]);
+    expect(leaf.activeTab).toBe("s2");
+  });
+
+  it("keeps a re-added tab addressable rather than silently ignoring it", () => {
+    initTree([tab("s1"), tab("s2")]);
+    const leafId = getFocusedLeafId()!;
+    setLeafActiveTab(leafId, "s1");
+
+    addSessionToLeaf(leafId, tab("s2"));
+
+    expect(getAllLeaves()[0].activeTab).toBe("s2");
+  });
+
+  it("dedupes tabs supplied to replaceRootLeafTabs", () => {
+    initTree([tab("s1")]);
+
+    // Two agent sessions linked to the same task can yield a repeated entry.
+    expect(replaceRootLeafTabs([tab("a"), tab("b"), tab("a")], "a")).toBe(true);
+
+    const leaf = getAllLeaves()[0];
+    expect(leaf.tabs.map((entry) => entry.ptyKey)).toEqual(["a", "b"]);
+  });
+
+  it("never reports the same ptyKey twice across the tree", () => {
+    initTree([tab("s1")]);
+    const leafId = getFocusedLeafId()!;
+    addSessionToLeaf(leafId, tab("s2"));
+    addSessionToLeaf(leafId, tab("s2"));
+    replaceRootLeafTabs([tab("s1"), tab("s1"), tab("s2")], "s1");
+
+    const keys = getAllLeaves().flatMap((leaf) => leaf.tabs.map((entry) => entry.ptyKey));
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+describe("repairing a persisted layout", () => {
+  // Layouts live in `task_workspaces.layout_json` and outlive any fix to the code
+  // that wrote them. A stored duplicate ptyKey throws `each_key_duplicate` on
+  // every load, so the workspace must heal itself rather than stay broken.
+  it("drops a duplicate tab stored in a saved layout", () => {
+    initTree([tab("s1")]);
+    const leafId = getFocusedLeafId()!;
+
+    deserialize({
+      focusedLeafId: leafId,
+      tree: {
+        type: "leaf",
+        id: leafId,
+        tabs: [tab("agent"), tab("agent:2"), tab("agent:2")],
+        activeTab: "agent:2",
+      },
+    });
+
+    const leaf = getAllLeaves()[0];
+    expect(leaf.tabs.map((entry) => entry.ptyKey)).toEqual(["agent", "agent:2"]);
+    expect(leaf.activeTab).toBe("agent:2");
+  });
+
+  it("drops a duplicate that spans two leaves of a split", () => {
+    initTree([tab("s1")]);
+    const leafId = getFocusedLeafId()!;
+
+    deserialize({
+      focusedLeafId: "left",
+      tree: {
+        type: "split",
+        id: "root",
+        direction: "vertical",
+        ratio: 0.5,
+        children: [
+          { type: "leaf", id: "left", tabs: [tab("shared")], activeTab: "shared" },
+          { type: "leaf", id: "right", tabs: [tab("shared"), tab("other")], activeTab: "shared" },
+        ],
+      },
+    } as never);
+
+    const keys = getAllLeaves().flatMap((leaf) => leaf.tabs.map((entry) => entry.ptyKey));
+    expect(keys).toEqual(["shared", "other"]);
+    // The right leaf lost its active tab, so it falls back to a surviving one.
+    const right = getAllLeaves().find((leaf) => leaf.id === "right")!;
+    expect(right.activeTab).toBe("other");
+    expect(leafId).toBeTruthy();
+  });
+
+  it("leaves a clean layout untouched", () => {
+    initTree([tab("s1")]);
+    const leafId = getFocusedLeafId()!;
+
+    deserialize({
+      focusedLeafId: leafId,
+      tree: { type: "leaf", id: leafId, tabs: [tab("a"), tab("b")], activeTab: "b" },
+    });
+
+    const leaf = getAllLeaves()[0];
+    expect(leaf.tabs.map((entry) => entry.ptyKey)).toEqual(["a", "b"]);
+    expect(leaf.activeTab).toBe("b");
+  });
+});

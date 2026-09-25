@@ -189,4 +189,32 @@ describe("pending terminal editor commands", () => {
     expect(consumePendingTerminalEditorCommand(command)).toBe(true);
     expect(getPendingTerminalEditorCommand(command)).toBeUndefined();
   });
+
+  it("registers the command before any await so a concurrent mount sees it", async () => {
+    // `addTab` mutates shared tab state, which schedules the workspace
+    // reconciliation effect. That effect runs during the first await and can mount
+    // the terminal for this tab itself — so the command must already be queued, or
+    // the terminal spawns a bare shell instead of the editor.
+    const pending = new Map<string, string>();
+    let commandVisibleDuringAwait = false;
+
+    const opened = await queueTerminalEditor({
+      sessionId: "session-1",
+      filePath: "src/main.rs",
+      getTerminalCommand: async () => "nvim src/main.rs",
+      getFocusedLeafId: () => "leaf-1",
+      addTab: () => 3,
+      removeTab: vi.fn(),
+      incrementTabCount: async () => {
+        // Stand in for the reconciliation effect mounting the terminal here.
+        commandVisibleDuringAwait = pending.get("session-1:3") === "nvim src/main.rs";
+      },
+      closeTab: vi.fn(),
+      addShellTab: vi.fn(() => true),
+      pendingCommands: pending,
+    });
+
+    expect(opened).toBe(true);
+    expect(commandVisibleDuringAwait).toBe(true);
+  });
 });

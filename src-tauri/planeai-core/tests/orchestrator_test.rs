@@ -72,6 +72,10 @@ impl Backend for TestBackend {
     fn create_daemon_session(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
         Ok(())
     }
+
+    fn create_rmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+        Ok(())
+    }
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
         self.sessions.lock().unwrap().push(session.clone());
         Ok(())
@@ -203,6 +207,10 @@ async fn orchestrator_kills_session_when_task_becomes_terminal() {
         fn create_daemon_session(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
             Ok(())
         }
+
+        fn create_rmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
         fn insert_session(&self, session: &NewSession) -> Result<(), String> {
             self.sessions.lock().unwrap().push(session.clone());
             // After dispatching, mark the task as done so reconciliation kills it
@@ -331,6 +339,10 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
         fn create_daemon_session(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
             Ok(())
         }
+
+        fn create_rmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
         fn insert_session(&self, session: &NewSession) -> Result<(), String> {
             self.dispatched.lock().unwrap().push(session.clone());
             Ok(())
@@ -456,6 +468,10 @@ async fn orchestrator_does_not_redispatch_task_with_exited_session() {
             Ok(())
         }
         fn create_daemon_session(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn create_rmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
             Ok(())
         }
         fn insert_session(&self, session: &NewSession) -> Result<(), String> {

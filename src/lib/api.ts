@@ -266,6 +266,7 @@ export const preferences = {
   listMonospaceFonts: () => invoke<string[]>("list_monospace_fonts"),
   listThemes: () => invoke<string[]>("list_themes"),
   checkTmuxAvailable: () => invoke<boolean>("check_tmux_available"),
+  checkRmuxAvailable: () => invoke<boolean>("check_rmux_available"),
   checkCliInstalled: () => invoke<boolean>("check_cli_installed"),
   installCli: () => invoke("install_cli"),
   getLogDir: () => invoke<string>("get_log_dir"),

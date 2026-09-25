@@ -1,0 +1,19 @@
+[package]
+name = "planeai-rmux"
+version = "0.1.0"
+edition = "2021"
+description = "rmux-backed persistent session hosting for PlaneAI. Not a terminal emulator."
+
+[dependencies]
+rmux-sdk = "=0.10.0"
+# Needed to match the daemon's typed protocol errors; rmux-sdk does not re-export them.
+rmux-proto = "=0.10.0"
+planeai-paths = { path = "../planeai-paths" }
+thiserror = "=2.0.19"
+tracing = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+planeai-core = { path = "../planeai-core" }
+tempfile = { workspace = true }
+rmux-sdk = "=0.10.0"

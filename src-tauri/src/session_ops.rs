@@ -311,6 +311,7 @@ pub trait PromptOps {
     fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String>;
     fn tmux_has_session(&self, tmux_name: &str) -> bool;
     fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String>;
+    fn rmux_send(&self, session_id: &str, text: &str) -> Result<(), String>;
 }
 
 pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
@@ -327,6 +328,9 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
         }
         fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String> {
             daemon_send_prompt(session_id, text)
+        }
+        fn rmux_send(&self, session_id: &str, text: &str) -> Result<(), String> {
+            crate::rmux_ops::send_prompt(session_id, text)
         }
     }
     RealPromptOps
@@ -571,6 +575,10 @@ pub fn send_prompt(
             ops.daemon_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via daemon data connection");
         }
+        planeai_rmux::BACKEND => {
+            ops.rmux_send(&session.id, text)?;
+            tracing::info!(session_id = %session.id, "send_prompt: sent via rmux pane input");
+        }
         other => return Err(format!("unsupported backend: {other}")),
     }
 
@@ -759,120 +767,21 @@ pub fn read_tmux_pane_after(
     cursor: &str,
     max_bytes: usize,
 ) -> Result<TmuxCursorReadResult, String> {
-    let full_text = read_tmux_pane(tmux_name, TMUX_CURSOR_SCROLLBACK_LINES)?;
-    let all_lines: Vec<&str> = full_text.lines().collect();
-
-    // Parse cursor: "tmux:<line_index>:<hash>"
-    let (prev_line_count, prev_hash) = parse_tmux_cursor(cursor)?;
-
-    // Try to validate cursor: check if lines up to prev_line_count still hash the same
-    let truncated = if prev_line_count == 0 {
-        false
-    } else if prev_line_count <= all_lines.len() {
-        let check_lines = &all_lines[..prev_line_count];
-        let current_hash = hash_lines(check_lines);
-        current_hash != prev_hash
-    } else {
-        true // History is shorter than our cursor position
-    };
-
-    let new_content = if truncated {
-        // Can't trust cursor — return all content
-        full_text.clone()
-    } else {
-        // Return only lines after the cursor position
-        if prev_line_count >= all_lines.len() {
-            String::new()
-        } else {
-            all_lines[prev_line_count..].join("\n")
-        }
-    };
-
-    // Apply max_bytes cap: truncate to complete lines within the byte budget so
-    // the line-based cursor can advance precisely. Any partial trailing line is
-    // omitted and will be returned on the next poll.
-    let (text, was_capped) = if max_bytes > 0 && new_content.len() > max_bytes {
-        let safe_end = new_content
-            .char_indices()
-            .take_while(|(i, _)| *i < max_bytes)
-            .last()
-            .map_or(0, |(i, c)| i + c.len_utf8());
-        let capped = &new_content[..safe_end];
-        if let Some(last_nl) = capped.rfind('\n') {
-            (new_content[..last_nl].to_string(), true)
-        } else {
-            (capped.to_string(), true)
-        }
-    } else {
-        (new_content, false)
-    };
-
-    // Build cursor: if max_bytes capped the output, only advance to cover the
-    // lines actually delivered so remaining content is returned on the next poll.
-    let new_cursor = if was_capped && !truncated {
-        let newline_count = text.matches('\n').count();
-        if newline_count == 0 {
-            build_tmux_cursor(&all_lines[..prev_line_count])
-        } else {
-            let delivered_line_count = newline_count + 1;
-            let cursor_line_count = prev_line_count + delivered_line_count;
-            let cursor_lines = &all_lines[..cursor_line_count];
-            build_tmux_cursor(cursor_lines)
-        }
-    } else {
-        build_tmux_cursor(&all_lines)
-    };
-
+    let captured = read_tmux_pane(tmux_name, TMUX_CURSOR_SCROLLBACK_LINES)?;
+    let read = planeai_core::capture_cursor::read_after("tmux", &captured, cursor, max_bytes)?;
     Ok(TmuxCursorReadResult {
-        text,
-        cursor: new_cursor,
-        truncated,
+        text: read.text,
+        cursor: read.cursor,
+        truncated: read.truncated,
     })
 }
 
 /// Build an initial tmux cursor (for first read without --after).
 #[allow(dead_code)]
 pub fn build_tmux_cursor_from_pane(tmux_name: &str) -> Result<String, String> {
-    let full_text = read_tmux_pane(tmux_name, TMUX_CURSOR_SCROLLBACK_LINES)?;
-    let all_lines: Vec<&str> = full_text.lines().collect();
-    Ok(build_tmux_cursor(&all_lines))
-}
-
-fn parse_tmux_cursor(cursor: &str) -> Result<(usize, u64), String> {
-    let parts: Vec<&str> = cursor.splitn(3, ':').collect();
-    if parts.len() != 3 || parts[0] != "tmux" {
-        return Err(format!("invalid tmux cursor: {cursor}"));
-    }
-    let line_count: usize = parts[1]
-        .parse()
-        .map_err(|_| format!("invalid cursor line count: {}", parts[1]))?;
-    let hash: u64 = parts[2]
-        .parse()
-        .map_err(|_| format!("invalid cursor hash: {}", parts[2]))?;
-    Ok((line_count, hash))
-}
-
-fn build_tmux_cursor(lines: &[&str]) -> String {
-    let line_count = lines.len();
-    let hash = hash_lines(lines);
-    format!("tmux:{line_count}:{hash}")
-}
-
-fn hash_lines(lines: &[&str]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    lines.len().hash(&mut hasher);
-    // Hash first 5 lines for anchoring (detects history trimming)
-    let first_end = lines.len().min(5);
-    for line in &lines[..first_end] {
-        line.hash(&mut hasher);
-    }
-    // Hash last 10 lines for tail stability
-    let start = lines.len().saturating_sub(10);
-    for line in &lines[start..] {
-        line.hash(&mut hasher);
-    }
-    hasher.finish()
+    let captured = read_tmux_pane(tmux_name, TMUX_CURSOR_SCROLLBACK_LINES)?;
+    let lines: Vec<&str> = captured.lines().collect();
+    Ok(planeai_core::capture_cursor::build_cursor("tmux", &lines))
 }
 
 pub fn resolve_session_by_prefix(conn: &Connection, prefix: &str) -> Result<Session, ResolveError> {
@@ -957,6 +866,12 @@ mod tests {
     }
 
     impl PromptOps for MockPromptOps {
+        fn rmux_send(&self, session_id: &str, text: &str) -> Result<(), String> {
+            self.sent_socket
+                .borrow_mut()
+                .push((session_id.to_string(), text.to_string()));
+            Ok(())
+        }
         fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String> {
             self.sent_keys
                 .borrow_mut()
@@ -1016,6 +931,7 @@ mod tests {
         KillOps {
             kill_tmux: Box::new(|_| Ok(())),
             kill_daemon_session: Box::new(|_| Ok(())),
+            kill_rmux_session: Box::new(|_| Ok(())),
         }
     }
 
@@ -1024,6 +940,7 @@ mod tests {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
                 kill_daemon_session: Box::new(|_| Err("daemon error".to_string())),
+                kill_rmux_session: Box::new(|_| Ok(())),
             },
             remove_worktree: Box::new(|_, _| Err("locked".to_string())),
             remove_dir: Box::new(|_| Err("permission denied".to_string())),
@@ -1242,6 +1159,7 @@ mod tests {
                 Ok(())
             }),
             kill_daemon_session: Box::new(|_| Ok(())),
+            kill_rmux_session: Box::new(|_| Ok(())),
         };
 
         archive(&conn, id, &None, &ops).unwrap();
@@ -1279,6 +1197,7 @@ mod tests {
         let ops = KillOps {
             kill_tmux: Box::new(|_| panic!("should not be called for local backend")),
             kill_daemon_session: Box::new(|_| panic!("should not be called for local backend")),
+            kill_rmux_session: Box::new(|_| Ok(())),
         };
 
         archive(&conn, id, &None, &ops).unwrap();
@@ -1321,6 +1240,7 @@ mod tests {
                 KILLED.with(|k| k.borrow_mut().push(sid.to_string()));
                 Ok(())
             }),
+            kill_rmux_session: Box::new(|_| Ok(())),
         };
 
         archive(&conn, id, &None, &ops).unwrap();
@@ -1730,45 +1650,41 @@ mod tests {
 
     #[test]
     fn parse_tmux_cursor_valid() {
-        let (line_count, hash) = super::parse_tmux_cursor("tmux:42:12345678901234").unwrap();
+        let (line_count, hash) =
+            planeai_core::capture_cursor::parse_cursor("tmux", "tmux:42:12345678901234").unwrap();
         assert_eq!(line_count, 42);
         assert_eq!(hash, 12345678901234);
     }
 
     #[test]
     fn parse_tmux_cursor_invalid_prefix() {
-        let result = super::parse_tmux_cursor("daemon:42:12345");
+        let result = planeai_core::capture_cursor::parse_cursor("tmux", "daemon:42:12345");
         assert!(result.is_err());
     }
 
     #[test]
     fn parse_tmux_cursor_invalid_format() {
-        let result = super::parse_tmux_cursor("tmux:abc:def");
+        let result = planeai_core::capture_cursor::parse_cursor("tmux", "tmux:abc:def");
         assert!(result.is_err());
     }
 
     #[test]
     fn build_tmux_cursor_roundtrips() {
         let lines: Vec<&str> = vec!["line 1", "line 2", "line 3"];
-        let cursor = super::build_tmux_cursor(&lines);
+        let cursor = planeai_core::capture_cursor::build_cursor("tmux", &lines);
         assert!(cursor.starts_with("tmux:3:"));
-        let (count, hash) = super::parse_tmux_cursor(&cursor).unwrap();
+        let (count, hash) = planeai_core::capture_cursor::parse_cursor("tmux", &cursor).unwrap();
         assert_eq!(count, 3);
         assert!(hash > 0);
     }
 
     #[test]
-    fn hash_lines_deterministic() {
-        let lines: Vec<&str> = vec!["hello", "world"];
-        let h1 = super::hash_lines(&lines);
-        let h2 = super::hash_lines(&lines);
-        assert_eq!(h1, h2);
-    }
+    fn tmux_and_rmux_cursors_are_not_interchangeable() {
+        // Both backends use the same algorithm, so the label is the only thing
+        // stopping one backend's cursor from being read as the other's.
+        let lines: Vec<&str> = vec!["line 1"];
+        let tmux_cursor = planeai_core::capture_cursor::build_cursor("tmux", &lines);
 
-    #[test]
-    fn hash_lines_different_for_different_content() {
-        let lines1: Vec<&str> = vec!["hello", "world"];
-        let lines2: Vec<&str> = vec!["hello", "mars"];
-        assert_ne!(super::hash_lines(&lines1), super::hash_lines(&lines2));
+        assert!(planeai_core::capture_cursor::parse_cursor("rmux", &tmux_cursor).is_err());
     }
 }

@@ -32,6 +32,15 @@ describe("TaskWorkspace session selection", () => {
     );
   });
 
+  it("never leaves a stale task workspace selected when the task cannot be resolved", () => {
+    // Done tasks are filtered out of the listing, and another project's tasks may
+    // not be loaded yet. Without the else branch, selecting such a session kept
+    // the previous selection and the main pane stayed on the wrong task.
+    expect(appSource).toMatch(
+      /if \(project && task\) \{\s*selectedTaskWorkspace = \{ project, task \};\s*touchWorkspaceMru\(toTaskWorkspaceId\(project\.id, task\.key\)\);\s*\} else \{[\s\S]*?selectedTaskWorkspace = null;\s*\}/,
+    );
+  });
+
   it("does not let a terminal from the previous layout reclaim focus during selection", () => {
     // The guard now lives in the tested `isTerminalPaneFocused` predicate; see
     // src/lib/__tests__/terminal-focus.test.ts for its behaviour.
