@@ -591,17 +591,6 @@ pub fn rmux_available() -> bool {
     })
 }
 
-/// Whether `name` resolves to an executable file, searching the same PATH a
-/// spawned session would see rather than this process's own.
-///
-/// A GUI app launched from Finder/Dock/Spotlight is started by `launchd`, which
-/// does not source the user's shell profile, so this process's own `PATH` is
-/// typically just `/usr/bin:/bin:/usr/sbin:/sbin` — missing Homebrew, cargo, and
-/// every other conventional install directory. `augmented_path` is what actually
-/// gets used to launch a session, so checking availability against anything
-/// narrower reports a backend as unavailable when it would in fact work, or
-/// (for a name that exists only in a directory `augmented_path` does not search)
-/// the other way around.
 fn executable_on_path(name: &str) -> bool {
     let path = planeai_core::command::augmented_path(&[]);
     std::env::split_paths(&path).any(|directory| {
