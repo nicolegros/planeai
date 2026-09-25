@@ -165,6 +165,24 @@ export function updateTabLabel(ptyKey: string, label: string): void {
   });
 }
 
+/**
+ * Refresh derived tab labels (e.g. after a session rename). Tabs with a custom
+ * title keep it, and the tree is left untouched when nothing changed.
+ */
+export function relabelTabs(labels: ReadonlyMap<string, string>): void {
+  if (!tree) return;
+  const stale = (tab: TabEntry) =>
+    !tab.customTitle && labels.has(tab.ptyKey) && labels.get(tab.ptyKey) !== tab.label;
+  if (!collectLeaves(tree).some((leaf) => leaf.tabs.some(stale))) return;
+  tree = mapTree(tree, (node) => {
+    if (node.type !== "leaf" || !node.tabs.some(stale)) return node;
+    return {
+      ...node,
+      tabs: node.tabs.map((tab) => (stale(tab) ? { ...tab, label: labels.get(tab.ptyKey)! } : tab)),
+    };
+  });
+}
+
 // ─── Initialization ──────────────────────────────────────────────────────────
 
 /** Initialize with a single leaf containing the given tab entries. */

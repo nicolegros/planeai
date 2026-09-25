@@ -102,7 +102,6 @@ function buildTaskMenu(task: TaskItem, linkedSession: Session | null): MenuItem[
           ...(linkedSession.status === "exited"
             ? [{ label: "Restart session", onSelect: () => {} } as MenuItem]
             : []),
-          { label: "Rename session", onSelect: () => {} } as MenuItem,
           { label: "Archive session", onSelect: () => {} } as MenuItem,
           { label: "Delete session", danger: true, onSelect: () => {} } as MenuItem,
         ]
@@ -272,7 +271,6 @@ describe("context menu item construction", () => {
         "Review diff",
         "Edit task",
         "Change status",
-        "Rename session",
         "Archive session",
         "Delete session",
       ]);
@@ -288,7 +286,6 @@ describe("context menu item construction", () => {
         "Edit task",
         "Change status",
         "Restart session",
-        "Rename session",
         "Archive session",
         "Delete session",
       ]);

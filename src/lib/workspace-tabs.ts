@@ -13,6 +13,7 @@ export interface WorkspaceTabTree {
   addSessionToLeaf: (leafId: string, tab: TabEntry) => void;
   setLeafActiveTab: (leafId: string, ptyKey: string) => void;
   removeSessionFromLeaf: (ptyKey: string) => boolean;
+  relabelTabs: (labels: ReadonlyMap<string, string>) => void;
 }
 
 export interface WorkspaceTabReconcile {
@@ -72,6 +73,9 @@ export function reconcileWorkspaceTabs(reconcile: WorkspaceTabReconcile): void {
     }
   }
   for (const key of stalePtyKeys) tree.removeSessionFromLeaf(key);
+
+  // Labels are copied into the tree (and persisted layout) when a tab is added.
+  tree.relabelTabs(new Map(reconcile.workspaceEntries.map((entry) => [entry.ptyKey, entry.label])));
 }
 
 /**

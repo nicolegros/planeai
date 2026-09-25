@@ -28,6 +28,8 @@
   let mode = $state<"task">("task");
   // svelte-ignore state_referenced_locally
   let sessionName = $state(taskPrefill?.name ?? "");
+  /** A typed name wins over the default derived from the selected task. */
+  let nameEdited = false;
   // svelte-ignore state_referenced_locally
   let taskKey = $state(taskPrefill?.key ?? "");
   // svelte-ignore state_referenced_locally
@@ -99,7 +101,7 @@
     taskSearchValue = task.key;
     const agentOrdinal = sessions.filter((session) => session.task_key === task.key).length + 1;
     const templates = getTaskManagerTemplates();
-    sessionName = task.title;
+    if (!nameEdited) sessionName = agentOrdinal === 1 ? task.title : `${task.title} (${agentOrdinal})`;
     taskPrompt = templates?.prompt ? renderTemplate(templates.prompt, task) : (task.description ? `Implement task ${task.key}: ${task.title}\n\n${task.description}` : `Implement task ${task.key}: ${task.title}`);
     const baseTaskBranch = templates?.branch ? renderTemplate(templates.branch, task) : `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-/]/g, "")}`;
     const taskBranch = agentOrdinal === 1 ? baseTaskBranch : `${baseTaskBranch}--${agentOrdinal}`;
@@ -226,6 +228,7 @@
     <Label>Name <span class="font-mono text-[10px] px-1 rounded {badge}">S</span></Label>
     <Input
       bind:value={sessionName}
+      oninput={() => (nameEdited = true)}
       onkeydown={metaEnter}
       placeholder="My session..."
     />

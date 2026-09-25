@@ -63,4 +63,40 @@ describe("reconcileWorkspaceTabs", () => {
 
     expect(splitTree.getFocusedLeaf()?.tabs.map((tab) => tab.ptyKey)).toEqual(["agent-1"]);
   });
+
+  it("relabels tabs when their session is renamed", () => {
+    splitTree.initTree([agent("agent-1"), shell("agent-1:1"), agent("agent-2")], "agent-1");
+
+    reconcileWorkspaceTabs({
+      workspaceEntries: [
+        { ...agent("agent-1"), label: "Fix login (2)" },
+        { ...shell("agent-1:1"), label: "Fix login (2) · Shell" },
+        agent("agent-2"),
+      ],
+      validSessionIds: new Set(["agent-1", "agent-2"]),
+      tree: splitTree,
+    });
+
+    expect(splitTree.getFocusedLeaf()?.tabs.map((tab) => tab.label)).toEqual([
+      "Fix login (2)",
+      "Fix login (2) · Shell",
+      "agent-2",
+    ]);
+    expect(splitTree.getFocusedLeaf()?.tabs.some((tab) => tab.customTitle)).toBe(false);
+  });
+
+  it("keeps a title the shell set for itself", () => {
+    splitTree.initTree(
+      [agent("agent-1"), { ...shell("agent-1:1"), label: "nvim", customTitle: true }],
+      "agent-1",
+    );
+
+    reconcileWorkspaceTabs({
+      workspaceEntries: [agent("agent-1"), { ...shell("agent-1:1"), label: "Renamed · Shell" }],
+      validSessionIds: new Set(["agent-1"]),
+      tree: splitTree,
+    });
+
+    expect(splitTree.getFocusedLeaf()?.tabs[1]?.label).toBe("nvim");
+  });
 });

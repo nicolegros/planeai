@@ -557,7 +557,6 @@
       else if (action.type === "review") { const linked = sessionForTask(task.key); if (linked) { onSelectSession(linked.id); onToggleDiff?.(); } }
       else if (action.type === "archive") { const linked = sessionForTask(task.key); if (linked) fadeOutThenAct(linked.id, () => onArchiveSession(linked)); }
       else if (action.type === "delete") { const linked = sessionForTask(task.key); if (linked) onDeleteSession(linked); }
-      else if (action.type === "rename") { const linked = sessionForTask(task.key); if (linked) startRename(linked); }
       else if (action.type === "restart") { const linked = sessionForTask(task.key); if (linked) onRestartSession(linked); }
     } else if (current.type === "plugin" && action.type === "select") {
       current.row.onSelect?.();
@@ -1011,7 +1010,6 @@
       ...(linkedSession
         ? [
             ...(linkedSession.status === 'exited' ? [{ label: "Restart session", onSelect: () => onRestartSession(linkedSession) }] : []),
-            { label: "Rename session", onSelect: () => startRename(linkedSession) },
             { label: "Archive session", onSelect: () => fadeOutThenAct(linkedSession.id, () => onArchiveSession(linkedSession)) },
             { label: "Delete session", danger: true, onSelect: () => onDeleteSession(linkedSession) },
           ]

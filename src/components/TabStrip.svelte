@@ -20,9 +20,10 @@
     onTabDragStart?: (e: DragEvent, tabIndex: number, tabId?: string) => void;
     onTabDrop?: (e: DragEvent, insertIndex: number) => void;
     onTabDragOver?: (e: DragEvent) => void;
+    onTabDoubleClick?: (index: number, tabId?: string) => void;
   }
 
-  let { tabs, activeTabIndex, activeTabId, focused = true, showAddButton = true, showCloseButton = false, draggable = false, onSelectTab, onAddTab, onClose, onTabDragStart, onTabDrop, onTabDragOver }: Props = $props();
+  let { tabs, activeTabIndex, activeTabId, focused = true, showAddButton = true, showCloseButton = false, draggable = false, onSelectTab, onAddTab, onClose, onTabDragStart, onTabDrop, onTabDragOver, onTabDoubleClick }: Props = $props();
 
   const TAB_ICONS: Record<string, typeof Bot> = { bot: Bot, "git-compare": GitCompare, file: FileCode, terminal: Terminal };
 
@@ -68,6 +69,7 @@
         draggable={draggable ? "true" : undefined}
         ondragstart={draggable ? (e) => onTabDragStart?.(e, tab.index, tab.id) : undefined}
         onclick={() => onSelectTab(tab.index, tab.id)}
+        ondblclick={onTabDoubleClick ? () => onTabDoubleClick(tab.index, tab.id) : undefined}
       >
         <Icon size={13} class={isActive && focused ? 'text-accent' : 'text-t3'} />
         {tab.label}

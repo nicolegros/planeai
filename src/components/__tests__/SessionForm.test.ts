@@ -176,7 +176,7 @@ describe("SessionForm", () => {
   });
 });
 
-it("keeps the task title for an additional task agent while defaulting it to an isolated worktree", async () => {
+it("numbers the name of an additional task agent while defaulting it to an isolated worktree", async () => {
   const target = renderForm({
     sessions: [
       {
@@ -205,10 +205,33 @@ it("keeps the task title for an additional task agent while defaulting it to an 
   flushSync();
 
   expect(target.querySelector<HTMLInputElement>("input[placeholder='My session...']")?.value).toBe(
-    "Fix bug",
+    "Fix bug (2)",
   );
   expect(target.querySelector<HTMLInputElement>("[data-field='branch'] input")?.value).toBe(
     "proj-1/fix-bug--2",
   );
   expect(target.querySelector<HTMLInputElement>("#use-worktree")?.checked).toBe(true);
+});
+
+it("keeps a name typed before the task list finishes loading", async () => {
+  const target = renderForm({
+    taskPrefill: {
+      key: "PROJ-1",
+      title: "Fix bug",
+      description: "",
+      branch: "",
+      name: "Fix bug",
+      prompt: "",
+    },
+  });
+  const nameInput = target.querySelector<HTMLInputElement>("input[placeholder='My session...']")!;
+  nameInput.value = "Reviewer agent";
+  nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+
+  await tick();
+  flushSync();
+  await tick();
+  flushSync();
+
+  expect(nameInput.value).toBe("Reviewer agent");
 });

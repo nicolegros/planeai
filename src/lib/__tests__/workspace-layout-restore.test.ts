@@ -108,6 +108,7 @@ describe("reconcileWorkspaceTabs preferredActiveTab", () => {
         (leaf as { activeTab: string }).activeTab = ptyKey;
       },
       removeSessionFromLeaf: () => true,
+      relabelTabs: () => {},
     };
   }
 

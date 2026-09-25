@@ -13,11 +13,11 @@
     symphonyStatus: { active: boolean; slots_used: number; max_concurrent: number } | null;
     runningCount: number; activeProvider: string | null;
     onSelectTab: (index: number, tabId?: string) => void; onCloseTab: (index: number) => void;
-    onAddTab: () => void; onOpenCommand?: () => void;
+    onAddTab: () => void; onTabDoubleClick?: (index: number, tabId?: string) => void; onOpenCommand?: () => void;
     titlebarContributions?: TitlebarContribution[]; titlebarSession?: PluginSessionContext;
     onOpenTitlebarContribution?: (pluginId: string, contributionId: string) => void;
   }
-  let { projectName, sessionName, tabs, activeTabIndex, activeTabId, symphonyStatus: _symphonyStatus, runningCount, activeProvider, onSelectTab, onCloseTab, onAddTab, onOpenCommand, titlebarContributions = [], titlebarSession, onOpenTitlebarContribution }: Props = $props();
+  let { projectName, sessionName, tabs, activeTabIndex, activeTabId, symphonyStatus: _symphonyStatus, runningCount, activeProvider, onSelectTab, onCloseTab, onAddTab, onTabDoubleClick, onOpenCommand, titlebarContributions = [], titlebarSession, onOpenTitlebarContribution }: Props = $props();
   const platformPadding = IS_MAC ? "pl-[72px]" : "pr-36";
 </script>
 <header data-tauri-drag-region class="h-[38px] flex items-center gap-3 px-[13px] shrink-0 bg-chrome border-b border-border {platformPadding}">
@@ -30,7 +30,7 @@
     {#if activeProvider}<span class="font-mono text-[10px] tracking-[.04em] text-t3 border border-border rounded-[5px] px-1.5 py-0.5 select-none">{activeProvider.toUpperCase()}</span>{/if}
     <span class="w-px h-[18px] bg-border shrink-0"></span>
   {/if}
-  <TabStrip {tabs} {activeTabIndex} {activeTabId} onSelectTab={onSelectTab} onAddTab={onAddTab} />
+  <TabStrip {tabs} {activeTabIndex} {activeTabId} onSelectTab={onSelectTab} onAddTab={onAddTab} {onTabDoubleClick} />
   <div class="ml-auto flex items-center gap-3 shrink-0">
     {#if runningCount > 0}<span class="flex items-center gap-1.5 text-[11.5px] text-t2 select-none"><span class="size-[7px] rounded-full bg-status-running" style="animation:pulse-dot 1.6s ease-in-out infinite"></span>{runningCount} running</span>{/if}
     {#each titlebarContributions as item (`${item.plugin.id}:${item.contribution.id}`)}
