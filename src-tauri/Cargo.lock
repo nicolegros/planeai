@@ -3461,15 +3461,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "planeai-rmux-spike"
-version = "0.0.0"
-dependencies = [
- "clap",
- "rmux-sdk",
- "tokio",
-]
-
-[[package]]
 name = "planeai-tasks"
 version = "0.0.0"
 dependencies = [

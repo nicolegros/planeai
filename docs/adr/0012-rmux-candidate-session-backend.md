@@ -95,7 +95,7 @@ Matching the existing daemon and tmux behaviour: unreachable rmux session or pan
 
 ### Validation before adoption
 
-A throwaway spike (`planeai-rmux-spike`, in `src-tauri/crates/`) drives a bundled rmux through `rmux-sdk` before any production wiring, so rmux assumptions do not spread into `pty.rs`, the CLI, and AXI ahead of evidence. It is a workspace member excluded from the app's dependency graph, and it requires the `rmux` binary on PATH. It must prove:
+A throwaway spike (`planeai-rmux-spike`) drove a bundled rmux through `rmux-sdk` before any production wiring, so rmux assumptions did not spread into `pty.rs`, the CLI, and AXI ahead of evidence. It was a workspace member excluded from the app's dependency graph, and it required the `rmux` binary on PATH. It has since been removed — the probe results below are what it existed to produce, and remain the record. It had to prove:
 
 1. **Daemon survival** — a `Preserve` session outlives the owning process; no lease reaping, no idle auto-shutdown. (`planeai-daemon` deliberately exits after 30s with no clients and no live sessions; rmux must not.)
 2. **Raw byte fidelity and replay** — reattaching to a full-screen TUI agent reproduces it correctly, including alternate buffer, OSC titles, and resize; lost output is reported, never silently skipped.

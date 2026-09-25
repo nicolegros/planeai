@@ -13,7 +13,6 @@ members = [
   "crates/planeai-daemon-bin",
   "crates/planeai-plugin-jira",
   "crates/planeai-plugin-fixture",
-  "crates/planeai-rmux-spike",
 ]
 resolver = "2"
 
