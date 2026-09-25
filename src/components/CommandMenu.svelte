@@ -19,7 +19,7 @@
     onArchiveSession: () => void;
     onDeleteSession: () => void;
     onNewSession: () => void;
-    onRenameSession: () => void;
+    onRenameSession: (id: string, name: string) => void | Promise<void>;
     onRestoreSession: (id: string) => void;
     onDestroyArchivedSession: (id: string) => void;
     onResetTerminal: () => void;
@@ -39,9 +39,11 @@
     pluginCommands?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
     onOpenPluginContribution?: (pluginId: string, contributionId: string) => void;
     openFileMode?: boolean;
+    /** Open straight into renaming this session. */
+    renameSessionId?: string | null;
   }
 
-  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onHideProject, onUnhideProject, onDeleteProject, onRestoreProject, onSelectTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onSplitVertical, onSplitHorizontal, onCloseSplit, pluginCommands = [], onOpenPluginContribution, openFileMode = false }: Props = $props();
+  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onHideProject, onUnhideProject, onDeleteProject, onRestoreProject, onSelectTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onSplitVertical, onSplitHorizontal, onCloseSplit, pluginCommands = [], onOpenPluginContribution, openFileMode = false, renameSessionId = null }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const sessions = $derived(orchestrator.getSessions());
@@ -69,7 +71,7 @@
   let query = $state("");
 
   let archivedSessions = $state<Session[]>([]);
-  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "hideProject" | "unhideProject" | "deleteProject" | "restoreProject" | "openFile" | "autoDispatch">("none");
+  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "hideProject" | "unhideProject" | "deleteProject" | "restoreProject" | "openFile" | "autoDispatch" | "renameSession">("none");
   let archivedProjects = $state<Project[]>([]);
   let fileList = $state<string[]>([]);
   let projectAutoModes = $state<Record<string, boolean>>({});
@@ -121,6 +123,26 @@
     }
   }
 
+  let renameTargetId = $state<string | null>(null);
+  let renameValue = $state("");
+
+  function openRename(sessionId: string) {
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) { close(); return; }
+    renameTargetId = session.id;
+    renameValue = session.name || session.branch;
+    subMenu = "renameSession";
+  }
+
+  function commitRename() {
+    const name = renameValue.trim();
+    const id = renameTargetId;
+    close();
+    if (id && name) void onRenameSession(id, name);
+  }
+
+  function selectAll(node: HTMLInputElement) { requestAnimationFrame(() => { node.focus(); node.select(); }); }
+
   function openDeleteProject() {
     subMenu = "deleteProject";
   }
@@ -140,6 +162,7 @@
 
   function close() {
     subMenu = "none";
+    renameTargetId = null;
     query = "";
     onOpenChange(false);
   }
@@ -152,6 +175,8 @@
       query = "";
       if (openFileMode) {
         openFilePicker();
+      } else if (renameSessionId) {
+        openRename(renameSessionId);
       } else {
         subMenu = "none";
       }
@@ -183,7 +208,19 @@
     >
       <Dialog.Title class="sr-only">Command Menu</Dialog.Title>
       <Dialog.Description class="sr-only">Search sessions, archive, or create new.</Dialog.Description>
-      {#if subMenu === "archivedSessions"}
+      {#if subMenu === "renameSession"}
+        <div class="flex flex-col">
+          <input
+            use:selectAll
+            bind:value={renameValue}
+            aria-label="Session name"
+            class="h-11 w-full border-b border-border bg-transparent px-4 text-sm outline-none placeholder:text-t3"
+            placeholder="Session name"
+            onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitRename(); } }}
+          />
+          <p class="px-4 py-2.5 text-xs text-t3">Rename session · <kbd class="font-mono">Enter</kbd> to save, <kbd class="font-mono">Esc</kbd> to cancel</p>
+        </div>
+      {:else if subMenu === "archivedSessions"}
         <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
             class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
@@ -509,7 +546,7 @@
                   keywords={["rename", "name", "edit"]}
                   disabled={!activeSessionId}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                  onSelect={() => { onRenameSession(); close(); }}
+                  onSelect={() => { if (activeSessionId) openRename(activeSessionId); }}
                 >
                   Rename session
                 </Command.Item>

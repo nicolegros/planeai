@@ -33,4 +33,25 @@ describe("TabStrip", () => {
     expect(select).toHaveBeenCalledWith(-2, "session:editor:/two.ts");
     unmount(component);
   });
+
+  it("reports a double-clicked tab", async () => {
+    const doubleClick = vi.fn();
+    const target = document.body.appendChild(document.createElement("div"));
+    const component = mount(TabStrip, {
+      target,
+      props: {
+        tabs: [{ id: "session-1", index: 0, label: "Fix login", icon: "bot" }],
+        activeTabIndex: 0,
+        onSelectTab: vi.fn(),
+        onTabDoubleClick: doubleClick,
+      },
+    });
+    await tick();
+
+    document
+      .querySelector('[role="tab"]')!
+      .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(doubleClick).toHaveBeenCalledWith(0, "session-1");
+    unmount(component);
+  });
 });

@@ -66,6 +66,7 @@
   let sidebarVisible = $state(true);
   let commandMenuOpen = $state(false);
   let commandMenuFileMode = $state(false);
+  let commandMenuRenameId = $state<string | null>(null);
   let showNewItemModal = $state(false);
   let showShortcuts = $state(false);
   let showHookPrompt = $state(false);
@@ -510,7 +511,7 @@
       }
       return sessionTabs.map((tab) => ({
         ptyKey: tab.index === 0 ? session.id : `${session.id}:${tab.index}`,
-        label: tab.index === 0 ? (session.name || session.branch || "Agent") : `${session.name || session.branch || "Agent"} · ${tab.customTitle ? tab.label : "Shell"}`,
+        label: tab.index === 0 ? (session.name || session.branch || "Agent") : (tab.customTitle ? tab.label : "Shell"),
         icon: tab.index === 0 ? (session.provider ? "bot" : "terminal") : "terminal",
         type: (tab.index === 0 ? "agent" : "shell") as "agent" | "shell",
         customTitle: tab.customTitle,
@@ -816,10 +817,25 @@
   }
 
   async function doRename(id: string, name: string) {
-    await sessionsApi.rename(id, name);
-    orchestrator.updateSessionName(id, name);
     renamingSessionId = null;
+    try {
+      await sessionsApi.rename(id, name);
+      orchestrator.updateSessionName(id, name);
+    } catch (error) {
+      showSnackbar(`Failed to rename session: ${error}`);
+    }
     focusTerminal();
+  }
+
+  function openSessionRename(sessionId: string): void {
+    commandMenuFileMode = false;
+    commandMenuRenameId = sessionId;
+    commandMenuOpen = true;
+  }
+
+  function renameFromTab(ptyKey: string | undefined, fallbackSessionId: string | null): void {
+    const sessionId = ptyKey ? ptyKeyToSessionId(ptyKey) : fallbackSessionId;
+    if (sessionId) openSessionRename(sessionId);
   }
 
   function openAddProject() {
@@ -1011,6 +1027,13 @@
 
   function openSessionForTask(task: TaskItem, project: Project): void {
     taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: task.title, prompt: "", baseBranch: task.base_branch, projectId: project.id };
+    showSessionForm = true;
+  }
+
+  /** Generic "new session" entry points start from the focused task, if any. */
+  function openNewSessionForm(): void {
+    if (activeTaskWorkspace && !activeLoopId && !activePluginId) { openSessionForTask(activeTaskWorkspace.task, activeTaskWorkspace.project); return; }
+    taskPrefill = null;
     showSessionForm = true;
   }
 
@@ -1245,8 +1268,8 @@
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
           if (navCycle.isCycling()) navCycle.cancel();
-          showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; closePluginContributionModal(); showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
-        } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
+          showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; closePluginContributionModal(); showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false; commandMenuRenameId = null;
+        } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; commandMenuRenameId = null; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
         else if (action.type === "new_tab") { splitNewTab(); }
@@ -1302,7 +1325,7 @@
         e.preventDefault();
         e.stopImmediatePropagation();
         if (e.key === 'Escape') { showNewItemModal = false; }
-        else if (e.key === 's') { showNewItemModal = false; taskPrefill = null; showSessionForm = true; }
+        else if (e.key === 's') { showNewItemModal = false; openNewSessionForm(); }
         else if (e.key === 't') { showNewItemModal = false; showTaskForm = true; }
         else if (e.key === 'l') { showNewItemModal = false; showLoopForm = true; }
       } else if (sessionToDelete) {
@@ -1404,6 +1427,7 @@
       }
     }}
     onAddTab={() => orchestrator.handleNewTab()}
+    onTabDoubleClick={(i, tabId) => { if (i === 0) renameFromTab(tabId, activeSessionId); }}
     {titlebarContributions}
     titlebarSession={activePluginSessionContext}
     onOpenTitlebarContribution={openTitlebarPluginContribution}
@@ -1427,7 +1451,7 @@
         onSelectTask={selectWorkspaceTask}
         onAddProject={openAddProject}
         onOpenPreferences={openPreferences}
-        onCreateSession={() => { taskPrefill = null; showSessionForm = true; }}
+        onCreateSession={openNewSessionForm}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
         onSelectLoop={selectWorkspaceLoop}
         onStartLoop={(id) => { loopsApi.start(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
@@ -1515,14 +1539,15 @@
     <CommandMenu
       open={commandMenuOpen}
       openFileMode={commandMenuFileMode}
-      onOpenChange={(v) => { commandMenuOpen = v; if (!v) commandMenuFileMode = false; }}
+      renameSessionId={commandMenuRenameId}
+      onOpenChange={(v) => { commandMenuOpen = v; if (!v) { commandMenuFileMode = false; commandMenuRenameId = null; } }}
       onSelectSession={(id) => { selectWorkspaceSession(id); focusTerminal(); }}
       onArchiveSession={() => { if (activeSessionId) { const s = sessions.find(x => x.id === activeSessionId); if (s) orchestrator.archiveSession(s); } }}
       onDeleteSession={() => { if (activeSessionId) { const s = sessions.find(x => x.id === activeSessionId); if (s) sessionToDelete = s; } }}
-      onRenameSession={() => { if (activeSessionId) { sidebarVisible = true; renamingSessionId = activeSessionId; } }}
+      onRenameSession={doRename}
       onRestoreSession={async (id) => { await sessionsApi.restore(id); await orchestrator.loadSessions(); }}
       onDestroyArchivedSession={async (id) => { await sessionsApi.destroy(id); }}
-      onNewSession={() => { if (projects.length === 0) openAddProject(); else showSessionForm = true; }}
+      onNewSession={() => { if (projects.length === 0) openAddProject(); else openNewSessionForm(); }}
       onResetTerminal={() => {
         if (activeSessionId) {
           orchestrator.recordUserInput(activeSessionId);
@@ -1593,6 +1618,7 @@
             }}
             onAddTab={() => { splitTree.setFocusedLeaf(leaf.id); splitNewTab(); }}
             onClose={() => splitTree.closeSplit(leaf.id)}
+            onTabDoubleClick={(i, tabId) => { if (i === 0) renameFromTab(tabId, null); }}
             onTabDragStart={(e, tabIndex, tabId) => handleTabDragStart(e, tabId ?? leaf.tabs.find((tab, visualIndex) => tabIndexForEntry(tab, visualIndex) === tabIndex)?.ptyKey ?? "", leaf.id)}
             onTabDrop={(e, insertIndex) => handleTabDrop(e, leaf.id, insertIndex)}
             onTabDragOver={handleTabDragOver}
@@ -1869,7 +1895,7 @@
             <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
           </div>
           <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
-            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] bg-accent-bg" onclick={() => { showNewItemModal = false; taskPrefill = null; showSessionForm = true; }}>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] bg-accent-bg" onclick={() => { showNewItemModal = false; openNewSessionForm(); }}>
               <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">›_</span>
               <span class="flex-1 text-[13.5px] text-t1">Session</span>
               <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">s</span>

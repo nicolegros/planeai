@@ -127,6 +127,20 @@ async function typeQuery(input: HTMLInputElement, text: string): Promise<void> {
   await tick();
 }
 
+async function findRenameInput(): Promise<HTMLInputElement> {
+  return await vi.waitFor(() => {
+    const next = document.querySelector<HTMLInputElement>("input[aria-label='Session name']");
+    expect(next).toBeTruthy();
+    return next!;
+  });
+}
+
+async function submitRename(input: HTMLInputElement, name: string): Promise<void> {
+  await typeQuery(input, name);
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await tick();
+}
+
 function visibleItemLabels(): string[] {
   return [...document.querySelectorAll("[data-command-item]")]
     .filter((el) => !el.hasAttribute("hidden") && el.getAttribute("aria-hidden") !== "true")
@@ -293,6 +307,43 @@ describe("CommandMenu", () => {
     await tick();
 
     expect(document.body.textContent).toContain("Orphan session");
+  });
+
+  it("renames the active session from the Rename session action", async () => {
+    const props = render();
+    const input = await findRootInput();
+
+    await typeQuery(input, "rename current session");
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    const renameInput = await findRenameInput();
+    expect(renameInput.value).toBe("Existing session");
+
+    await submitRename(renameInput, "  Second agent  ");
+
+    expect(props.onRenameSession).toHaveBeenCalledWith("session-1", "Second agent");
+    expect(props.onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("opens straight into renaming the requested session", async () => {
+    sessions = [makeSession(), makeSession({ id: "session-2", name: "Other agent" })];
+    const props = { ...menuProps(), renameSessionId: "session-2" };
+    render(props);
+
+    const renameInput = await findRenameInput();
+    expect(renameInput.value).toBe("Other agent");
+    await submitRename(renameInput, "Renamed");
+
+    expect(props.onRenameSession).toHaveBeenCalledWith("session-2", "Renamed");
+  });
+
+  it("ignores a blank rename", async () => {
+    const props = { ...menuProps(), renameSessionId: "session-1" };
+    render(props);
+
+    await submitRename(await findRenameInput(), "   ");
+
+    expect(props.onRenameSession).not.toHaveBeenCalled();
+    expect(props.onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("keeps listing a loop session even when a task could navigate to it", async () => {

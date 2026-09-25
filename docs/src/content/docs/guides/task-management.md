@@ -29,6 +29,14 @@ Open the command menu (**⌘K** / **Ctrl+K**) and start typing a task key or tit
 
 Tasks appear once you type — the menu's default view stays a short list of actions. Tasks in the project you are currently working in are listed first. Completed tasks are included unless "Hide done tasks" is enabled.
 
+### Starting and renaming sessions
+
+While a task is focused, every "new session" entry point (**⌘N** then **S**, "New session" in the command menu, the sidebar button) opens the form with that task and its project already selected.
+The session name defaults to the task title; additional sessions on the same task are numbered, for example "Fix login (2)", and the name stays editable.
+
+To rename a session, pick "Rename session" in the command menu or double-click its agent tab, type the new name, and press **Enter**.
+The workspace tabs follow the new name.
+
 ## Creating tasks
 
 There are three ways to create tasks, each suited to a different workflow.
