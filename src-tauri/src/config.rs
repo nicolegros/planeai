@@ -569,13 +569,7 @@ pub fn resolve_backend(config: &Config) -> &str {
 /// Check if tmux binary is available on PATH (cached — checked once per process).
 #[cfg(not(windows))]
 pub fn tmux_available() -> bool {
-    *TMUX_AVAILABLE.get_or_init(|| {
-        std::process::Command::new("which")
-            .arg("tmux")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    })
+    *TMUX_AVAILABLE.get_or_init(|| executable_on_path("tmux"))
 }
 
 #[cfg(windows)]
@@ -598,9 +592,7 @@ pub fn rmux_available() -> bool {
 }
 
 fn executable_on_path(name: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
+    let path = planeai_core::command::augmented_path(&[]);
     std::env::split_paths(&path).any(|directory| {
         if directory.as_os_str().is_empty() {
             return false;
