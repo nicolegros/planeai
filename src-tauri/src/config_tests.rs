@@ -311,6 +311,40 @@ fn executable_on_path_finds_a_file_in_a_path_directory() {
 }
 
 #[test]
+fn executable_on_path_finds_a_binary_missing_from_the_processs_own_path() {
+    // A GUI app launched from Finder/Dock/Spotlight is started by launchd, which
+    // does not source the user's shell profile: this process's raw `PATH` can be
+    // as narrow as `/usr/bin:/bin:/usr/sbin:/sbin`, missing Homebrew, cargo, and
+    // every other conventional install directory a session launch would still
+    // find. If the availability check used that raw PATH, it would report a
+    // backend unavailable when a real launch — which goes through
+    // `augmented_path` — would succeed. This reproduces that gap directly: the
+    // binary sits somewhere `augmented_path` searches but the raw PATH does not.
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap();
+    let cargo_bin = std::path::PathBuf::from(&home).join(".cargo").join("bin");
+    fs::create_dir_all(&cargo_bin).unwrap();
+    let binary = cargo_bin.join("planeai-fake-conventional-dir-binary");
+    fs::write(&binary, b"#!/bin/sh\n").unwrap();
+
+    let previous = std::env::var_os("PATH");
+    std::env::set_var("PATH", "/usr/bin:/bin:/usr/sbin:/sbin");
+    let found = executable_on_path("planeai-fake-conventional-dir-binary");
+    match previous {
+        Some(value) => std::env::set_var("PATH", value),
+        None => std::env::remove_var("PATH"),
+    }
+    let _ = fs::remove_file(&binary);
+
+    assert!(
+        found,
+        "a binary in a conventional install directory must be found even when \
+         the process's own PATH does not include it"
+    );
+}
+
+#[test]
 fn session_backend_round_trips_through_config_file() {
     let dir = tempfile::tempdir().unwrap();
     let config_dir = dir.path();
