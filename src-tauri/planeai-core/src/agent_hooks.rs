@@ -470,6 +470,8 @@ pub fn install_claude_hook_at(claude_dir: &Path, script_command: &str) -> Result
     ensure_hook("StopFailure", None);
     ensure_hook("Notification", Some("idle_prompt|permission_prompt"));
     ensure_hook("UserPromptSubmit", None);
+    // Flips the session back to busy after a permission prompt is approved.
+    ensure_hook("PostToolUse", None);
 
     let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     std::fs::write(&settings_path, output)
@@ -1002,6 +1004,22 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("planeai-stop-notify"));
+    }
+
+    #[test]
+    fn install_claude_hook_marks_post_tool_use_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join(".claude");
+        install_claude_hook_at(&claude_dir, "/path/planeai-stop-notify-claude.sh").unwrap();
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planeai-stop-notify"));
+        assert!(include_str!("../resources/planeai-stop-notify-claude.sh").contains("PostToolUse"));
     }
 
     #[test]

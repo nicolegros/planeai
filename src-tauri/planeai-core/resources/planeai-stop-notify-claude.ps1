@@ -8,6 +8,7 @@ $event = ($input_text | ConvertFrom-Json).hook_event_name
 $e = switch ($event) {
     "Stop" { "stop" }
     "UserPromptSubmit" { "busy" }
+    "PostToolUse" { "busy" }
     default { "notification" }
 }
 $msg = '{"session_id":"' + $sid + '","event":"' + $e + '"}'
