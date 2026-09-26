@@ -17,7 +17,7 @@ Download the latest release for your platform:
 ## Requirements
 
 - **tmux** (optional, for persistent sessions) — `brew install tmux` on macOS
-- **At least one AI agent CLI on PATH** — e.g., `kiro-cli`, `claude`, `gh copilot`
+- **At least one AI agent CLI on PATH** — e.g., `kiro-cli`, `claude`, `codex`, `gh copilot`
 
 ## Basic Usage
 

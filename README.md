@@ -2,14 +2,14 @@
 
 [Documentation](https://nicolegros.github.io/planeai) · [Releases](https://github.com/nicolegros/planeai/releases/latest)
 
-A desktop app that lets you run multiple AI coding agents in parallel — each in its own persistent terminal session, orchestrated from a keyboard-first UI. Works with Kiro, Claude, Copilot, or any CLI-based agent.
+A desktop app that lets you run multiple AI coding agents in parallel — each in its own persistent terminal session, orchestrated from a keyboard-first UI. Works with Kiro, Claude, Copilot, Codex, or any CLI-based agent.
 
 > **Status:** Early development. Expect breaking changes between releases.
 
 <!-- TODO: Add screenshot/GIF showing the main UI with multiple sessions running -->
 <table>
   <tr>
-    <td align="center"><img src="docs/assets/claude-dark.png" alt="Multi-agent support" /><br/><sub>Bring your agent (claude, copilot, kiro, etc.)</sub></td>
+    <td align="center"><img src="docs/assets/claude-dark.png" alt="Multi-agent support" /><br/><sub>Bring your agent (claude, codex, copilot, kiro, etc.)</sub></td>
     <td align="center"><img src="docs/assets/claude-light.png" alt="Custom themes" /><br/><sub>Custom themes and presets</sub></td>
   </tr>
   <tr>
@@ -22,7 +22,7 @@ A desktop app that lets you run multiple AI coding agents in parallel — each i
 
 - **Parallel agents** — run as many AI coding sessions as you need, side by side
 - **Persistent sessions** — agents keep running when you quit the app (tmux backend, or the experimental daemon and rmux backends)
-- **Provider-agnostic** — works with Kiro, Claude, Copilot, or any CLI agent
+- **Provider-agnostic** — works with Kiro, Claude, Copilot, Codex, or any CLI agent
 - **Keyboard-first** — command menu (Cmd+K / Ctrl+K), shortcuts for every action
 - **Task management** — built-in task tracker with lifecycle hooks and auto-dispatch
 - **Loop recipes** — declarative YAML workflows for multi-agent loops (maker-verifier, n-candidates-arbiter, custom)
@@ -43,7 +43,7 @@ Download the latest release for your platform:
 
 ### Requirements
 
-- At least one AI agent CLI on PATH (e.g., `kiro-cli`, `claude`, `gh copilot`)
+- At least one AI agent CLI on PATH (e.g., `kiro-cli`, `claude`, `codex`, `gh copilot`)
 - tmux (optional, for persistent sessions via tmux backend — `brew install tmux` on macOS)
 - rmux (optional, for persistent sessions via the experimental rmux backend — see [rmux.io](https://rmux.io))
 

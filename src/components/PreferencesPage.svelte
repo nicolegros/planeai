@@ -5,6 +5,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { loadSettings, getSettings, updateSettings, refreshSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager, type LanguageServerProfile, type EditorSettings } from "../lib/settings.svelte";
+  import { PROVIDER_PRESETS, type ProviderPreset } from "../lib/provider-presets";
   import { EDITOR_PRESETS, editorDraft, validateEditorSettings, type EditorMode } from "../lib/editor-settings";
   import {
     emptyLanguageServerProfileDraft,
@@ -315,6 +316,11 @@
     showAddProvider = false;
   }
 
+  function addProviderPreset(preset: ProviderPreset) {
+    const providers = { ...config.providers, [preset.key]: { ...preset.provider } };
+    updateSettings({ providers } as Partial<AppConfig>);
+  }
+
   function removeProvider(key: string) {
     const providers = { ...config.providers };
     delete providers[key];
@@ -569,10 +575,18 @@
           </div>
         </div>
       {:else}
-        <button
-          class="px-4 py-2 rounded-md text-sm font-medium bg-panel-hi text-t1 hover:bg-panel-hi"
-          onclick={() => { showAddProvider = true; }}
-        >+ Add Provider</button>
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            class="px-4 py-2 rounded-md text-sm font-medium bg-panel-hi text-t1 hover:bg-panel-hi"
+            onclick={() => { showAddProvider = true; }}
+          >+ Add Provider</button>
+          {#each PROVIDER_PRESETS.filter((preset) => !(preset.key in config.providers)) as preset (preset.key)}
+            <button
+              class="rounded border border-border px-2 py-1 text-xs text-t2 hover:text-accent"
+              onclick={() => addProviderPreset(preset)}
+            >+ {preset.label}</button>
+          {/each}
+        </div>
       {/if}
     </section>
 
