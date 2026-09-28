@@ -124,6 +124,13 @@ fn main() {
             db::migrate(&conn).expect("failed to run migrations");
             planeai_tasks::sqlite::migrate(&conn).expect("failed to run task migrations");
             plugins::migrate(&conn).expect("failed to run plugin runtime migrations");
+            match plugins::restore_session_panel_placements(&conn) {
+                Ok(0) => {}
+                Ok(count) => tracing::info!(count, "restored plugin session panel placements"),
+                Err(error) => {
+                    tracing::warn!(%error, "failed to restore plugin session panel placements")
+                }
+            }
             let bundled_plugins =
                 plugins::bundled_manifests().expect("invalid bundled plugin manifest");
             plugins::sync_inventory(&conn, &bundled_plugins)
