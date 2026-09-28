@@ -512,9 +512,16 @@ pub fn install_codex_hook(home: &str) -> Result<(), String> {
 /// Shell command Codex runs for the notify script, without the event argument.
 fn codex_script_command(script_path: &Path, custom_codex_home: bool) -> String {
     if cfg!(windows) {
-        format!("powershell -NoProfile -File \"{}\"", script_path.display())
+        format!(
+            "powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\"",
+            script_path.display()
+        )
     } else if custom_codex_home {
-        format!("\"{}\"", script_path.display())
+        // POSIX single quotes so `$`, backticks or `"` in CODEX_HOME stay literal.
+        format!(
+            "'{}'",
+            script_path.display().to_string().replace('\'', r"'\''")
+        )
     } else {
         // Keep `$HOME` unexpanded (Codex runs hooks through a shell) so a hooks.json
         // kept in dotfiles stays portable across machines.
@@ -549,18 +556,6 @@ pub fn install_codex_hook_at(codex_dir: &Path, script_command: &str) -> Result<(
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .ok_or("hooks.json `hooks` is not a JSON object")?;
-
-    // Drop planeai groups left behind for events planeai no longer hooks.
-    hooks.retain(|event, groups| {
-        if CODEX_HOOK_EVENTS.iter().any(|(e, _)| e == event) {
-            return true;
-        }
-        let Some(groups) = groups.as_array_mut() else {
-            return true;
-        };
-        groups.retain(|g| !codex_group_has_marker(g));
-        !groups.is_empty()
-    });
 
     for (event, arg) in CODEX_HOOK_EVENTS {
         let groups = hooks
@@ -659,30 +654,6 @@ mod tests {
     }
 
     #[test]
-    fn install_codex_hook_removes_stale_planeai_groups_only() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("hooks.json"),
-            r#"{"hooks":{
-              "PermissionRequest":[
-                {"hooks":[{"type":"command","command":"guard.sh"}]},
-                {"hooks":[{"type":"command","command":"planeai-stop-notify-codex.sh notification"}]}
-              ],
-              "SessionEnd":[{"hooks":[{"type":"command","command":"planeai-stop-notify-codex.sh stop"}]}]
-            }}"#,
-        )
-        .unwrap();
-        install_codex_hook_at(dir.path(), "planeai-stop-notify-codex.sh").unwrap();
-        let v = read_json(&dir.path().join("hooks.json"));
-        assert_eq!(
-            v["hooks"]["PermissionRequest"],
-            serde_json::json!([{"hooks":[{"type":"command","command":"guard.sh"}]}])
-        );
-        assert!(v["hooks"].get("SessionEnd").is_none());
-        assert!(is_codex_hook_installed_at(dir.path()));
-    }
-
-    #[test]
     fn install_codex_hook_appends_after_existing_groups() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("hooks.json"), SUPERSET_HOOKS).unwrap();
@@ -775,10 +746,10 @@ mod tests {
             codex_script_command(script, false),
             "\"$HOME/.codex/hooks/planeai-stop-notify-codex.sh\""
         );
-        let custom = Path::new("/opt/codex home/hooks/planeai-stop-notify-codex.sh");
+        let custom = Path::new("/opt/it's $HOME/hooks/planeai-stop-notify-codex.sh");
         assert_eq!(
             codex_script_command(custom, true),
-            "\"/opt/codex home/hooks/planeai-stop-notify-codex.sh\""
+            r"'/opt/it'\''s $HOME/hooks/planeai-stop-notify-codex.sh'"
         );
     }
 
@@ -817,11 +788,7 @@ mod tests {
         let sock = dir.path().join("n.sock");
         let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
 
-        for (arg, expected) in [
-            ("busy", "busy"),
-            ("stop", "stop"),
-            ("notification", "notification"),
-        ] {
+        for (arg, expected) in [("busy", "busy"), ("stop", "stop")] {
             let output = std::process::Command::new("bash")
                 .arg(&script)
                 .arg(arg)
@@ -901,6 +868,7 @@ mod tests {
         let codex = include_str!("../resources/planeai-stop-notify-codex.sh");
         let copilot = include_str!("../resources/planeai-stop-notify-copilot.sh");
         assert_eq!(run_notify_script(codex, Some("bogus"), ""), None);
+        assert_eq!(run_notify_script(codex, Some("notification"), ""), None);
         assert_eq!(run_notify_script(copilot, Some("bogus"), ""), None);
 
         if !has_command("jq") {
