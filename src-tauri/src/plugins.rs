@@ -744,27 +744,74 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
-    conn.execute(
-        "UPDATE plugin_inventory
-         SET ui_contributions = (
-             SELECT json_group_array(
-                 CASE
-                     WHEN json_extract(value, '$.placement') = 'session.panel'
-                         THEN json_set(value, '$.placement', 'main-pane')
-                     ELSE json(value)
-                 END
-             )
-             FROM json_each(plugin_inventory.ui_contributions)
-         )
-         WHERE json_valid(ui_contributions)
-           AND EXISTS (
-               SELECT 1
-               FROM json_each(plugin_inventory.ui_contributions)
-               WHERE json_extract(value, '$.placement') = 'session.panel'
-           )",
-        [],
-    )?;
     Ok(())
+}
+
+/// Repairs local inventories whose `session.panel` contributions were rewritten to
+/// `main-pane` by a former startup migration, using the immutable installed package manifest.
+pub fn restore_session_panel_placements(conn: &Connection) -> Result<usize, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT id, installed_path, ui_contributions FROM plugin_inventory
+             WHERE source_kind = 'local' AND installed_path IS NOT NULL",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())?;
+    let mut restored = 0;
+    for (plugin_id, installed_path, json) in rows {
+        let manifest_path = Path::new(&installed_path).join(crate::plugin_packages::MANIFEST_FILE);
+        let Ok(manifest_json) = std::fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let manifest: PluginManifest = match serde_json::from_str(&manifest_json) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                tracing::warn!(%plugin_id, %error, "skipping unreadable installed plugin manifest");
+                continue;
+            }
+        };
+        let session_panels = manifest
+            .effective_ui_contributions()
+            .into_iter()
+            .filter(|contribution| contribution.placement == PluginUiPlacement::SessionPanel)
+            .map(|contribution| contribution.id)
+            .collect::<HashSet<_>>();
+        let mut contributions: Vec<PluginUiContribution> =
+            serde_json::from_str(&json).map_err(|error| {
+                format!("failed to parse persisted UI contributions for {plugin_id}: {error}")
+            })?;
+        let mut changed = false;
+        for contribution in &mut contributions {
+            if contribution.placement == PluginUiPlacement::MainPane
+                && session_panels.contains(&contribution.id)
+            {
+                contribution.placement = PluginUiPlacement::SessionPanel;
+                changed = true;
+            }
+        }
+        if !changed {
+            continue;
+        }
+        let json = serde_json::to_string(&contributions)
+            .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
+        conn.execute(
+            "UPDATE plugin_inventory SET ui_contributions = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+            params![plugin_id, json],
+        )
+        .map_err(|error| format!("failed to restore plugin UI contributions: {error}"))?;
+        restored += 1;
+    }
+    Ok(restored)
 }
 
 fn validate_shortcut_collisions(
@@ -3762,28 +3809,115 @@ mod tests {
         assert!(inventory.background_service.is_none());
     }
 
+    fn session_panel_manifest() -> PluginManifest {
+        serde_json::from_value(serde_json::json!({
+            "schema": "planeai.plugin.v1",
+            "id": "panel-test",
+            "name": "Panel test",
+            "version": "1.0.0",
+            "host_api_version": HOST_API_VERSION,
+            "source_kind": "local",
+            "backend_entrypoints": { crate::plugin_packages::current_platform_key(): "bin/plugin" },
+            "ui_contributions": [
+                { "id": "details", "label": "Details", "placement": "session.panel", "entrypoint": "ui/details.js" },
+                { "id": "dashboard", "label": "Dashboard", "placement": "main-pane", "entrypoint": "ui/dashboard.js" }
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn placements(conn: &Connection, plugin_id: &str) -> Vec<PluginUiPlacement> {
+        get_inventory(conn, plugin_id)
+            .unwrap()
+            .unwrap()
+            .ui_contributions
+            .into_iter()
+            .map(|contribution| contribution.placement)
+            .collect()
+    }
+
     #[test]
-    fn migration_converts_legacy_session_panel_to_a_main_pane_contribution() {
+    fn migration_preserves_session_panel_contributions() {
         let conn = database();
-        conn.execute(
-            "UPDATE plugin_inventory SET ui_contributions = ?1 WHERE id = 'jira'",
-            [r#"[{"id":"legacy-panel","label":"Legacy panel","placement":"session.panel","entrypoint":"ui/panel.js","order":null,"shortcut":null},{"id":"preferences","label":"Preferences","placement":"preferences","entrypoint":"ui/preferences.js","order":null,"shortcut":null}]"#],
+        let package = tempfile::TempDir::new().unwrap();
+        insert_local_inventory(
+            &conn,
+            &session_panel_manifest(),
+            "bin/plugin",
+            "hash",
+            package.path(),
+            "/source",
         )
         .unwrap();
 
         migrate(&conn).unwrap();
 
-        let inventory = get_inventory(&conn, "jira").unwrap().unwrap();
-        assert_eq!(inventory.ui_contributions[0].id, "legacy-panel");
         assert_eq!(
-            inventory.ui_contributions[0].placement,
-            PluginUiPlacement::MainPane
-        );
-        assert_eq!(
-            inventory.ui_contributions[1].placement,
-            PluginUiPlacement::Preferences
+            placements(&conn, "panel-test"),
+            [PluginUiPlacement::SessionPanel, PluginUiPlacement::MainPane]
         );
     }
+
+    #[test]
+    fn restores_session_panel_placements_from_the_installed_package_manifest() {
+        let conn = database();
+        let package = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            package.path().join(crate::plugin_packages::MANIFEST_FILE),
+            r#"{"schema":"planeai.plugin.v1","id":"panel-test","name":"Panel test","version":"1.0.0","host_api_version":"planeai.plugin-host.v1","source_kind":"local","backend_entrypoints":{},"ui_contributions":[{"id":"details","label":"Details","placement":"session.panel","entrypoint":"ui/details.js"},{"id":"dashboard","label":"Dashboard","placement":"main-pane","entrypoint":"ui/dashboard.js"}]}"#,
+        )
+        .unwrap();
+        insert_local_inventory(
+            &conn,
+            &session_panel_manifest(),
+            "bin/plugin",
+            "hash",
+            package.path(),
+            "/source",
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE plugin_inventory SET ui_contributions = replace(ui_contributions, '\"session.panel\"', '\"main-pane\"') WHERE id = 'panel-test'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            placements(&conn, "panel-test"),
+            [PluginUiPlacement::MainPane, PluginUiPlacement::MainPane]
+        );
+
+        assert_eq!(restore_session_panel_placements(&conn).unwrap(), 1);
+        assert_eq!(
+            placements(&conn, "panel-test"),
+            [PluginUiPlacement::SessionPanel, PluginUiPlacement::MainPane]
+        );
+        assert_eq!(restore_session_panel_placements(&conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn session_panel_restoration_skips_missing_or_unreadable_package_manifests() {
+        let conn = database();
+        let package = tempfile::TempDir::new().unwrap();
+        insert_local_inventory(
+            &conn,
+            &session_panel_manifest(),
+            "bin/plugin",
+            "hash",
+            package.path(),
+            "/source",
+        )
+        .unwrap();
+
+        assert_eq!(restore_session_panel_placements(&conn).unwrap(), 0);
+
+        std::fs::write(
+            package.path().join(crate::plugin_packages::MANIFEST_FILE),
+            "not json",
+        )
+        .unwrap();
+        assert_eq!(restore_session_panel_placements(&conn).unwrap(), 0);
+    }
+
     #[test]
     fn bundled_jira_manifest_is_valid_and_disabled_by_default() {
         let manifest = bundled_manifests().unwrap().pop().unwrap();
