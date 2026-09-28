@@ -121,9 +121,11 @@ planeai installs a small notify script into each supported agent's own config so
 | Kiro    | `~/.kiro/agents/default.json`                 | `userPromptSubmit` -> busy, `stop` -> stop                                                             |
 | Claude  | `~/.claude/settings.json`                     | `UserPromptSubmit`/`PostToolUse` -> busy, `Stop` -> stop, `Notification`/`StopFailure` -> notification |
 | Copilot | `$COPILOT_HOME/hooks/planeai-notify.json`     | `userPromptSubmitted` -> busy, `agentStop` -> stop, `errorOccurred` -> notification                    |
-| Codex   | `$CODEX_HOME/hooks.json` (default `~/.codex`) | `UserPromptSubmit`/`PostToolUse` -> busy, `Stop` -> stop, `PermissionRequest` -> notification          |
+| Codex   | `$CODEX_HOME/hooks.json` (default `~/.codex`) | `UserPromptSubmit`/`PostToolUse` -> busy, `Stop` -> stop                                               |
 
 `PostToolUse` flips a session back to busy after a permission prompt is approved, since PTY output does not override the idle state of a hook-enabled session.
+Notify scripts ignore any event they do not map explicitly, so a hook config newer than its script can never flood the user with alerts.
+Codex `PermissionRequest` is not hooked: with `approvals_reviewer = "auto_review"` it fires for every escalated command even though no human is needed.
 Codex only runs hooks the user has trusted: it asks on the first launch after installation.
 Until the hooks are trusted, Codex sessions stay busy because hook-enabled sessions skip silence detection.
 The Codex hook command keeps `$HOME` unexpanded so a `hooks.json` kept in dotfiles stays portable, and planeai rewrites the file in place so a symlinked `hooks.json` is preserved.

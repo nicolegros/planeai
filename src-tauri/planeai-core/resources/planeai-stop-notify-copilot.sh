@@ -7,7 +7,8 @@ SOCK="${PLANEAI_SOCKET:-$HOME/Library/Application Support/ca.nicolegros.planeai/
 case "$1" in
   stop) E="stop" ;;
   busy) E="busy" ;;
-  *)    E="notification" ;;
+  notification) E="notification" ;;
+  *)    exit 0 ;;  # unknown events must never alert
 esac
 [ -S "$SOCK" ] && printf '{"session_id":"%s","event":"%s"}\n' "$SESSION_ID" "$E" | nc -U "$SOCK" -w1 2>/dev/null
 exit 0

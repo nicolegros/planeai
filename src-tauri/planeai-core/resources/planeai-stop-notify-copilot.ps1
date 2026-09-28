@@ -6,7 +6,8 @@ $sock = if ($env:PLANEAI_SOCKET) { $env:PLANEAI_SOCKET } else { "\\.\pipe\planea
 $e = switch ($args[0]) {
     "stop" { "stop" }
     "busy" { "busy" }
-    default { "notification" }
+    "notification" { "notification" }
+    default { exit 0 }  # unknown events must never alert
 }
 $msg = '{"session_id":"' + $sid + '","event":"' + $e + '"}'
 $pipeName = $sock -replace '^\\\\.\\pipe\\',''

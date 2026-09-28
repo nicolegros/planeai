@@ -9,7 +9,9 @@ $e = switch ($event) {
     "Stop" { "stop" }
     "UserPromptSubmit" { "busy" }
     "PostToolUse" { "busy" }
-    default { "notification" }
+    "Notification" { "notification" }
+    "StopFailure" { "notification" }
+    default { exit 0 }  # unknown events must never alert
 }
 $msg = '{"session_id":"' + $sid + '","event":"' + $e + '"}'
 $pipeName = $sock -replace '^\\\\.\\pipe\\',''
