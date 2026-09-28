@@ -17,3 +17,5 @@ tokio = { workspace = true }
 planeai-core = { path = "../planeai-core" }
 tempfile = { workspace = true }
 rmux-sdk = "=0.10.0"
+# `start_paused` lets settle-timing tests run on virtual time.
+tokio = { workspace = true, features = ["test-util"] }

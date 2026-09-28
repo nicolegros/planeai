@@ -302,6 +302,13 @@ into the input buffer and submits nothing, so the prompt sits on the input line
 while the send reports success. `RmuxClient::submit_text` owns the byte so no call
 site has to know it.
 
+The CR is also a separate input, sent only once the pane's echo of the text has
+gone quiet (capped at a few seconds). An agent that receives text and CR in one
+input reads the whole burst as a paste and keeps the CR as a newline, so a
+multi-line prompt, such as editor feedback from the nvim plugin, is typed but
+never submitted. A fixed delay is not enough, because a large prompt takes longer
+to ingest than a short one.
+
 Ownership rules:
 
 - One rmux session per TaskWorkspace, created when its first resource is spawned, destroyed **only on explicit task deletion** (`planeai-cli task delete`). Moving a task to `Done` archives its agent panes but keeps the workspace and its rmux session.
@@ -312,6 +319,7 @@ Ownership rules:
 - Session cleanup policy is `Preserve` — `KillOnOwnerExit` would kill every agent when the app quits.
 - Killing the last session stops the daemon, so all paths use `connect_or_start` and treat a closed transport as restart-and-retry.
 - rmux applies no backpressure to the child: a consumer that stops draining loses output (reported via lag notices with a resume point). So the adapter drains continuously into its own bounded buffer and implements `pause()`/`resume()` PlaneAI-side, like the existing `DaemonBackend`. The read loop is performance-critical — a debug-build consumer lost 97.6% of a 6.29 MiB burst that a release build delivered intact.
+- A pane does not inherit the client's environment: rmux gives it a minimal PATH of its own. Every spawn passes PlaneAI's augmented PATH and TERM explicitly (`build_daemon_env`), or tools like the agent CLI are not found.
 - Agent and shell commands use explicit argv, never `.shell()`, which would run the user's login shell (fish, nu) instead of `sh`.
 - `rmux-daemon` is a separate binary from `rmux` and is what gets spawned; ship it as a sidecar and point `RMUX_SDK_DAEMON_BINARY` at its absolute path.
 - xterm remains the renderer, replaying the recovery stream's `keyframe` then following its live byte events; snapshots are additive for AXI/automation only.
