@@ -925,19 +925,20 @@ async fn a_large_multiline_prompt_is_submitted_to_a_real_agent() {
 
     let context = include_str!("../src/client.rs");
     let prompt = format!(
-        "Please address this editor feedback:\n\n--- src/client.rs ---\n```rust\n{context}\n```\nComment: reply with one word\n"
+        "Please address this editor feedback:\n\n--- src/client.rs ---\n```rust\n{context}\n```\nComment: do not run any tools, just reply with one word\n"
     );
     client
         .submit_text(&workspace, handle, &prompt)
         .await
         .expect("submit_text");
 
-    // Submitted once the agent answers below the prompt; an unsubmitted prompt
-    // is still sitting in the input box with nothing after it.
+    // Submitted once the agent finishes a turn (`✻ Worked for 4s`). An
+    // unsubmitted prompt sits in the input box and no turn ever runs; a large
+    // prompt may be shown collapsed, so its own text cannot be matched.
     let answered = wait_for_screen(&client, &workspace, handle, |screen| {
         screen
-            .rsplit_once("Comment: reply with one word")
-            .is_some_and(|(_, after)| after.contains("\n⏺ "))
+            .lines()
+            .any(|line| line.trim_start().starts_with("✻ ") && line.contains(" for "))
     })
     .await;
     let screen = client

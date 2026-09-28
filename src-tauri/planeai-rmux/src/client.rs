@@ -359,24 +359,14 @@ impl RmuxClient {
         })
     }
 
-    /// Write literal text to a resource's pane.
-    ///
-    /// Uses the `send-keys -l` path, so bytes reach the tty unmodified. Keeping
-    /// this in the crate means callers never handle raw SDK handles just to send a
-    /// prompt.
-    pub async fn send_text(
-        &self,
-        workspace: &WorkspaceName,
-        handle: ResourceHandle,
-        text: &str,
-    ) -> Result<()> {
+    /// Resolve a resource's pane.
+    async fn pane(&self, workspace: &WorkspaceName, handle: ResourceHandle) -> Result<Pane> {
         let name = self.workspace_name(workspace)?;
         let session = self.session(&name).await?;
-        let pane = session
+        session
             .pane_by_id(handle.pane_id)
             .await
-            .map_err(Error::sdk("pane_by_id"))?;
-        pane.send_text(text).await.map_err(Error::sdk("send_text"))
+            .map_err(Error::sdk("pane_by_id"))
     }
 
     /// Send a prompt and submit it.
@@ -393,24 +383,18 @@ impl RmuxClient {
         handle: ResourceHandle,
         text: &str,
     ) -> Result<()> {
-        let name = self.workspace_name(workspace)?;
-        let session = self.session(&name).await?;
-        let pane = session
-            .pane_by_id(handle.pane_id)
-            .await
-            .map_err(Error::sdk("pane_by_id"))?;
+        let pane = self.pane(workspace, handle).await?;
         // Subscribed before writing, so the echo cannot be missed.
         let mut output = pane
             .output_stream()
             .await
             .map_err(Error::sdk("output_stream"))?;
-        pane.send_text(text)
-            .await
-            .map_err(Error::sdk("send_text"))?;
+        // Writes are not retried as transport errors: a lost reply cannot be told
+        // apart from lost input, and a retry could type the text twice.
+        let delivery = |source| Error::PromptDelivery { source };
+        pane.send_text(text).await.map_err(delivery)?;
         wait_for_echo_to_settle(&mut output, SUBMIT_QUIET, SUBMIT_SETTLE_LIMIT).await;
-        pane.send_text(SUBMIT_BYTE)
-            .await
-            .map_err(Error::sdk("send_text"))
+        pane.send_text(SUBMIT_BYTE).await.map_err(delivery)
     }
 
     /// Capture a resource's pane as plain text, ANSI stripped.
@@ -427,12 +411,7 @@ impl RmuxClient {
         workspace: &WorkspaceName,
         handle: ResourceHandle,
     ) -> Result<String> {
-        let name = self.workspace_name(workspace)?;
-        let session = self.session(&name).await?;
-        let pane = session
-            .pane_by_id(handle.pane_id)
-            .await
-            .map_err(Error::sdk("pane_by_id"))?;
+        let pane = self.pane(workspace, handle).await?;
         let capture = pane
             .capture_pane()
             .escape_sequences(false)
@@ -458,12 +437,7 @@ impl RmuxClient {
         workspace: &WorkspaceName,
         handle: ResourceHandle,
     ) -> Result<String> {
-        let name = self.workspace_name(workspace)?;
-        let session = self.session(&name).await?;
-        let pane = session
-            .pane_by_id(handle.pane_id)
-            .await
-            .map_err(Error::sdk("pane_by_id"))?;
+        let pane = self.pane(workspace, handle).await?;
         let capture = pane
             .capture_pane()
             .escape_sequences(false)
@@ -674,7 +648,16 @@ trait OutputChunks {
 
 impl OutputChunks for rmux_sdk::PaneOutputStream {
     async fn next_chunk(&mut self) -> bool {
-        matches!(self.next().await, Ok(Some(_)))
+        match self.next().await {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            // A failed poll says nothing about the echo, so wait out the window
+            // instead of sending Enter into a paste still in flight.
+            Err(error) => {
+                tracing::warn!(%error, "rmux output poll failed while settling a prompt");
+                std::future::pending().await
+            }
+        }
     }
 }
 
