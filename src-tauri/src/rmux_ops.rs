@@ -107,9 +107,8 @@ pub fn spawn_resource_blocking(
 
 /// Send a prompt to a session's agent pane and submit it.
 ///
-/// `send_text` is the literal `send-keys -l` path, so the text reaches the tty
-/// unmodified. The submit byte is the client's concern — agents read raw-mode
-/// Enter as `\r`, not `\n`.
+/// Submission is the client's concern: it types the text, waits for the echo to
+/// settle, then sends Enter as `\r` (see `RmuxClient::submit_text`).
 pub fn send_prompt(session_id: &str, text: &str) -> Result<(), String> {
     let (workspace, handle) = resolve(&db()?, session_id)?;
     let text = text.to_string();

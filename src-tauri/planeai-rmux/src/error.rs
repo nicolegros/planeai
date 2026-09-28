@@ -33,6 +33,15 @@ pub enum Error {
     #[error("rmux pane %{pane_id} is gone")]
     ResourceGone { pane_id: u32 },
 
+    /// Writing a prompt failed, possibly after part of it reached the pane.
+    ///
+    /// Deliberately not a transport error: retrying could type the text twice.
+    #[error("rmux prompt delivery failed and may be partially typed: {source}")]
+    PromptDelivery {
+        #[source]
+        source: rmux_sdk::RmuxError,
+    },
+
     /// Any other SDK failure, carrying the operation for context.
     #[error("rmux {operation} failed: {source}")]
     Sdk {
@@ -85,3 +94,26 @@ impl Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn transport() -> rmux_sdk::RmuxError {
+        rmux_sdk::RmuxError::transport("send", std::io::Error::other("closed"))
+    }
+
+    #[test]
+    fn a_transport_failure_is_retried() {
+        assert!(Error::sdk("send_text")(transport()).is_daemon_gone());
+    }
+
+    #[test]
+    fn a_failed_prompt_write_is_not_retried() {
+        // The text may already be in the pane; a retry could type it a second time.
+        assert!(!Error::PromptDelivery {
+            source: transport()
+        }
+        .is_daemon_gone());
+    }
+}

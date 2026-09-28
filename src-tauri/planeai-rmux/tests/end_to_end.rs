@@ -51,7 +51,13 @@ fn spawn_spec(workspace: &WorkspaceName, pty_key: &str, command: &str, cwd: &str
         pty_key: pty_key.to_string(),
         command: command.to_string(),
         cwd: cwd.to_string(),
-        env: vec!["PLANEAI_E2E=1".to_string()],
+        // rmux gives a pane its own minimal environment rather than the client's,
+        // so production passes PATH and TERM explicitly and so must this.
+        env: vec![
+            "PLANEAI_E2E=1".to_string(),
+            format!("PATH={}", std::env::var("PATH").unwrap_or_default()),
+            "TERM=xterm-256color".to_string(),
+        ],
         cols: 100,
         rows: 30,
     }
@@ -891,4 +897,76 @@ async fn drain_until(
             return true;
         }
     }
+}
+
+#[tokio::test]
+#[ignore = "requires the rmux binary and an authenticated `claude` on PATH"]
+async fn a_large_multiline_prompt_is_submitted_to_a_real_agent() {
+    // Editor feedback is the shape that failed: many lines of code context sent
+    // in one go. An agent reads a burst as a paste, and an Enter arriving inside
+    // it becomes a newline in the prompt rather than a submission.
+    let runtime = tempfile::tempdir().unwrap();
+    let client = connect(runtime.path()).await;
+    let workspace = workspace(&format!("AGENT-{}", unique_suffix()));
+    // A trusted directory, so the agent opens straight to its prompt.
+    let cwd = env!("CARGO_MANIFEST_DIR").to_string();
+    // Production geometry, so a long prompt overflows the input box as it does
+    // in the app.
+    let spawn = ResourceSpawn {
+        cols: 80,
+        rows: 24,
+        ..spawn_spec(&workspace, "agent", "claude --model haiku", &cwd)
+    };
+    let handle = client.spawn_resource(&spawn).await.expect("spawn agent");
+    assert!(
+        wait_for_screen(&client, &workspace, handle, |screen| screen.contains("❯")).await,
+        "the agent never showed its prompt"
+    );
+
+    let context = include_str!("../src/client.rs");
+    let prompt = format!(
+        "Please address this editor feedback:\n\n--- src/client.rs ---\n```rust\n{context}\n```\nComment: do not run any tools, just reply with one word\n"
+    );
+    client
+        .submit_text(&workspace, handle, &prompt)
+        .await
+        .expect("submit_text");
+
+    // Submitted once the agent finishes a turn (`✻ Worked for 4s`). An
+    // unsubmitted prompt sits in the input box and no turn ever runs; a large
+    // prompt may be shown collapsed, so its own text cannot be matched.
+    let answered = wait_for_screen(&client, &workspace, handle, |screen| {
+        screen
+            .lines()
+            .any(|line| line.trim_start().starts_with("✻ ") && line.contains(" for "))
+    })
+    .await;
+    let screen = client
+        .capture_resource_text(&workspace, handle)
+        .await
+        .unwrap_or_default();
+    client.kill_workspace(&workspace).await.expect("cleanup");
+    assert!(
+        answered,
+        "the prompt was typed but never submitted:\n{screen}"
+    );
+}
+
+/// Poll the pane's text until `ready` accepts it.
+async fn wait_for_screen(
+    client: &RmuxClient,
+    workspace: &WorkspaceName,
+    handle: ResourceHandle,
+    ready: impl Fn(&str) -> bool,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(screen) = client.capture_resource_text(workspace, handle).await {
+            if ready(&screen) {
+                return true;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    false
 }

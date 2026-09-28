@@ -7,6 +7,7 @@
 //! full terminals rather than simultaneously visible splits.
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use rmux_sdk::{
     EnsureSession, Pane, PaneId, PaneRecoveryStream, Rmux, Session, SessionName, TerminalSizeSpec,
@@ -358,38 +359,42 @@ impl RmuxClient {
         })
     }
 
-    /// Write literal text to a resource's pane.
-    ///
-    /// Uses the `send-keys -l` path, so bytes reach the tty unmodified. Keeping
-    /// this in the crate means callers never handle raw SDK handles just to send a
-    /// prompt.
-    pub async fn send_text(
-        &self,
-        workspace: &WorkspaceName,
-        handle: ResourceHandle,
-        text: &str,
-    ) -> Result<()> {
+    /// Resolve a resource's pane.
+    async fn pane(&self, workspace: &WorkspaceName, handle: ResourceHandle) -> Result<Pane> {
         let name = self.workspace_name(workspace)?;
         let session = self.session(&name).await?;
-        let pane = session
+        session
             .pane_by_id(handle.pane_id)
             .await
-            .map_err(Error::sdk("pane_by_id"))?;
-        pane.send_text(text).await.map_err(Error::sdk("send_text"))
+            .map_err(Error::sdk("pane_by_id"))
     }
 
     /// Send a prompt and submit it.
     ///
-    /// Submission lives here rather than at the call site so no caller has to
-    /// remember which byte an agent reads as Enter. See [`submit_payload`].
+    /// The text and the Enter byte ([`SUBMIT_BYTE`]) go out as separate inputs,
+    /// with Enter held back until the pane has finished echoing the text. An
+    /// agent TUI reads input arriving in one burst as a paste, and an Enter inside
+    /// a paste becomes a newline in the prompt instead of submitting it. A fixed
+    /// delay is not enough: a large multi-line prompt, such as editor feedback
+    /// carrying code context, takes the agent longer to ingest than a short one.
     pub async fn submit_text(
         &self,
         workspace: &WorkspaceName,
         handle: ResourceHandle,
         text: &str,
     ) -> Result<()> {
-        self.send_text(workspace, handle, &submit_payload(text))
+        let pane = self.pane(workspace, handle).await?;
+        // Subscribed before writing, so the echo cannot be missed.
+        let mut output = pane
+            .output_stream()
             .await
+            .map_err(Error::sdk("output_stream"))?;
+        // Writes are not retried as transport errors: a lost reply cannot be told
+        // apart from lost input, and a retry could type the text twice.
+        let delivery = |source| Error::PromptDelivery { source };
+        pane.send_text(text).await.map_err(delivery)?;
+        wait_for_echo_to_settle(&mut output, SUBMIT_QUIET, SUBMIT_SETTLE_LIMIT).await;
+        pane.send_text(SUBMIT_BYTE).await.map_err(delivery)
     }
 
     /// Capture a resource's pane as plain text, ANSI stripped.
@@ -406,12 +411,7 @@ impl RmuxClient {
         workspace: &WorkspaceName,
         handle: ResourceHandle,
     ) -> Result<String> {
-        let name = self.workspace_name(workspace)?;
-        let session = self.session(&name).await?;
-        let pane = session
-            .pane_by_id(handle.pane_id)
-            .await
-            .map_err(Error::sdk("pane_by_id"))?;
+        let pane = self.pane(workspace, handle).await?;
         let capture = pane
             .capture_pane()
             .escape_sequences(false)
@@ -437,12 +437,7 @@ impl RmuxClient {
         workspace: &WorkspaceName,
         handle: ResourceHandle,
     ) -> Result<String> {
-        let name = self.workspace_name(workspace)?;
-        let session = self.session(&name).await?;
-        let pane = session
-            .pane_by_id(handle.pane_id)
-            .await
-            .map_err(Error::sdk("pane_by_id"))?;
+        let pane = self.pane(workspace, handle).await?;
         let capture = pane
             .capture_pane()
             .escape_sequences(false)
@@ -625,7 +620,7 @@ impl RmuxClient {
     }
 }
 
-/// Append the byte an agent reads as Enter.
+/// The byte an agent reads as Enter.
 ///
 /// Carriage return, not line feed. Agents run their TUI in raw mode, where the
 /// terminal driver performs no CR/LF translation and Enter arrives literally as
@@ -634,13 +629,61 @@ impl RmuxClient {
 ///
 /// This matches the other backends: `planeai-daemon` pushes `b'\r'` onto the
 /// input payload, and tmux's separate `send-keys Enter` resolves to CR. The
-/// `Enter` *key name* is what tmux translates — the newline in a shell string is
+/// `Enter` *key name* is what tmux translates - the newline in a shell string is
 /// not the same thing, which is the assumption that made this wrong at first.
+const SUBMIT_BYTE: &str = "\r";
+
+/// How long a pane must stay silent after echoing a prompt before Enter is sent.
+const SUBMIT_QUIET: Duration = Duration::from_millis(200);
+
+/// Upper bound on waiting for that silence: a busy agent animating a spinner
+/// never goes quiet, and one that does not echo never starts.
+const SUBMIT_SETTLE_LIMIT: Duration = Duration::from_secs(3);
+
+/// Pane output, reduced to what settling needs.
+trait OutputChunks {
+    /// Resolve `true` for each output chunk and `false` once the stream has ended.
+    async fn next_chunk(&mut self) -> bool;
+}
+
+impl OutputChunks for rmux_sdk::PaneOutputStream {
+    async fn next_chunk(&mut self) -> bool {
+        match self.next().await {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            // A failed poll says nothing about the echo, so wait out the window
+            // instead of sending Enter into a paste still in flight.
+            Err(error) => {
+                tracing::warn!(%error, "rmux output poll failed while settling a prompt");
+                std::future::pending().await
+            }
+        }
+    }
+}
+
+/// Wait until output has started and then paused for `quiet`, or `limit` passes.
 ///
-/// Interior newlines are left alone: they are the caller's content, and only the
-/// trailing byte submits.
-fn submit_payload(text: &str) -> String {
-    format!("{text}\r")
+/// Waiting for the echo to start, not just for silence, matters: an agent still
+/// collecting a paste may render nothing until it is done, so silence before the
+/// echo does not mean the text was ingested.
+async fn wait_for_echo_to_settle(output: &mut impl OutputChunks, quiet: Duration, limit: Duration) {
+    let deadline = tokio::time::Instant::now() + limit;
+    let mut echoed = false;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        let window = if echoed {
+            quiet.min(remaining)
+        } else {
+            remaining
+        };
+        match tokio::time::timeout(window, output.next_chunk()).await {
+            Ok(true) => echoed = true,
+            Ok(false) | Err(_) => return,
+        }
+    }
 }
 
 /// Wrap a command string for the platform shell as explicit argv.
@@ -671,26 +714,84 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_submitted_prompt_ends_in_carriage_return_not_line_feed() {
-        // Agents run their TUI in raw mode, where the terminal driver does no
-        // CR/LF translation and Enter is literally `\r`. A `\n` lands in the input
-        // buffer without submitting, so the prompt sits on the line unsent while
-        // the send reports success. tmux's `send-keys Enter` and the daemon's
-        // `push(b'\r')` both emit CR; rmux has to match them.
-        assert_eq!(submit_payload("hello"), "hello\r");
-        assert!(!submit_payload("hello").ends_with('\n'));
+    fn prompts_are_submitted_with_carriage_return_not_line_feed() {
+        // Raw-mode agents read Enter as a literal `\r`; a `\n` lands in the input
+        // buffer without submitting, while the send still reports success.
+        assert_eq!(SUBMIT_BYTE, "\r");
     }
 
-    #[test]
-    fn a_multiline_prompt_submits_once_at_the_end() {
-        // Interior newlines are the caller's content. Only the final byte submits,
-        // so a pasted multi-line prompt is not split into several submissions.
-        assert_eq!(submit_payload("first\nsecond"), "first\nsecond\r");
+    /// A fake pane: each entry is the delay before the next chunk. Once exhausted
+    /// the pane stays silent, unless `ends` is set.
+    struct Scripted {
+        gaps: std::vec::IntoIter<Duration>,
+        ends: bool,
     }
 
-    #[test]
-    fn an_empty_prompt_still_submits() {
-        assert_eq!(submit_payload(""), "\r");
+    fn scripted(gaps: Vec<Duration>) -> Scripted {
+        Scripted {
+            gaps: gaps.into_iter(),
+            ends: false,
+        }
+    }
+
+    impl OutputChunks for Scripted {
+        async fn next_chunk(&mut self) -> bool {
+            match self.gaps.next() {
+                Some(gap) => {
+                    tokio::time::sleep(gap).await;
+                    true
+                }
+                None if self.ends => false,
+                None => std::future::pending().await,
+            }
+        }
+    }
+
+    const QUIET: Duration = Duration::from_millis(200);
+    const LIMIT: Duration = Duration::from_secs(3);
+
+    #[tokio::test(start_paused = true)]
+    async fn enter_waits_for_the_echo_to_go_quiet() {
+        let started = tokio::time::Instant::now();
+        let ms = Duration::from_millis;
+        wait_for_echo_to_settle(&mut scripted(vec![ms(5), ms(50), ms(150)]), QUIET, LIMIT).await;
+        // Last chunk at 205ms, then a full quiet window.
+        assert_eq!(started.elapsed(), ms(405));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn silence_before_the_echo_starts_is_not_mistaken_for_ingestion() {
+        // An agent collecting a paste renders nothing until the paste is complete.
+        let started = tokio::time::Instant::now();
+        let ms = Duration::from_millis;
+        wait_for_echo_to_settle(&mut scripted(vec![ms(900)]), QUIET, LIMIT).await;
+        assert_eq!(started.elapsed(), ms(1100));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn output_that_never_stops_is_bounded() {
+        let started = tokio::time::Instant::now();
+        let spinner = vec![Duration::from_millis(100); 100];
+        wait_for_echo_to_settle(&mut scripted(spinner), QUIET, LIMIT).await;
+        assert_eq!(started.elapsed(), LIMIT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pane_that_never_echoes_is_bounded() {
+        let started = tokio::time::Instant::now();
+        wait_for_echo_to_settle(&mut scripted(vec![]), QUIET, LIMIT).await;
+        assert_eq!(started.elapsed(), LIMIT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_ended_stream_stops_the_wait() {
+        let started = tokio::time::Instant::now();
+        let mut ended = Scripted {
+            gaps: Vec::new().into_iter(),
+            ends: true,
+        };
+        wait_for_echo_to_settle(&mut ended, QUIET, LIMIT).await;
+        assert_eq!(started.elapsed(), Duration::ZERO);
     }
 
     #[test]
