@@ -302,6 +302,16 @@ impl Default for Config {
                 autonomous_prompt_template: None, // deprecated: now on auto_dispatch
             },
         );
+        providers.insert(
+            "codex".to_string(),
+            Provider {
+                command: "codex".to_string(),
+                yolo_flag: Some("--dangerously-bypass-approvals-and-sandbox".to_string()),
+                resume_command: Some("codex resume --last".to_string()),
+                prompt_command: Some("{prompt}".to_string()),
+                autonomous_prompt_template: None, // deprecated: now on auto_dispatch
+            },
+        );
         Config {
             appearance: Appearance {
                 mode: "system".to_string(),

@@ -31,6 +31,12 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
       "autonomous_prompt_template": "{{task.title}}: {{task.description}}",
       "yolo_flag": "--dangerously-skip-permissions",
     },
+    "codex": {
+      "command": "codex",
+      "prompt_command": "{prompt}",
+      "yolo_flag": "--dangerously-bypass-approvals-and-sandbox",
+      "resume_command": "codex resume --last",
+    },
   },
 }
 ```
@@ -42,6 +48,24 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
 | `autonomous_prompt_template` | Template rendered when auto-dispatch sends a task                 |
 | `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations            |
 | `resume_command`             | Command to resume interactively when restarting an exited session |
+
+Existing configs can add Kiro, Claude Code, Copilot or Codex in one click from the presets under **Preferences → Models**.
+
+### Notification hooks
+
+For Kiro, Claude Code, Copilot and Codex, planeai can install a notification hook into the agent's own config.
+The hook tells planeai the moment the agent starts working, finishes, or needs your attention, instead of waiting for 5 seconds of terminal silence.
+planeai offers to install missing hooks in a banner at startup and keeps installed hook scripts up to date on every launch.
+
+| Agent       | Hook config                                              |
+| ----------- | -------------------------------------------------------- |
+| Kiro        | `~/.kiro/agents/default.json`                            |
+| Claude Code | `~/.claude/settings.json`                                |
+| Copilot     | `$COPILOT_HOME/hooks/planeai-notify.json` (`~/.copilot`) |
+| Codex       | `$CODEX_HOME/hooks.json` (`~/.codex`)                    |
+
+Codex runs a hook only after you trust it, so the first Codex launch after installation asks you to review planeai's hooks.
+Until you trust them, Codex sessions keep showing as busy.
 
 ## Session Backend
 

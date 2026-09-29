@@ -9,7 +9,7 @@ EVENT=$(jq -r '.hook_event_name // ""' 2>/dev/null)
 case "$EVENT" in
   stop|Stop) E="stop" ;;
   userPromptSubmit|UserPromptSubmit) E="busy" ;;
-  *)    E="notification" ;;
+  *)    exit 0 ;;  # unknown events must never alert
 esac
 [ -S "$SOCK" ] && printf '{"session_id":"%s","event":"%s"}\n' "$SESSION_ID" "$E" | nc -U "$SOCK" -w1 2>/dev/null
 exit 0

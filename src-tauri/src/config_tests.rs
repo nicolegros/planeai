@@ -420,6 +420,22 @@ fn default_config_includes_copilot_provider() {
 }
 
 #[test]
+fn default_config_includes_codex_provider() {
+    let config = Config::default();
+    let codex = config.providers.get("codex").unwrap();
+    assert_eq!(codex.command, "codex");
+    assert_eq!(
+        codex.yolo_flag,
+        Some("--dangerously-bypass-approvals-and-sandbox".to_string())
+    );
+    assert_eq!(
+        codex.resume_command,
+        Some("codex resume --last".to_string())
+    );
+    assert_eq!(codex.prompt_command, Some("{prompt}".to_string()));
+}
+
+#[test]
 fn default_config_includes_claude_provider() {
     let config = Config::default();
     let claude = config.providers.get("claude").unwrap();

@@ -58,9 +58,6 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(
-            configured_agent_kinds(&cfg),
-            HashSet::from([AgentKind::Kiro, AgentKind::Claude, AgentKind::Copilot])
-        );
+        assert_eq!(configured_agent_kinds(&cfg), HashSet::from(AgentKind::ALL));
     }
 }

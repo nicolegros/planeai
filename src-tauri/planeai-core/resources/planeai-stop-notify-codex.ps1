@@ -1,12 +1,12 @@
-# planeai stop-hook for Copilot CLI: notifies planeai when Copilot needs attention.
-# Installed by planeai. Safe to delete — notifications will fall back to silence detection.
+# planeai stop-hook for Codex CLI: notifies planeai when Codex is busy or needs attention.
+# Installed by planeai. Safe to delete - notifications will fall back to silence detection.
+# Must print nothing: Codex parses hook stdout.
 $sid = $env:PLANEAI_SESSION_ID
 if (-not $sid) { exit 0 }
 $sock = if ($env:PLANEAI_SOCKET) { $env:PLANEAI_SOCKET } else { "\\.\pipe\planeai-notify" }
 $e = switch ($args[0]) {
     "stop" { "stop" }
     "busy" { "busy" }
-    "notification" { "notification" }
     default { exit 0 }  # unknown events must never alert
 }
 $msg = '{"session_id":"' + $sid + '","event":"' + $e + '"}'
