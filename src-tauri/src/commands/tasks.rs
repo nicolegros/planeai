@@ -13,7 +13,7 @@ use crate::task_lifecycle::{
     StatusChangeCause, TaskLifecycleBatch, TaskLifecycleEvent, TaskLifecycleOrigin,
 };
 
-use crate::commands::sessions::helpers::{fire_task_hook, session_cwd};
+use crate::commands::sessions::helpers::fire_task_hook;
 
 /// Task structure returned to the frontend. Matches the original contract + parent_key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -360,9 +360,7 @@ pub async fn fire_task_notify_hook(
             .map_err(|e| e.to_string())?
             .ok_or("session not found")?;
         if session.task_key.is_some() {
-            if let Some(cwd) = session_cwd(&conn, &session) {
-                fire_task_hook(&cfg, &session, "on_notify", &cwd, &conn);
-            }
+            fire_task_hook(&cfg, &session, "on_notify", &conn);
         }
         Ok(())
     })

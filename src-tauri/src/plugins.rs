@@ -2190,8 +2190,11 @@ fn transition_linked_plugin_task(session_id: &str, status: Status) -> Result<Val
     let session = crate::db::get_session(&conn, session_id)
         .map_err(|error| error.to_string())?
         .ok_or("session not found")?;
-    let task_key = session.task_key.ok_or("session has no linked task")?;
-    let project = crate::db::get_project(&conn, &session.project_id)
+    let task_key = session
+        .task_key
+        .clone()
+        .ok_or("session has no linked task")?;
+    let project = crate::db::get_project(&conn, session.task_project_id())
         .map_err(|error| error.to_string())?
         .ok_or("session project not found")?;
     if project.hidden {

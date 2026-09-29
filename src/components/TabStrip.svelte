@@ -73,6 +73,7 @@
       >
         <Icon size={13} class={isActive && focused ? 'text-accent' : 'text-t3'} />
         {tab.label}
+        {#if tab.detail}<span class="-ml-[3px] font-normal text-t3">· {tab.detail}</span>{/if}
       </button>
     </div>
   {/each}

@@ -34,6 +34,11 @@ Tasks appear once you type — the menu's default view stays a short list of act
 While a task is focused, every "new session" entry point (**⌘N** then **S**, "New session" in the command menu, the sidebar button) opens the form with that task and its project already selected.
 The session name defaults to the task title; additional sessions on the same task are numbered, for example "Fix login (2)", and the name stays editable.
 
+A task's work can span repositories.
+Pick another project in the form and the task stays linked: the picker keeps it pinned with its project name, and a hint shows which project owns it.
+The new agent runs in the other project's repository but opens in the task's workspace, next to its sibling agents, with the repository's project name shown on its tab.
+If that repository lacks the task's base branch, the form uses the repository's default branch instead.
+
 To rename a session, pick "Rename session" in the command menu or double-click its agent tab, type the new name, and press **Enter**.
 The workspace tabs follow the new name.
 

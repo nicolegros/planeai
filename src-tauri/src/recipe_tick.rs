@@ -483,6 +483,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         yolo: ctx.snapshot.policy.auto_approve,
         provider: provider_opt,
         task_key: loop_run.task_key.clone(),
+        task_project: None,
         prompt: rendered_prompt,
         parent_session_id: loop_run.created_by_session_id.clone(),
     };
@@ -1379,6 +1380,7 @@ fn exec_candidates_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<Ti
             yolo: ctx.snapshot.policy.auto_approve,
             provider: provider_opt,
             task_key: loop_run.task_key.clone(),
+            task_project: None,
             prompt: rendered_prompt.clone(),
             parent_session_id: loop_run.created_by_session_id.clone(),
         };
@@ -1860,6 +1862,7 @@ fn exec_arbiter_rank(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
         yolo: ctx.snapshot.policy.auto_approve,
         provider: provider_opt,
         task_key: loop_run.task_key.clone(),
+        task_project: None,
         prompt: rendered_prompt,
         parent_session_id: loop_run.created_by_session_id.clone(),
     };

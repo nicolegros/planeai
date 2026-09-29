@@ -105,6 +105,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     tab_count: 1,
     base_branch: null,
     task_key: null,
+    task_project_id: null,
     ...overrides,
   };
 }

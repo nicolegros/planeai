@@ -3,7 +3,10 @@ import { mount, flushSync, tick } from "svelte";
 
 vi.mock("../../lib/api", () => ({
   sessions: { launch: vi.fn(() => new Promise(() => {})) },
-  projects: { listBranches: vi.fn(() => Promise.resolve([])) },
+  projects: {
+    listBranches: vi.fn(() => Promise.resolve([])),
+    detectDefaultBranch: vi.fn(() => Promise.resolve("main")),
+  },
   tasks: {
     list: vi.fn(() =>
       Promise.resolve([
@@ -286,4 +289,172 @@ it("resets a typed name when another task is picked", async () => {
 
   expect(nameInput.value).toBe("Add feature");
   target.remove();
+});
+
+describe("cross-project task link", () => {
+  const twoProjects = [
+    { id: "p1", name: "Project", path: "/tmp/proj", hidden: false },
+    { id: "p2", name: "Other", path: "/tmp/other", hidden: false },
+  ];
+  const prefill = {
+    key: "PROJ-1",
+    title: "Fix bug",
+    description: "",
+    branch: "",
+    name: "Fix bug",
+    prompt: "",
+    baseBranch: "release/2.x",
+    projectId: "p1",
+  };
+
+  async function settle() {
+    for (let i = 0; i < 4; i++) {
+      await tick();
+      flushSync();
+    }
+  }
+
+  async function pickOption(target: HTMLElement, field: string, text: string) {
+    const input = target.querySelector<HTMLInputElement>(`[data-field='${field}'] input`)!;
+    input.focus();
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+    flushSync();
+    const option = await vi.waitFor(() => {
+      const found = [...document.querySelectorAll<HTMLElement>("[role='option']")].find((el) =>
+        el.textContent?.includes(text),
+      );
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    option.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    option.click();
+    await settle();
+  }
+
+  async function renderSwitchedToOther(props = {}) {
+    const { projects, tasks } = await import("../../lib/api");
+    vi.mocked(projects.listBranches).mockImplementation((path: string) =>
+      Promise.resolve(path === "/tmp/other" ? ["main"] : ["main", "release/2.x"]),
+    );
+    vi.mocked(tasks.listAll).mockImplementation(
+      (path: string) =>
+        Promise.resolve(
+          path === "/tmp/other"
+            ? [
+                {
+                  key: "OTH-1",
+                  title: "Other task",
+                  description: "",
+                  status: "todo",
+                  priority: 0,
+                  base_branch: "main",
+                },
+              ]
+            : [
+                {
+                  key: "PROJ-1",
+                  title: "Fix bug",
+                  description: "",
+                  status: "todo",
+                  priority: 0,
+                  base_branch: "release/2.x",
+                },
+              ],
+        ) as never,
+    );
+    const target = document.createElement("div");
+    document.body.append(target);
+    mount(SessionForm, {
+      target,
+      props: {
+        ...baseProps,
+        projects: twoProjects,
+        currentProjectId: "p1",
+        taskPrefill: prefill,
+        ...props,
+      },
+    });
+    await settle();
+    await pickOption(target, "project", "Other");
+    return target;
+  }
+
+  it("keeps the task linked and launches with the task's project", async () => {
+    const { sessions } = await import("../../lib/api");
+    vi.mocked(sessions.launch).mockClear();
+    const target = await renderSwitchedToOther();
+
+    expect(target.querySelector<HTMLInputElement>("[data-field='task'] input")?.value).toBe(
+      "PROJ-1: Fix bug · Project",
+    );
+    expect(target.querySelector("[data-field='task']")?.textContent).toContain(
+      "Linked to task in Project",
+    );
+
+    target.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true }));
+    await tick();
+    expect(sessions.launch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "p2",
+        repoPath: "/tmp/other",
+        taskKey: "PROJ-1",
+        taskProjectId: "p1",
+      }),
+    );
+    target.remove();
+  });
+
+  it("relinks to a task of the new project when one is picked", async () => {
+    const { sessions } = await import("../../lib/api");
+    vi.mocked(sessions.launch).mockClear();
+    const target = await renderSwitchedToOther();
+    await pickOption(target, "task", "OTH-1");
+
+    expect(target.querySelector("[data-field='task']")?.textContent).not.toContain(
+      "Linked to task in",
+    );
+    target.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true }));
+    await tick();
+    expect(sessions.launch).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: "p2", taskKey: "OTH-1", taskProjectId: null }),
+    );
+    target.remove();
+  });
+
+  it("falls back to the other repo's default branch when it lacks the task's base", async () => {
+    const target = await renderSwitchedToOther();
+
+    const base = target.querySelector("[data-field='base']")!;
+    expect(base.querySelector("input")!.value).toBe("main");
+    expect(target.textContent).toContain("Task base release/2.x not found in Other, using main");
+    target.remove();
+  });
+
+  it("numbers the name across the task but the branch only within the repo", async () => {
+    const target = await renderSwitchedToOther({
+      sessions: [
+        {
+          id: "existing",
+          project_id: "p1",
+          task_project_id: null,
+          name: "Fix bug",
+          branch: "proj-1/fix-bug",
+          status: "active",
+          task_key: "PROJ-1",
+          worktree_path: null,
+        },
+      ],
+    });
+
+    expect(
+      target.querySelector<HTMLInputElement>("input[placeholder='My session...']")?.value,
+    ).toBe("Fix bug (2)");
+    expect(target.querySelector<HTMLInputElement>("[data-field='branch'] input")?.value).toBe(
+      "proj-1/fix-bug",
+    );
+    expect(target.querySelector<HTMLInputElement>("#use-worktree")?.checked).toBe(false);
+    target.remove();
+  });
 });

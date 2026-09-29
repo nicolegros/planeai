@@ -31,6 +31,8 @@ export interface LaunchSessionParams {
   autoApprove: boolean;
   provider: string;
   taskKey: string | null;
+  /** Project owning `taskKey`, when it differs from `projectId`. */
+  taskProjectId: string | null;
   taskPrompt: string | null;
 }
 
@@ -72,6 +74,7 @@ export const projects = {
   getAutoMode: (id: string) => invoke<boolean>("get_project_auto_mode", { id }),
   validateGitRepo: (path: string) => invoke<boolean>("validate_git_repo", { path }),
   listBranches: (repoPath: string) => invoke<string[]>("list_branches", { repoPath }),
+  detectDefaultBranch: (repoPath: string) => invoke<string>("detect_default_branch", { repoPath }),
 };
 
 export const pty = {

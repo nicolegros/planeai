@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::config::Config;
 use crate::db::{self, Session};
-use crate::session_ops::{fire_task_hook, session_cwd};
+use crate::session_ops::fire_task_hook;
 
 pub trait RestartOps {
     fn create_tmux_session(
@@ -99,7 +99,7 @@ pub fn restart(
     // Two agents on the same task share one rmux workspace, so the key comes from
     // the session's task linkage rather than its id.
     let rmux_workspace = planeai_rmux::WorkspaceKey::for_session(
-        &session.project_id,
+        session.task_project_id(),
         session.task_key.as_deref(),
         &session.id,
     )
@@ -137,10 +137,8 @@ pub fn restart(
         .ok_or_else(|| format!("session not found after restore: {id}"))?;
 
     // Fire task hook after restore
-    if let Some(ref _key) = updated.task_key {
-        if let Some(cwd) = session_cwd(conn, &updated) {
-            fire_task_hook(config, &updated, "on_restart", &cwd, conn);
-        }
+    if updated.task_key.is_some() {
+        fire_task_hook(config, &updated, "on_restart", conn);
     }
 
     Ok(updated)

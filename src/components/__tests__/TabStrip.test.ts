@@ -34,6 +34,22 @@ describe("TabStrip", () => {
     unmount(component);
   });
 
+  it("shows a tab's detail after its label", async () => {
+    const target = document.body.appendChild(document.createElement("div"));
+    const component = mount(TabStrip, {
+      target,
+      props: {
+        tabs: [{ id: "s1", index: 0, label: "Fix bug (2)", detail: "Other", icon: "bot" }],
+        activeTabIndex: 0,
+        onSelectTab: vi.fn(),
+      },
+    });
+    await tick();
+
+    expect(document.querySelector('[role="tab"]')?.textContent?.trim()).toBe("Fix bug (2) · Other");
+    unmount(component);
+  });
+
   it("reports a double-clicked tab", async () => {
     const doubleClick = vi.fn();
     const target = document.body.appendChild(document.createElement("div"));

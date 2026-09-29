@@ -232,6 +232,19 @@ describe("computeCommandMenuSessions", () => {
     expect(computeCommandMenuSessions(sessions, rows, () => false)).toEqual([]);
   });
 
+  it("routes a session running in another repo through its task's project", () => {
+    const sessions = [
+      makeSession({
+        id: "cross",
+        project_id: "project-2",
+        task_project_id: "project-1",
+        task_key: "PLA-1",
+      }),
+    ];
+
+    expect(computeCommandMenuSessions(sessions, rows, () => false)).toEqual([]);
+  });
+
   it("includes sessions with no task key", () => {
     const sessions = [makeSession({ id: "orphan", task_key: null })];
 

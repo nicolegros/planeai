@@ -136,7 +136,7 @@ fn prepare_tab_spawn(
         .unwrap_or(project_path)
         .to_string();
     let rmux_workspace = planeai_rmux::WorkspaceKey::for_session(
-        &session.project_id,
+        session.task_project_id(),
         session.task_key.as_deref(),
         &session.id,
     )

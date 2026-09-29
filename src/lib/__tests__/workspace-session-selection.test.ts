@@ -16,7 +16,7 @@ describe("TaskWorkspace session selection", () => {
 
   it("builds a flat task workspace from every session linked to the same task", () => {
     expect(appSource).toMatch(
-      /return sessions\.filter\(\(session\) => session\.project_id === workspace\.projectId && session\.task_key === workspace\.taskKey\);/,
+      /return sessions\.filter\(\(session\) => sessionTaskProjectId\(session\) === workspace\.projectId && session\.task_key === workspace\.taskKey\);/,
     );
     expect(appSource).toMatch(
       /function buildTabEntriesForWorkspace\(workspace: WorkspaceIdentity\)/,

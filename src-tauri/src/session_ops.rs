@@ -53,11 +53,9 @@ pub fn archive(
 
     // Fire task hook before mutation
     if let (Some(cfg), Some(ref key)) = (config, &session.task_key) {
-        if let Some(cwd) = session_cwd(conn, &session) {
-            eprintln!("[session] firing on_complete hook for task {key}");
-            tracing::info!(task_key = %key, "firing on_complete hook");
-            fire_task_hook(cfg, &session, "on_complete", &cwd, conn);
-        }
+        eprintln!("[session] firing on_complete hook for task {key}");
+        tracing::info!(task_key = %key, "firing on_complete hook");
+        fire_task_hook(cfg, &session, "on_complete", conn);
     }
 
     // Kill the agent backend process.
@@ -198,9 +196,7 @@ pub fn destroy(
 
     // Fire task hook before mutation
     if let (Some(cfg), Some(_)) = (config, &session.task_key) {
-        if let Some(cwd) = session_cwd(conn, &session) {
-            fire_task_hook(cfg, &session, "on_complete", &cwd, conn);
-        }
+        fire_task_hook(cfg, &session, "on_complete", conn);
     }
 
     // Soft-delete
@@ -245,15 +241,16 @@ pub fn session_cwd(conn: &Connection, session: &Session) -> Option<String> {
         .map(|p| p.path)
 }
 
+/// The project whose task store holds the session's task, which may differ from the repo it runs in.
+fn task_owner_project(conn: &Connection, session: &Session) -> Option<db::Project> {
+    db::get_project(conn, session.task_project_id())
+        .ok()
+        .flatten()
+}
+
 /// Fire a task manager lifecycle hook (on_start, on_notify, on_restart, on_complete).
 /// Uses the caller's connection — no new DB connections opened.
-pub fn fire_task_hook(
-    cfg: &Config,
-    session: &Session,
-    hook_name: &str,
-    cwd: &str,
-    conn: &Connection,
-) {
+pub fn fire_task_hook(cfg: &Config, session: &Session, hook_name: &str, conn: &Connection) {
     let task_key = match &session.task_key {
         Some(k) => k,
         None => return,
@@ -271,11 +268,7 @@ pub fn fire_task_hook(
     };
     if let Some(h) = hook {
         let db_path = planeai_paths::db_path();
-        let projects = db::list_projects(conn).unwrap_or_default();
-        let Some(project) = projects
-            .iter()
-            .find(|p| crate::util::is_project_path_or_descendant(cwd, &p.path))
-        else {
+        let Some(project) = task_owner_project(conn, session) else {
             return;
         };
         if let (Some(status), Ok(repo)) = (
@@ -1362,6 +1355,59 @@ mod tests {
     }
 
     #[test]
+    fn task_hooks_resolve_the_task_owner_not_the_session_repo() {
+        let conn = setup_db();
+        let owner = db::create_project(&conn, "owner", "/tmp/owner").unwrap();
+        let repo = db::create_project(&conn, "repo", "/tmp/repo").unwrap();
+        let session = db::create_session_with_id_and_worktree_ownership(
+            &conn,
+            "sess-cross",
+            &repo.id,
+            "agent",
+            None,
+            "own-1/fix",
+            Some("/tmp/worktrees/repo/abc"),
+            true,
+            None,
+            "daemon",
+            true,
+            Some("OWN-1"),
+            Some(&owner.id),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(task_owner_project(&conn, &session).unwrap().id, owner.id);
+    }
+
+    #[test]
+    fn task_hooks_resolve_worktree_sessions_to_their_project() {
+        let conn = setup_db();
+        let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let session = db::create_session_with_id_and_worktree_ownership(
+            &conn,
+            "sess-wt",
+            &project.id,
+            "agent",
+            None,
+            "mya-1/fix",
+            Some("/tmp/.planeai/worktrees/myapp/abc"),
+            true,
+            None,
+            "daemon",
+            true,
+            Some("MYA-1"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(task_owner_project(&conn, &session).unwrap().id, project.id);
+    }
+
+    #[test]
     fn format_table_renders_correct_columns() {
         let projects = vec![db::Project {
             id: "proj-1".to_string(),
@@ -1391,6 +1437,7 @@ mod tests {
             pr_state: None,
             attached_once: false,
             parent_session_id: None,
+            task_project_id: None,
         }];
 
         let table = format_table(&sessions, &projects);

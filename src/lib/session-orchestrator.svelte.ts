@@ -5,7 +5,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sessions as sessionsApi, symphony, tasks } from "./api";
-import type { Session } from "./types";
+import { sessionTaskProjectId, type Session } from "./types";
 import { initSession, getTabCount, destroySession as destroyTabState } from "./session-tabs.svelte";
 import { touchMru, removeMru, getMruList, flushMru, seedMru } from "./mru.svelte";
 import { disposeSessionTerminalViews } from "./terminal-views";
@@ -243,7 +243,9 @@ export async function parkSession(s: Session): Promise<void> {
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
     setActiveSession(
-      sessions.find((x) => x.project_id === s.project_id && x.task_key === s.task_key)?.id ?? null,
+      sessions.find(
+        (x) => sessionTaskProjectId(x) === sessionTaskProjectId(s) && x.task_key === s.task_key,
+      )?.id ?? null,
     );
     if (activeSessionId) touchMru(activeSessionId);
   }

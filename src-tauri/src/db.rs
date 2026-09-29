@@ -24,11 +24,20 @@ pub struct Session {
     pub pr_state: Option<String>,
     pub attached_once: bool,
     pub parent_session_id: Option<String>,
+    /// Project owning `task_key` when it differs from `project_id`.
+    pub task_project_id: Option<String>,
+}
+
+impl Session {
+    /// The project whose TaskWorkspace this session belongs to.
+    pub fn task_project_id(&self) -> &str {
+        self.task_project_id.as_deref().unwrap_or(&self.project_id)
+    }
 }
 
 /// Column list for SELECT statements returning a Session.
 /// Keep in sync with `row_to_session`.
-pub const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, attached_once, parent_session_id";
+pub const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, attached_once, parent_session_id, task_project_id";
 
 /// Map a row (selected with SESSION_COLUMNS) to a Session struct.
 pub fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
@@ -52,6 +61,7 @@ pub fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
         pr_state: row.get(16)?,
         attached_once: row.get(17)?,
         parent_session_id: row.get(18)?,
+        task_project_id: row.get(19)?,
     })
 }
 
@@ -169,6 +179,7 @@ fn record_to_session(r: planeai_core::services::SessionRecord) -> Session {
         pr_state: r.pr_state,
         attached_once: r.attached_once,
         parent_session_id: r.parent_session_id,
+        task_project_id: r.task_project_id,
     }
 }
 
@@ -294,6 +305,7 @@ pub fn create_session_with_id(
         backend,
         auto_approve,
         task_key,
+        None,
         base_branch,
         parent_session_id,
     )
@@ -313,6 +325,7 @@ pub fn create_session_with_id_and_worktree_ownership(
     backend: &str,
     auto_approve: bool,
     task_key: Option<&str>,
+    task_project_id: Option<&str>,
     base_branch: Option<&str>,
     parent_session_id: Option<&str>,
 ) -> Result<Session> {
@@ -328,6 +341,7 @@ pub fn create_session_with_id_and_worktree_ownership(
         backend: backend.to_string(),
         auto_approve,
         task_key: task_key.map(|s| s.to_string()),
+        task_project_id: task_project_id.map(|s| s.to_string()),
         base_branch: base_branch.map(|s| s.to_string()),
         parent_session_id: parent_session_id.map(|s| s.to_string()),
         ..Default::default()
@@ -470,6 +484,48 @@ mod tests {
     }
 
     #[test]
+    fn test_task_project_id_links_a_session_to_another_projects_task() {
+        let conn = setup();
+        let owner = create_project(&conn, "owner", "/tmp/owner").unwrap();
+        let repo = create_project(&conn, "repo", "/tmp/repo").unwrap();
+        let create = |id: &str, task_project_id: Option<&str>| {
+            create_session_with_id_and_worktree_ownership(
+                &conn,
+                id,
+                &repo.id,
+                "agent",
+                None,
+                "main",
+                None,
+                true,
+                None,
+                "daemon",
+                true,
+                Some("OWN-1"),
+                task_project_id,
+                None,
+                None,
+            )
+            .unwrap()
+        };
+
+        let linked = create("sess-linked", Some(&owner.id));
+        assert_eq!(linked.task_project_id(), owner.id);
+        let loaded = get_session(&conn, "sess-linked").unwrap().unwrap();
+        assert_eq!(loaded.task_project_id.as_deref(), Some(owner.id.as_str()));
+
+        // Naming the session's own project stores no override.
+        let own = create("sess-own", Some(&repo.id));
+        assert_eq!(own.task_project_id, None);
+        assert_eq!(own.task_project_id(), repo.id);
+
+        delete_project(&conn, &owner.id).unwrap();
+        let orphaned = get_session(&conn, "sess-linked").unwrap().unwrap();
+        assert_eq!(orphaned.task_project_id, None);
+        assert_eq!(orphaned.task_project_id(), repo.id);
+    }
+
+    #[test]
     fn test_reused_worktree_is_persisted_as_unowned() {
         let conn = setup();
         let project = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
@@ -485,6 +541,7 @@ mod tests {
             None,
             "daemon",
             true,
+            None,
             None,
             None,
             None,

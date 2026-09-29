@@ -12,6 +12,15 @@ export interface Session {
   tab_count: number;
   base_branch: string | null;
   task_key: string | null;
+  /** Project owning the linked task; null means the session's own project. */
+  task_project_id: string | null;
+}
+
+/** The project whose TaskWorkspace a session belongs to. */
+export function sessionTaskProjectId(
+  session: Pick<Session, "project_id" | "task_project_id">,
+): string {
+  return session.task_project_id ?? session.project_id;
 }
 
 export interface LaunchResult {
