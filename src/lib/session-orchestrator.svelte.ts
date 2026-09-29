@@ -111,6 +111,10 @@ export function clearReviewReady(sessionId: string): void {
 
 export async function loadSessions(): Promise<void> {
   const loadedSessions = await sessionsApi.list();
+  // Sessions can leave outside this module (e.g. CLI archive); a lingering view
+  // would be reused with a dead connection if the session came back.
+  const loadedIds = new Set(loadedSessions.map((s) => s.id));
+  for (const s of sessions) if (!loadedIds.has(s.id)) removeSessionViews(s.id);
   sessions = loadedSessions;
   for (const s of sessions) {
     if (getTabCount(s.id) === 0) initSession(s.id, s.tab_count);

@@ -313,6 +313,21 @@ describe("session-orchestrator", () => {
     });
   });
 
+  describe("terminal views", () => {
+    it("disposes the views of sessions that disappear on reload", async () => {
+      const { disposeSessionTerminalViews } = await import("../terminal-views");
+      const dispose = vi.mocked(disposeSessionTerminalViews);
+      api.list.mockResolvedValue([makeSession({ id: "s1" }), makeSession({ id: "s2" })]);
+      await loadSessions();
+      dispose.mockClear();
+
+      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
+      await loadSessions();
+
+      expect(dispose.mock.calls).toEqual([["s2"]]);
+    });
+  });
+
   describe("selectSession exited daemon fix (PLA-169)", () => {
     // Terminal views never connect while exited, so the session must stay
     // exited until the restart has actually completed.
