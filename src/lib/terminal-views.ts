@@ -5,7 +5,12 @@
  * view; it keeps its buffer and PTY connection. A view is disposed only when
  * its tab is closed or its session leaves the app.
  */
-import { createTerminalView, type TerminalView, type TerminalViewOptions } from "./terminal-view";
+import {
+  createTerminalView,
+  type GeometryHint,
+  type TerminalView,
+  type TerminalViewOptions,
+} from "./terminal-view";
 import { createXtermSurface } from "./xterm-surface";
 import { tauriTerminalPty } from "./terminal-pty";
 
@@ -13,6 +18,7 @@ export type AcquireOptions = Omit<TerminalViewOptions, "pty" | "createSurface"> 
   Partial<Pick<TerminalViewOptions, "pty" | "createSurface">>;
 
 const views = new Map<string, TerminalView>();
+const geometryHint: GeometryHint = { last: null };
 
 /** Return the live view for a pty key, creating it on first use. */
 export function acquireTerminalView(options: AcquireOptions): TerminalView {
@@ -21,14 +27,11 @@ export function acquireTerminalView(options: AcquireOptions): TerminalView {
   const view = createTerminalView({
     pty: tauriTerminalPty,
     createSurface: createXtermSurface,
+    geometryHint,
     ...options,
   });
   views.set(options.ptyKey, view);
   return view;
-}
-
-export function hasTerminalView(ptyKey: string): boolean {
-  return views.has(ptyKey);
 }
 
 export function disposeTerminalView(ptyKey: string): void {

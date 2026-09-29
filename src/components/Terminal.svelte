@@ -84,12 +84,13 @@
     const current = view;
     if (!current || !request || request.id === handledFocusRequest || request.sessionId !== sessionId || !visible) return;
     handledFocusRequest = request.id;
-    requestAnimationFrame(() => {
-      if (focusRequest?.id !== request.id) return;
+    // A request can arrive while the font is still loading; apply it once open.
+    void current.opened.then(() => requestAnimationFrame(() => {
+      if (focusRequest?.id !== request.id || view !== current) return;
       suppressProgrammaticFocusin = true;
       current.focus();
       queueMicrotask(() => { suppressProgrammaticFocusin = false; });
-    });
+    }));
   });
 
   // Only re-run when terminal-relevant settings change.

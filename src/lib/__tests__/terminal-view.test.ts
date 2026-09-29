@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTerminalView,
+  type GeometryHint,
   type TerminalConnectRequest,
   type TerminalGeometry,
   type TerminalPty,
@@ -100,7 +101,9 @@ class FakePty implements TerminalPty {
   write(_key: string, bytes: number[]) {
     this.writes.push(bytes);
   }
+  resizeCalls: TerminalGeometry[] = [];
   resize(_key: string, g: TerminalGeometry) {
+    this.resizeCalls.push(g);
     if (g.cols === this.size.cols && g.rows === this.size.rows) return;
     this.size = g;
     this.sigwinch++;
@@ -139,6 +142,7 @@ async function containerResized(): Promise<void> {
 let surface: FakeSurface;
 let pty: FakePty;
 let view: TerminalView;
+let hint: GeometryHint;
 let containers: HTMLElement[];
 let mounted: HTMLElement;
 
@@ -160,6 +164,7 @@ function createView(kind: "agent" | "shell" = "agent", initialCommand?: string):
     kind,
     initialCommand,
     pty,
+    geometryHint: hint,
     createSurface: (handlers) => (surface = new FakeSurface(handlers)),
     resizeDebounceMs: 1,
   });
@@ -182,6 +187,7 @@ beforeEach(() => {
   containers = [];
   globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
   pty = new FakePty();
+  hint = { last: null };
   view = createView();
 });
 
@@ -221,13 +227,53 @@ describe("terminal view: first mount", () => {
     expect(pty.sigwinch).toBe(1);
   });
 
-  it("stays unconnected while hidden, and connects on first show", async () => {
+  it("connects while hidden at the last measured size, with PTY and surface agreeing", async () => {
+    hint.last = { cols: 100, rows: 30 };
+    mountIn(newContainer());
+    surface.available = null;
+    await surface.loadFont();
+    expect(pty.connects).toHaveLength(1);
+    await pty.acceptConnect();
+
+    expect(pty.size).toEqual({ cols: 100, rows: 30 });
+    expectInSync();
+  });
+
+  it("connects while hidden at the surface default when nothing was measured yet", async () => {
+    mountIn(newContainer());
+    surface.available = null;
+    await surface.loadFont();
+    await pty.acceptConnect();
+
+    expect(pty.size).toEqual({ cols: 80, rows: 24 });
+    expectInSync();
+  });
+
+  it("resizes both on first show when the provisional size was wrong", async () => {
+    hint.last = { cols: 100, rows: 30 };
     mountIn(newContainer());
     await surface.loadFont();
-    expect(pty.connects).toHaveLength(0);
-
+    await pty.acceptConnect();
+    const repaints = pty.sigwinch;
     view.setShown(true);
-    expect(pty.connects).toHaveLength(1);
+
+    expect(pty.size).toEqual({ cols: 120, rows: 40 });
+    expect(pty.sigwinch).toBe(repaints + 1);
+    expectInSync();
+  });
+
+  it("records visible measurements as the provisional size", async () => {
+    await liveView();
+
+    expect(hint.last).toEqual({ cols: 120, rows: 40 });
+  });
+
+  it("does not connect while unmounted", async () => {
+    mountIn(newContainer());
+    view.unmount(mounted);
+    await surface.loadFont();
+
+    expect(pty.connects).toHaveLength(0);
   });
 
   it("waits for layout before connecting", async () => {
@@ -250,18 +296,78 @@ describe("terminal view: first mount", () => {
     expect(pty.connects[0]).toEqual({ ptyKey: "s1", kind: "shell", initialCommand: "vim file.ts" });
   });
 
-  it("reports connection failures and retries on the next show", async () => {
+  it("reports a connection failure once and does not retry on resize, focus or show", async () => {
     const attachError = vi.fn();
     view.setEvents({ attachError });
     mountIn(newContainer());
     view.setShown(true);
     await surface.loadFont();
     await pty.rejectConnect(new Error("boom"));
-    expect(attachError).toHaveBeenCalledWith(new Error("boom"));
-
+    surface.available = { cols: 90, rows: 30 };
+    await containerResized();
+    view.setFocused(true);
     view.setShown(false);
     view.setShown(true);
+
+    expect(attachError).toHaveBeenCalledTimes(1);
+    expect(pty.connects).toHaveLength(1);
+  });
+
+  it("retries a failed connection on restart", async () => {
+    mountIn(newContainer());
+    view.setShown(true);
+    await surface.loadFont();
+    await pty.rejectConnect(new Error("boom"));
+    view.setExited(true);
+    view.setExited(false);
+
     expect(pty.connects).toHaveLength(2);
+  });
+
+  it("retries a failed connection when moved to a new container", async () => {
+    mountIn(newContainer());
+    view.setShown(true);
+    await surface.loadFont();
+    await pty.rejectConnect(new Error("boom"));
+    view.unmount(mounted);
+    mountIn(newContainer());
+
+    expect(pty.connects).toHaveLength(2);
+  });
+
+  it("delivers an attach outcome that arrived while no slot was listening", async () => {
+    mountIn(newContainer());
+    view.setShown(true);
+    await surface.loadFont();
+    view.setEvents(null);
+    await pty.acceptConnect();
+    const attached = vi.fn();
+    view.setEvents({ attached });
+    view.setEvents({ attached });
+
+    expect(attached).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers a failure that arrived while no slot was listening", async () => {
+    mountIn(newContainer());
+    view.setShown(true);
+    await surface.loadFont();
+    await pty.rejectConnect(new Error("boom"));
+    const attachError = vi.fn();
+    view.setEvents({ attachError });
+
+    expect(attachError).toHaveBeenCalledWith(new Error("boom"));
+  });
+
+  it("resolves opened once the surface opens", async () => {
+    let opened = false;
+    void view.opened.then(() => (opened = true));
+    mountIn(newContainer());
+    await flush();
+    expect(opened).toBe(false);
+
+    await surface.loadFont();
+    expect(opened).toBe(true);
   });
 });
 
@@ -285,14 +391,33 @@ describe("terminal view: geometry invariant", () => {
     expectInSync();
   });
 
-  it("sends nothing when shown again at the same size", async () => {
+  it("re-asserts the size when shown again, without a repaint when unchanged", async () => {
     await liveView();
     const before = pty.sigwinch;
     view.setShown(false);
+    pty.resizeCalls = [];
     view.setShown(true);
 
+    expect(pty.resizeCalls).toEqual([{ cols: 120, rows: 40 }]);
     expect(pty.sigwinch).toBe(before);
+  });
+
+  it("restores this window's size after another client resized the PTY", async () => {
+    await liveView();
+    view.setShown(false);
+    pty.resize("s1", { cols: 70, rows: 20 });
+    view.setShown(true);
+
     expectInSync();
+    expect(pty.size).toEqual({ cols: 120, rows: 40 });
+  });
+
+  it("does not re-assert the size on plain resize reconciles", async () => {
+    await liveView();
+    pty.resizeCalls = [];
+    await containerResized();
+
+    expect(pty.resizeCalls).toEqual([]);
   });
 
   it("resizes both when shown again at a different size, so the child repaints", async () => {
@@ -522,6 +647,26 @@ describe("terminal view: focus", () => {
     view.setFocused(false);
 
     expect(surface.focused).toBe(false);
+  });
+
+  it("does not steal focus back on resize reconciles", async () => {
+    await liveView();
+    view.setFocused(true);
+    surface.focused = false;
+    surface.available = { cols: 90, rows: 30 };
+    await containerResized();
+
+    expect(surface.focused).toBe(false);
+  });
+
+  it("focuses again when shown while focused", async () => {
+    await liveView();
+    view.setFocused(true);
+    view.setShown(false);
+    surface.focused = false;
+    view.setShown(true);
+
+    expect(surface.focused).toBe(true);
   });
 
   it("ignores one-shot focus while hidden", async () => {

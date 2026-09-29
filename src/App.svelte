@@ -1168,6 +1168,8 @@
 
       pendingShellCommands.delete(ptyKey);
       splitTree.removeSessionFromLeaf(ptyKey);
+      // The shell is gone either way; don't leave its view behind if close_tab fails.
+      disposeTerminalView(ptyKey);
       const sessionId = ptyKey.slice(0, separator);
       const tabIndex = Number.parseInt(ptyKey.slice(separator + 1), 10);
       if (!sessionId || Number.isNaN(tabIndex)) return;
@@ -1654,7 +1656,6 @@
                   initialCommand={tabEntry.type === "shell" ? getPendingTerminalEditorCommand({ ptyKey: tabEntry.ptyKey, pendingCommands: pendingShellCommands }) : undefined}
                   onAttached={() => {
                     if (tabEntry.type === "shell") confirmPendingShellCommandStarted(tabEntry.ptyKey);
-                    if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active");
                     if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal();
                   }}
                   onAttachError={(error) => {

@@ -253,10 +253,14 @@ Views live in a registry keyed by pty key (`src/lib/terminal-views.ts`).
 `Terminal.svelte` is only a slot that mounts and unmounts a view, so TaskWorkspace switches, splits, and tab moves re-parent the view instead of re-creating it.
 A view is disposed only when its shell tab closes or its session is deleted, archived, or parked.
 
-- **Geometry invariant**: xterm's size and the PTY's size change together, and only while the view is visible.
-  Hidden or unmounted views keep receiving output at their frozen size, so showing one again needs no replay and no redraw from the child.
+- **Geometry invariant**: xterm's size and the PTY's size change together.
+  Sizes are measured only while the view is visible; hidden or unmounted views keep receiving output at their frozen size, so showing one again needs no replay and no redraw from the child.
+  Showing a view re-asserts its size to the PTY, since another client (a second app instance, an external tmux attach) may have resized it.
   A real size change reaches the child as `SIGWINCH`; the kernel ignores a same-size resize, which is why a re-created view used to stay garbled until the window was resized.
-- **Connect once sized**: a view connects (`attach_session` or `spawn_tab`) only after its surface is opened (font loaded) and measured in a visible container, so output is never laid out at xterm's default 80×24.
+- **Connect on mount**: a view connects (`attach_session` or `spawn_tab`) once its surface is opened (font loaded) and it is mounted in the current layout, visible or not; on the local backend the attach is what starts the agent.
+  A visible view connects at its measured size.
+  A hidden view that was never measured connects at the last size any view measured (same leaf, same font), so output is never laid out at a size the PTY does not have; if that size was wrong, both resize together on first show.
+- **Failed connections** are reported once and retried only on restart or when the view moves to a new container.
 - **WebGL while visible**: only visible views hold a WebGL renderer; browsers cap live WebGL contexts at about 16.
 
 ### Restart

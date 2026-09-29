@@ -2,9 +2,10 @@
  * Terminal view: the live terminal for one pty key (see CONTEXT.md).
  *
  * Invariant: the surface (xterm) and the PTY always have the same size, and
- * both change together, only while the view is visible. Output keeps flowing
- * into the buffer while hidden or unmounted, so showing a view again needs no
- * replay and no redraw from the child process.
+ * both change together. Sizes are measured only while the view is visible; a
+ * hidden view that was never measured connects at a provisional size
+ * (GeometryHint). Output keeps flowing into the buffer while hidden or
+ * unmounted, so showing a view again needs no replay and no redraw.
  */
 
 export type TerminalKind = "agent" | "shell";
@@ -63,18 +64,29 @@ export interface TerminalViewEvents {
   userInput?: () => void;
 }
 
+/**
+ * Last size any view measured. Views that cannot measure yet (hidden tabs,
+ * tabs behind an overlay) connect at it; same leaf and font, so usually exact.
+ */
+export interface GeometryHint {
+  last: TerminalGeometry | null;
+}
+
 export interface TerminalViewOptions {
   ptyKey: string;
   kind: TerminalKind;
   initialCommand?: string;
   pty: TerminalPty;
   createSurface: (handlers: TerminalSurfaceHandlers) => TerminalSurface;
+  geometryHint?: GeometryHint;
   onTitle?: (title: string) => void;
   resizeDebounceMs?: number;
 }
 
 export interface TerminalView {
   readonly ptyKey: string;
+  /** Resolves once the surface is open (font loaded). */
+  readonly opened: Promise<void>;
   /** Place the view in a container, moving it out of any previous one. */
   mount(container: HTMLElement): void;
   /**
@@ -88,6 +100,7 @@ export interface TerminalView {
   /** One-shot focus request; ignored unless the view is visible. */
   focus(): void;
   refreshAppearance(): void;
+  /** Also delivers an attach outcome that arrived while no events were set. */
   setEvents(events: TerminalViewEvents | null): void;
   dispose(): void;
 }
@@ -98,7 +111,8 @@ const FOCUS_REPORTS = /\x1b\[I|\x1b\[O/g;
 const encoder = new TextEncoder();
 
 type Phase = "created" | "opening" | "opened" | "disposed";
-type Connection = "none" | "connecting" | "live";
+// "failed" is not retried by reconcile; only a restart or a move to a new container retries.
+type Connection = "none" | "connecting" | "live" | "failed";
 
 export function createTerminalView(options: TerminalViewOptions): TerminalView {
   const { ptyKey, kind, pty } = options;
@@ -111,7 +125,9 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
   let phase: Phase = "created";
   let container: HTMLElement | null = null;
   let shown = false;
+  let wasVisible = false;
   let focused = false;
+  let focusPending = false;
   let exited = false;
   let sized = false;
   let connection: Connection = "none";
@@ -121,7 +137,10 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
   let pendingBytes = 0;
   let paused = false;
   let events: TerminalViewEvents | null = null;
+  let undeliveredOutcome: ((events: TerminalViewEvents) => void) | null = null;
   let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+  let resolveOpened!: () => void;
+  const opened = new Promise<void>((resolve) => (resolveOpened = resolve));
 
   const surface = options.createSurface({
     onData: (data) => {
@@ -153,18 +172,36 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
     return phase === "opened" && container !== null && shown;
   }
 
+  function currentGeometry(): TerminalGeometry {
+    return { cols: surface.cols, rows: surface.rows };
+  }
+
   function writeUserBytes(bytes: number[]): void {
     events?.userInput?.();
     pty.write(ptyKey, bytes);
   }
 
-  function syncGeometry(): void {
+  /** Returns whether the surface (and PTY) were resized. */
+  function syncGeometry(): boolean {
     const next = surface.measure();
-    if (!next || next.cols <= 0 || next.rows <= 0) return;
+    if (!next || next.cols <= 0 || next.rows <= 0) return false;
     sized = true;
-    if (next.cols === surface.cols && next.rows === surface.rows) return;
+    if (options.geometryHint) options.geometryHint.last = next;
+    if (next.cols === surface.cols && next.rows === surface.rows) return false;
     surface.resize(next);
     if (connection === "live") pty.resize(ptyKey, next);
+    return true;
+  }
+
+  function adoptProvisionalGeometry(): void {
+    const hint = options.geometryHint?.last;
+    if (hint && (hint.cols !== surface.cols || hint.rows !== surface.rows)) surface.resize(hint);
+    sized = true;
+  }
+
+  function deliver(fire: (events: TerminalViewEvents) => void): void {
+    if (events) fire(events);
+    else undeliveredOutcome = fire;
   }
 
   function receive(gen: number, data: Uint8Array): void {
@@ -191,6 +228,7 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
     receivedOutput = false;
     pendingBytes = 0;
     paused = false;
+    undeliveredOutcome = null;
     pty
       .connect({ ptyKey, kind, initialCommand: options.initialCommand }, (data) =>
         receive(gen, data),
@@ -199,28 +237,44 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
         if (gen !== generation || phase === "disposed") return;
         connection = "live";
         // Bring the PTY to the surface's size; the kernel ignores a no-op.
-        pty.resize(ptyKey, { cols: surface.cols, rows: surface.rows });
-        events?.attached?.();
+        pty.resize(ptyKey, currentGeometry());
+        deliver((e) => e.attached?.());
       })
       .catch((error) => {
         if (gen !== generation || phase === "disposed") return;
-        connection = "none";
-        events?.attachError?.(error);
+        connection = "failed";
+        deliver((e) => e.attachError?.(error));
       });
   }
 
   function reconcile(): void {
     if (phase !== "opened") return;
     const visible = isVisible();
+    const becameVisible = visible && !wasVisible;
+    wasVisible = visible;
     surface.setGpu(visible);
-    if (!visible) return;
-    syncGeometry();
-    if (sized && connection === "none" && !exited) connect();
-    if (focused) surface.focus();
+    if (becameVisible) focusPending = true;
+
+    if (visible) {
+      const resized = syncGeometry();
+      // Another client may have resized the PTY while this view was hidden.
+      if (becameVisible && !resized && connection === "live") pty.resize(ptyKey, currentGeometry());
+    }
+
+    if (container && connection === "none" && !exited) {
+      if (!sized && !visible) adoptProvisionalGeometry();
+      if (sized) connect();
+    }
+
+    if (visible && focused && focusPending) {
+      focusPending = false;
+      surface.focus();
+    }
   }
 
   return {
     ptyKey,
+    opened,
 
     mount(target) {
       if (phase === "disposed") return;
@@ -229,6 +283,7 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
         shown = false;
         focused = false;
       }
+      if (container !== target && connection === "failed") connection = "none";
       container = target;
       target.appendChild(host);
       if (phase === "created") {
@@ -237,6 +292,7 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
           if (phase !== "opening") return;
           surface.open(host);
           phase = "opened";
+          resolveOpened();
           reconcile();
         });
         return;
@@ -263,6 +319,7 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
     setFocused(next) {
       if (focused === next) return;
       focused = next;
+      focusPending = next;
       if (!next && phase === "opened") surface.blur();
       reconcile();
     },
@@ -292,6 +349,10 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
 
     setEvents(next) {
       events = next;
+      if (!next || !undeliveredOutcome) return;
+      const fire = undeliveredOutcome;
+      undeliveredOutcome = null;
+      fire(next);
     },
 
     dispose() {

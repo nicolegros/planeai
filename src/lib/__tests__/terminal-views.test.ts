@@ -9,7 +9,6 @@ import {
   disposeAllTerminalViews,
   disposeSessionTerminalViews,
   disposeTerminalView,
-  hasTerminalView,
 } from "../terminal-views";
 
 const disposed: string[] = [];
@@ -44,16 +43,17 @@ describe("terminal view registry", () => {
     disposeTerminalView("s1:1");
 
     expect(disposed).toEqual(["s1:1"]);
-    expect(hasTerminalView("s1:1")).toBe(false);
     expect(acquire("s1:1")).not.toBe(first);
   });
 
   it("disposes a session's agent and shell views only", () => {
-    for (const key of ["s1", "s1:1", "s1:2", "s10", "s10:1"]) acquire(key);
+    const s10 = acquire("s10");
+    const s10Shell = acquire("s10:1");
+    for (const key of ["s1", "s1:1", "s1:2"]) acquire(key);
     disposeSessionTerminalViews("s1");
 
     expect(disposed.sort()).toEqual(["s1", "s1:1", "s1:2"]);
-    expect(hasTerminalView("s10")).toBe(true);
-    expect(hasTerminalView("s10:1")).toBe(true);
+    expect(acquire("s10")).toBe(s10);
+    expect(acquire("s10:1")).toBe(s10Shell);
   });
 });
