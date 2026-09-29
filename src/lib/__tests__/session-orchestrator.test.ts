@@ -21,9 +21,9 @@ vi.mock("../settings.svelte", () => ({
 vi.mock("../tab-switcher.svelte", () => ({
   getCycleState: vi.fn(() => ({ isCycling: false, cycleList: [], index: 0, isVisible: false })),
 }));
+vi.mock("../terminal-views", () => ({ disposeSessionTerminalViews: vi.fn() }));
 vi.mock("../mru.svelte", () => ({
-  activateSession: vi.fn(),
-  removeSession: vi.fn(),
+  removeMru: vi.fn(),
   touchMru: vi.fn(),
   getMruList: vi.fn(() => []),
   flushMru: vi.fn(() => Promise.resolve()),
@@ -313,40 +313,40 @@ describe("session-orchestrator", () => {
     });
   });
 
-  describe("selectSession exited daemon fix (PLA-169)", () => {
-    it("waits for restart before activating pool for exited sessions", async () => {
-      const { activateSession: poolActivate } = await import("../mru.svelte");
-      const poolMock = vi.mocked(poolActivate);
+  describe("terminal views", () => {
+    it("disposes the views of sessions that disappear on reload", async () => {
+      const { disposeSessionTerminalViews } = await import("../terminal-views");
+      const dispose = vi.mocked(disposeSessionTerminalViews);
+      api.list.mockResolvedValue([makeSession({ id: "s1" }), makeSession({ id: "s2" })]);
+      await loadSessions();
+      dispose.mockClear();
 
+      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
+      await loadSessions();
+
+      expect(dispose.mock.calls).toEqual([["s2"]]);
+    });
+  });
+
+  describe("selectSession exited daemon fix (PLA-169)", () => {
+    // Terminal views never connect while exited, so the session must stay
+    // exited until the restart has actually completed.
+    it("keeps an exited session exited until restart resolves", async () => {
       api.list.mockResolvedValue([
         makeSession({ id: "s1", status: "active" }),
         makeSession({ id: "s2", status: "exited", backend: "daemon" }),
       ]);
-      api.restart.mockResolvedValue(makeSession({ id: "s2", status: "active", backend: "daemon" }));
+      let finishRestart!: (session: Session) => void;
+      api.restart.mockReturnValue(new Promise((resolve) => (finishRestart = resolve)));
       await loadSessions();
 
-      poolMock.mockClear();
       selectSession("s2");
+      expect(getSessions().find((s) => s.id === "s2")?.status).toBe("exited");
 
-      // Pool should NOT be activated synchronously for exited sessions
-      expect(poolMock).not.toHaveBeenCalled();
-
-      // After restart resolves, pool is activated
-      await vi.waitFor(() => expect(poolMock).toHaveBeenCalledWith("s2"));
-    });
-
-    it("activates pool immediately for active sessions", async () => {
-      const { activateSession: poolActivate } = await import("../mru.svelte");
-      const poolMock = vi.mocked(poolActivate);
-
-      api.list.mockResolvedValue([makeSession({ id: "s1", status: "active" })]);
-      await loadSessions();
-
-      poolMock.mockClear();
-      selectSession("s1");
-
-      // Active sessions activate pool immediately
-      expect(poolMock).toHaveBeenCalledWith("s1");
+      finishRestart(makeSession({ id: "s2", status: "active", backend: "daemon" }));
+      await vi.waitFor(() =>
+        expect(getSessions().find((s) => s.id === "s2")?.status).toBe("active"),
+      );
     });
   });
 

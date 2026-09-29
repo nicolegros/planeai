@@ -50,7 +50,8 @@
   import { ptyKeyToSessionId, reconcileWorkspaceTabs, resolveRestoredLayoutSelection } from "./lib/workspace-tabs";
   import { addShellTabToLeaf, openEditorResource, openShellResourceInFocusedLeaf, openShellResourceInNewPane, toggleDiffResource } from "./lib/workspace-resources";
   import { saveActiveEditorResource } from "./lib/editor-resources";
-  import { getMruList, isMounted as poolIsMounted } from "./lib/mru.svelte";
+  import { getMruList } from "./lib/mru.svelte";
+  import { disposeTerminalView } from "./lib/terminal-views";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
   import { initUpdateListener, focusUpdateToast, getUpdateState, setLaunchUpdateAvailable } from "./lib/updater.svelte";
@@ -655,8 +656,11 @@
     await closeShellTabInTree(activeEntry.ptyKey);
   }
 
-  /** Close a shell tab using its PTY key rather than a visual tab position. */
-  async function closeShellTabInTree(ptyKey: string): Promise<void> {
+  /**
+   * Close a shell tab using its PTY key rather than a visual tab position.
+   * `refocus: false` for closes the user did not initiate, which must not steal focus.
+   */
+  async function closeShellTabInTree(ptyKey: string, { refocus = true } = {}): Promise<void> {
     if (pendingShellCommands.has(ptyKey)) {
       showSnackbar("Terminal editor is still starting", "error");
       return;
@@ -673,6 +677,7 @@
       // This avoids an orphaned terminal UI when the daemon close request fails.
       await orchestrator.closeShellTab(sessionId, tabIndex);
       splitTree.removeSessionFromLeaf(ptyKey);
+      if (!refocus) return;
       await tick();
       refocusTerminal();
     } catch (error) {
@@ -745,6 +750,12 @@
   }
 
   async function handleShellAttachError(ptyKey: string, error: unknown): Promise<void> {
+    if (!pendingShellCommands.has(ptyKey)) {
+      showSnackbar(`Failed to start shell: ${error}`, "error");
+      // A shell that never started would otherwise linger as a dead pane.
+      await closeShellTabInTree(ptyKey, { refocus: false });
+      return;
+    }
     try {
       const rolledBack = await rollbackPendingTerminalEditor({
         ptyKey,
@@ -752,7 +763,10 @@
         removeTab,
         closeTab: pty.closeTab,
       });
-      if (rolledBack) splitTree.removeSessionFromLeaf(ptyKey);
+      if (rolledBack) {
+        splitTree.removeSessionFromLeaf(ptyKey);
+        disposeTerminalView(ptyKey);
+      }
     } catch (rollbackError) {
       console.warn("Failed to clean up terminal editor tab", rollbackError);
     }
@@ -1164,6 +1178,8 @@
 
       pendingShellCommands.delete(ptyKey);
       splitTree.removeSessionFromLeaf(ptyKey);
+      // The shell is gone either way; don't leave its view behind if close_tab fails.
+      disposeTerminalView(ptyKey);
       const sessionId = ptyKey.slice(0, separator);
       const tabIndex = Number.parseInt(ptyKey.slice(separator + 1), 10);
       if (!sessionId || Number.isNaN(tabIndex)) return;
@@ -1632,7 +1648,7 @@
             {@const isActiveInLeaf = tabEntry.ptyKey === leaf.activeTab}
             {@const project = session ? projects.find((p) => p.id === session.project_id) : null}
             {#if (tabEntry.type === "agent" || tabEntry.type === "shell")}
-              {#if session && poolIsMounted(session.id)}
+              {#if session}
               <!-- Wrapper hides inactive tabs; Terminal's visible prop also pauses during loop overlay -->
               <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
                 <Terminal
@@ -1650,7 +1666,6 @@
                   initialCommand={tabEntry.type === "shell" ? getPendingTerminalEditorCommand({ ptyKey: tabEntry.ptyKey, pendingCommands: pendingShellCommands }) : undefined}
                   onAttached={() => {
                     if (tabEntry.type === "shell") confirmPendingShellCommandStarted(tabEntry.ptyKey);
-                    if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active");
                     if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal();
                   }}
                   onAttachError={(error) => {

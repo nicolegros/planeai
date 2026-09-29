@@ -200,6 +200,15 @@ it("awaits shell-tab closure before removing the split-tree entry and contains f
   );
 });
 
+it("closes a plain shell tab that failed to start without stealing focus", () => {
+  expect(appSource).toMatch(
+    /async function handleShellAttachError[\s\S]*?if \(!pendingShellCommands\.has\(ptyKey\)\) \{[\s\S]*?Failed to start shell[\s\S]*?await closeShellTabInTree\(ptyKey, \{ refocus: false \}\);[\s\S]*?return;/,
+  );
+  expect(appSource).toMatch(
+    /async function closeShellTabInTree[\s\S]*?if \(!refocus\) return;[\s\S]*?refocusTerminal\(\);/,
+  );
+});
+
 it("parks an active agent session when Cmd+W closes its agent tab", () => {
   expect(appSource).toMatch(
     /if \(activeEntry\.type === "agent"\) \{[\s\S]*?await orchestrator\.parkSession\(session\);/,
