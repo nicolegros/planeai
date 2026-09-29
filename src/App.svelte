@@ -746,6 +746,10 @@
   }
 
   async function handleShellAttachError(ptyKey: string, error: unknown): Promise<void> {
+    if (!pendingShellCommands.has(ptyKey)) {
+      showSnackbar(`Failed to start shell: ${error}`, "error");
+      return;
+    }
     try {
       const rolledBack = await rollbackPendingTerminalEditor({
         ptyKey,

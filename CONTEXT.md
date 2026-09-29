@@ -259,7 +259,8 @@ A view is disposed only when its shell tab closes or its session is deleted, arc
   A real size change reaches the child as `SIGWINCH`; the kernel ignores a same-size resize, which is why a re-created view used to stay garbled until the window was resized.
 - **Connect on mount**: a view connects (`attach_session` or `spawn_tab`) once its surface is opened (font loaded) and it is mounted in the current layout, visible or not; on the local backend the attach is what starts the agent.
   A visible view connects at its measured size.
-  A hidden view that was never measured connects at the last size any view measured (same leaf, same font), so output is never laid out at a size the PTY does not have; if that size was wrong, both resize together on first show.
+  A hidden view that was never measured waits briefly (100 ms) for a visible sibling to measure, then connects at the last size any view measured, or at xterm's default 80×24 if none did.
+  Either way surface and PTY start at the same size, and both resize together on first show if it was wrong.
 - **Failed connections** are reported once and retried only on restart or when the view moves to a new container.
 - **WebGL while visible**: only visible views hold a WebGL renderer; browsers cap live WebGL contexts at about 16.
 

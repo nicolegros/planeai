@@ -132,6 +132,8 @@ class FakeResizeObserver {
   }
 }
 
+const provisionalWait = () => new Promise<void>((resolve) => setTimeout(resolve, 5));
+
 async function containerResized(): Promise<void> {
   for (const o of observers) if (!o.disconnected) o.callback([], {} as ResizeObserver);
   await new Promise((resolve) => setTimeout(resolve, 5));
@@ -167,6 +169,7 @@ function createView(kind: "agent" | "shell" = "agent", initialCommand?: string):
     geometryHint: hint,
     createSurface: (handlers) => (surface = new FakeSurface(handlers)),
     resizeDebounceMs: 1,
+    provisionalWaitMs: 1,
   });
 }
 
@@ -232,6 +235,8 @@ describe("terminal view: first mount", () => {
     mountIn(newContainer());
     surface.available = null;
     await surface.loadFont();
+    expect(pty.connects).toHaveLength(0);
+    await provisionalWait();
     expect(pty.connects).toHaveLength(1);
     await pty.acceptConnect();
 
@@ -243,6 +248,8 @@ describe("terminal view: first mount", () => {
     mountIn(newContainer());
     surface.available = null;
     await surface.loadFont();
+    await provisionalWait();
+    expect(pty.connects).toHaveLength(1);
     await pty.acceptConnect();
 
     expect(pty.size).toEqual({ cols: 80, rows: 24 });
@@ -253,6 +260,7 @@ describe("terminal view: first mount", () => {
     hint.last = { cols: 100, rows: 30 };
     mountIn(newContainer());
     await surface.loadFont();
+    await provisionalWait();
     await pty.acceptConnect();
     const repaints = pty.sigwinch;
     view.setShown(true);
@@ -260,6 +268,30 @@ describe("terminal view: first mount", () => {
     expect(pty.size).toEqual({ cols: 120, rows: 40 });
     expect(pty.sigwinch).toBe(repaints + 1);
     expectInSync();
+  });
+
+  it("lets a visible sibling that opens later measure before connecting hidden", async () => {
+    mountIn(newContainer());
+    const hiddenSurface = surface;
+    const siblingPty = new FakePty();
+    const sibling = createTerminalView({
+      ptyKey: "s2",
+      kind: "agent",
+      pty: siblingPty,
+      geometryHint: hint,
+      createSurface: (handlers) => (surface = new FakeSurface(handlers)),
+      resizeDebounceMs: 1,
+      provisionalWaitMs: 1,
+    });
+    sibling.mount(newContainer());
+    sibling.setShown(true);
+    await hiddenSurface.loadFont();
+    await surface.loadFont();
+    await provisionalWait();
+
+    expect({ cols: hiddenSurface.cols, rows: hiddenSurface.rows }).toEqual({ cols: 120, rows: 40 });
+    expect(pty.connects).toHaveLength(1);
+    sibling.dispose();
   });
 
   it("records visible measurements as the provisional size", async () => {
@@ -325,6 +357,7 @@ describe("terminal view: first mount", () => {
   });
 
   it("retries a failed connection when moved to a new container", async () => {
+    view.setEvents({ attachError: vi.fn() });
     mountIn(newContainer());
     view.setShown(true);
     await surface.loadFont();
@@ -333,6 +366,21 @@ describe("terminal view: first mount", () => {
     mountIn(newContainer());
 
     expect(pty.connects).toHaveLength(2);
+  });
+
+  it("hands an unseen failure to the next container instead of retrying", async () => {
+    mountIn(newContainer());
+    view.setShown(true);
+    await surface.loadFont();
+    await pty.rejectConnect(new Error("boom"));
+    view.unmount(mounted);
+    mountIn(newContainer());
+    view.setShown(true);
+    const attachError = vi.fn();
+    view.setEvents({ attachError });
+
+    expect(pty.connects).toHaveLength(1);
+    expect(attachError).toHaveBeenCalledWith(new Error("boom"));
   });
 
   it("delivers an attach outcome that arrived while no slot was listening", async () => {

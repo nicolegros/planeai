@@ -65,8 +65,9 @@ export interface TerminalViewEvents {
 }
 
 /**
- * Last size any view measured. Views that cannot measure yet (hidden tabs,
- * tabs behind an overlay) connect at it; same leaf and font, so usually exact.
+ * Last size any view measured. A view that cannot measure (hidden tab, tab
+ * behind an overlay) waits briefly for a visible sibling to measure, then
+ * connects at this size, or at the surface default if nothing was measured.
  */
 export interface GeometryHint {
   last: TerminalGeometry | null;
@@ -81,6 +82,7 @@ export interface TerminalViewOptions {
   geometryHint?: GeometryHint;
   onTitle?: (title: string) => void;
   resizeDebounceMs?: number;
+  provisionalWaitMs?: number;
 }
 
 export interface TerminalView {
@@ -111,12 +113,22 @@ const FOCUS_REPORTS = /\x1b\[I|\x1b\[O/g;
 const encoder = new TextEncoder();
 
 type Phase = "created" | "opening" | "opened" | "disposed";
-// "failed" is not retried by reconcile; only a restart or a move to a new container retries.
-type Connection = "none" | "connecting" | "live" | "failed";
+
+/** One attempt to connect; replaced wholesale on every (re)connect. */
+interface Connection {
+  // "failed" is not retried by reconcile; only a restart or a move to a new container retries.
+  status: "connecting" | "live" | "failed";
+  receivedOutput: boolean;
+  pendingBytes: number;
+  paused: boolean;
+  /** Attach outcome that arrived while no events were set. */
+  undelivered: ((events: TerminalViewEvents) => void) | null;
+}
 
 export function createTerminalView(options: TerminalViewOptions): TerminalView {
   const { ptyKey, kind, pty } = options;
   const resizeDebounceMs = options.resizeDebounceMs ?? 50;
+  const provisionalWaitMs = options.provisionalWaitMs ?? 100;
 
   const host = document.createElement("div");
   host.style.width = "100%";
@@ -130,31 +142,29 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
   let focusPending = false;
   let exited = false;
   let sized = false;
-  let connection: Connection = "none";
-  // Bumped on every (re)connect so output from a superseded connection is dropped.
-  let generation = 0;
-  let receivedOutput = false;
-  let pendingBytes = 0;
-  let paused = false;
+  let provisionalWaited = false;
+  let provisionalTimer: ReturnType<typeof setTimeout> | null = null;
+  let connection: Connection | null = null;
   let events: TerminalViewEvents | null = null;
-  let undeliveredOutcome: ((events: TerminalViewEvents) => void) | null = null;
   let resizeTimer: ReturnType<typeof setTimeout> | null = null;
   let resolveOpened!: () => void;
   const opened = new Promise<void>((resolve) => (resolveOpened = resolve));
 
+  const isLive = () => connection?.status === "live";
+
   const surface = options.createSurface({
     onData: (data) => {
-      if (exited || connection !== "live") return;
+      if (exited || !connection || connection.status !== "live") return;
       // Focus reports xterm emits before the child has spoken confuse shells.
-      const filtered = receivedOutput ? data : data.replace(FOCUS_REPORTS, "");
+      const filtered = connection.receivedOutput ? data : data.replace(FOCUS_REPORTS, "");
       if (filtered) writeUserBytes(Array.from(encoder.encode(filtered)));
     },
     onUserBytes: (bytes) => {
-      if (exited || connection !== "live") return;
+      if (exited || !isLive()) return;
       writeUserBytes(bytes);
     },
     onReply: (bytes) => {
-      if (connection === "live") pty.write(ptyKey, bytes);
+      if (isLive()) pty.write(ptyKey, bytes);
     },
     onTitle: (title) => options.onTitle?.(title),
   });
@@ -189,61 +199,74 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
     if (options.geometryHint) options.geometryHint.last = next;
     if (next.cols === surface.cols && next.rows === surface.rows) return false;
     surface.resize(next);
-    if (connection === "live") pty.resize(ptyKey, next);
+    if (isLive()) pty.resize(ptyKey, next);
     return true;
   }
 
-  function adoptProvisionalGeometry(): void {
+  /** Hidden and never measured: give a visible sibling a moment to measure first. */
+  function waitThenAdoptProvisionalGeometry(): void {
+    if (!provisionalWaited) {
+      if (!provisionalTimer) {
+        provisionalTimer = setTimeout(() => {
+          provisionalTimer = null;
+          provisionalWaited = true;
+          reconcile();
+        }, provisionalWaitMs);
+      }
+      return;
+    }
     const hint = options.geometryHint?.last;
     if (hint && (hint.cols !== surface.cols || hint.rows !== surface.rows)) surface.resize(hint);
     sized = true;
   }
 
-  function deliver(fire: (events: TerminalViewEvents) => void): void {
+  function deliver(target: Connection, fire: (events: TerminalViewEvents) => void): void {
     if (events) fire(events);
-    else undeliveredOutcome = fire;
+    else target.undelivered = fire;
   }
 
-  function receive(gen: number, data: Uint8Array): void {
-    if (gen !== generation || phase === "disposed") return;
-    receivedOutput = true;
-    pendingBytes += data.byteLength;
-    if (pendingBytes > FLOW_HIGH && !paused) {
-      paused = true;
+  function receive(target: Connection, data: Uint8Array): void {
+    if (target !== connection || phase === "disposed") return;
+    target.receivedOutput = true;
+    target.pendingBytes += data.byteLength;
+    if (target.pendingBytes > FLOW_HIGH && !target.paused) {
+      target.paused = true;
       pty.pause(ptyKey);
     }
     surface.write(data, () => {
-      if (gen !== generation) return;
-      pendingBytes = Math.max(pendingBytes - data.byteLength, 0);
-      if (paused && pendingBytes < FLOW_LOW) {
-        paused = false;
+      if (target !== connection) return;
+      target.pendingBytes = Math.max(target.pendingBytes - data.byteLength, 0);
+      if (target.paused && target.pendingBytes < FLOW_LOW) {
+        target.paused = false;
         pty.resume(ptyKey);
       }
     });
   }
 
   function connect(): void {
-    const gen = ++generation;
-    connection = "connecting";
-    receivedOutput = false;
-    pendingBytes = 0;
-    paused = false;
-    undeliveredOutcome = null;
+    const attempt: Connection = {
+      status: "connecting",
+      receivedOutput: false,
+      pendingBytes: 0,
+      paused: false,
+      undelivered: null,
+    };
+    connection = attempt;
     pty
       .connect({ ptyKey, kind, initialCommand: options.initialCommand }, (data) =>
-        receive(gen, data),
+        receive(attempt, data),
       )
       .then(() => {
-        if (gen !== generation || phase === "disposed") return;
-        connection = "live";
+        if (attempt !== connection || phase === "disposed") return;
+        attempt.status = "live";
         // Bring the PTY to the surface's size; the kernel ignores a no-op.
         pty.resize(ptyKey, currentGeometry());
-        deliver((e) => e.attached?.());
+        deliver(attempt, (e) => e.attached?.());
       })
       .catch((error) => {
-        if (gen !== generation || phase === "disposed") return;
-        connection = "failed";
-        deliver((e) => e.attachError?.(error));
+        if (attempt !== connection || phase === "disposed") return;
+        attempt.status = "failed";
+        deliver(attempt, (e) => e.attachError?.(error));
       });
   }
 
@@ -258,11 +281,11 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
     if (visible) {
       const resized = syncGeometry();
       // Another client may have resized the PTY while this view was hidden.
-      if (becameVisible && !resized && connection === "live") pty.resize(ptyKey, currentGeometry());
+      if (becameVisible && !resized && isLive()) pty.resize(ptyKey, currentGeometry());
     }
 
-    if (container && connection === "none" && !exited) {
-      if (!sized && !visible) adoptProvisionalGeometry();
+    if (container && !connection && !exited) {
+      if (!sized && !visible) waitThenAdoptProvisionalGeometry();
       if (sized) connect();
     }
 
@@ -283,7 +306,11 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
         shown = false;
         focused = false;
       }
-      if (container !== target && connection === "failed") connection = "none";
+      // Retry a failure on a move, unless no slot has seen it yet: the next
+      // slot's handler decides (e.g. rolling back a terminal editor tab).
+      if (container !== target && connection?.status === "failed" && !connection.undelivered) {
+        connection = null;
+      }
       container = target;
       target.appendChild(host);
       if (phase === "created") {
@@ -329,9 +356,8 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
       exited = next;
       if (next) return;
       // Restart: same view, clean buffer (CONTEXT.md "Restart"), new connection.
-      if (connection !== "none" || receivedOutput) {
-        generation++;
-        connection = "none";
+      if (connection) {
+        connection = null;
         if (phase === "opened") surface.reset();
       }
       reconcile();
@@ -349,17 +375,18 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
 
     setEvents(next) {
       events = next;
-      if (!next || !undeliveredOutcome) return;
-      const fire = undeliveredOutcome;
-      undeliveredOutcome = null;
+      const fire = connection?.undelivered;
+      if (!next || !connection || !fire) return;
+      connection.undelivered = null;
       fire(next);
     },
 
     dispose() {
       if (phase === "disposed") return;
       phase = "disposed";
-      generation++;
+      connection = null;
       if (resizeTimer) clearTimeout(resizeTimer);
+      if (provisionalTimer) clearTimeout(provisionalTimer);
       resizeObserver.disconnect();
       host.remove();
       container = null;
