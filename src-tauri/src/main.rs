@@ -280,7 +280,7 @@ fn main() {
 
             // Refresh hook scripts to latest bundled version (idempotent, only updates
             // scripts for hooks that are already installed on the user's system).
-            planeai_core::notify::refresh_hook_scripts(&config::home_dir());
+            planeai_core::agent_hooks::refresh_hook_scripts(&config::home_dir());
 
             // PTY manager with notify wired in
             let pty_mgr = pty::PtyManager::new();

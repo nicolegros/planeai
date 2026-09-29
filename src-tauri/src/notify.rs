@@ -7,13 +7,14 @@ use tauri::{AppHandle, Emitter, Manager};
 use planeai::ipc::{Channel, IpcListener};
 
 // Re-export shared types from planeai-core
+#[cfg(test)]
+use planeai_core::agent_hooks::{
+    install_claude_hook_at, install_copilot_hook_at, is_claude_hook_installed_at,
+    is_copilot_hook_installed_at, is_kiro_hook_installed_at,
+};
 pub use planeai_core::notify::{
-    is_claude_hook_installed_at, is_copilot_hook_installed_at, is_kiro_hook_installed_at,
     parse_notify_message, AgentState, NotifyEvent, NotifyMessage, NotifyState, SharedNotifyState,
 };
-// Used in tests
-#[cfg(test)]
-pub(crate) use planeai_core::notify::{install_claude_hook_at, install_copilot_hook_at};
 
 const SILENCE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 

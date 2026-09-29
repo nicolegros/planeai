@@ -1,20 +1,18 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::config;
 use crate::db;
 
+use planeai_core::agent_hooks::AgentKind;
 use planeai_core::session_launch::{prepare_session, CreateSessionRequest, SessionTarget};
 
-static KIRO_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
-static CLAUDE_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
-static COPILOT_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
+static HOOK_CACHE: Mutex<Option<HashMap<AgentKind, bool>>> = Mutex::new(None);
 
 /// Invalidate cached hook-installed results (call after hook installation).
 pub fn invalidate_hook_cache() {
-    *KIRO_HOOK_CACHE.lock().unwrap() = None;
-    *CLAUDE_HOOK_CACHE.lock().unwrap() = None;
-    *COPILOT_HOOK_CACHE.lock().unwrap() = None;
+    *HOOK_CACHE.lock().unwrap() = None;
 }
 
 /// Resolve the working directory for a session's project.
@@ -42,54 +40,18 @@ pub(crate) fn fire_task_hook(
 
 /// Check if a provider has hook-based idle detection.
 pub(crate) fn provider_has_hook(provider_key: &str, cfg: &config::Config) -> bool {
-    let Some(provider) = cfg.providers.get(provider_key) else {
-        return false;
-    };
-    if provider.command.contains("kiro") {
-        is_kiro_hook_installed()
-    } else if provider.command.contains("claude") {
-        is_claude_hook_installed()
-    } else if provider.command.contains("copilot") {
-        is_copilot_hook_installed()
-    } else {
-        false
-    }
+    cfg.providers
+        .get(provider_key)
+        .and_then(|p| AgentKind::from_command(&p.command))
+        .is_some_and(is_hook_installed)
 }
 
-pub(crate) fn is_kiro_hook_installed() -> bool {
-    let mut cache = KIRO_HOOK_CACHE.lock().unwrap();
-    *cache.get_or_insert_with(|| {
-        let home = config::home_dir();
-        // Check v2 agent config location
-        let v2_path = std::path::PathBuf::from(format!("{home}/.kiro/agents/default.json"));
-        if crate::notify::is_kiro_hook_installed_at(&v2_path) {
-            return true;
-        }
-        // Check v3 hooks directory
-        let v3_dir = std::path::PathBuf::from(format!("{home}/.kiro/hooks"));
-        planeai_core::notify::is_kiro_v3_hook_installed_at(&v3_dir)
-    })
-}
-
-pub(crate) fn is_claude_hook_installed() -> bool {
-    let mut cache = CLAUDE_HOOK_CACHE.lock().unwrap();
-    *cache.get_or_insert_with(|| {
-        let home = config::home_dir();
-        let path = std::path::PathBuf::from(format!("{home}/.claude/settings.json"));
-        crate::notify::is_claude_hook_installed_at(&path)
-    })
-}
-
-pub(crate) fn is_copilot_hook_installed() -> bool {
-    let mut cache = COPILOT_HOOK_CACHE.lock().unwrap();
-    *cache.get_or_insert_with(|| {
-        let copilot_dir = std::env::var("COPILOT_HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| {
-                std::path::PathBuf::from(format!("{}/.copilot", config::home_dir()))
-            });
-        crate::notify::is_copilot_hook_installed_at(&copilot_dir)
-    })
+pub(crate) fn is_hook_installed(kind: AgentKind) -> bool {
+    let mut cache = HOOK_CACHE.lock().unwrap();
+    *cache
+        .get_or_insert_with(HashMap::new)
+        .entry(kind)
+        .or_insert_with(|| kind.is_hook_installed(&config::home_dir()))
 }
 
 /// Build the canonical PTY environment for a local/tmux session via `prepare_session()`.
@@ -132,26 +94,18 @@ mod tests {
 
     #[test]
     fn hook_cache_returns_consistent_value() {
-        // First call populates cache, subsequent calls return same value
-        let first = is_kiro_hook_installed();
-        let second = is_kiro_hook_installed();
+        let first = is_hook_installed(AgentKind::Kiro);
+        let second = is_hook_installed(AgentKind::Kiro);
         assert_eq!(first, second);
     }
 
     #[test]
     fn invalidate_resets_all_caches() {
-        // Populate caches
-        is_kiro_hook_installed();
-        is_claude_hook_installed();
-        is_copilot_hook_installed();
-
-        // Invalidate
+        for kind in AgentKind::ALL {
+            is_hook_installed(kind);
+        }
         invalidate_hook_cache();
-
-        // Verify caches are cleared
-        assert!(KIRO_HOOK_CACHE.lock().unwrap().is_none());
-        assert!(CLAUDE_HOOK_CACHE.lock().unwrap().is_none());
-        assert!(COPILOT_HOOK_CACHE.lock().unwrap().is_none());
+        assert!(HOOK_CACHE.lock().unwrap().is_none());
     }
 
     #[test]
