@@ -748,6 +748,8 @@
   async function handleShellAttachError(ptyKey: string, error: unknown): Promise<void> {
     if (!pendingShellCommands.has(ptyKey)) {
       showSnackbar(`Failed to start shell: ${error}`, "error");
+      // A shell that never started would otherwise linger as a dead pane.
+      await closeShellTabInTree(ptyKey);
       return;
     }
     try {
