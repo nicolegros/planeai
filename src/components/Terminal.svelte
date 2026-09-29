@@ -4,9 +4,8 @@
   import { getTerminalSettings, isDark } from "../lib/settings.svelte";
   import { extractCommandName } from "../lib/shell-title";
   import { updateTabLabel } from "../lib/split-tree.svelte";
-  import { createTerminalView, type TerminalView } from "../lib/terminal-view";
-  import { createXtermSurface } from "../lib/xterm-surface";
-  import { tauriTerminalPty } from "../lib/terminal-pty";
+  import type { TerminalView } from "../lib/terminal-view";
+  import { acquireTerminalView } from "../lib/terminal-views";
 
   interface Props {
     sessionId: string;
@@ -34,14 +33,13 @@
     onFocused?.(event);
   }
 
+  // This component is a slot: the view outlives it and is only re-parented here.
   onMount(() => {
     const kind = skipAttach ? "shell" : "agent";
-    const created = createTerminalView({
+    const acquired = acquireTerminalView({
       ptyKey: sessionId,
       kind,
       initialCommand,
-      pty: tauriTerminalPty,
-      createSurface: createXtermSurface,
       onTitle: kind === "shell"
         ? (title) => {
             const name = extractCommandName(title);
@@ -49,11 +47,11 @@
           }
         : undefined,
     });
-    created.setExited(exited);
-    created.mount(containerEl);
-    view = created;
+    acquired.setExited(exited);
+    acquired.mount(containerEl);
+    view = acquired;
     return () => {
-      created.dispose();
+      if (acquired.unmount(containerEl)) acquired.setEvents(null);
       view = null;
     };
   });

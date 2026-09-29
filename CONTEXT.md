@@ -246,13 +246,28 @@ Each session can have multiple tabs. Tab 0 is the agent; tabs 1+ are shell tabs.
 - Tmux sessions that were `active` → check `tmux has-session`; if false → mark `exited`; if true → leave as-is
 - Daemon sessions → left as-is (daemon manages their lifecycle)
 
+### Terminal views
+
+A Terminal view (`src/lib/terminal-view.ts`) owns one pty key's xterm, buffer, and PTY connection.
+Views live in a registry keyed by pty key (`src/lib/terminal-views.ts`).
+`Terminal.svelte` is only a slot that mounts and unmounts a view, so TaskWorkspace switches, splits, and tab moves re-parent the view instead of re-creating it.
+A view is disposed only when its shell tab closes or its session is deleted, archived, or parked.
+
+- **Geometry invariant**: xterm's size and the PTY's size change together, and only while the view is visible.
+  Hidden or unmounted views keep receiving output at their frozen size, so showing one again needs no replay and no redraw from the child.
+  A real size change reaches the child as `SIGWINCH`; the kernel ignores a same-size resize, which is why a re-created view used to stay garbled until the window was resized.
+- **Connect once sized**: a view connects (`attach_session` or `spawn_tab`) only after its surface is opened (font loaded) and measured in a visible container, so output is never laid out at xterm's default 80×24.
+- **WebGL while visible**: only visible views hold a WebGL renderer; browsers cap live WebGL contexts at about 16.
+
 ### Restart
 
 Exited sessions can be restarted: same session identity (name, project, worktree), clean terminal buffer, status returns to `active`. For tmux, creates a new tmux session with the same name. For daemon, sends a spawn command to the daemon. For local, the session status is restored and a new PTY is spawned on attach.
 
 Provider resume is attempted on restart: if `resume_command` is set → use that; otherwise → fresh provider command. If resume fails, automatically falls back to fresh launch.
 
-Selecting an exited session triggers restart automatically. The terminal pool activation is deferred until restart completes, preventing attach-to-exited-session loops (especially on daemon backend).
+Selecting an exited session triggers restart automatically.
+The session stays `exited` until restart completes, and a Terminal view never connects while exited, preventing attach-to-exited-session loops (especially on daemon backend).
+On restart the same Terminal view resets its buffer and reconnects.
 
 ### DB columns
 

@@ -75,8 +75,13 @@ export interface TerminalViewOptions {
 
 export interface TerminalView {
   readonly ptyKey: string;
+  /** Place the view in a container, moving it out of any previous one. */
   mount(container: HTMLElement): void;
-  unmount(): void;
+  /**
+   * Take the view out of `from`. Returns false (and does nothing) when the view
+   * has since been mounted elsewhere, so a stale slot cannot evict a newer one.
+   */
+  unmount(from: HTMLElement): boolean;
   setShown(shown: boolean): void;
   setFocused(focused: boolean): void;
   setExited(exited: boolean): void;
@@ -219,6 +224,11 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
 
     mount(target) {
       if (phase === "disposed") return;
+      if (container && container !== target) {
+        // Moving: the new slot decides visibility and focus.
+        shown = false;
+        focused = false;
+      }
       container = target;
       target.appendChild(host);
       if (phase === "created") {
@@ -234,13 +244,14 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
       reconcile();
     },
 
-    unmount() {
-      if (!container) return;
+    unmount(from) {
+      if (container !== from) return false;
       host.remove();
       container = null;
       shown = false;
       focused = false;
       reconcile();
+      return true;
     },
 
     setShown(next) {

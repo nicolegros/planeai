@@ -32,6 +32,7 @@ vi.mock("../../lib/split-tree.svelte", () => ({ updateTabLabel: vi.fn() }));
 vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
 
 import Terminal from "../Terminal.svelte";
+import { disposeAllTerminalViews } from "../../lib/terminal-views";
 
 describe("Terminal pointer focus boundary", () => {
   let target: HTMLDivElement;
@@ -60,6 +61,7 @@ describe("Terminal pointer focus boundary", () => {
 
   afterEach(() => {
     unmount(component);
+    disposeAllTerminalViews();
     target.remove();
     vi.clearAllMocks();
   });

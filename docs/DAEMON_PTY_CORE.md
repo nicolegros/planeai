@@ -237,12 +237,12 @@ If resume fails, automatically falls back to fresh command.
 
 When a session transitions from exited to active (via restart):
 
-1. Session orchestrator calls `restart()` and defers terminal pool activation until the restart resolves
-2. On success, orchestrator updates session status to "active" and activates the terminal pool
-3. Terminal.svelte mounts and calls `pty.attach()` with flow control channel
+1. Session orchestrator calls `restart()`; the session stays `exited` until the restart resolves
+2. On success, orchestrator updates session status to "active"
+3. The session's Terminal view resets its buffer and calls `pty.attach()` with a flow control channel
 4. Replays buffer + resumes live output
 
-This sequencing prevents the terminal from attaching to a still-exited daemon session (which would immediately EOF and re-emit pty-exited). Restart failures surface via `showSnackbar()`; the terminal pool is still activated so the user sees the session state.
+A Terminal view never connects while its session is exited, which prevents attaching to a still-exited daemon session (which would immediately EOF and re-emit pty-exited). Restart failures surface via `showSnackbar()`.
 
 ## Architecture
 

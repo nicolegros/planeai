@@ -7,14 +7,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sessions as sessionsApi, symphony, tasks } from "./api";
 import type { Session } from "./types";
 import { initSession, getTabCount, destroySession as destroyTabState } from "./session-tabs.svelte";
-import {
-  touchMru,
-  getMruList,
-  flushMru,
-  seedMru,
-  activateSession as poolActivate,
-  removeSession as poolRemove,
-} from "./mru.svelte";
+import { touchMru, removeMru, getMruList, flushMru, seedMru } from "./mru.svelte";
+import { disposeSessionTerminalViews } from "./terminal-views";
 import { clearComments } from "./review-comments.svelte";
 import { clearEditorFeedback } from "./editor-feedback.svelte";
 import { destroySession as destroyViewedState } from "./diff-viewed.svelte";
@@ -163,21 +157,21 @@ export function selectSession(id: string, opts: { explicit?: boolean } = {}): vo
   setActiveSession(id, opts);
   const session = sessions.find((s) => s.id === id);
   if (session?.status === "exited") {
-    // Await restart before activating the terminal pool. Without this,
-    // the terminal mounts and attaches to the still-exited daemon session,
-    // gets an immediate EOF, and re-emits pty-exited — causing a loop.
+    // The session stays `exited` until restart resolves, so its terminal view
+    // does not attach to the still-exited daemon session (immediate EOF, then
+    // pty-exited again: a loop).
     sessionsApi
       .restart(id)
       .then((updated) => {
         if (updated) sessions = sessions.map((x) => (x.id === id ? updated : x));
-        if (activeSessionId === id) poolActivate(id);
+        if (activeSessionId === id) touchMru(id);
       })
       .catch((e) => {
         showSnackbar(`Restart failed: ${e}`);
-        if (activeSessionId === id) poolActivate(id);
+        if (activeSessionId === id) touchMru(id);
       });
   } else {
-    poolActivate(id);
+    touchMru(id);
   }
   if (agentStates[id]) {
     clearAgentState(id);
@@ -199,6 +193,12 @@ export function createSession(session: Session): void {
   selectSession(session.id, { explicit: true });
 }
 
+/** A session leaving the app takes its terminal views (agent and shells) with it. */
+function removeSessionViews(sessionId: string): void {
+  removeMru(sessionId);
+  disposeSessionTerminalViews(sessionId);
+}
+
 export async function deleteSession(s: Session): Promise<void> {
   await sessionsApi.destroy(s.id);
   dismissForSession(s.id);
@@ -206,12 +206,12 @@ export async function deleteSession(s: Session): Promise<void> {
   clearComments(s.id);
   clearEditorFeedback(s.id);
   destroyViewedState(s.id);
-  poolRemove(s.id);
+  removeSessionViews(s.id);
   tabLayoutCleanup(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
     setActiveSession(sessions[0]?.id ?? null);
-    if (activeSessionId) poolActivate(activeSessionId);
+    if (activeSessionId) touchMru(activeSessionId);
   }
 }
 
@@ -221,11 +221,11 @@ export async function archiveSession(s: Session): Promise<void> {
   clearComments(s.id);
   clearEditorFeedback(s.id);
   destroyViewedState(s.id);
-  poolRemove(s.id);
+  removeSessionViews(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
     setActiveSession(sessions[0]?.id ?? null);
-    if (activeSessionId) poolActivate(activeSessionId);
+    if (activeSessionId) touchMru(activeSessionId);
   }
 }
 
@@ -235,13 +235,13 @@ export async function parkSession(s: Session): Promise<void> {
   clearComments(s.id);
   clearEditorFeedback(s.id);
   destroyViewedState(s.id);
-  poolRemove(s.id);
+  removeSessionViews(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
     setActiveSession(
       sessions.find((x) => x.project_id === s.project_id && x.task_key === s.task_key)?.id ?? null,
     );
-    if (activeSessionId) poolActivate(activeSessionId);
+    if (activeSessionId) touchMru(activeSessionId);
   }
 }
 
@@ -278,14 +278,14 @@ export function updateSessionName(sessionId: string, name: string): void {
 export function removeProjectSessions(projectId: string): string[] {
   const ids = sessions.filter((s) => s.project_id === projectId).map((s) => s.id);
   for (const id of ids) {
-    poolRemove(id);
+    removeSessionViews(id);
     destroyTabState(id);
     clearEditorFeedback(id);
   }
   sessions = sessions.filter((s) => s.project_id !== projectId);
   if (activeSessionId && ids.includes(activeSessionId)) {
     setActiveSession(getMruList()[0] ?? null);
-    if (activeSessionId) poolActivate(activeSessionId);
+    if (activeSessionId) touchMru(activeSessionId);
   }
   return ids;
 }

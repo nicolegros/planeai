@@ -8,6 +8,7 @@ import type { Tab } from "./session-tabs.svelte";
 import { getTabs, addTab, removeTab, setActiveTab, getActiveTabIndex } from "./session-tabs.svelte";
 import { getActiveSessionId } from "./session-orchestrator.svelte";
 import { refocusTerminal } from "./focus.svelte";
+import { disposeTerminalView } from "./terminal-views";
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -157,6 +158,7 @@ export async function handleCloseTab(): Promise<void> {
 export async function closeShellTab(sessionId: string, tabIndex: number): Promise<void> {
   await pty.closeTab(sessionId, tabIndex);
   removeTab(sessionId, tabIndex);
+  disposeTerminalView(`${sessionId}:${tabIndex}`);
 }
 
 export function handleNextTab(): void {

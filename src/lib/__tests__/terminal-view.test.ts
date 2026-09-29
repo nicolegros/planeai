@@ -140,6 +140,12 @@ let surface: FakeSurface;
 let pty: FakePty;
 let view: TerminalView;
 let containers: HTMLElement[];
+let mounted: HTMLElement;
+
+function mountIn(el: HTMLElement): void {
+  mounted = el;
+  view.mount(el);
+}
 
 function newContainer(): HTMLElement {
   const el = document.createElement("div");
@@ -161,7 +167,7 @@ function createView(kind: "agent" | "shell" = "agent", initialCommand?: string):
 
 /** Mount, show, load the font, and accept the connection. */
 async function liveView(): Promise<void> {
-  view.mount(newContainer());
+  mountIn(newContainer());
   view.setShown(true);
   await surface.loadFont();
   await pty.acceptConnect();
@@ -188,7 +194,7 @@ afterEach(() => {
 
 describe("terminal view: first mount", () => {
   it("does not connect before the surface is opened and sized", async () => {
-    view.mount(newContainer());
+    mountIn(newContainer());
     view.setShown(true);
     expect(pty.connects).toHaveLength(0);
 
@@ -199,7 +205,7 @@ describe("terminal view: first mount", () => {
   });
 
   it("never writes output at the pre-fit default size", async () => {
-    view.mount(newContainer());
+    mountIn(newContainer());
     view.setShown(true);
     await surface.loadFont();
     pty.emit("replay");
@@ -216,7 +222,7 @@ describe("terminal view: first mount", () => {
   });
 
   it("stays unconnected while hidden, and connects on first show", async () => {
-    view.mount(newContainer());
+    mountIn(newContainer());
     await surface.loadFont();
     expect(pty.connects).toHaveLength(0);
 
@@ -225,7 +231,7 @@ describe("terminal view: first mount", () => {
   });
 
   it("waits for layout before connecting", async () => {
-    view.mount(newContainer());
+    mountIn(newContainer());
     view.setShown(true);
     surface.available = null;
     await surface.loadFont();
@@ -247,7 +253,7 @@ describe("terminal view: first mount", () => {
   it("reports connection failures and retries on the next show", async () => {
     const attachError = vi.fn();
     view.setEvents({ attachError });
-    view.mount(newContainer());
+    mountIn(newContainer());
     view.setShown(true);
     await surface.loadFont();
     await pty.rejectConnect(new Error("boom"));
@@ -321,9 +327,9 @@ describe("terminal view: moving between containers", () => {
   it("keeps its buffer and connection across unmount and mount", async () => {
     await liveView();
     pty.emit("screen");
-    view.unmount();
+    view.unmount(mounted);
     pty.emit("more");
-    view.mount(newContainer());
+    mountIn(newContainer());
     view.setShown(true);
 
     expect(pty.connects).toHaveLength(1);
@@ -332,23 +338,41 @@ describe("terminal view: moving between containers", () => {
 
   it("re-parents the same host element instead of reopening", async () => {
     const first = newContainer();
-    view.mount(first);
+    mountIn(first);
     view.setShown(true);
     await surface.loadFont();
     const host = first.firstElementChild;
-    view.unmount();
+    view.unmount(mounted);
     const second = newContainer();
-    view.mount(second);
+    mountIn(second);
 
     expect(first.childElementCount).toBe(0);
     expect(second.firstElementChild).toBe(host);
   });
 
+  it("ignores an unmount from a container it has already left", async () => {
+    await liveView();
+    const first = mounted;
+    mountIn(newContainer());
+    view.setShown(true);
+
+    expect(view.unmount(first)).toBe(false);
+    expect(surface.gpu).toBe(true);
+    expect(mounted.childElementCount).toBe(1);
+  });
+
+  it("lets the new container decide visibility when moved directly", async () => {
+    await liveView();
+    mountIn(newContainer());
+
+    expect(surface.gpu).toBe(false);
+  });
+
   it("forgets shown and focused on unmount", async () => {
     await liveView();
     view.setFocused(true);
-    view.unmount();
-    view.mount(newContainer());
+    view.unmount(mounted);
+    mountIn(newContainer());
 
     expect(surface.gpu).toBe(false);
     surface.focused = false;
@@ -366,7 +390,7 @@ describe("terminal view: GPU renderer", () => {
     expect(surface.gpu).toBe(false);
 
     view.setShown(true);
-    view.unmount();
+    view.unmount(mounted);
     expect(surface.gpu).toBe(false);
   });
 });
@@ -484,7 +508,7 @@ describe("terminal view: exit and restart", () => {
 describe("terminal view: focus", () => {
   it("applies focus once the surface opens", async () => {
     view.setFocused(true);
-    view.mount(newContainer());
+    mountIn(newContainer());
     view.setShown(true);
     expect(surface.focused).toBe(false);
 
@@ -513,7 +537,7 @@ describe("terminal view: dispose", () => {
   it("disposes the surface and ignores late connections", async () => {
     const attached = vi.fn();
     view.setEvents({ attached });
-    view.mount(newContainer());
+    mountIn(newContainer());
     view.setShown(true);
     await surface.loadFont();
     view.dispose();
@@ -524,7 +548,7 @@ describe("terminal view: dispose", () => {
   });
 
   it("never opens a surface disposed before its font loaded", async () => {
-    view.mount(newContainer());
+    mountIn(newContainer());
     view.dispose();
     await surface.loadFont();
 

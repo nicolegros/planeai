@@ -50,7 +50,8 @@
   import { ptyKeyToSessionId, reconcileWorkspaceTabs, resolveRestoredLayoutSelection } from "./lib/workspace-tabs";
   import { addShellTabToLeaf, openEditorResource, openShellResourceInFocusedLeaf, openShellResourceInNewPane, toggleDiffResource } from "./lib/workspace-resources";
   import { saveActiveEditorResource } from "./lib/editor-resources";
-  import { getMruList, isMounted as poolIsMounted } from "./lib/mru.svelte";
+  import { getMruList } from "./lib/mru.svelte";
+  import { disposeTerminalView } from "./lib/terminal-views";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
   import { initUpdateListener, focusUpdateToast, getUpdateState, setLaunchUpdateAvailable } from "./lib/updater.svelte";
@@ -752,7 +753,10 @@
         removeTab,
         closeTab: pty.closeTab,
       });
-      if (rolledBack) splitTree.removeSessionFromLeaf(ptyKey);
+      if (rolledBack) {
+        splitTree.removeSessionFromLeaf(ptyKey);
+        disposeTerminalView(ptyKey);
+      }
     } catch (rollbackError) {
       console.warn("Failed to clean up terminal editor tab", rollbackError);
     }
@@ -1632,7 +1636,7 @@
             {@const isActiveInLeaf = tabEntry.ptyKey === leaf.activeTab}
             {@const project = session ? projects.find((p) => p.id === session.project_id) : null}
             {#if (tabEntry.type === "agent" || tabEntry.type === "shell")}
-              {#if session && poolIsMounted(session.id)}
+              {#if session}
               <!-- Wrapper hides inactive tabs; Terminal's visible prop also pauses during loop overlay -->
               <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
                 <Terminal
