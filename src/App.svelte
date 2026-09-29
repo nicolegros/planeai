@@ -656,8 +656,11 @@
     await closeShellTabInTree(activeEntry.ptyKey);
   }
 
-  /** Close a shell tab using its PTY key rather than a visual tab position. */
-  async function closeShellTabInTree(ptyKey: string): Promise<void> {
+  /**
+   * Close a shell tab using its PTY key rather than a visual tab position.
+   * `refocus: false` for closes the user did not initiate, which must not steal focus.
+   */
+  async function closeShellTabInTree(ptyKey: string, { refocus = true } = {}): Promise<void> {
     if (pendingShellCommands.has(ptyKey)) {
       showSnackbar("Terminal editor is still starting", "error");
       return;
@@ -674,6 +677,7 @@
       // This avoids an orphaned terminal UI when the daemon close request fails.
       await orchestrator.closeShellTab(sessionId, tabIndex);
       splitTree.removeSessionFromLeaf(ptyKey);
+      if (!refocus) return;
       await tick();
       refocusTerminal();
     } catch (error) {
@@ -749,7 +753,7 @@
     if (!pendingShellCommands.has(ptyKey)) {
       showSnackbar(`Failed to start shell: ${error}`, "error");
       // A shell that never started would otherwise linger as a dead pane.
-      await closeShellTabInTree(ptyKey);
+      await closeShellTabInTree(ptyKey, { refocus: false });
       return;
     }
     try {
