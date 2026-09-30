@@ -19,6 +19,13 @@ export interface PluginModalOptions {
  */
 export type PluginSettings = Record<string, unknown>;
 
+export interface PluginUiTheme {
+  /** The light/dark mode PlaneAI is rendering right now, with `system` already resolved. */
+  mode: "light" | "dark";
+  /** The user's appearance preference; informational, render from `mode`. */
+  preference: "system" | "light" | "dark";
+}
+
 export interface PluginUiHost {
   /** Calls the owning plugin sidecar; lifecycle methods remain reserved for PlaneAI. */
   call<T>(method: string, params?: unknown): Promise<T>;
@@ -52,6 +59,14 @@ export interface PluginUiHost {
     register(rows: PluginSidebarNavRow[]): () => void;
     select(rowId: string): void;
     handleKeydown(event: KeyboardEvent): void;
+  };
+  /**
+   * PlaneAI's appearance. `onChange` fires when `mode` or `preference` changes, not on
+   * theme swaps; the `--planeai-*` tokens update in place for those.
+   */
+  theme: {
+    get(): PluginUiTheme;
+    onChange(listener: (theme: PluginUiTheme) => void): () => void;
   };
   data: {
     changed(): Promise<void>;

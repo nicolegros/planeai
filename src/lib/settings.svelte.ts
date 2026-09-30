@@ -1,6 +1,6 @@
 import { config as configApi } from "./api";
 import { emit } from "@tauri-apps/api/event";
-import { loadTheme } from "./theme-loader";
+import { loadTheme, THEME_CHANGED_EVENT } from "./theme-loader";
 
 export type AppearanceMode = "system" | "light" | "dark";
 
@@ -128,6 +128,7 @@ function applyDarkClass() {
       htmlEl.style.overflow = "";
     });
   });
+  window.dispatchEvent(new Event(THEME_CHANGED_EVENT));
 }
 
 /** Reactive — reads $state vars so Svelte tracks it in $effect/$derived */
@@ -135,6 +136,11 @@ export function isDark(): boolean {
   if (config.appearance.mode === "dark") return true;
   if (config.appearance.mode === "light") return false;
   return systemIsDark;
+}
+
+/** The resolved light/dark mode alongside the user's preference, as exposed to plugin UIs. */
+export function getAppearance(): { mode: "light" | "dark"; preference: AppearanceMode } {
+  return { mode: isDark() ? "dark" : "light", preference: config.appearance.mode };
 }
 
 export function getSettings(): AppConfig {

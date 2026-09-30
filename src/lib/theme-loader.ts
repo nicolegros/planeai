@@ -2,6 +2,8 @@ import type { ITheme } from "@xterm/xterm";
 import { preferences } from "./api";
 
 const STYLE_ID = "planeai-theme";
+/** Dispatched on `window` once the theme CSS or the light/dark mode has been applied to the document. */
+export const THEME_CHANGED_EVENT = "planeai-theme-changed";
 
 /**
  * Inject a theme CSS string into the document.
@@ -16,7 +18,7 @@ export function injectTheme(css: string): void {
     document.head.appendChild(el);
   }
   el.textContent = css;
-  window.dispatchEvent(new Event("planeai-theme-changed"));
+  window.dispatchEvent(new Event(THEME_CHANGED_EVENT));
 }
 
 export function extractTerminalTheme(): ITheme {

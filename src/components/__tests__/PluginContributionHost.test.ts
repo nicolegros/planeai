@@ -9,6 +9,7 @@ const {
   hostCall,
   eventListeners,
   showSnackbar,
+  appearance,
 } = vi.hoisted(() => ({
   pluginCall: vi.fn(() =>
     Promise.resolve({
@@ -27,6 +28,10 @@ const {
   hostCall: vi.fn(() => Promise.resolve({ projects: [] })),
   eventListeners: new Map<string, (event: { payload: string }) => void>(),
   showSnackbar: vi.fn(),
+  appearance: {
+    mode: "light" as "light" | "dark",
+    preference: "system" as "system" | "light" | "dark",
+  },
 }));
 
 vi.mock("../../lib/api", () => ({
@@ -44,11 +49,18 @@ vi.mock("../../lib/snackbar.svelte", () => ({
   showSnackbar,
 }));
 
+vi.mock("../../lib/settings.svelte", () => ({
+  getAppearance: () => ({ ...appearance }),
+}));
+
 import PluginContributionHost from "../PluginContributionHost.svelte";
 import PluginContributionHostHarness from "./PluginContributionHostHarness.svelte";
 import PluginContributionHostLocalHarness from "./PluginContributionHostLocalHarness.svelte";
 import { getPluginSidebarRows } from "../../lib/plugin-sidebar-navigation.svelte";
 import type { PluginInventory, PluginUiContribution } from "../../lib/types";
+import type { PluginUiTheme } from "../../lib/plugin-sdk";
+import { JSDOM } from "jsdom";
+import { jiraStatusEntrypoint } from "../../plugins/jira/entry";
 import { focusTerminal, getActiveZone } from "../../lib/focus.svelte";
 import { shouldBypassSidebarKeyboard } from "../../lib/sidebar-nav.svelte";
 
@@ -77,6 +89,8 @@ describe("PluginContributionHost", () => {
     target?.remove();
     vi.clearAllMocks();
     eventListeners.clear();
+    appearance.mode = "light";
+    appearance.preference = "system";
   });
 
   it("mounts the Jira UI in a host-owned Shadow DOM root", async () => {
@@ -422,6 +436,147 @@ describe("PluginContributionHost", () => {
       ),
     );
     document.documentElement.style.removeProperty("--color-main");
+  });
+
+  async function mountLocalFrame(
+    placement: PluginUiContribution["placement"],
+  ): Promise<HTMLIFrameElement> {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement },
+    }) as typeof component;
+    return vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+  }
+
+  it("renders local iframes in the host color scheme so transparent placements blend in", async () => {
+    appearance.mode = "dark";
+    const frame = await mountLocalFrame("titlebar");
+    expect(frame.srcdoc).toContain('<html data-theme="dark">');
+    expect(frame.srcdoc).toContain(":root{color-scheme:dark;");
+
+    const postMessage = vi.fn();
+    Object.defineProperty(frame, "contentWindow", { configurable: true, value: { postMessage } });
+    appearance.mode = "light";
+    window.dispatchEvent(new Event("planeai-theme-changed"));
+    await vi.waitFor(() =>
+      expect(postMessage).toHaveBeenCalledWith(
+        {
+          type: "theme",
+          css: expect.stringContaining(":root{color-scheme:light;"),
+          theme: { mode: "light", preference: "system" },
+        },
+        "*",
+      ),
+    );
+    expect(target.querySelector<HTMLElement>("[data-plugin-ui-contribution]")?.dataset.theme).toBe(
+      "light",
+    );
+  });
+
+  it("sends the current appearance with the init message", async () => {
+    localUiSource.mockResolvedValue("export default { mount() { return () => {}; } }");
+    const frame = await mountLocalFrame("main-pane");
+    const postMessage = vi.fn();
+    Object.defineProperty(frame, "contentWindow", { configurable: true, value: { postMessage } });
+    appearance.mode = "dark";
+    appearance.preference = "dark";
+    frame.dispatchEvent(new Event("load"));
+    await vi.waitFor(() =>
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "init",
+          css: expect.stringContaining(":root{color-scheme:dark;"),
+          theme: { mode: "dark", preference: "dark" },
+        }),
+        "*",
+      ),
+    );
+  });
+
+  it("exposes the appearance inside local iframes and notifies plugins only when it changes", async () => {
+    appearance.mode = "dark";
+    const frame = await mountLocalFrame("main-pane");
+    const dom = new JSDOM(frame.srcdoc, { runScripts: "dangerously" });
+    const root = dom.window.document.documentElement;
+    const host = dom.window.eval("host") as {
+      theme: {
+        get(): PluginUiTheme;
+        onChange(listener: (theme: PluginUiTheme) => void): () => void;
+      };
+    };
+    const post = (data: unknown) =>
+      dom.window.dispatchEvent(
+        new dom.window.MessageEvent("message", { data, source: dom.window as unknown as Window }),
+      );
+
+    expect(root.dataset.theme).toBe("dark");
+    expect(host.theme.get()).toEqual({ mode: "dark", preference: "system" });
+    const listener = vi.fn();
+    const unsubscribe = host.theme.onChange(listener);
+
+    post({
+      type: "theme",
+      css: ":root{color-scheme:dark;--planeai-main:#000}",
+      theme: { mode: "dark", preference: "system" },
+    });
+    expect(dom.window.document.getElementById("planeai-plugin-theme")?.textContent).toBe(
+      ":root{color-scheme:dark;--planeai-main:#000}",
+    );
+    expect(listener).not.toHaveBeenCalled();
+
+    post({
+      type: "theme",
+      css: ":root{color-scheme:light}",
+      theme: { mode: "light", preference: "light" },
+    });
+    expect(root.dataset.theme).toBe("light");
+    expect(listener).toHaveBeenCalledExactlyOnceWith({ mode: "light", preference: "light" });
+
+    unsubscribe();
+    post({
+      type: "init",
+      source: "",
+      css: ":root{color-scheme:dark}",
+      theme: { mode: "dark", preference: "system" },
+    });
+    expect(root.dataset.theme).toBe("dark");
+    expect(host.theme.get()).toEqual({ mode: "dark", preference: "system" });
+    expect(listener).toHaveBeenCalledOnce();
+    dom.window.close();
+  });
+
+  it("gives builtin plugins the appearance and its changes", async () => {
+    const mountSpy = vi.spyOn(jiraStatusEntrypoint, "mount");
+    appearance.mode = "dark";
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostHarness, { target }) as typeof component;
+    const host = await vi.waitFor(() => {
+      expect(mountSpy).toHaveBeenCalled();
+      return mountSpy.mock.calls[0][1].host;
+    });
+    const element = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]")!;
+    expect(element.dataset.theme).toBe("dark");
+    expect(host.theme.get()).toEqual({ mode: "dark", preference: "system" });
+
+    const listener = vi.fn();
+    host.theme.onChange(listener);
+    window.dispatchEvent(new Event("planeai-theme-changed"));
+    expect(listener).not.toHaveBeenCalled();
+
+    appearance.mode = "light";
+    window.dispatchEvent(new Event("planeai-theme-changed"));
+    expect(listener).toHaveBeenCalledExactlyOnceWith({ mode: "light", preference: "system" });
+    await vi.waitFor(() => expect(element.dataset.theme).toBe("light"));
+    mountSpy.mockRestore();
   });
 
   it("treats a local sidebar footer as sidebar content for keyboard navigation", async () => {

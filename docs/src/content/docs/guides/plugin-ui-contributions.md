@@ -160,15 +160,49 @@ For example, local UI CSS can adopt or intentionally customize the host theme:
 }
 ```
 
+#### Light and dark mode
+
+PlaneAI renders your iframe in the same light or dark mode as the host, whether the user picked **Light**, **Dark**, or **System** (in which case PlaneAI follows the OS appearance live).
+The iframe's `<html>` element carries `data-theme="light"` or `data-theme="dark"` and a matching `color-scheme`, so native scrollbars and form controls, and transparent placements such as `titlebar` and `session.indicator`, blend into the host.
+Both are updated in place with the `--planeai-*` tokens.
+
+Prefer the tokens for colors.
+Reach for `data-theme` only for mode-specific styling the tokens cannot express, such as swapping an illustration:
+
+```css
+.logo {
+  background-image: url("data:image/svg+xml,…light…");
+}
+:root[data-theme="dark"] .logo {
+  background-image: url("data:image/svg+xml,…dark…");
+}
+```
+
+Do not rely on `prefers-color-scheme` inside the iframe: it can report the OS appearance rather than an explicit **Light** or **Dark** choice in PlaneAI.
+
+For mode-dependent work in JavaScript (canvas charts, syntax highlighter themes), read `context.host.theme`:
+
+```js
+const render = ({ mode }) => chart.setPalette(mode === "dark" ? darkPalette : lightPalette);
+render(context.host.theme.get());
+const stopWatchingTheme = context.host.theme.onChange(render);
+// Call stopWatchingTheme() from your disposer.
+```
+
+`get()` returns `{ mode, preference }`, where `mode` is the resolved `"light"` or `"dark"` and `preference` is the user's `"system"`, `"light"`, or `"dark"` choice.
+Render from `mode`; `preference` is informational.
+`onChange` fires only when either value changes, not when the user switches to another theme with the same mode, because the tokens already cover that.
+
 `context.host` provides:
 
 - `call(method, params?)` — RPC scoped to the owning sidecar. Lifecycle methods are reserved.
+- `theme.get()` and `theme.onChange(listener)` — the resolved light/dark mode and the user's appearance preference; see [Light and dark mode](#light-and-dark-mode). Available to every `host_api_version`.
 - `settings.get<T extends Record<string, unknown>>()` and `settings.replace<T>(settings)` — typed public JSON-object settings. These are the UI counterpart to the capability-gated sidecar settings callbacks; they never expose secrets.
 - `data.changed()` — tells PlaneAI the plugin's data changed. A running `sidebar.section` remounts after this event.
 - `navigation.open(pluginId, contributionId)`, `navigation.close()`, and `navigation.openPreferences()`.
 - `sidebar.register(rows)`, `sidebar.select(rowId)`, and `sidebar.handleKeydown(event)` for sidebar navigation contributions. Always call the returned unregister function from your mount disposer.
 
-The fixture UI calls `context.host.call("fixture.status")`, loads a saved greeting with `context.host.settings.get()`, replaces it when **Save greeting** is selected, calls `data.changed()`, and removes its click handler in its disposer.
+The fixture UI calls `context.host.call("fixture.status")`, loads a saved greeting with `context.host.settings.get()`, replaces it when **Save greeting** is selected, calls `data.changed()`, shows the current appearance from `context.host.theme`, and removes its listeners in its disposer.
 
 Each `ui_contributions` item requires a unique safe `id`, `label`, `placement`, and `entrypoint`. Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, `main-pane`, `session.panel`, and `titlebar`. Sidebar contributions may set integer `order`. `main-pane` and `session.panel` contributions may declare an optional portable `Mod+[Shift+][Alt+]A-Z` shortcut and are discoverable in Cmd+K while running. PlaneAI rejects duplicate declared shortcuts across installed plugins. When a matching selected-session panel is available, it receives its declared chord before a main-pane contribution or a legacy host fallback; otherwise the host's normal shortcut behavior continues. A `session.panel` contribution is also discoverable as an action at the end of the titlebar whenever a session is selected; PlaneAI supplies its UI entrypoint the selected session's identity, project ID, branch, base branch, status, provider, and linked task key. A compact `titlebar` contribution is rendered independently at the end of the titlebar with the same selected-session context. It can call `navigation.open(pluginId, contributionId)` to open a declared `session.panel` in a generic modal, rather than replacing the main workspace. During the GitHub migration, its plugin-owned pull-request chip deliberately appears beside the retained legacy PR-status chip or **Create PR** affordance; the legacy UI and routes remain available as a fallback when the plugin is unavailable. UI context does not supply a working-tree path—request the separately capability-gated `host.sessions.repositoryContext` operation when needed. Use the placement's available space conservatively; the host owns focus, navigation, keyboard routing, lifecycle, loading/retry UI, and teardown.
 
@@ -217,7 +251,7 @@ The command validates every declared local backend path and the current-platform
 
 - Plugins are trusted and unsandboxed; network, process, filesystem, and credential safety are the author's responsibility.
 - Local plugin capabilities are limited to the explicit contracts above. `sessions.actions`, `sessions.advisories`, and `sessions.complete` are host-rendered requests, while `tasks.transition` is restricted to the linked task of an identified session; no direct session control/output, arbitrary task update, storage bridge, or arbitrary sidebar-navigation capability is available to local packages.
-- UI is a single self-contained ESM file loaded into a ShadowRoot. No relative imports, asset graph, global PlaneAI DOM access, or direct Tauri IPC.
+- UI is a single self-contained ESM file loaded into a sandboxed iframe. No relative imports, asset graph, global PlaneAI DOM access, or direct Tauri IPC.
 - UI settings are public JSON objects; secrets are backend-only. Never log secrets, including to stderr.
 - Stdout must remain newline-framed JSON-RPC. Correlate IDs, stay below 64 KiB, respond to shutdown, and treat host callbacks as nested RPC.
 - Task events require both the manifest capability and handshake subscription; delivery is best-effort, so handlers must tolerate missed batches and reconcile with `tasks.read`.
