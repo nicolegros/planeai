@@ -9,6 +9,7 @@ const {
   hostCall,
   eventListeners,
   showSnackbar,
+  appearance,
 } = vi.hoisted(() => ({
   pluginCall: vi.fn(() =>
     Promise.resolve({
@@ -27,6 +28,7 @@ const {
   hostCall: vi.fn(() => Promise.resolve({ projects: [] })),
   eventListeners: new Map<string, (event: { payload: string }) => void>(),
   showSnackbar: vi.fn(),
+  appearance: { dark: false },
 }));
 
 vi.mock("../../lib/api", () => ({
@@ -42,6 +44,10 @@ vi.mock("../../lib/api", () => ({
 
 vi.mock("../../lib/snackbar.svelte", () => ({
   showSnackbar,
+}));
+
+vi.mock("../../lib/settings.svelte", () => ({
+  isDark: () => appearance.dark,
 }));
 
 import PluginContributionHost from "../PluginContributionHost.svelte";
@@ -77,6 +83,7 @@ describe("PluginContributionHost", () => {
     target?.remove();
     vi.clearAllMocks();
     eventListeners.clear();
+    appearance.dark = false;
   });
 
   it("mounts the Jira UI in a host-owned Shadow DOM root", async () => {
@@ -422,6 +429,36 @@ describe("PluginContributionHost", () => {
       ),
     );
     document.documentElement.style.removeProperty("--color-main");
+  });
+
+  it("renders local iframes in the host color scheme so transparent placements blend in", async () => {
+    appearance.dark = true;
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "titlebar" },
+    }) as typeof component;
+
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    expect(frame.srcdoc).toContain(":root{color-scheme:dark;");
+
+    const postMessage = vi.fn();
+    Object.defineProperty(frame, "contentWindow", { configurable: true, value: { postMessage } });
+    appearance.dark = false;
+    window.dispatchEvent(new Event("planeai-theme-changed"));
+    await vi.waitFor(() =>
+      expect(postMessage).toHaveBeenCalledWith(
+        { type: "theme", css: expect.stringContaining(":root{color-scheme:light;") },
+        "*",
+      ),
+    );
   });
 
   it("treats a local sidebar footer as sidebar content for keyboard navigation", async () => {

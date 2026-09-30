@@ -11,6 +11,7 @@
   import type { PluginUiDisposer, PluginUiEntrypoint, PluginUiHost, PluginSessionContext } from "../lib/plugin-sdk";
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import { focusSidebar } from "../lib/focus.svelte";
+  import { isDark } from "../lib/settings.svelte";
   import type { PluginInventory, PluginUiContribution } from "../lib/types";
 
   interface Props {
@@ -93,12 +94,13 @@
     return value.replace(/[<>{};]/g, (character) => `\\${character.codePointAt(0)!.toString(16)} `);
   }
 
+  // color-scheme must match the host's, otherwise WebKit paints an opaque canvas behind transparent frames.
   function localPluginThemeCss(): string {
     const styles = getComputedStyle(document.documentElement);
     const tokens = pluginThemeTokens
       .map(([name, source]) => `--planeai-${name}:${escapePluginThemeValue(styles.getPropertyValue(source).trim())}`)
       .join(";");
-    return `:root{${tokens};--planeai-radius:8px;--planeai-space-1:4px;--planeai-space-2:8px;--planeai-space-3:12px;--planeai-space-4:16px;--planeai-space-5:20px;--planeai-space-6:24px}`;
+    return `:root{color-scheme:${isDark() ? "dark" : "light"};${tokens};--planeai-radius:8px;--planeai-space-1:4px;--planeai-space-2:8px;--planeai-space-3:12px;--planeai-space-4:16px;--planeai-space-5:20px;--planeai-space-6:24px}`;
   }
 
   const localPluginBaseCss = "html{font-size:13px;line-height:1.45}html,body{margin:0;height:100%;min-height:100%;background:var(--planeai-main);color:var(--planeai-text);font-family:var(--planeai-font-sans)}*,*::before,*::after{box-sizing:border-box}h1,h2,h3,p{margin:0}h1{font-size:20px;line-height:28px;font-weight:600}h2{font-size:15px;line-height:20px;font-weight:600}h3{font-size:13px;line-height:18px;font-weight:600}p{font-size:13px;line-height:19px}button,input,select,textarea{font:inherit;line-height:18px}button{min-height:32px;border:1px solid var(--planeai-border);border-radius:var(--planeai-radius);padding:6px 10px;background:var(--planeai-surface-raised);color:var(--planeai-text);cursor:pointer}button:hover:not(:disabled){background:var(--planeai-accent-subtle)}button:disabled{cursor:not-allowed;opacity:.55}input,select,textarea{border:1px solid var(--planeai-border);border-radius:var(--planeai-radius);padding:7px 9px;background-color:var(--planeai-main);color:var(--planeai-text)}select{appearance:none;padding-right:28px;background-image:linear-gradient(45deg,transparent 50%,var(--planeai-text-muted) 50%),linear-gradient(135deg,var(--planeai-text-muted) 50%,transparent 50%);background-position:calc(100% - 13px) 50%,calc(100% - 9px) 50%;background-size:4px 4px,4px 4px;background-repeat:no-repeat}textarea{min-height:72px}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--planeai-accent);outline-offset:2px}";

@@ -128,6 +128,7 @@ function applyDarkClass() {
       htmlEl.style.overflow = "";
     });
   });
+  window.dispatchEvent(new Event("planeai-theme-changed"));
 }
 
 /** Reactive — reads $state vars so Svelte tracks it in $effect/$derived */
