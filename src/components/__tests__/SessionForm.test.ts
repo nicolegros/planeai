@@ -432,6 +432,62 @@ describe("cross-project task link", () => {
     target.remove();
   });
 
+  it("asks for a base branch when the other repo has neither the task's base nor a detectable default", async () => {
+    const { projects, sessions } = await import("../../lib/api");
+    vi.mocked(sessions.launch).mockClear();
+    vi.mocked(projects.detectDefaultBranch).mockRejectedValue("could not detect default branch");
+    const target = await renderSwitchedToOther();
+
+    expect(target.querySelector<HTMLInputElement>("[data-field='base'] input")!.value).toBe("");
+    expect(target.textContent).toContain(
+      "Task base release/2.x not found in Other, pick a base branch",
+    );
+    target.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true }));
+    await tick();
+    flushSync();
+    expect(target.textContent).toContain("Select a base branch.");
+    expect(sessions.launch).not.toHaveBeenCalled();
+    vi.mocked(projects.detectDefaultBranch).mockResolvedValue("main");
+    target.remove();
+  });
+
+  it("keeps the prefilled task linked when the project changes before its tasks load", async () => {
+    const { tasks } = await import("../../lib/api");
+    let releaseOwnerTasks!: () => void;
+    vi.mocked(tasks.listAll).mockImplementation((path: string) =>
+      path === "/tmp/other"
+        ? (Promise.resolve([]) as never)
+        : (new Promise((resolve) => {
+            releaseOwnerTasks = () =>
+              resolve([
+                {
+                  key: "PROJ-1",
+                  title: "Fix bug",
+                  description: "",
+                  status: "todo",
+                  priority: 0,
+                  base_branch: "main",
+                },
+              ] as never);
+          }) as never),
+    );
+    const target = document.createElement("div");
+    document.body.append(target);
+    mount(SessionForm, {
+      target,
+      props: { ...baseProps, projects: twoProjects, currentProjectId: "p1", taskPrefill: prefill },
+    });
+    await settle();
+    await pickOption(target, "project", "Other");
+    releaseOwnerTasks();
+    await settle();
+
+    expect(target.querySelector("[data-field='task']")?.textContent).toContain(
+      "Linked to task in Project",
+    );
+    target.remove();
+  });
+
   it("numbers the name across the task but the branch only within the repo", async () => {
     const target = await renderSwitchedToOther({
       sessions: [

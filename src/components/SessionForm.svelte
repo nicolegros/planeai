@@ -76,32 +76,42 @@
     if (!project) return;
     const stale = () => selectedProject?.id !== project.id;
     Promise.all([
-      projectsApi.listBranches(project.path).catch(() => [] as string[]),
+      projectsApi.listBranches(project.path),
       projectsApi.detectDefaultBranch(project.path).catch(() => ""),
-    ]).then(([names, detected]) => {
-      if (stale()) return;
-      branches = names.map((s) => {
-        const remote = s.startsWith("remote:");
-        const name = remote ? s.slice(7) : s;
-        return { value: remote ? `remote:${name}` : name, label: name, remote };
-      });
-      defaultBranch = detected;
-      branchesProjectId = project.id;
-    });
+    ]).then(
+      ([names, detected]) => {
+        if (stale()) return;
+        branches = names.map((s) => {
+          const remote = s.startsWith("remote:");
+          const name = remote ? s.slice(7) : s;
+          return { value: remote ? `remote:${name}` : name, label: name, remote };
+        });
+        defaultBranch = detected;
+        branchesProjectId = project.id;
+      },
+      // Without a branch list nothing is known to be missing, so the task's base is kept.
+      () => {
+        if (stale()) return;
+        branches = [];
+        defaultBranch = "";
+        branchesProjectId = "";
+      },
+    );
   });
 
   function hasBranch(name: string): boolean {
     return branches.some((b) => b.value === name || b.value === `remote:${name}`);
   }
 
-  // Another repo may lack the task's base branch; fall back to that repo's default.
+  // Another repo may lack the task's base branch; fall back to that repo's default, if it has one.
   const taskBaseMissing = $derived(
     isCrossProject && !!taskBaseBranch && branchesProjectId === projectValue && !hasBranch(taskBaseBranch),
   );
+  const fallbackBaseBranch = $derived(defaultBranch && hasBranch(defaultBranch) ? defaultBranch : "");
 
   $effect(() => {
     if (baseBranchPicked || !taskBaseBranch || branchesProjectId !== projectValue) return;
-    baseBranchValue = taskBaseMissing ? defaultBranch : taskBaseBranch;
+    baseBranchValue = taskBaseMissing ? fallbackBaseBranch : taskBaseBranch;
   });
 
   // Fetch tasks when in task mode and project changes
@@ -111,17 +121,16 @@
       const taskFn = taskPrefill?.key ? tasksApi.listAll : tasksApi.list;
       taskFn(project.path).then(
         (items) => {
-          if (selectedProject?.id !== project.id) return;
-          taskItems = items;
+          if (selectedProject?.id === project.id) taskItems = items;
+          // The prefilled task links from its own project's listing, even after a project switch.
           if (taskPrefill?.key && !prefillApplied && project.id === taskProjectId) {
             prefillApplied = true;
             taskSearchValue = taskPrefill.key;
-            if (items.some((t) => t.key === taskPrefill.key)) {
-              onTaskSelected(taskPrefill.key, { keepTypedName: true });
-            }
+            const task = items.find((t) => t.key === taskPrefill.key);
+            if (task) linkTask(task, project.id, { keepTypedName: true });
           }
         },
-        (e) => { taskItems = []; showSnackbar(String(e)); },
+        (e) => { if (selectedProject?.id === project.id) taskItems = []; showSnackbar(String(e)); },
       );
     }
   });
@@ -139,11 +148,14 @@
     if (linkedTask) applyTaskDefaults(linkedTask, { keepTypedName: true });
   }
 
-  function onTaskSelected(key: string, { keepTypedName = false } = {}) {
+  function onTaskSelected(key: string) {
     const listed = taskItems.find((t) => t.key === key);
-    const task = listed ?? (linkedTask?.key === key ? linkedTask : undefined);
-    if (!task) return;
-    if (listed) taskProjectId = projectValue;
+    if (listed) linkTask(listed, projectValue);
+    else if (linkedTask?.key === key) applyTaskDefaults(linkedTask);
+  }
+
+  function linkTask(task: TaskItem, ownerProjectId: string, { keepTypedName = false } = {}) {
+    taskProjectId = ownerProjectId;
     linkedTask = task;
     taskBaseBranch = task.base_branch;
     baseBranchPicked = false;
@@ -213,6 +225,7 @@
     if (submitting) return;
     if (!selectedProject) { error = "Select a project."; return; }
     if (!taskKey) { error = "Select a task."; return; }
+    if ((useWorktree || isNewBranch) && !baseBranchValue && taskBaseMissing) { error = "Select a base branch."; return; }
     submitting = true;
 
     const taskKeyParam = taskKey || null;
@@ -250,7 +263,7 @@
 </script>
 
 {#snippet baseFallbackHint()}
-  <p class="text-xs text-t3">Task base <span class="font-medium font-mono text-t1">{taskBaseBranch}</span> not found in {selectedProject?.name}, using <span class="font-medium font-mono text-t1">{baseBranch}</span></p>
+  <p class="text-xs text-t3">Task base <span class="font-medium font-mono text-t1">{taskBaseBranch}</span> not found in {selectedProject?.name}, {#if fallbackBaseBranch}using <span class="font-medium font-mono text-t1">{fallbackBaseBranch}</span>{:else}pick a base branch{/if}</p>
 {/snippet}
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

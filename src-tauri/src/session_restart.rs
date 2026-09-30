@@ -252,6 +252,7 @@ mod tests {
         calls: RefCell<Vec<(String, String, String, String)>>,
         daemon_calls: RefCell<Vec<(String, String, String)>>,
         rmux_calls: RefCell<Vec<(String, String, String)>>,
+        rmux_workspaces: RefCell<Vec<String>>,
         fail_resume: bool,
     }
 
@@ -261,6 +262,7 @@ mod tests {
                 calls: RefCell::new(vec![]),
                 daemon_calls: RefCell::new(vec![]),
                 rmux_calls: RefCell::new(vec![]),
+                rmux_workspaces: RefCell::new(vec![]),
                 fail_resume: false,
             }
         }
@@ -270,6 +272,7 @@ mod tests {
                 calls: RefCell::new(vec![]),
                 daemon_calls: RefCell::new(vec![]),
                 rmux_calls: RefCell::new(vec![]),
+                rmux_workspaces: RefCell::new(vec![]),
                 fail_resume: true,
             }
         }
@@ -284,6 +287,9 @@ mod tests {
             cwd: &str,
             _extra_path_dirs: &[String],
         ) -> Result<(), String> {
+            self.rmux_workspaces
+                .borrow_mut()
+                .push(_workspace.as_str().to_string());
             self.rmux_calls.borrow_mut().push((
                 session_id.to_string(),
                 cmd.to_string(),
@@ -466,6 +472,42 @@ mod tests {
         assert_eq!(ops.calls.borrow().len(), 0);
         assert_eq!(ops.daemon_calls.borrow().len(), 1);
         assert_eq!(ops.daemon_calls.borrow()[0].0, id);
+    }
+
+    #[test]
+    fn restart_rmux_session_rejoins_its_tasks_workspace_across_projects() {
+        let conn = setup_db();
+        let owner = db::create_project(&conn, "owner", "/tmp/owner").unwrap();
+        let repo = db::create_project(&conn, "repo", "/tmp/repo").unwrap();
+        let id = "cccc2222-4444-5555-6666-777788889999";
+        db::create_session_with_id_and_worktree_ownership(
+            &conn,
+            id,
+            &repo.id,
+            "cross",
+            None,
+            "main",
+            None,
+            true,
+            None,
+            planeai_rmux::BACKEND,
+            false,
+            Some("OWN-1"),
+            Some(&owner.id),
+            None,
+            None,
+        )
+        .unwrap();
+        db::mark_session_exited(&conn, id).unwrap();
+
+        let ops = MockRestartOps::new();
+        restart(&conn, id, &Config::default(), &ops).unwrap();
+
+        let expected = planeai_rmux::WorkspaceKey::for_session(&owner.id, Some("OWN-1"), id).name();
+        assert_eq!(
+            *ops.rmux_workspaces.borrow(),
+            vec![expected.as_str().to_string()]
+        );
     }
 
     #[test]

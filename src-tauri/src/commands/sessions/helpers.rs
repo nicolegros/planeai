@@ -164,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn fire_task_hook_with_matching_project_derives_prefix() {
+    fn fire_task_hook_unknown_task_project_returns_early() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
         db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
@@ -183,9 +183,8 @@ mod tests {
             ..config::Config::default()
         };
 
+        // `proj-1` is not a registered project, so the hook never opens the global task DB.
         let session = test_session(Some("MYA-1"));
-        // Runs through the full path — project matched, prefix derived.
-        // The task update won't find the task (no task tables), but doesn't error.
         fire_task_hook(&cfg, &session, "on_complete", &conn);
     }
 

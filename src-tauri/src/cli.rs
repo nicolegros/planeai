@@ -343,19 +343,7 @@ pub fn create_session(conn: &Connection, opts: SessionCreateOpts) -> Result<db::
         .find(|p| p.name == project_name)
         .ok_or_else(|| format!("unknown project: {project_name}"))?;
 
-    let task_project_id = match &opts.task_project {
-        Some(task_project) => {
-            let owner = projects
-                .iter()
-                .find(|p| p.id == *task_project || p.name == *task_project)
-                .ok_or_else(|| format!("unknown task project: {task_project}"))?;
-            if opts.task_key.is_none() {
-                return Err("--task-project requires --task-key".to_string());
-            }
-            (owner.id != proj.id).then(|| owner.id.clone())
-        }
-        None => None,
-    };
+    let task_project_id = resolve_task_project_id(&projects, proj, &opts)?;
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let mut plan = build_session_plan(&session_id, &opts, &env, proj)?;
@@ -366,6 +354,25 @@ pub fn create_session(conn: &Connection, opts: SessionCreateOpts) -> Result<db::
     db::get_session(conn, &session_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "session created but not found in database".to_string())
+}
+
+/// Resolve `--task-project` to a project id; None when it names the session's own project.
+fn resolve_task_project_id(
+    projects: &[db::Project],
+    session_project: &db::Project,
+    opts: &SessionCreateOpts,
+) -> Result<Option<String>, String> {
+    let Some(task_project) = &opts.task_project else {
+        return Ok(None);
+    };
+    if opts.task_key.is_none() {
+        return Err("--task-project requires --task-key".to_string());
+    }
+    let owner = projects
+        .iter()
+        .find(|p| p.id == *task_project || p.name == *task_project)
+        .ok_or_else(|| format!("unknown task project: {task_project}"))?;
+    Ok((owner.id != session_project.id).then(|| owner.id.clone()))
 }
 
 /// Options for a sibling session in the invoking agent's TaskWorkspace.
@@ -475,6 +482,50 @@ mod tests {
             prefix: "MYA".to_string(),
             hidden: false,
         }
+    }
+
+    fn task_opts(task_key: Option<&str>, task_project: Option<&str>) -> SessionCreateOpts {
+        SessionCreateOpts {
+            project: "myapp".to_string(),
+            branch: "feat-x".to_string(),
+            name: None,
+            new_branch: true,
+            worktree: false,
+            base_branch: None,
+            yolo: false,
+            provider: None,
+            task_key: task_key.map(str::to_string),
+            task_project: task_project.map(str::to_string),
+            prompt: None,
+            parent_session_id: None,
+        }
+    }
+
+    #[test]
+    fn task_project_resolves_by_name_or_id_and_ignores_the_own_project() {
+        let own = test_project();
+        let owner = db::Project {
+            id: "proj-2".to_string(),
+            name: "owner".to_string(),
+            ..test_project()
+        };
+        let projects = [own.clone(), owner];
+        let resolve = |task_project| {
+            resolve_task_project_id(&projects, &own, &task_opts(Some("OWN-1"), task_project))
+        };
+
+        assert_eq!(resolve(Some("owner")).unwrap().as_deref(), Some("proj-2"));
+        assert_eq!(resolve(Some("proj-2")).unwrap().as_deref(), Some("proj-2"));
+        assert_eq!(resolve(Some("myapp")).unwrap(), None);
+        assert_eq!(resolve(None).unwrap(), None);
+        assert_eq!(
+            resolve(Some("nope")).unwrap_err(),
+            "unknown task project: nope"
+        );
+        assert_eq!(
+            resolve_task_project_id(&projects, &own, &task_opts(None, Some("owner"))).unwrap_err(),
+            "--task-project requires --task-key"
+        );
     }
 
     #[test]

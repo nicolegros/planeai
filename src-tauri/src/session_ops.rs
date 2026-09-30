@@ -231,16 +231,6 @@ pub fn destroy(
     })
 }
 
-pub fn session_cwd(conn: &Connection, session: &Session) -> Option<String> {
-    if let Some(ref wt) = session.worktree_path {
-        return Some(wt.clone());
-    }
-    db::get_project(conn, &session.project_id)
-        .ok()
-        .flatten()
-        .map(|p| p.path)
-}
-
 /// The project whose task store holds the session's task, which may differ from the repo it runs in.
 fn task_owner_project(conn: &Connection, session: &Session) -> Option<db::Project> {
     db::get_project(conn, session.task_project_id())
