@@ -438,24 +438,36 @@ describe("session-orchestrator", () => {
       cleanup();
     });
 
-    it("fires the notify hook when the agent idles and the resume hook when it works again", async () => {
+    it("fires resume only on agent-resumed, after the session's pending notify", async () => {
       const { listen } = await import("@tauri-apps/api/event");
       const listenMock = vi.mocked(listen);
       listenMock.mockClear();
       const { tasks } = await import("../api");
-      vi.mocked(tasks.fireNotifyHook).mockClear();
-      vi.mocked(tasks.fireResumeHook).mockClear();
+      let finishNotify!: () => void;
+      vi.mocked(tasks.fireNotifyHook)
+        .mockReset()
+        .mockReturnValue(new Promise<void>((resolve) => (finishNotify = resolve)) as never);
+      vi.mocked(tasks.fireResumeHook)
+        .mockReset()
+        .mockResolvedValue(undefined as never);
 
       const cleanup = startEventListeners();
-      const handler = listenMock.mock.calls.find(
-        (c) => c[0] === "agent-state-change",
-      )![1] as (event: { payload: { session_id: string; state: string } }) => void;
+      const handlerFor = (name: string) =>
+        listenMock.mock.calls.find((c) => c[0] === name)![1] as (event: {
+          payload: { session_id: string; state?: string };
+        }) => void;
 
-      handler({ payload: { session_id: "s1", state: "Idle" } });
+      handlerFor("agent-state-change")({ payload: { session_id: "s1", state: "Idle" } });
+      handlerFor("agent-state-change")({ payload: { session_id: "s1", state: "Busy" } });
+      await Promise.resolve();
       expect(tasks.fireNotifyHook).toHaveBeenCalledWith("s1");
       expect(tasks.fireResumeHook).not.toHaveBeenCalled();
-      handler({ payload: { session_id: "s1", state: "Busy" } });
-      expect(tasks.fireResumeHook).toHaveBeenCalledWith("s1");
+
+      handlerFor("agent-resumed")({ payload: { session_id: "s1" } });
+      await Promise.resolve();
+      expect(tasks.fireResumeHook).not.toHaveBeenCalled();
+      finishNotify();
+      await vi.waitFor(() => expect(tasks.fireResumeHook).toHaveBeenCalledWith("s1"));
 
       cleanup();
     });

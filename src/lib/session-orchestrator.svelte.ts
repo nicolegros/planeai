@@ -298,20 +298,37 @@ export function removeProjectSessions(projectId: string): string[] {
 
 // ─── Event Management ────────────────────────────────────────────────────────
 
+/** A session's hooks run in event order, so a quick resume cannot overtake the notify move it reverts. */
+const taskHookQueues = new Map<string, Promise<unknown>>();
+function queueTaskHook(sessionId: string, fire: (sessionId: string) => Promise<unknown>): void {
+  const next = (taskHookQueues.get(sessionId) ?? Promise.resolve())
+    .then(() => fire(sessionId))
+    .catch(() => {});
+  taskHookQueues.set(sessionId, next);
+  void next.then(() => {
+    if (taskHookQueues.get(sessionId) === next) taskHookQueues.delete(sessionId);
+  });
+}
+
 export function startEventListeners(): () => void {
   const unlisteners: Array<Promise<() => void>> = [];
+
+  // Emitted only when the agent's own hook reports work after a known idle.
+  unlisteners.push(
+    listen<{ session_id: string }>("agent-resumed", (event) => {
+      queueTaskHook(event.payload.session_id, tasks.fireResumeHook);
+    }),
+  );
 
   // Agent state changes (Busy/Idle)
   unlisteners.push(
     listen<{ session_id: string; state: string }>("agent-state-change", (event) => {
       agentStates = { ...agentStates, [event.payload.session_id]: event.payload.state };
-      if (event.payload.state === "Busy")
-        tasks.fireResumeHook(event.payload.session_id).catch(() => {});
       if (event.payload.state === "Idle") {
         if (getSettings().sound_enabled !== false) {
           playTaskComplete();
         }
-        tasks.fireNotifyHook(event.payload.session_id).catch(() => {});
+        queueTaskHook(event.payload.session_id, tasks.fireNotifyHook);
         // Auto-open review tab when agent finishes
         const sid = event.payload.session_id;
         const session = sessions.find((s) => s.id === sid);

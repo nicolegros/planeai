@@ -100,9 +100,16 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 .map(|m| m.name.as_str())
                 .unwrap_or("?");
             tracing::info!(session_id = %msg.session_id, name, "agent busy (hook signal)");
-            s.notify_busy(&msg.session_id);
+            let resumed = s.notify_busy(&msg.session_id);
             drop(s);
             emit_state_change(app, &msg.session_id, AgentState::Busy);
+            // Only the agent's own hook reliably marks a resume; PTY output may be a redraw or echo.
+            if resumed {
+                let _ = app.emit(
+                    "agent-resumed",
+                    serde_json::json!({ "session_id": msg.session_id }),
+                );
+            }
         }
         NotifyEvent::Notification => {
             let fired = {
@@ -183,6 +190,10 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
                     to_notify.push(id);
                 }
             }
+            // Emitted under the lock so a busy signal cannot publish its resume before this Idle.
+            for id in &to_notify {
+                emit_state_change(&app, id, AgentState::Idle);
+            }
         }
         for session_id in to_notify {
             let name = {
@@ -192,7 +203,6 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
                     .unwrap_or_else(|| "?".into())
             };
             tracing::info!(%session_id, %name, "idle timeout, firing notification");
-            emit_state_change(&app, &session_id, AgentState::Idle);
             fire_notification(&app, &session_id, &state);
         }
     });
@@ -282,6 +292,7 @@ mod tests {
     fn silence_check_skipped_for_hook_enabled_sessions() {
         let mut state = NotifyState::new();
         state.register_session("s1", "test", "project", true);
+        let _ = state.notify_busy("s1");
         state.notify_output("s1");
         state.advance_time("s1", Duration::from_secs(10));
         assert!(!state.check_silence("s1"));

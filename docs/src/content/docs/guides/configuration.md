@@ -227,13 +227,13 @@ Hooks move the linked task to a status when its agent session changes state.
 }
 ```
 
-| Hook          | Trigger                            |
-| ------------- | ---------------------------------- |
-| `on_start`    | Session created from the task      |
-| `on_notify`   | Agent goes idle and waits for you  |
-| `on_resume`   | Agent works again after going idle |
-| `on_restart`  | Exited task session restarted      |
-| `on_complete` | Task session archived or deleted   |
+| Hook          | Trigger                                      |
+| ------------- | -------------------------------------------- |
+| `on_start`    | Session created from the task                |
+| `on_notify`   | Agent goes idle and waits for you            |
+| `on_resume`   | Agent hook reports new work after going idle |
+| `on_restart`  | Exited task session restarted                |
+| `on_complete` | Task session archived or deleted             |
 
 ## Extra PATH Directories
 

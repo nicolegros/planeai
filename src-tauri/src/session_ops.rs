@@ -238,7 +238,7 @@ fn task_owner_project(conn: &Connection, session: &Session) -> Option<db::Projec
         .flatten()
 }
 
-/// `on_resume` only reverts the move `on_notify` made, never a manual or later one.
+/// `on_resume` only moves a task whose status is still the `on_notify` target.
 fn resume_applies(
     tm: &crate::config::TaskManager,
     current: Option<planeai_tasks::model::Status>,
@@ -251,7 +251,7 @@ fn resume_applies(
 }
 
 /// Fire a task manager lifecycle hook (on_start, on_notify, on_restart, on_resume, on_complete).
-/// Uses the caller's connection — no new DB connections opened.
+/// Reads the session through the caller's connection and opens the task store to move the task.
 pub fn fire_task_hook(cfg: &Config, session: &Session, hook_name: &str, conn: &Connection) {
     let task_key = match &session.task_key {
         Some(k) => k,

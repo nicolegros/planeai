@@ -137,12 +137,13 @@ Configure them in **Preferences → Task Management** (⌘, / Ctrl+,) or directl
 | ------------- | --------------------------------------------------- |
 | `on_start`    | A session is created from the task                  |
 | `on_notify`   | The agent goes idle and waits for you               |
-| `on_resume`   | The agent works again after going idle              |
+| `on_resume`   | The agent's hook reports new work after going idle  |
 | `on_restart`  | An exited session linked to the task is restarted   |
 | `on_complete` | A session linked to the task is archived or deleted |
 
 A hook left unset never fires.
-`on_resume` only moves a task that is still in the `on_notify` status, so it never undoes a manual move and does nothing without `on_notify`.
+`on_resume` needs an agent with PlaneAI hooks installed, since terminal output alone cannot tell a redraw from new work.
+It only moves a task whose status is still the `on_notify` target, and does nothing without `on_notify`.
 Valid statuses are `todo`, `in_progress`, `in_review`, and `done`.
 
 :::tip
