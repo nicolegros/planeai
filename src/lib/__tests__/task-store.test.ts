@@ -3,7 +3,15 @@ import type { TaskItem } from "../types";
 
 const { listAll } = vi.hoisted(() => ({ listAll: vi.fn() }));
 
+const { listeners } = vi.hoisted(() => ({ listeners: new Map<string, () => void>() }));
+
 vi.mock("../api", () => ({ tasks: { listAll } }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn((event: string, handler: () => void) => {
+    listeners.set(event, handler);
+    return Promise.resolve(() => listeners.delete(event));
+  }),
+}));
 
 import * as taskStore from "../task-store.svelte";
 
@@ -75,5 +83,20 @@ describe("task store", () => {
     await staleLoad;
 
     expect(taskStore.getTasksForProject("/repo")).toEqual([task("FRESH-1", "ABC-1")]);
+  });
+
+  it("refreshes once after a burst of tasks-changed events", async () => {
+    vi.useFakeTimers();
+    listAll.mockResolvedValue([task("PLA-1")]);
+    const stop = taskStore.startTaskEventListener(() => ["/repo"]);
+
+    listeners.get("tasks-changed")!();
+    listeners.get("tasks-changed")!();
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(listAll).toHaveBeenCalledTimes(1);
+    expect(listAll).toHaveBeenCalledWith("/repo");
+    stop();
+    vi.useRealTimers();
   });
 });

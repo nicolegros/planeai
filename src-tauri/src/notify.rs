@@ -144,6 +144,7 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 tracing::warn!("discarding malformed task lifecycle notify message without batch");
                 return;
             };
+            let _ = app.emit("tasks-changed", ());
             app.state::<crate::plugins::PluginRuntimeHandle>()
                 .0
                 .dispatch_task_lifecycle(batch);

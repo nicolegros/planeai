@@ -2,6 +2,7 @@
  * Global task store — single source of truth for task state across all components.
  * Replaces independent fetching in TaskPanel, UnifiedSidebar, and App.svelte.
  */
+import { listen } from "@tauri-apps/api/event";
 import { tasks as tasksApi } from "./api";
 import type { TaskItem } from "./types";
 
@@ -57,6 +58,22 @@ export async function loadTasks(projectPaths: string[]): Promise<void> {
   } finally {
     if (requestGeneration === taskRequestGeneration) loading = false;
   }
+}
+
+/** Refreshes on `tasks-changed`, emitted for status moves made outside the UI (lifecycle hooks, CLI); bursts are coalesced. */
+export function startTaskEventListener(getProjectPaths: () => string[]): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const unlisten = listen("tasks-changed", () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      void refresh(getProjectPaths());
+    }, 150);
+  });
+  return () => {
+    if (timer) clearTimeout(timer);
+    void unlisten.then((fn) => fn());
+  };
 }
 
 /** Refreshes only the supplied projects, preserving unrelated store entries. */
