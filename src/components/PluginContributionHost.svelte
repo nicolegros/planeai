@@ -8,11 +8,10 @@
   import * as taskStore from "../lib/task-store.svelte";
   import { getAllTasks } from "../lib/task-store.svelte";
   import { openPluginModal, openProjectForm } from "../lib/plugin-modal-manager";
-  import type { PluginUiDisposer, PluginUiEntrypoint, PluginUiHost, PluginUiTheme, PluginSessionContext } from "../lib/plugin-sdk";
-  import { getAppearance } from "../lib/settings.svelte";
-  import { THEME_CHANGED_EVENT } from "../lib/theme-loader";
+  import type { PluginUiDisposer, PluginUiEntrypoint, PluginUiHost, PluginSessionContext } from "../lib/plugin-sdk";
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import { focusSidebar } from "../lib/focus.svelte";
+  import { isDark } from "../lib/settings.svelte";
   import type { PluginInventory, PluginUiContribution } from "../lib/types";
 
   interface Props {
@@ -59,12 +58,10 @@
   let generation = 0;
   const dataChangeListeners = new Set<() => void>();
   const taskDataChangeListeners = new Set<() => void>();
-  let refreshLocalPluginTheme: ((theme: PluginUiTheme) => void) | null = null;
-  let appearance = $state<PluginUiTheme>(currentPluginTheme());
-  const themeChangeListeners = new Set<(theme: PluginUiTheme) => void>();
+  let refreshLocalPluginTheme: (() => void) | null = null;
   let refreshLocalPluginData: (() => void) | null = null;
 
-  function subscribe<L>(listeners: Set<L>, listener: L): () => void {
+  function subscribe(listeners: Set<() => void>, listener: () => void): () => void {
     listeners.add(listener);
     return () => listeners.delete(listener);
   }
@@ -97,18 +94,13 @@
     return value.replace(/[<>{};]/g, (character) => `\\${character.codePointAt(0)!.toString(16)} `);
   }
 
-  function currentPluginTheme(): PluginUiTheme {
-    const { mode, preference } = getAppearance();
-    return { mode, preference: preference === "light" || preference === "dark" ? preference : "system" };
-  }
-
   // color-scheme must match the host's, otherwise WebKit paints an opaque canvas behind transparent frames.
-  function localPluginThemeCss(theme: PluginUiTheme): string {
+  function localPluginThemeCss(): string {
     const styles = getComputedStyle(document.documentElement);
     const tokens = pluginThemeTokens
       .map(([name, source]) => `--planeai-${name}:${escapePluginThemeValue(styles.getPropertyValue(source).trim())}`)
       .join(";");
-    return `:root{color-scheme:${theme.mode};${tokens};--planeai-radius:8px;--planeai-space-1:4px;--planeai-space-2:8px;--planeai-space-3:12px;--planeai-space-4:16px;--planeai-space-5:20px;--planeai-space-6:24px}`;
+    return `:root{color-scheme:${isDark() ? "dark" : "light"};${tokens};--planeai-radius:8px;--planeai-space-1:4px;--planeai-space-2:8px;--planeai-space-3:12px;--planeai-space-4:16px;--planeai-space-5:20px;--planeai-space-6:24px}`;
   }
 
   const localPluginBaseCss = "html{font-size:13px;line-height:1.45}html,body{margin:0;height:100%;min-height:100%;background:var(--planeai-main);color:var(--planeai-text);font-family:var(--planeai-font-sans)}*,*::before,*::after{box-sizing:border-box}h1,h2,h3,p{margin:0}h1{font-size:20px;line-height:28px;font-weight:600}h2{font-size:15px;line-height:20px;font-weight:600}h3{font-size:13px;line-height:18px;font-weight:600}p{font-size:13px;line-height:19px}button,input,select,textarea{font:inherit;line-height:18px}button{min-height:32px;border:1px solid var(--planeai-border);border-radius:var(--planeai-radius);padding:6px 10px;background:var(--planeai-surface-raised);color:var(--planeai-text);cursor:pointer}button:hover:not(:disabled){background:var(--planeai-accent-subtle)}button:disabled{cursor:not-allowed;opacity:.55}input,select,textarea{border:1px solid var(--planeai-border);border-radius:var(--planeai-radius);padding:7px 9px;background-color:var(--planeai-main);color:var(--planeai-text)}select{appearance:none;padding-right:28px;background-image:linear-gradient(45deg,transparent 50%,var(--planeai-text-muted) 50%),linear-gradient(135deg,var(--planeai-text-muted) 50%,transparent 50%);background-position:calc(100% - 13px) 50%,calc(100% - 9px) 50%;background-size:4px 4px,4px 4px;background-repeat:no-repeat}textarea{min-height:72px}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--planeai-accent);outline-offset:2px}";
@@ -209,12 +201,10 @@
       frame.addEventListener("focus", focusSidebar);
       frame.addEventListener("pointerdown", focusSidebar);
     }
-    const initialTheme = currentPluginTheme();
     frame.srcdoc = `<!doctype html>
-      <html data-theme="${initialTheme.mode}">
       <meta charset="utf-8">
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'">
-      <style id="planeai-plugin-theme">${localPluginThemeCss(initialTheme)}</style>
+      <style id="planeai-plugin-theme">${localPluginThemeCss()}</style>
       <style id="planeai-plugin-base">${localPluginBaseCss}</style>
       ${isTitlebar ? '<style id="planeai-plugin-titlebar">html,body{background:transparent}</style>' : isSessionIndicator ? '<style id="planeai-plugin-indicator">html,body{background:transparent}</style>' : ""}
       <script>
@@ -223,18 +213,6 @@
         const pending = new Map();
         const registrations = new Map();
         const dataChangeListeners = new Set();
-        let theme = ${JSON.stringify(initialTheme)};
-        const themeChangeListeners = new Set();
-        const applyTheme = (message) => {
-          const style = document.getElementById("planeai-plugin-theme");
-          if (style && typeof message.css === "string") style.textContent = message.css;
-          const next = message.theme;
-          if (!next || (next.mode !== "light" && next.mode !== "dark")) return;
-          document.documentElement.dataset.theme = next.mode;
-          if (next.mode === theme.mode && next.preference === theme.preference) return;
-          theme = { mode: next.mode, preference: next.preference };
-          for (const listener of themeChangeListeners) listener({ ...theme });
-        };
         const send = (message) => parent.postMessage(message, "*");
         let sessionPanelContentObserver = null;
         let contentHeightPending = false;
@@ -337,13 +315,6 @@
               event.stopPropagation();
             },
           },
-          theme: {
-            get: () => ({ ...theme }),
-            onChange: (listener) => {
-              themeChangeListeners.add(listener);
-              return () => themeChangeListeners.delete(listener);
-            },
-          },
           data: {
             changed: () => request("data-changed"),
             onChanged: (listener) => {
@@ -358,7 +329,8 @@
           const message = event.data;
           if (!message || typeof message.type !== "string") return;
           if (message.type === "theme") {
-            applyTheme(message);
+            const theme = document.getElementById("planeai-plugin-theme");
+            if (theme && typeof message.css === "string") theme.textContent = message.css;
             return;
           }
           if (message.type === "data-changed") {
@@ -389,7 +361,6 @@
             return;
           }
           if (message.type !== "init") return;
-          applyTheme(message);
           sidebarKeydownRoutingEnabled = message.contribution?.placement?.startsWith("sidebar.") ?? false;
           try {
             const url = URL.createObjectURL(new Blob([message.source], { type: "text/javascript" }));
@@ -411,8 +382,8 @@
         if (frame.isConnected) frame.focus();
       });
     };
-    const refreshTheme = (theme: PluginUiTheme): void => {
-      frame.contentWindow?.postMessage({ type: "theme", css: localPluginThemeCss(theme), theme }, "*");
+    const refreshTheme = (): void => {
+      frame.contentWindow?.postMessage({ type: "theme", css: localPluginThemeCss() }, "*");
     };
     refreshLocalPluginTheme = refreshTheme;
     const registrations = new Map<string, string[]>();
@@ -547,8 +518,7 @@
             contribution: PluginUiContribution;
             session?: PluginSessionContext;
           };
-          const theme = currentPluginTheme();
-          frame.contentWindow?.postMessage({ type: "init", source, ...context, css: localPluginThemeCss(theme), theme }, "*");
+          frame.contentWindow?.postMessage({ type: "init", source, ...context }, "*");
         })
         .catch((error) => showLoadFailure(root, error));
     };
@@ -646,10 +616,6 @@
             if (detail.handled) event.stopPropagation();
           },
         },
-        theme: {
-          get: () => ({ ...appearance }),
-          onChange: (listener) => subscribe(themeChangeListeners, listener),
-        },
         data,
       };
       data.refreshAssignment = async (project) => {
@@ -716,14 +682,9 @@
   onMount(() => {
     let disposed = false;
     let unlistenDataChange: (() => void) | undefined;
-    const refreshTheme = (): void => {
-      const theme = currentPluginTheme();
-      refreshLocalPluginTheme?.(theme);
-      if (theme.mode === appearance.mode && theme.preference === appearance.preference) return;
-      appearance = theme;
-      for (const listener of themeChangeListeners) listener({ ...theme });
-    };
-    window.addEventListener(THEME_CHANGED_EVENT, refreshTheme);
+    let unlistenSettingsChange: (() => void) | undefined;
+    const refreshTheme = (): void => refreshLocalPluginTheme?.();
+    window.addEventListener("planeai-theme-changed", refreshTheme);
     void listen<string>("plugin-data-changed", (event) => {
       if (event.payload !== plugin.id || !["sidebar.section", "interaction", "session.panel", "session.indicator"].includes(contribution.placement)) return;
       if (plugin.source_kind === "builtin" && dataChangeListeners.size > 0) {
@@ -737,10 +698,15 @@
       if (disposed) cleanup();
       else unlistenDataChange = cleanup;
     });
+    void listen("settings-changed", refreshTheme).then((cleanup) => {
+      if (disposed) cleanup();
+      else unlistenSettingsChange = cleanup;
+    });
     return () => {
       disposed = true;
-      window.removeEventListener(THEME_CHANGED_EVENT, refreshTheme);
+      window.removeEventListener("planeai-theme-changed", refreshTheme);
       unlistenDataChange?.();
+      unlistenSettingsChange?.();
     };
   });
 
@@ -766,7 +732,6 @@
   role={contribution.placement === "session.indicator" ? undefined : "region"}
   aria-label={`${plugin.name} · ${contribution.label}`}
   data-plugin-ui-contribution={`${plugin.id}:${contribution.id}`}
-  data-theme={appearance.mode}
   data-plugin-sidebar-contribution={contribution.placement.startsWith("sidebar.") ? "" : undefined}
   bind:this={container}
   onfocus={() => {
