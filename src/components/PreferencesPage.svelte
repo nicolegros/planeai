@@ -623,7 +623,8 @@
                   <!-- svelte-ignore a11y_label_has_associated_control -->
                   <label class="text-xs text-t2 w-24 shrink-0 flex items-center gap-1">{label} <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">{desc}</span></span></label>
                   <span class="text-xs text-t3">→</span>
-                  <Input value={(taskManagement as any)[hookKey]?.move_to || defaultVal} onchange={(e) => updateTmHook(hookKey, e.currentTarget.value)} class="font-mono flex-1" />
+                  <!-- An unset hook never fires, so its suggestion is only a placeholder. -->
+                  <Input value={(taskManagement as any)[hookKey]?.move_to ?? ""} placeholder={`Disabled - e.g. ${defaultVal}`} onchange={(e) => updateTmHook(hookKey, e.currentTarget.value.trim())} class="font-mono flex-1" />
                 </div>
               {/each}
             </div>
