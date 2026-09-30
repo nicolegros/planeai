@@ -211,35 +211,29 @@ Available variables: `task.key`, `task.title`, `task.description`, `task.status`
 
 ### Lifecycle Hooks
 
-Hooks run shell commands at task state transitions.
+Hooks move the linked task to a status when its agent session changes state.
 
 ```jsonc
 {
-  "task_manager": {
-    "lifecycle_hooks": {
-      // Runs when a task is dispatched to an agent
-      "on_start": "echo 'Starting {{task.key}}'",
-      // Runs when the agent signals completion
-      "on_complete": "git add -A && git commit -m 'feat({{task.key | slugify}}): {{task.title}}'",
-      // Runs when a notification is received
-      "on_notify": "say '{{task.key}} needs attention'",
-      // Runs when a failed task is retried
-      "on_restart": "git stash && git pull --rebase",
-    },
+  "task_management": {
+    // Each hook moves the linked task to `move_to`; unset hooks never fire
+    "on_start": { "move_to": "in_progress" },
+    "on_notify": { "move_to": "in_review" },
+    // Only reverts a task still in the `on_notify` status
+    "on_resume": { "move_to": "in_progress" },
+    "on_restart": { "move_to": "in_progress" },
+    "on_complete": { "move_to": "done" },
   },
 }
 ```
 
-| Hook          | Trigger                             |
-| ------------- | ----------------------------------- |
-| `on_start`    | Task dispatched to an agent session |
-| `on_complete` | Agent signals task completion       |
-| `on_notify`   | Task receives a notification        |
-| `on_restart`  | Task is retried after failure       |
-
-:::note
-Hooks run in the working directory of the task's git worktree.
-:::
+| Hook          | Trigger                            |
+| ------------- | ---------------------------------- |
+| `on_start`    | Session created from the task      |
+| `on_notify`   | Agent goes idle and waits for you  |
+| `on_resume`   | Agent works again after going idle |
+| `on_restart`  | Exited task session restarted      |
+| `on_complete` | Task session archived or deleted   |
 
 ## Extra PATH Directories
 

@@ -238,7 +238,19 @@ fn task_owner_project(conn: &Connection, session: &Session) -> Option<db::Projec
         .flatten()
 }
 
-/// Fire a task manager lifecycle hook (on_start, on_notify, on_restart, on_complete).
+/// `on_resume` only reverts the move `on_notify` made, never a manual or later one.
+fn resume_applies(
+    tm: &crate::config::TaskManager,
+    current: Option<planeai_tasks::model::Status>,
+) -> bool {
+    let notified = tm
+        .on_notify
+        .as_ref()
+        .and_then(|hook| planeai_tasks::model::Status::parse(&hook.move_to));
+    notified.is_some() && notified == current
+}
+
+/// Fire a task manager lifecycle hook (on_start, on_notify, on_restart, on_resume, on_complete).
 /// Uses the caller's connection — no new DB connections opened.
 pub fn fire_task_hook(cfg: &Config, session: &Session, hook_name: &str, conn: &Connection) {
     let task_key = match &session.task_key {
@@ -253,6 +265,7 @@ pub fn fire_task_hook(cfg: &Config, session: &Session, hook_name: &str, conn: &C
         "on_start" => tm.on_start.as_ref(),
         "on_notify" => tm.on_notify.as_ref(),
         "on_restart" => tm.on_restart.as_ref(),
+        "on_resume" => tm.on_resume.as_ref(),
         "on_complete" => tm.on_complete.as_ref(),
         _ => None,
     };
@@ -268,6 +281,12 @@ pub fn fire_task_hook(cfg: &Config, session: &Session, hook_name: &str, conn: &C
                 &project.prefix,
             ),
         ) {
+            if hook_name == "on_resume" {
+                use planeai_tasks::provider::TaskProvider;
+                if !resume_applies(tm, repo.get(task_key).ok().map(|task| task.status)) {
+                    return;
+                }
+            }
             match planeai_core::task_lifecycle::move_task_with_lifecycle(&repo, task_key, status) {
                 Ok((_task, events)) => {
                     forward_task_lifecycle(planeai_core::task_lifecycle::TaskLifecycleBatch::new(
@@ -1342,6 +1361,35 @@ mod tests {
         let sessions = list(&conn, true).unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].status, "archived");
+    }
+
+    #[test]
+    fn resume_only_reverts_the_on_notify_move() {
+        use planeai_tasks::model::Status;
+        let hook = |status: &str| {
+            Some(crate::config::LifecycleHook {
+                move_to: status.to_string(),
+            })
+        };
+        let tm = crate::config::TaskManager {
+            templates: None,
+            on_start: None,
+            on_notify: hook("in_review"),
+            on_restart: None,
+            on_resume: hook("in_progress"),
+            on_complete: None,
+            auto_dispatch: None,
+        };
+
+        assert!(resume_applies(&tm, Some(Status::InReview)));
+        assert!(!resume_applies(&tm, Some(Status::Done)));
+        assert!(!resume_applies(&tm, Some(Status::Todo)));
+        assert!(!resume_applies(&tm, None));
+        let without_notify = crate::config::TaskManager {
+            on_notify: None,
+            ..tm
+        };
+        assert!(!resume_applies(&without_notify, Some(Status::InReview)));
     }
 
     #[test]

@@ -175,6 +175,7 @@ mod tests {
                 on_start: None,
                 on_notify: None,
                 on_restart: None,
+                on_resume: None,
                 on_complete: Some(config::LifecycleHook {
                     move_to: "done".into(),
                 }),
@@ -200,6 +201,7 @@ mod tests {
                 on_start: None,
                 on_notify: None,
                 on_restart: None,
+                on_resume: None,
                 on_complete: Some(config::LifecycleHook {
                     move_to: "done".into(),
                 }),

@@ -352,6 +352,24 @@ pub async fn fire_task_notify_hook(
     db_state: State<'_, DbState>,
     config_state: State<'_, ConfigState>,
 ) -> Result<(), String> {
+    fire_agent_activity_hook(session_id, "on_notify", db_state, config_state).await
+}
+
+#[tauri::command]
+pub async fn fire_task_resume_hook(
+    session_id: String,
+    db_state: State<'_, DbState>,
+    config_state: State<'_, ConfigState>,
+) -> Result<(), String> {
+    fire_agent_activity_hook(session_id, "on_resume", db_state, config_state).await
+}
+
+async fn fire_agent_activity_hook(
+    session_id: String,
+    hook_name: &'static str,
+    db_state: State<'_, DbState>,
+    config_state: State<'_, ConfigState>,
+) -> Result<(), String> {
     let db = db_state.0.clone();
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
     super::blocking(move || {
@@ -360,7 +378,7 @@ pub async fn fire_task_notify_hook(
             .map_err(|e| e.to_string())?
             .ok_or("session not found")?;
         if session.task_key.is_some() {
-            fire_task_hook(&cfg, &session, "on_notify", &conn);
+            fire_task_hook(&cfg, &session, hook_name, &conn);
         }
         Ok(())
     })

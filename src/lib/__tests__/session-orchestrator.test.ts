@@ -43,7 +43,10 @@ vi.mock("../api", () => ({
   },
   pty: { closeTab: vi.fn(() => Promise.resolve()) },
   symphony: { getStatus: vi.fn(() => Promise.resolve("null")) },
-  tasks: { fireNotifyHook: vi.fn(() => Promise.resolve()) },
+  tasks: {
+    fireNotifyHook: vi.fn(() => Promise.resolve()),
+    fireResumeHook: vi.fn(() => Promise.resolve()),
+  },
   git: { getChangedFiles: vi.fn(() => Promise.resolve([])) },
 }));
 
@@ -431,6 +434,28 @@ describe("session-orchestrator", () => {
 
       handler({ payload: { session_id: "s1", state: "Idle" } });
       expect(playTaskComplete).not.toHaveBeenCalled();
+
+      cleanup();
+    });
+
+    it("fires the notify hook when the agent idles and the resume hook when it works again", async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const listenMock = vi.mocked(listen);
+      listenMock.mockClear();
+      const { tasks } = await import("../api");
+      vi.mocked(tasks.fireNotifyHook).mockClear();
+      vi.mocked(tasks.fireResumeHook).mockClear();
+
+      const cleanup = startEventListeners();
+      const handler = listenMock.mock.calls.find(
+        (c) => c[0] === "agent-state-change",
+      )![1] as (event: { payload: { session_id: string; state: string } }) => void;
+
+      handler({ payload: { session_id: "s1", state: "Idle" } });
+      expect(tasks.fireNotifyHook).toHaveBeenCalledWith("s1");
+      expect(tasks.fireResumeHook).not.toHaveBeenCalled();
+      handler({ payload: { session_id: "s1", state: "Busy" } });
+      expect(tasks.fireResumeHook).toHaveBeenCalledWith("s1");
 
       cleanup();
     });

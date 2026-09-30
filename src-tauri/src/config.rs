@@ -205,6 +205,9 @@ pub struct TaskManager {
     pub on_notify: Option<LifecycleHook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_restart: Option<LifecycleHook>,
+    /// Reverts the `on_notify` move once the agent works again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_resume: Option<LifecycleHook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_complete: Option<LifecycleHook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -446,6 +449,7 @@ fn migrate_autonomous_prompt_template(config: &mut Config) -> bool {
             on_start: None,
             on_notify: None,
             on_restart: None,
+            on_resume: None,
             on_complete: None,
             auto_dispatch: None,
         });

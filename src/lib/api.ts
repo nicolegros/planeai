@@ -157,6 +157,7 @@ export const tasks = {
   move: (key: string, status: string, repoPath: string) =>
     invoke("move_task_item", { key, status, repoPath }),
   fireNotifyHook: (sessionId: string) => invoke("fire_task_notify_hook", { sessionId }),
+  fireResumeHook: (sessionId: string) => invoke("fire_task_resume_hook", { sessionId }),
 };
 
 export const fileExplorer = {

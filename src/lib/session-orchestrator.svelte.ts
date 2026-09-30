@@ -305,6 +305,8 @@ export function startEventListeners(): () => void {
   unlisteners.push(
     listen<{ session_id: string; state: string }>("agent-state-change", (event) => {
       agentStates = { ...agentStates, [event.payload.session_id]: event.payload.state };
+      if (event.payload.state === "Busy")
+        tasks.fireResumeHook(event.payload.session_id).catch(() => {});
       if (event.payload.state === "Idle") {
         if (getSettings().sound_enabled !== false) {
           playTaskComplete();

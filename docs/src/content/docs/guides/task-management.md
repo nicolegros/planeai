@@ -118,29 +118,32 @@ The session and task stay linked. When the agent signals completion, the task mo
 
 ## Lifecycle hooks
 
-Hooks run shell commands at task state transitions. Configure them in **Preferences → Task Management** (⌘, / Ctrl+,) or directly in your `config.json`:
+Hooks move the linked task to a status when its agent session changes state.
+Configure them in **Preferences → Task Management** (⌘, / Ctrl+,) or directly in your `config.json`:
 
 ```jsonc
 {
-  "task_manager": {
-    "lifecycle_hooks": {
-      "on_start": "echo 'Starting {{task.key}}'",
-      "on_complete": "git add -A && git commit -m 'feat({{task.key | slugify}}): {{task.title}}'",
-      "on_notify": "say '{{task.key}} needs attention'",
-      "on_restart": "git stash && git pull --rebase",
-    },
+  "task_management": {
+    "on_start": { "move_to": "in_progress" },
+    "on_notify": { "move_to": "in_review" },
+    "on_resume": { "move_to": "in_progress" },
+    "on_restart": { "move_to": "in_progress" },
+    "on_complete": { "move_to": "done" },
   },
 }
 ```
 
-| Hook          | Fires when                                                |
-| ------------- | --------------------------------------------------------- |
-| `on_start`    | A task is dispatched to an agent session                  |
-| `on_complete` | The agent signals it's done (session archived or deleted) |
-| `on_notify`   | The agent signals idle (needs attention)                  |
-| `on_restart`  | A failed task's session is restarted                      |
+| Hook          | Fires when                                          |
+| ------------- | --------------------------------------------------- |
+| `on_start`    | A session is created from the task                  |
+| `on_notify`   | The agent goes idle and waits for you               |
+| `on_resume`   | The agent works again after going idle              |
+| `on_restart`  | An exited session linked to the task is restarted   |
+| `on_complete` | A session linked to the task is archived or deleted |
 
-Hooks run in the working directory of the task's git worktree. They support the same `{{template}}` syntax as other planeai templates (see [Configuration](/planeai/guides/configuration/)).
+A hook left unset never fires.
+`on_resume` only moves a task that is still in the `on_notify` status, so it never undoes a manual move and does nothing without `on_notify`.
+Valid statuses are `todo`, `in_progress`, `in_review`, and `done`.
 
 :::tip
 All task management settings — templates, lifecycle hooks, and auto-dispatch — are available in **Preferences → Task Management**. You don't need to edit JSON if you prefer a GUI.

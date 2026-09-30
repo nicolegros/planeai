@@ -83,6 +83,7 @@ describe("PreferencesPage lifecycle hooks", () => {
     expect(hookInput("On start").value).toBe("in_progress");
     expect(hookInput("On notify").value).toBe("");
     expect(hookInput("On notify").placeholder).toBe("Disabled - e.g. in_review");
+    expect(hookInput("On resume").placeholder).toBe("Disabled - e.g. in_progress");
     unmount(component);
   });
 });
