@@ -930,7 +930,7 @@ mod tests {
     fn test_kill_ops() -> KillOps {
         KillOps {
             kill_tmux: Box::new(|_| Ok(())),
-            list_daemon_sessions: Box::new(Vec::new),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| Ok(())),
             kill_rmux_session: Box::new(|_| Ok(())),
         }
@@ -940,7 +940,7 @@ mod tests {
         CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
-                list_daemon_sessions: Box::new(Vec::new),
+                list_daemon_sessions: Box::new(|| Ok(Vec::new())),
                 kill_daemon_session: Box::new(|_| Err("daemon error".to_string())),
                 kill_rmux_session: Box::new(|_| Ok(())),
             },
@@ -1160,7 +1160,7 @@ mod tests {
                 KILLED.with(|k| k.borrow_mut().push(name.to_string()));
                 Ok(())
             }),
-            list_daemon_sessions: Box::new(Vec::new),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| Ok(())),
             kill_rmux_session: Box::new(|_| Ok(())),
         };
@@ -1199,7 +1199,7 @@ mod tests {
 
         let ops = KillOps {
             kill_tmux: Box::new(|_| panic!("should not be called for local backend")),
-            list_daemon_sessions: Box::new(Vec::new),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| panic!("should not be called for local backend")),
             kill_rmux_session: Box::new(|_| Ok(())),
         };
@@ -1240,7 +1240,7 @@ mod tests {
 
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
-            list_daemon_sessions: Box::new(Vec::new),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|sid| {
                 KILLED.with(|k| k.borrow_mut().push(sid.to_string()));
                 Ok(())

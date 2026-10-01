@@ -3,7 +3,7 @@
 type OpResult = Result<(), String>;
 type Op1 = Box<dyn Fn(&str) -> OpResult>;
 type Op2 = Box<dyn Fn(&str, &str) -> OpResult>;
-type ListOp = Box<dyn Fn() -> Vec<String>>;
+type ListOp = Box<dyn Fn() -> Result<Vec<String>, String>>;
 
 /// Data needed by background cleanup (gathered while locks are held).
 pub struct CleanupContext {
@@ -57,7 +57,11 @@ pub fn kill_backend(
                 // Shell tabs are `{id}:{index}` with sparse indices, so ask the
                 // daemon which ones are alive rather than guessing a range.
                 let shell_prefix = format!("{id}:");
-                for tab_id in (ops.list_daemon_sessions)() {
+                let live = (ops.list_daemon_sessions)().unwrap_or_else(|e| {
+                    errors.push(format!("daemon list: {e}"));
+                    Vec::new()
+                });
+                for tab_id in live {
                     if !tab_id.starts_with(&shell_prefix) {
                         continue;
                     }
@@ -135,7 +139,10 @@ pub fn real_kill_ops() -> KillOps {
                 Ok(())
             }
         }),
-        list_daemon_sessions: Box::new(|| list_daemon_session_ids().unwrap_or_default()),
+        list_daemon_sessions: Box::new(|| {
+            crate::daemon::list_session_ids()
+                .map(|ids| ids.unwrap_or_default().into_iter().collect())
+        }),
         kill_daemon_session: Box::new(|session_id| {
             use std::io::{Read, Write};
             let app_dir = planeai_paths::app_data_dir();
@@ -154,29 +161,6 @@ pub fn real_kill_ops() -> KillOps {
         }),
         kill_rmux_session: Box::new(crate::rmux_ops::close_session_resources),
     }
-}
-
-/// Ask the daemon which sessions it hosts. `None` when it is unreachable.
-fn list_daemon_session_ids() -> Option<Vec<String>> {
-    use std::io::{BufRead, Write};
-    let app_dir = planeai_paths::app_data_dir();
-    let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir).ok()?;
-    stream
-        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
-        .ok()?;
-    stream.write_all(&[0x00]).ok()?;
-    let req = serde_json::json!({"cmd": "list"});
-    stream.write_all(format!("{}\n", req).as_bytes()).ok()?;
-    let mut line = String::new();
-    std::io::BufReader::new(stream).read_line(&mut line).ok()?;
-    let response: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
-    let ids = response
-        .get("sessions")?
-        .as_array()?
-        .iter()
-        .filter_map(|session| session.get("session_id")?.as_str().map(String::from))
-        .collect();
-    Some(ids)
 }
 
 /// Production operations that call real tmux/git/fs commands.
@@ -223,7 +207,7 @@ mod tests {
                 KILLED.with(|k| k.borrow_mut().push(name.to_string()));
                 Ok(())
             }),
-            list_daemon_sessions: Box::new(Vec::new),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| Ok(())),
             kill_rmux_session: Box::new(|_| Ok(())),
         };
@@ -241,7 +225,7 @@ mod tests {
         }
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
-            list_daemon_sessions: Box::new(Vec::new),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| {
                 panic!("an rmux session must not be killed through the daemon")
             }),
@@ -262,7 +246,7 @@ mod tests {
     fn kill_backend_rmux_reports_failures() {
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
-            list_daemon_sessions: Box::new(Vec::new),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| Ok(())),
             kill_rmux_session: Box::new(|_| Err("daemon refused".to_string())),
         };
@@ -277,7 +261,7 @@ mod tests {
     fn kill_backend_local_is_noop() {
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
-            list_daemon_sessions: Box::new(Vec::new),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| Ok(())),
             kill_rmux_session: Box::new(|_| Ok(())),
         };
@@ -295,7 +279,7 @@ mod tests {
             kill_rmux_session: Box::new(|_| Ok(())),
             // Shell 1 was closed earlier, so the live indices are sparse.
             list_daemon_sessions: Box::new(|| {
-                [
+                Ok([
                     "sess-abc",
                     "sess-abc:2",
                     "sess-abc:5",
@@ -303,7 +287,7 @@ mod tests {
                     "sess-abcd:1",
                 ]
                 .map(String::from)
-                .to_vec()
+                .to_vec())
             }),
             kill_daemon_session: Box::new(|id| {
                 KILLED.with(|k| k.borrow_mut().push(id.to_string()));
@@ -321,6 +305,18 @@ mod tests {
     }
 
     #[test]
+    fn kill_backend_reports_shell_tabs_it_could_not_list() {
+        let ops = KillOps {
+            kill_tmux: Box::new(|_| Ok(())),
+            kill_rmux_session: Box::new(|_| Ok(())),
+            list_daemon_sessions: Box::new(|| Err("timed out".to_string())),
+            kill_daemon_session: Box::new(|_| Ok(())),
+        };
+        let errors = kill_backend("daemon", None, Some("sess-abc"), &ops);
+        assert_eq!(errors, vec!["daemon list: timed out".to_string()]);
+    }
+
+    #[test]
     fn kill_backend_without_shell_tabs_only_kills_agent() {
         thread_local! {
             static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
@@ -328,7 +324,7 @@ mod tests {
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
             kill_rmux_session: Box::new(|_| Ok(())),
-            list_daemon_sessions: Box::new(Vec::new),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|id| {
                 KILLED.with(|k| k.borrow_mut().push(id.to_string()));
                 Ok(())
@@ -352,7 +348,7 @@ mod tests {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Ok(())),
                 kill_rmux_session: Box::new(|_| Ok(())),
-                list_daemon_sessions: Box::new(Vec::new),
+                list_daemon_sessions: Box::new(|| Ok(Vec::new())),
                 kill_daemon_session: Box::new(|id| {
                     KILLED.with(|k| k.borrow_mut().push(id.to_string()));
                     Ok(())
@@ -389,7 +385,7 @@ mod tests {
                     KILLED.with(|k| k.borrow_mut().push(name.to_string()));
                     Ok(())
                 }),
-                list_daemon_sessions: Box::new(Vec::new),
+                list_daemon_sessions: Box::new(|| Ok(Vec::new())),
                 kill_daemon_session: Box::new(|_| Ok(())),
                 kill_rmux_session: Box::new(|_| Ok(())),
             },
@@ -423,7 +419,7 @@ mod tests {
         let ops = CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Ok(())),
-                list_daemon_sessions: Box::new(Vec::new),
+                list_daemon_sessions: Box::new(|| Ok(Vec::new())),
                 kill_daemon_session: Box::new(|_| Ok(())),
                 kill_rmux_session: Box::new(|_| Ok(())),
             },
@@ -476,7 +472,7 @@ mod tests {
         let ops = CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Ok(())),
-                list_daemon_sessions: Box::new(Vec::new),
+                list_daemon_sessions: Box::new(|| Ok(Vec::new())),
                 kill_daemon_session: Box::new(|_| Ok(())),
                 kill_rmux_session: Box::new(|_| Ok(())),
             },
@@ -502,7 +498,7 @@ mod tests {
         let ops = CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
-                list_daemon_sessions: Box::new(Vec::new),
+                list_daemon_sessions: Box::new(|| Ok(Vec::new())),
                 kill_daemon_session: Box::new(|_| Ok(())),
                 kill_rmux_session: Box::new(|_| Ok(())),
             },

@@ -433,30 +433,7 @@ async fn send_control_request(
 /// Sync query to daemon for startup reconciliation. Shell tabs use the async
 /// cancellable control lifecycle above instead.
 pub fn list_sessions_sync() -> Option<std::collections::HashSet<String>> {
-    list_sessions_sync_inner()
-}
-
-fn list_sessions_sync_inner() -> Option<std::collections::HashSet<String>> {
-    use std::io::{BufRead, Write};
-
-    let app_dir = planeai_paths::app_data_dir();
-    let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir).ok()?;
-    stream.set_read_timeout(Some(CONTROL_TIMEOUT)).ok()?;
-    stream.write_all(&[0x00]).ok()?; // control connection type byte
-    let req = serde_json::json!({"cmd": "list"});
-    stream.write_all(format!("{}\n", req).as_bytes()).ok()?;
-
-    let mut line = String::new();
-    let mut reader = std::io::BufReader::new(stream);
-    reader.read_line(&mut line).ok()?;
-
-    let val: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
-    let sessions = val.get("sessions")?.as_array()?;
-    let ids: std::collections::HashSet<String> = sessions
-        .iter()
-        .filter_map(|s| s.get("session_id")?.as_str().map(|s| s.to_string()))
-        .collect();
-    Some(ids)
+    crate::daemon::list_session_ids().ok().flatten()
 }
 
 // ─── Sidecar Spawning ────────────────────────────────────────────────────────

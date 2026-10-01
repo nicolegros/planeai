@@ -1,8 +1,12 @@
+use std::sync::{Arc, Mutex};
+
+use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::cleanup;
+use crate::config::Config;
 use crate::db;
-use crate::plugins::PluginRuntimeHandle;
+use crate::plugins::{PluginRuntimeHandle, PluginRuntimeSupervisor};
 use crate::state::{ConfigState, DbState, PtyState};
 
 pub(crate) fn session_lifecycle_event(
@@ -52,56 +56,54 @@ pub fn restart_session(
 }
 
 #[tauri::command]
-pub fn archive_session(
+pub async fn archive_session(
     id: String,
-    db_state: State<DbState>,
-    pty_state: State<PtyState>,
-    config_state: State<ConfigState>,
-    runtime: State<PluginRuntimeHandle>,
+    db_state: State<'_, DbState>,
+    pty_state: State<'_, PtyState>,
+    config_state: State<'_, ConfigState>,
+    runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
     pty_state.0.detach(&id);
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    let session = db::get_session(&conn, &id)
-        .map_err(|e| e.to_string())?
-        .ok_or("session not found")?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
-    crate::session_ops::archive(&conn, &id, &Some(cfg), &cleanup::real_kill_ops())?;
-    if session.status != "archived" {
-        runtime
-            .0
-            .dispatch_session_lifecycle(session_lifecycle_event(
-                &session,
-                &session.status,
-                "archived",
-            ));
-    }
-    Ok(())
+    archive_off_main_thread(id, db_state.0.clone(), runtime.0.clone(), Some(cfg)).await
 }
 
 #[tauri::command]
-pub fn park_session(
+pub async fn park_session(
     id: String,
-    db_state: State<DbState>,
-    pty_state: State<PtyState>,
-    runtime: State<PluginRuntimeHandle>,
+    db_state: State<'_, DbState>,
+    pty_state: State<'_, PtyState>,
+    runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
     pty_state.0.detach(&id);
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    let session = db::get_session(&conn, &id)
-        .map_err(|e| e.to_string())?
-        .ok_or("session not found")?;
     // Parking closes an agent without declaring its linked task complete.
-    crate::session_ops::archive(&conn, &id, &None, &cleanup::real_kill_ops())?;
-    if session.status != "archived" {
-        runtime
-            .0
-            .dispatch_session_lifecycle(session_lifecycle_event(
+    archive_off_main_thread(id, db_state.0.clone(), runtime.0.clone(), None).await
+}
+
+/// Archiving kills backend processes over daemon IPC, which must not stall the
+/// main thread that delivers PTY output.
+async fn archive_off_main_thread(
+    id: String,
+    db: Arc<Mutex<Connection>>,
+    runtime: Arc<PluginRuntimeSupervisor>,
+    cfg: Option<Config>,
+) -> Result<(), String> {
+    crate::commands::blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        let session = db::get_session(&conn, &id)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?;
+        crate::session_ops::archive(&conn, &id, &cfg, &cleanup::real_kill_ops())?;
+        if session.status != "archived" {
+            runtime.dispatch_session_lifecycle(session_lifecycle_event(
                 &session,
                 &session.status,
                 "archived",
             ));
-    }
-    Ok(())
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
