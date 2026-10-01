@@ -1,5 +1,5 @@
 /**
- * Pty key — the canonical identity of a TaskWorkspace resource tab.
+ * Pty key: the canonical identity of a TaskWorkspace resource tab.
  *
  * The grammar is shared with the backend and persisted in layouts, so it must
  * not change:
@@ -53,10 +53,4 @@ export function parsePtyKey(ptyKey: string): PtyKeyParts | null {
 export function ptyKeySessionId(ptyKey: string): string {
   const separator = ptyKey.indexOf(":");
   return separator === -1 ? ptyKey : ptyKey.slice(0, separator);
-}
-
-/** Shell tab index of a pty key, or null when it is not a shell tab. */
-export function shellIndex(ptyKey: string): number | null {
-  const parts = parsePtyKey(ptyKey);
-  return parts?.kind === "shell" ? parts.index : null;
 }

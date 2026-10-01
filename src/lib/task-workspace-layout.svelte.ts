@@ -1,5 +1,5 @@
 /**
- * TaskWorkspace layout — the tabs and splits of the loaded TaskWorkspace.
+ * TaskWorkspace layout: the tabs and splits of the loaded TaskWorkspace.
  *
  * Owns the layout tree (see ./layout-tree), which workspace it belongs to, its
  * persistence, shell tab index allocation, terminal-editor command reservations,
@@ -20,11 +20,26 @@ import {
   shellPtyKey,
 } from "./pty-key";
 import { editor as editorApi, pty, sessions as sessionsApi } from "./api";
+import { toTaskWorkspaceId } from "./sidebar-session-order";
+import { sessionTaskProjectId, type Session } from "./types";
 import { disposeTerminalView } from "./terminal-views";
 
 export type WorkspaceIdentity =
   | { kind: "task"; key: string; projectId: string; taskKey: string }
   | { kind: "session"; key: string; sessionId: string };
+
+/** The workspace a session belongs to: its task's, or its own when it has no task. */
+export function workspaceOf(session: Session): WorkspaceIdentity {
+  const projectId = sessionTaskProjectId(session);
+  return session.task_key
+    ? {
+        kind: "task",
+        key: toTaskWorkspaceId(projectId, session.task_key),
+        projectId,
+        taskKey: session.task_key,
+      }
+    : { kind: "session", key: `session:${session.id}`, sessionId: session.id };
+}
 
 /** An agent session of the workspace, as its tab shows it. */
 export interface WorkspaceAgent {
@@ -82,7 +97,6 @@ export interface PaneTab {
   /** Muted display-only suffix, never persisted with the label. */
   detail?: string;
   icon: string;
-  type: TabEntry["type"];
 }
 
 export type TaskWorkspaceLayout = ReturnType<typeof createTaskWorkspaceLayout>;
@@ -106,6 +120,11 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
    * a new tab that took its key.
    */
   const highestShellIndex = new Map<string, number>();
+  /**
+   * Shells closed or exited in this run. A layout saved while one was still open
+   * (another workspace was loaded when it went) must not bring it back.
+   */
+  const goneShells = new Set<string>();
 
   function commit(next: Layout | null): void {
     if (next === layout) return;
@@ -143,7 +162,7 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     commit(
       tree.reconcile(layout, {
         agentTabs: agentTabs(),
-        preferredActiveTab: focusedSessionId ?? undefined,
+        preferredActiveTab: focusedSessionId ? agentPtyKey(focusedSessionId) : undefined,
       }),
     );
   }
@@ -165,13 +184,14 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
   }
 
   function removeShell(ptyKey: string): void {
+    goneShells.add(ptyKey);
     if (layout) commit(tree.removeTab(layout, ptyKey));
     deps.disposeView(ptyKey);
     saveNow();
   }
 
   function openDiff(sessionId: string): ResourceOpen {
-    if (!layout) return "unavailable";
+    if (!layout || loading) return "unavailable";
     const ptyKey = diffPtyKey(sessionId);
     if (tree.findTab(layout, ptyKey)) {
       commit(tree.focusTab(layout, ptyKey));
@@ -186,6 +206,12 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       }),
     );
     return "opened";
+  }
+
+  function pruneGoneShells(restored: Layout): Layout | null {
+    let result: Layout | null = restored;
+    for (const ptyKey of goneShells) if (result) result = tree.removeTab(result, ptyKey);
+    return result;
   }
 
   async function closeShell(ptyKey: string): Promise<void> {
@@ -225,13 +251,14 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
      * Resolves null when a newer `show` or `clear` superseded this one.
      */
     async show(target: WorkspaceIdentity, options: ShowOptions): Promise<ShowResult | null> {
+      const selectedTab = agentPtyKey(options.selectedSessionId);
       if (workspace?.key === target.key && !loading) {
         agents = options.agents;
         if (options.selectedSessionId !== focusedSessionId) {
           focusedSessionId = options.selectedSessionId;
-          const existing = tree.findTab(layout, options.selectedSessionId);
-          if (layout && existing && existing.leaf.activeTab !== options.selectedSessionId) {
-            commit(tree.focusTab(layout, options.selectedSessionId));
+          const existing = tree.findTab(layout, selectedTab);
+          if (layout && existing && existing.leaf.activeTab !== selectedTab) {
+            commit(tree.focusTab(layout, selectedTab));
           }
         }
         reconcileNow();
@@ -261,20 +288,22 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
               ? restoredSessionId
               : null,
           selectedSessionId: options.selectedSessionId,
-          restoredTreeHasTabForSelectedSession: !!tree.findTab(restored, options.selectedSessionId),
+          restoredTreeHasTabForSelectedSession: !!tree.findTab(restored, selectedTab),
           selectionIsExplicit: options.selectionIsExplicit,
         });
         if (selection.kind === "focus_selected_session") {
-          restored = tree.focusTab(restored, options.selectedSessionId);
+          restored = tree.focusTab(restored, selectedTab);
         }
         if (selection.kind === "adopt_restored_session") adoptedSessionId = selection.sessionId;
       }
-      layout = restored ?? tree.createLayout(agentTabs(), agentPtyKey(options.selectedSessionId));
+      const pruned = restored && pruneGoneShells(restored);
+      layout = pruned || tree.createLayout(agentTabs(), selectedTab);
       workspace = target;
       focusedSessionId = adoptedSessionId ?? options.selectedSessionId;
       loading = false;
       reconcileNow();
-      return { adoptedSessionId, restored: !!restored };
+      if (pruned !== restored) saveNow();
+      return { adoptedSessionId, restored: !!pruned };
     },
 
     /** Re-sync tabs with the workspace's agents (sessions added, renamed, or gone). */
@@ -303,20 +332,21 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
      */
     openShell(
       sessionId: string,
-      where: { leafId?: string; split?: SplitDirection } = {},
+      where: { paneId?: string; split?: SplitDirection } = {},
     ): string | null {
-      if (!layout) return null;
+      // While another workspace loads, the shown layout is about to be replaced.
+      if (!layout || loading) return null;
       let base = layout;
-      let leafId = where.leafId ?? layout.focusedLeafId;
+      let paneId = where.paneId ?? layout.focusedLeafId;
       if (where.split) {
         const split = tree.splitFocused(layout, where.split);
         if (!split) return null;
         base = split.layout;
-        leafId = split.leafId;
+        paneId = split.leafId;
       }
-      if (!tree.findLeaf(base, leafId)) return null;
+      if (!tree.findLeaf(base, paneId)) return null;
       const ptyKey = shellPtyKey(sessionId, allocateShellIndex(sessionId));
-      commit(tree.focusLeaf(tree.addTab(base, leafId, shellTab(ptyKey, "Shell")), leafId));
+      commit(tree.focusLeaf(tree.addTab(base, paneId, shellTab(ptyKey, "Shell")), paneId));
       saveNow();
       return ptyKey;
     },
@@ -325,16 +355,17 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
      * Open a file with the terminal editor in a new shell tab of the focused
      * pane. Its command is reserved before the tab exists, so the terminal that
      * mounts for it starts the editor rather than a bare shell. Null when the
-     * pane went away while the command was being resolved.
+     * pane went away, or another workspace started loading, while the command
+     * was being resolved.
      */
     async openTerminalEditor(sessionId: string, filePath: string): Promise<string | null> {
-      const leafId = layout?.focusedLeafId;
-      if (!leafId) return null;
+      const paneId = loading ? null : layout?.focusedLeafId;
+      if (!paneId) return null;
       const command = await deps.getTerminalCommand(sessionId, filePath);
-      if (!layout || !tree.findLeaf(layout, leafId)) return null;
+      if (!layout || loading || !tree.findLeaf(layout, paneId)) return null;
       const ptyKey = shellPtyKey(sessionId, allocateShellIndex(sessionId));
       pendingCommands.set(ptyKey, command);
-      commit(tree.addTab(layout, leafId, shellTab(ptyKey, fileName(filePath))));
+      commit(tree.addTab(layout, paneId, shellTab(ptyKey, fileName(filePath))));
       saveNow();
       return ptyKey;
     },
@@ -363,7 +394,7 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
 
     /** Open a file in the embedded editor, focusing its tab when already open. */
     openEditor(sessionId: string, filePath: string): ResourceOpen {
-      if (!layout) return "unavailable";
+      if (!layout || loading) return "unavailable";
       const ptyKey = editorPtyKey(sessionId, filePath);
       if (tree.findTab(layout, ptyKey)) {
         commit(tree.focusTab(layout, ptyKey));
@@ -411,8 +442,8 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
      */
     async shellExited(ptyKey: string): Promise<void> {
       const parts = parsePtyKey(ptyKey);
-      // An explicit close already removed the tab; closing again would be redundant.
-      if (parts?.kind !== "shell" || !tree.findTab(layout, ptyKey)) return;
+      // An explicit close already finalized it; closing again would be redundant.
+      if (parts?.kind !== "shell" || goneShells.has(ptyKey)) return;
       pendingCommands.delete(ptyKey);
       removeShell(ptyKey);
       await deps.closeShell(parts.sessionId, parts.index);
@@ -433,8 +464,8 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       return tree.findTab(layout, ptyKey)?.tab ?? null;
     },
 
-    focusPane(leafId: string): void {
-      if (layout) commit(tree.focusLeaf(layout, leafId));
+    focusPane(paneId: string): void {
+      if (layout) commit(tree.focusLeaf(layout, paneId));
     },
 
     /** Move the focused pane's front tab by `delta`; returns the new front tab, or null if none moved. */
@@ -446,8 +477,8 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     },
 
     /** Close a pane (the focused one by default), moving its tabs to its sibling. */
-    closePane(leafId?: string): void {
-      if (layout) commit(tree.closePane(layout, leafId ?? layout.focusedLeafId));
+    closePane(paneId?: string): void {
+      if (layout) commit(tree.closePane(layout, paneId ?? layout.focusedLeafId));
     },
 
     focusDirection(direction: NavDirection): void {
@@ -458,13 +489,13 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       if (layout) commit(tree.moveFocusedTab(layout, direction));
     },
 
-    moveTab(ptyKey: string, leafId: string, index?: number): void {
-      if (layout) commit(tree.moveTab(layout, ptyKey, leafId, index));
+    moveTab(ptyKey: string, paneId: string, index?: number): void {
+      if (layout) commit(tree.moveTab(layout, ptyKey, paneId, index));
     },
 
     /** Split a pane on one side and move a tab into the new pane. */
-    splitWithTab(ptyKey: string, leafId: string, side: NavDirection): void {
-      if (layout) commit(tree.splitWithTab(layout, ptyKey, leafId, side));
+    splitWithTab(ptyKey: string, paneId: string, side: NavDirection): void {
+      if (layout) commit(tree.splitWithTab(layout, ptyKey, paneId, side));
     },
 
     setRatio(splitId: string, ratio: number): void {
@@ -492,7 +523,6 @@ export function toPaneTabs(
     label: tab.label,
     detail: detailFor(tab),
     icon: tab.icon,
-    type: tab.type,
   }));
 }
 

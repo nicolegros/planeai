@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../api", () => ({ editor: {}, pty: {}, sessions: {} }));
 vi.mock("../terminal-views", () => ({ disposeTerminalView: vi.fn() }));
 
+import type { Session } from "../types";
 import {
   createLayout,
   focusedTabOf,
@@ -16,6 +17,7 @@ import {
 import {
   createTaskWorkspaceLayout,
   resolveRestoredLayoutSelection,
+  workspaceOf,
   type TaskWorkspaceLayoutDeps,
   type WorkspaceAgent,
   type WorkspaceIdentity,
@@ -204,7 +206,7 @@ describe("shell tabs", () => {
     expect(deps.store.save).toHaveBeenCalledOnce();
   });
 
-  it("never reuses an index held by a restored shell, even past the tab count", async () => {
+  it("never reuses an index held by a restored shell", async () => {
     // Shell 1 was closed before the restart; only shell 2 survives in the layout.
     const { workspace, show } = setup({
       [TASK.key]: createLayout([agentTab("a"), shellTab("a:2")]),
@@ -236,7 +238,7 @@ describe("shell tabs", () => {
     await show(TASK, ["a"], "a");
     workspace.openShell("a", { split: "vertical" });
     const left = leavesOf(workspace.layout)[0].id;
-    workspace.openShell("a", { leafId: left });
+    workspace.openShell("a", { paneId: left });
     expect(keys(workspace.layout)).toEqual([["a", "a:2"], ["a:1"]]);
     expect(workspace.focusedLeaf()?.id).toBe(left);
   });
@@ -296,6 +298,100 @@ describe("shell tabs", () => {
     await workspace.shellFailedToStart(ptyKey);
     expect(deps.closeShell).toHaveBeenCalledWith("a", 1);
     expect(workspace.findTab(ptyKey)).toBeNull();
+  });
+});
+
+describe("across workspace switches", () => {
+  it("opens nothing while another workspace is loading", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    let release!: () => void;
+    deps.store.load.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve(null))),
+    );
+    const loading = show(OTHER, ["x"], "x");
+    expect(workspace.openShell("x")).toBeNull();
+    expect(workspace.openDiff("x")).toBe("unavailable");
+    expect(workspace.openEditor("x", "a.ts")).toBe("unavailable");
+    expect(await workspace.openTerminalEditor("x", "a.ts")).toBeNull();
+    release();
+    await loading;
+    expect(keys(workspace.layout)).toEqual([["x"]]);
+  });
+
+  it("does not bring back a shell closed while its workspace was switched away", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = workspace.openShell("a")!;
+    let killed!: () => void;
+    deps.closeShell.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (killed = resolve)),
+    );
+    const closing = workspace.closeTab(ptyKey);
+    await show(OTHER, ["x"], "x");
+    killed();
+    await closing;
+    await show(TASK, ["a"], "a");
+    expect(keys(workspace.layout)).toEqual([["a"]]);
+  });
+
+  it("finalizes and forgets a shell that exited in an unloaded workspace", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = workspace.openShell("a")!;
+    await show(OTHER, ["x"], "x");
+    await workspace.shellExited(ptyKey);
+    expect(deps.closeShell).toHaveBeenCalledWith("a", 1);
+    await show(TASK, ["a"], "a");
+    expect(keys(workspace.layout)).toEqual([["a"]]);
+  });
+
+  it("builds a fresh layout when every remembered tab is gone", async () => {
+    const { workspace, show } = setup({ [TASK.key]: createLayout([shellTab("a:1")]) });
+    await show(OTHER, ["x"], "x");
+    await workspace.shellExited("a:1");
+    expect(await show(TASK, ["a"], "a")).toEqual({ adoptedSessionId: null, restored: false });
+    expect(keys(workspace.layout)).toEqual([["a"]]);
+  });
+});
+
+describe("workspaceOf", () => {
+  const session = {
+    id: "s1",
+    project_id: "repo",
+    task_key: null,
+    task_project_id: null,
+  } as Session;
+
+  it("gives a task's sessions one workspace, keyed by the task's own project", () => {
+    expect(workspaceOf({ ...session, task_key: "PLA-1", task_project_id: "owner" })).toEqual({
+      kind: "task",
+      key: "task:owner:PLA-1",
+      projectId: "owner",
+      taskKey: "PLA-1",
+    });
+  });
+
+  it("puts every session linked to the same task in one workspace", () => {
+    const other = {
+      ...session,
+      id: "s2",
+      project_id: "elsewhere",
+      task_key: "PLA-1",
+      task_project_id: "owner",
+    };
+    expect(workspaceOf(other).key).toBe(
+      workspaceOf({ ...session, task_key: "PLA-1", task_project_id: "owner" }).key,
+    );
+  });
+
+  it("gives a session without a task a workspace of its own", () => {
+    expect(workspaceOf(session)).toEqual({ kind: "session", key: "session:s1", sessionId: "s1" });
+  });
+
+  it("keys a workspace by identity, unaffected by session updates", () => {
+    const renamed = { ...session, task_key: "PLA-1", name: "Renamed", status: "exited" } as Session;
+    expect(workspaceOf(renamed).key).toBe(workspaceOf({ ...session, task_key: "PLA-1" }).key);
   });
 });
 

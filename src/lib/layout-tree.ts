@@ -1,5 +1,5 @@
 /**
- * Layout tree — the pure value behind a TaskWorkspace's tabs and splits.
+ * Layout tree: the pure value behind a TaskWorkspace's tabs and splits.
  *
  * A strict binary tree: splits have exactly two children, leaves (panes) hold an
  * ordered list of tabs keyed by pty key. Every operation returns a new layout and

@@ -2,18 +2,12 @@ import { describe, expect, it } from "vitest";
 /**
  * These assertions read App.svelte as text, which only pins wiring that cannot be
  * extracted from the component. Prefer a behavioural test: the decisions this file
- * used to cover now live in workspace-tabs.ts, terminal-focus.ts and the
- * orchestrator, each with real unit tests. Add here only as a last resort.
+ * used to cover now live in task-workspace-layout.svelte.ts, layout-tree.ts,
+ * terminal-focus.ts and the orchestrator, each with real unit tests. Add here only as a last resort.
  */
 import appSource from "../../App.svelte?raw";
 
 describe("TaskWorkspace session selection", () => {
-  it("builds a flat task workspace from every session linked to the same task", () => {
-    expect(appSource).toMatch(
-      /return sessions\.filter\(\(session\) => sessionTaskProjectId\(session\) === workspace\.projectId && session\.task_key === workspace\.taskKey\);/,
-    );
-  });
-
   it("never leaves a stale task workspace selected when the task cannot be resolved", () => {
     // Done tasks are filtered out of the listing, and another project's tasks may
     // not be loaded yet. Without the else branch, selecting such a session kept

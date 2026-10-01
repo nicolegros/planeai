@@ -18,12 +18,11 @@
     onClose?: () => void;
     onTabDragStart?: (e: DragEvent, tabId: string) => void;
     onTabDrop?: (e: DragEvent, insertIndex: number) => void;
-    onTabDragOver?: (e: DragEvent) => void;
     onTabDragEnd?: () => void;
     onTabDoubleClick?: (tabId: string) => void;
   }
 
-  let { tabs, activeTabId, focused = true, showAddButton = true, showCloseButton = false, draggable = false, onSelectTab, onAddTab, onClose, onTabDragStart, onTabDrop, onTabDragOver, onTabDragEnd, onTabDoubleClick }: Props = $props();
+  let { tabs, activeTabId, focused = true, showAddButton = true, showCloseButton = false, draggable = false, onSelectTab, onAddTab, onClose, onTabDragStart, onTabDrop, onTabDragEnd, onTabDoubleClick }: Props = $props();
 
   const TAB_ICONS: Record<string, typeof Bot> = { bot: Bot, "git-compare": GitCompare, file: FileCode, terminal: Terminal };
 
@@ -40,7 +39,6 @@
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
     dropTargetIndex = index;
-    onTabDragOver?.(e);
   }
 
   function handleDragLeave(e: DragEvent) {
@@ -57,13 +55,13 @@
   }
 </script>
 
-<!-- The whole strip accepts drops; anywhere past the tabs means the end. -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- The whole strip accepts drops; anywhere past the tabs means the end. A drop
+     target needs no focus, so the tablist stays out of the focus order. -->
+<!-- svelte-ignore a11y_interactive_supports_focus -->
 <div
   class="flex items-stretch h-[38px] flex-1"
   role="tablist"
   aria-label="Pane tabs"
-  tabindex="-1"
   ondragover={draggable ? (e) => handleDragOver(e, tabs.length) : undefined}
   ondragleave={draggable ? handleDragLeave : undefined}
   ondrop={draggable ? handleDrop : undefined}

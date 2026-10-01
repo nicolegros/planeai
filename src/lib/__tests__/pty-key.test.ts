@@ -5,7 +5,6 @@ import {
   editorPtyKey,
   parsePtyKey,
   ptyKeySessionId,
-  shellIndex,
   shellPtyKey,
 } from "../pty-key";
 
@@ -40,11 +39,5 @@ describe("pty key grammar", () => {
     expect(ptyKeySessionId("s1:2")).toBe("s1");
     expect(ptyKeySessionId("s1:diff")).toBe("s1");
     expect(ptyKeySessionId("s1:editor:a/b:c")).toBe("s1");
-  });
-
-  it("reads a shell index only from shell keys", () => {
-    expect(shellIndex("s1:4")).toBe(4);
-    expect(shellIndex("s1")).toBeNull();
-    expect(shellIndex("s1:diff")).toBeNull();
   });
 });

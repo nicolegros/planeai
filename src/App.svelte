@@ -45,7 +45,7 @@
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
-  import { taskWorkspaceLayout as workspaceLayout, toPaneTabs, type PaneTab, type WorkspaceAgent, type WorkspaceIdentity } from "./lib/task-workspace-layout.svelte";
+  import { taskWorkspaceLayout as workspaceLayout, toPaneTabs, workspaceOf, type PaneTab, type WorkspaceAgent, type WorkspaceIdentity } from "./lib/task-workspace-layout.svelte";
   import { activeTabOf, tabsOf, type LeafNode, type NavDirection, type SplitDirection, type TabEntry } from "./lib/layout-tree";
   import { ptyKeySessionId } from "./lib/pty-key";
   import { saveActiveEditorResource } from "./lib/editor-resources";
@@ -112,7 +112,7 @@
   });
   const activeTaskSessions = $derived(
     activeTaskWorkspace
-      ? sessions.filter((session) => sessionTaskProjectId(session) === activeTaskWorkspace.project.id && session.task_key === activeTaskWorkspace.task.key)
+      ? sessions.filter((session) => workspaceOf(session).key === toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key))
       : [],
   );
   const isEmptyTaskWorkspace = $derived(!!activeTaskWorkspace && activeTaskSessions.length === 0);
@@ -184,7 +184,7 @@
   // ─── TaskWorkspace layout ───────────────────────────────────────────────────
   const layoutTree = $derived(workspaceLayout.layout?.tree ?? null);
   const focusedLeafId = $derived(workspaceLayout.layout?.focusedLeafId ?? null);
-  const hasMultiplePanes = $derived(layoutTree?.type === "split");
+  const hasMultiplePanes = $derived(workspaceLayout.isSplit);
   // A single pane shows its tabs in the titlebar; split panes each get their own tab bar.
   const singlePane = $derived(layoutTree?.type === "leaf" ? layoutTree : null);
   const titlebarTabs = $derived(singlePane ? paneTabs(singlePane) : []);
@@ -251,15 +251,11 @@
 
   function workspaceForSession(sessionId: string): WorkspaceIdentity | null {
     const session = sessions.find((candidate) => candidate.id === sessionId);
-    if (!session) return null;
-    return session.task_key
-      ? { kind: "task", key: toTaskWorkspaceId(sessionTaskProjectId(session), session.task_key), projectId: sessionTaskProjectId(session), taskKey: session.task_key }
-      : { kind: "session", key: `session:${session.id}`, sessionId: session.id };
+    return session ? workspaceOf(session) : null;
   }
 
   function workspaceSessions(workspace: WorkspaceIdentity): Session[] {
-    if (workspace.kind === "session") return sessions.filter((session) => session.id === workspace.sessionId);
-    return sessions.filter((session) => sessionTaskProjectId(session) === workspace.projectId && session.task_key === workspace.taskKey);
+    return sessions.filter((session) => workspaceOf(session).key === workspace.key);
   }
 
   function workspaceAgents(workspace: WorkspaceIdentity): WorkspaceAgent[] {
@@ -272,13 +268,19 @@
 
   // The selected session decides which workspace is shown. Selecting another
   // agent of the same task keeps the shared layout and only brings its tab forward.
+  // Keyed by identity rather than the session list: an empty TaskWorkspace clears
+  // the layout while the selection stays put, and an unrelated session update must
+  // not load the hidden workspace back in behind it.
+  const activeWorkspaceKey = $derived(
+    activeSessionId && sessionsLoaded ? (workspaceForSession(activeSessionId)?.key ?? null) : null,
+  );
   $effect(() => {
-    if (!activeSessionId || !sessionsLoaded) return;
-    const workspace = workspaceForSession(activeSessionId);
-    if (!workspace) return;
-    const selectionIsExplicit = orchestrator.isSelectionExplicit(activeSessionId);
+    if (!activeWorkspaceKey || !activeSessionId) return;
     const sessionId = activeSessionId;
-    untrack(() => void showWorkspace(workspace, sessionId, selectionIsExplicit));
+    untrack(() => {
+      const workspace = workspaceForSession(sessionId);
+      if (workspace) void showWorkspace(workspace, sessionId, orchestrator.isSelectionExplicit(sessionId));
+    });
   });
 
   // Keep the loaded workspace's tabs in step with its sessions (added, renamed, archived).
@@ -355,11 +357,6 @@
     paneDrop = null;
   }
 
-  function handleTabDragOver(e: DragEvent) {
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-  }
-
   function paneTabs(leaf: LeafNode): PaneTab[] {
     return toPaneTabs(leaf, (tab) => tab.type === "agent" ? crossProjectName(ptyKeySessionId(tab.ptyKey)) : undefined);
   }
@@ -404,9 +401,9 @@
   }
 
   /** Open a shell tab for the focused agent in a pane (the focused one by default). */
-  function openShellTab(leafId?: string): void {
+  function openShellTab(paneId?: string): void {
     if (!activeSessionId) return;
-    if (!workspaceLayout.openShell(activeSessionId, { leafId })) return;
+    if (!workspaceLayout.openShell(activeSessionId, { paneId })) return;
     refocusTerminal();
   }
 
@@ -921,6 +918,16 @@
       });
     };
     window.addEventListener("keydown", onPluginShortcut, true);
+    // With native drag-drop off (it swallows tab drags), a file dropped anywhere
+    // else would make the webview navigate to it and replace the app.
+    const onStrayDragOver = (event: DragEvent) => {
+      if (draggedPtyKey || event.defaultPrevented) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+    };
+    const onStrayDrop = (event: DragEvent) => event.preventDefault();
+    window.addEventListener("dragover", onStrayDragOver);
+    window.addEventListener("drop", onStrayDrop);
     let pluginListenersDisposed = false;
     const pluginListenerReady = Promise.all([
       unlistenPluginRuntime,
@@ -1079,7 +1086,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); cleanupTaskListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenShellPtyExit.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); window.removeEventListener("dragover", onStrayDragOver); window.removeEventListener("drop", onStrayDrop); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); cleanupTaskListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenShellPtyExit.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -1285,7 +1292,6 @@
             onTabDoubleClick={renameFromTab}
             onTabDragStart={handleTabDragStart}
             onTabDrop={(_, insertIndex) => handleTabDrop(leaf.id, insertIndex)}
-            onTabDragOver={handleTabDragOver}
             onTabDragEnd={endTabDrag}
           />
         </div>
@@ -1410,7 +1416,7 @@
       />
     {/if}
 
-    <!-- Always render through split tree (single leaf = normal view) -->
+    <!-- Always render through the layout tree (a single pane is the normal view) -->
     {#if layoutTree && !isEmptyTaskWorkspace}
       <div class:hidden={!!activeLoopId || !!activePluginId} class="w-full h-full">
         <SplitContainer node={layoutTree} renderLeaf={splitLeafSnippet} />

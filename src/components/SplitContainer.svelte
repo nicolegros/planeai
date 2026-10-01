@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * SplitContainer — recursively renders the binary split tree.
+   * SplitContainer - recursively renders the binary layout tree.
    * Internal nodes render two children with a divider.
    * Leaf nodes delegate to the parent via the `renderLeaf` snippet.
    */

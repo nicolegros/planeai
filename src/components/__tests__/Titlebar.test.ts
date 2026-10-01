@@ -33,7 +33,7 @@ const baseProps = {
   projectName: "PlaneAI",
   sessionName: "Migration",
   sidebarVisible: true,
-  tabs: [{ id: "session-42", label: "Agent", icon: "bot", type: "agent" as const }],
+  tabs: [{ id: "session-42", label: "Agent", icon: "bot" }],
   activeTabId: "session-42",
   symphonyStatus: null,
   runningCount: 1,

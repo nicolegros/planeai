@@ -14,8 +14,8 @@ describe("TabStrip", () => {
       target,
       props: {
         tabs: [
-          { id: "session:editor:/one.ts", label: "one.ts", icon: "file", type: "editor" },
-          { id: "session:editor:/two.ts", label: "two.ts", icon: "file", type: "editor" },
+          { id: "session:editor:/one.ts", label: "one.ts", icon: "file" },
+          { id: "session:editor:/two.ts", label: "two.ts", icon: "file" },
         ],
         activeTabId: "session:editor:/two.ts",
         onSelectTab: select,
@@ -38,7 +38,7 @@ describe("TabStrip", () => {
     const component = mount(TabStrip, {
       target,
       props: {
-        tabs: [{ id: "s1", label: "Fix bug (2)", detail: "Other", icon: "bot", type: "agent" }],
+        tabs: [{ id: "s1", label: "Fix bug (2)", detail: "Other", icon: "bot" }],
         activeTabId: "s1",
         onSelectTab: vi.fn(),
       },
@@ -55,7 +55,7 @@ describe("TabStrip", () => {
     const component = mount(TabStrip, {
       target,
       props: {
-        tabs: [{ id: "session-1", label: "Fix login", icon: "bot", type: "agent" }],
+        tabs: [{ id: "session-1", label: "Fix login", icon: "bot" }],
         activeTabId: "session-1",
         onSelectTab: vi.fn(),
         onTabDoubleClick: doubleClick,
@@ -76,8 +76,8 @@ describe("TabStrip", () => {
       target,
       props: {
         tabs: [
-          { id: "a", label: "A", icon: "bot", type: "agent" },
-          { id: "a:1", label: "Shell", icon: "terminal", type: "shell" },
+          { id: "a", label: "A", icon: "bot" },
+          { id: "a:1", label: "Shell", icon: "terminal" },
         ],
         activeTabId: "a",
         draggable: true,
