@@ -4848,12 +4848,11 @@ mod runtime_spawn_tests {
     #[cfg(unix)]
     #[test]
     fn plugin_runtime_path_resolves_binaries_a_gui_launch_path_would_miss() {
-        use std::os::unix::fs::PermissionsExt as _;
-
         let user_bin = tempfile::tempdir().unwrap();
-        let cli = user_bin.path().join("planeai-path-probe");
-        std::fs::write(&cli, "#!/bin/sh\nexit 0\n").unwrap();
-        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // A symlink, not a freshly written script: a concurrent test's fork can inherit the
+        // script's write handle, making exec fail with "Text file busy".
+        std::os::unix::fs::symlink("/bin/echo", user_bin.path().join("planeai-path-probe"))
+            .unwrap();
 
         let extra_path_dirs = vec![user_bin.path().to_string_lossy().into_owned()];
         let gui_launch_path = "/usr/bin:/bin:/usr/sbin:/sbin";
