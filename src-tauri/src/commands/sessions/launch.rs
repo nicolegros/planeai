@@ -276,19 +276,20 @@ pub async fn launch_session(
     let session = db::create_session_with_params(
         &conn,
         &planeai_core::services::CreateSessionParams {
-            id: session_id.clone(),
-            project_id: project_id.clone(),
-            name: name.clone(),
-            tmux_name: tmux_name.clone(),
+            id: session_id,
+            project_id,
+            name,
+            tmux_name,
+            // Still needed by the rollback below.
             branch: branch.clone(),
             worktree_path: worktree_path.clone(),
             worktree_owned: Some(created_worktree),
-            provider: Some(provider_key.clone()),
-            backend: backend.clone(),
+            provider: Some(provider_key),
+            backend,
             auto_approve,
-            task_key: Some(task_key.clone()),
-            task_project_id: task_project_id.clone(),
-            base_branch: effective_base_branch.clone(),
+            task_key: Some(task_key),
+            task_project_id,
+            base_branch: effective_base_branch,
             ..Default::default()
         },
     )

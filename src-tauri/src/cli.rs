@@ -286,7 +286,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     // For worktree-created sessions, store the new worktree path.
     // Cleanup guards against deleting non-loop-managed worktrees via branch name check.
     let worktree_path = if was_redirected {
-        Some(effective_working_dir.clone())
+        Some(effective_working_dir)
     } else {
         match &plan.branch_strategy {
             BranchStrategy::Worktree { path, .. } => Some(path.clone()),
