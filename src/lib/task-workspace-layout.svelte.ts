@@ -462,6 +462,11 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       if (layout) commit(tree.moveTab(layout, ptyKey, leafId, index));
     },
 
+    /** Split a pane on one side and move a tab into the new pane. */
+    splitWithTab(ptyKey: string, leafId: string, side: NavDirection): void {
+      if (layout) commit(tree.splitWithTab(layout, ptyKey, leafId, side));
+    },
+
     setRatio(splitId: string, ratio: number): void {
       if (layout) commit(tree.setRatio(layout, splitId, ratio));
     },

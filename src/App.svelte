@@ -315,8 +315,44 @@
   function handleTabDrop(targetLeafId: string, insertIndex: number) {
     if (!draggedPtyKey) return;
     workspaceLayout.moveTab(draggedPtyKey, targetLeafId, insertIndex);
-    draggedPtyKey = null;
+    endTabDrag();
     syncFocusedTabToSelection();
+  }
+
+  /** Where over a pane a dragged tab would land: an edge splits, the center moves it in. */
+  type PaneDropZone = NavDirection | "center";
+  let paneDrop = $state<{ leafId: string; zone: PaneDropZone } | null>(null);
+
+  function paneDropZone(e: DragEvent): PaneDropZone {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    const edges: [NavDirection, number][] = [["left", x], ["right", 1 - x], ["up", y], ["down", 1 - y]];
+    const [side, distance] = edges.reduce((closest, edge) => (edge[1] < closest[1] ? edge : closest));
+    return distance < 0.25 ? side : "center";
+  }
+
+  function handlePaneDragOver(e: DragEvent, leafId: string) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    paneDrop = { leafId, zone: paneDropZone(e) };
+  }
+
+  function handlePaneDrop(e: DragEvent, leafId: string) {
+    e.preventDefault();
+    const ptyKey = draggedPtyKey;
+    const zone = paneDropZone(e);
+    endTabDrag();
+    if (!ptyKey) return;
+    if (zone !== "center") workspaceLayout.splitWithTab(ptyKey, leafId, zone);
+    else if (workspaceLayout.findTab(ptyKey)?.leaf.id !== leafId) workspaceLayout.moveTab(ptyKey, leafId);
+    else return;
+    syncFocusedTabToSelection();
+  }
+
+  function endTabDrag() {
+    draggedPtyKey = null;
+    paneDrop = null;
   }
 
   function handleTabDragOver(e: DragEvent) {
@@ -1063,6 +1099,9 @@
     }}
     onAddTab={() => openShellTab(singlePane?.id)}
     onTabDoubleClick={renameFromTab}
+    onTabDragStart={handleTabDragStart}
+    onTabDrop={(_, insertIndex) => { if (singlePane) handleTabDrop(singlePane.id, insertIndex); }}
+    onTabDragEnd={endTabDrag}
     {titlebarContributions}
     titlebarSession={activePluginSessionContext}
     onOpenTitlebarContribution={openTitlebarPluginContribution}
@@ -1247,10 +1286,24 @@
             onTabDragStart={handleTabDragStart}
             onTabDrop={(_, insertIndex) => handleTabDrop(leaf.id, insertIndex)}
             onTabDragOver={handleTabDragOver}
+            onTabDragEnd={endTabDrag}
           />
         </div>
         {/if}
         <div class="split-leaf-content">
+          {#if draggedPtyKey}
+            <div
+              class="pane-drop-target"
+              role="presentation"
+              ondragover={(e) => handlePaneDragOver(e, leaf.id)}
+              ondragleave={(e) => { if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) && paneDrop?.leafId === leaf.id) paneDrop = null; }}
+              ondrop={(e) => handlePaneDrop(e, leaf.id)}
+            >
+              {#if paneDrop?.leafId === leaf.id}
+                <div class="pane-drop-preview" data-zone={paneDrop.zone}></div>
+              {/if}
+            </div>
+          {/if}
           {#each leaf.tabs as tabEntry (tabEntry.ptyKey)}
             {@const sessionId = ptyKeySessionId(tabEntry.ptyKey)}
             {@const session = sessions.find((s) => s.id === sessionId)}
