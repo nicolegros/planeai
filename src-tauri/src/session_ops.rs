@@ -1397,22 +1397,20 @@ mod tests {
         let conn = setup_db();
         let owner = db::create_project(&conn, "owner", "/tmp/owner").unwrap();
         let repo = db::create_project(&conn, "repo", "/tmp/repo").unwrap();
-        let session = db::create_session_with_id_and_worktree_ownership(
+        let session = db::create_session_with_params(
             &conn,
-            "sess-cross",
-            &repo.id,
-            "agent",
-            None,
-            "own-1/fix",
-            Some("/tmp/worktrees/repo/abc"),
-            true,
-            None,
-            "daemon",
-            true,
-            Some("OWN-1"),
-            Some(&owner.id),
-            None,
-            None,
+            &planeai_core::services::CreateSessionParams {
+                id: "sess-cross".to_string(),
+                project_id: repo.id.to_string(),
+                name: "agent".to_string(),
+                branch: "own-1/fix".to_string(),
+                worktree_path: Some("/tmp/worktrees/repo/abc".to_string()),
+                backend: "daemon".to_string(),
+                auto_approve: true,
+                task_key: Some("OWN-1".to_string()),
+                task_project_id: Some(owner.id.to_string()),
+                ..Default::default()
+            },
         )
         .unwrap();
 
@@ -1423,22 +1421,19 @@ mod tests {
     fn task_hooks_resolve_worktree_sessions_to_their_project() {
         let conn = setup_db();
         let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        let session = db::create_session_with_id_and_worktree_ownership(
+        let session = db::create_session_with_params(
             &conn,
-            "sess-wt",
-            &project.id,
-            "agent",
-            None,
-            "mya-1/fix",
-            Some("/tmp/.planeai/worktrees/myapp/abc"),
-            true,
-            None,
-            "daemon",
-            true,
-            Some("MYA-1"),
-            None,
-            None,
-            None,
+            &planeai_core::services::CreateSessionParams {
+                id: "sess-wt".to_string(),
+                project_id: project.id.to_string(),
+                name: "agent".to_string(),
+                branch: "mya-1/fix".to_string(),
+                worktree_path: Some("/tmp/.planeai/worktrees/myapp/abc".to_string()),
+                backend: "daemon".to_string(),
+                auto_approve: true,
+                task_key: Some("MYA-1".to_string()),
+                ..Default::default()
+            },
         )
         .unwrap();
 

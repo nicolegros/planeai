@@ -480,22 +480,18 @@ mod tests {
         let owner = db::create_project(&conn, "owner", "/tmp/owner").unwrap();
         let repo = db::create_project(&conn, "repo", "/tmp/repo").unwrap();
         let id = "cccc2222-4444-5555-6666-777788889999";
-        db::create_session_with_id_and_worktree_ownership(
+        db::create_session_with_params(
             &conn,
-            id,
-            &repo.id,
-            "cross",
-            None,
-            "main",
-            None,
-            true,
-            None,
-            planeai_rmux::BACKEND,
-            false,
-            Some("OWN-1"),
-            Some(&owner.id),
-            None,
-            None,
+            &planeai_core::services::CreateSessionParams {
+                id: id.to_string(),
+                project_id: repo.id.to_string(),
+                name: "cross".to_string(),
+                branch: "main".to_string(),
+                backend: planeai_rmux::BACKEND.to_string(),
+                task_key: Some("OWN-1".to_string()),
+                task_project_id: Some(owner.id.to_string()),
+                ..Default::default()
+            },
         )
         .unwrap();
         db::mark_session_exited(&conn, id).unwrap();

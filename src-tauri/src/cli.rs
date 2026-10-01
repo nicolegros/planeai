@@ -281,33 +281,37 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
         let _ = tmux_name;
     }
 
-    let session = db::create_session_with_id_and_worktree_ownership(
+    // Store worktree_path so gates and agents know where to run.
+    // For redirected sessions (branch already in another worktree), store that path.
+    // For worktree-created sessions, store the new worktree path.
+    // Cleanup guards against deleting non-loop-managed worktrees via branch name check.
+    let worktree_path = if was_redirected {
+        Some(effective_working_dir.clone())
+    } else {
+        match &plan.branch_strategy {
+            BranchStrategy::Worktree { path, .. } => Some(path.clone()),
+            BranchStrategy::Checkout { .. } => None,
+        }
+    };
+    let session = db::create_session_with_params(
         conn,
-        &plan.session_id,
-        &plan.project_id,
-        &plan.session_name,
-        plan.tmux_name.as_deref(),
-        &plan.branch,
-        // Store worktree_path so gates and agents know where to run.
-        // For redirected sessions (branch already in another worktree), store that path.
-        // For worktree-created sessions, store the new worktree path.
-        // Cleanup guards against deleting non-loop-managed worktrees via branch name check.
-        if was_redirected {
-            Some(effective_working_dir.as_str())
-        } else {
-            match &plan.branch_strategy {
-                BranchStrategy::Worktree { path, .. } => Some(path.as_str()),
-                BranchStrategy::Checkout { .. } => None,
-            }
+        &planeai_core::services::CreateSessionParams {
+            id: plan.session_id.clone(),
+            project_id: plan.project_id.clone(),
+            name: plan.session_name.clone(),
+            tmux_name: plan.tmux_name.clone(),
+            branch: plan.branch.clone(),
+            worktree_path,
+            worktree_owned: Some(true),
+            provider: Some(plan.provider.clone()),
+            backend: plan.backend.clone(),
+            auto_approve: plan.yolo,
+            task_key: plan.task_key.clone(),
+            task_project_id: plan.task_project_id.clone(),
+            base_branch: plan.base_branch.clone(),
+            parent_session_id: plan.parent_session_id.clone(),
+            ..Default::default()
         },
-        true,
-        Some(&plan.provider),
-        &plan.backend,
-        plan.yolo,
-        plan.task_key.as_deref(),
-        plan.task_project_id.as_deref(),
-        plan.base_branch.as_deref(),
-        plan.parent_session_id.as_deref(),
     )
     .map_err(|e| e.to_string())?;
 

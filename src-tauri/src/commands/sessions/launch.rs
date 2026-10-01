@@ -273,22 +273,24 @@ pub async fn launch_session(
         ns.register_session(&session_id, display_name, &project_name, hook_enabled);
     }
 
-    let session = db::create_session_with_id_and_worktree_ownership(
+    let session = db::create_session_with_params(
         &conn,
-        &session_id,
-        &project_id,
-        &name,
-        tmux_name.as_deref(),
-        &branch,
-        worktree_path.as_deref(),
-        created_worktree,
-        Some(&provider_key),
-        &backend,
-        auto_approve,
-        Some(&task_key),
-        task_project_id.as_deref(),
-        effective_base_branch.as_deref(),
-        None,
+        &planeai_core::services::CreateSessionParams {
+            id: session_id.clone(),
+            project_id: project_id.clone(),
+            name: name.clone(),
+            tmux_name: tmux_name.clone(),
+            branch: branch.clone(),
+            worktree_path: worktree_path.clone(),
+            worktree_owned: Some(created_worktree),
+            provider: Some(provider_key.clone()),
+            backend: backend.clone(),
+            auto_approve,
+            task_key: Some(task_key.clone()),
+            task_project_id: task_project_id.clone(),
+            base_branch: effective_base_branch.clone(),
+            ..Default::default()
+        },
     )
     .map_err(|e| {
         let rp = repo_path.clone();
