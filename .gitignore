@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Test reports
+.vitest/
+
 # Build output
 dist/
 docs/.astro/
