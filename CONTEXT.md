@@ -243,10 +243,10 @@ It owns the layout, which workspace it belongs to, loading and saving it, shell 
 
 Each agent session can have shell tabs (pty keys `<sessionId>:<index>`).
 
-- **The layout is the authority**: a session's shell tabs are exactly the shell tabs in its TaskWorkspace's persisted layout.
+- **The layout is the authority**: a session's shell tabs are exactly the shell tabs in its TaskWorkspace's persisted layout; there is no per-session tab count.
   A new shell takes the next index above every index in the layout and every index handed out earlier in the run, so an index is never reused while a late `pty-exited` for it could still arrive.
   Opening or closing a shell saves the layout immediately rather than on the debounce, so a shell process cannot outlive the record of its tab.
-- **Daemon backend**: shell tabs are spawned in the daemon with composed ID `{session_id}:{tab_index}`. They receive the same augmented PATH environment as agent sessions (via `build_daemon_env`). They persist across app restarts (same as the agent session). On archive/destroy, all shell tabs are killed alongside the agent session.
+- **Daemon backend**: shell tabs are spawned in the daemon with composed ID `{session_id}:{tab_index}`. They receive the same augmented PATH environment as agent sessions (via `build_daemon_env`). They persist across app restarts (same as the agent session). On archive/destroy, every live daemon session prefixed `{session_id}:` is killed alongside the agent session.
 - **Tmux backend**: shell tabs use a local PTY (`PtyTarget::Shell`) and are ephemeral — they die with the app.
 - **Closing**: a shell is killed on the backend first and its tab stays if that fails, so no shell keeps running without a tab to reach it. A shell that exits by itself loses its tab right away.
 - **Terminal editor tabs**: a shell tab that runs the configured terminal editor reserves its command under its pty key before the tab enters the layout, so the terminal that mounts for it starts the editor instead of a bare shell. It cannot be closed until its shell has attached.

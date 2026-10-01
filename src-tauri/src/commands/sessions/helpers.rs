@@ -130,7 +130,6 @@ mod tests {
             provider: None,
             backend: "tmux".into(),
             provider_session_id: None,
-            tab_count: 1,
             auto_approve: false,
             task_key: task_key.map(|s| s.to_string()),
             base_branch: None,

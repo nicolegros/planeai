@@ -864,10 +864,18 @@ fn production_db_compat_read_list_create_update() {
     // Verify we can READ a session with all production columns
     let s = SessionService::get(&conn, "s-existing").unwrap().unwrap();
     assert_eq!(s.tmux_name, Some("planeai-myapp-abc".to_string()));
-    assert_eq!(s.tab_count, 2);
     assert!(s.auto_approve);
     assert_eq!(s.task_key, Some("PLA-3".to_string()));
     assert_eq!(s.backend, "tmux");
+    let has_tab_count: bool = conn
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'tab_count'")
+        .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, i64>(0)))
+        .map(|count| count > 0)
+        .unwrap();
+    assert!(
+        !has_tab_count,
+        "the layout owns shell tabs, so tab_count is dropped"
+    );
     assert_eq!(s.provider, Some("kiro".to_string()));
 
     // Verify we can CREATE a new session alongside existing ones

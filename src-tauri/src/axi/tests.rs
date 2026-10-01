@@ -228,7 +228,6 @@ fn session_create_outputs_toon_with_session_id() {
         provider: Some("kiro".to_string()),
         backend: "daemon".to_string(),
         provider_session_id: None,
-        tab_count: 1,
         auto_approve: true,
         task_key: None,
         base_branch: Some("main".to_string()),

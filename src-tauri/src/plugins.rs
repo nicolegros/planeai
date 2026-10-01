@@ -1931,7 +1931,6 @@ async fn execute_host_task(
                         "created_at": session.created_at,
                         "provider": session.provider,
                         "backend": session.backend,
-                        "tab_count": session.tab_count,
                         "task_key": session.task_key,
                     })
                 })
