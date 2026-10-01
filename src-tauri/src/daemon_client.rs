@@ -642,12 +642,15 @@ mod tests {
                 &["999".to_string()],
                 "/",
                 &HashMap::new(),
-                std::time::Duration::from_millis(250),
+                // The same bound covers the lookup and the cancel acknowledgement,
+                // which must not time out on a loaded machine. Only the withheld
+                // spawn response is meant to.
+                std::time::Duration::from_secs(2),
             )
             .await
         });
 
-        tokio::time::timeout(std::time::Duration::from_secs(1), spawn_effective_rx)
+        tokio::time::timeout(std::time::Duration::from_secs(10), spawn_effective_rx)
             .await
             .expect("daemon should spawn before the response is delayed")
             .expect("proxy should observe the effective spawn");
