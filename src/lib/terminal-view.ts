@@ -20,7 +20,7 @@ export interface TerminalSurfaceHandlers {
   onData: (data: string) => void;
   /** Bytes produced by paste or terminal shortcuts. */
   onUserBytes: (bytes: number[]) => void;
-  /** Protocol replies (e.g. DECRQM) that are not user input. */
+  /** Protocol replies and reports (e.g. DECRQM, color scheme changes) that are not user input. */
   onReply: (bytes: number[]) => void;
   onTitle: (title: string) => void;
 }
