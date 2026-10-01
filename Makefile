@@ -71,7 +71,7 @@ test: test-plugin-fixture
 	pnpm test
 	cd src-tauri && env -u PLANEAI_DAEMON_PTY_CORE -u PLANEAI_SESSION_LOG_DIR JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo test --workspace
 
-test-plugin-fixture: local-plugin-fixture
+test-plugin-fixture: sidecar-placeholders local-plugin-fixture
 	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo run -p planeai-cli-bin -- plugin test --package plugins/local-fixture
 	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo run -p planeai-cli-bin -- plugin test --package plugins/local-fixture --scenario plugins/local-fixture/scenarios/persist-settings.jsonl
 	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo run -p planeai-cli-bin -- plugin test --package plugins/local-fixture --scenario plugins/local-fixture/scenarios/state-environment.jsonl

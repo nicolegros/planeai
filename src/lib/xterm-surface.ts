@@ -5,7 +5,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
-import { getSettings, getTerminalSettings } from "./settings.svelte";
+import { getSettings, getTerminalSettings, isDark } from "./settings.svelte";
 import { extractTerminalTheme } from "./theme-loader";
 import { matchTerminalKey } from "./terminal-keys";
 import type { TerminalGeometry, TerminalSurface, TerminalSurfaceHandlers } from "./terminal-view";
@@ -13,6 +13,9 @@ import type { TerminalGeometry, TerminalSurface, TerminalSurfaceHandlers } from 
 const SCROLLBACK_LINES = 20_000;
 const FONT_TIMEOUT_MS = 3000;
 const encoder = new TextEncoder();
+// Contour's color scheme protocol: apps subscribe to dark/light change reports.
+const COLOR_SCHEME_MODE = 2031;
+const COLOR_SCHEME_QUERY = 996;
 
 function fontStack(primary: string): string {
   const quoted = `"${primary.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
@@ -40,6 +43,7 @@ type CsiParser = {
     id: { prefix?: string; intermediates?: string; final: string },
     cb: (params: (number | number[])[]) => boolean,
   ) => { dispose(): void };
+  registerEscHandler?: (id: { final: string }, cb: () => boolean) => { dispose(): void };
 };
 
 /** Production surface: xterm.js with fit, links, unicode 11, and WebGL while visible. */
@@ -75,16 +79,59 @@ export function createXtermSurface(handlers: TerminalSurfaceHandlers): TerminalS
   let webgl: WebglAddon | null = null;
   let host: HTMLElement | null = null;
 
-  // xterm answers DECRQM incorrectly; report every mode as "not recognized".
+  let colorSchemeReports = false;
+  // Scheme the app last received; null when a replayed subscription has not been reported yet.
+  let reportedDark: boolean | null = null;
+  // Output parsed after the attach sync comes from apps running now, not from the replay.
+  let attached = false;
+  const reply = (text: string) => handlers.onReply(Array.from(encoder.encode(text)));
+  const reportColorScheme = () => {
+    const dark = isDark();
+    if (reply(`\x1b[?997;${dark ? 1 : 2}n`)) reportedDark = dark;
+  };
+  const syncColorScheme = () => {
+    if (attached && colorSchemeReports && isDark() !== reportedDark) reportColorScheme();
+  };
+  const resetColorScheme = () => {
+    colorSchemeReports = false;
+    reportedDark = null;
+  };
+
+  // xterm answers DECRQM incorrectly; report every mode but 2031 as "not recognized".
   const parser = (term as unknown as { parser?: CsiParser }).parser;
   if (parser?.registerCsiHandler) {
     for (const prefix of [undefined, "?"]) {
       parser.registerCsiHandler({ prefix, intermediates: "$", final: "p" }, (params) => {
         const mode = (params[0] as number) ?? 0;
-        handlers.onReply(Array.from(encoder.encode(`\x1b[${prefix ?? ""}${mode};0$y`)));
+        const state =
+          prefix === "?" && mode === COLOR_SCHEME_MODE ? (colorSchemeReports ? 1 : 2) : 0;
+        reply(`\x1b[${prefix ?? ""}${mode};${state}$y`);
         return true;
       });
     }
+    // Returning false lets xterm still apply the other modes in the sequence.
+    for (const [final, enabled] of [
+      ["h", true],
+      ["l", false],
+    ] as const) {
+      parser.registerCsiHandler({ prefix: "?", final }, (params) => {
+        if (params.includes(COLOR_SCHEME_MODE)) {
+          colorSchemeReports = enabled;
+          // A starting app reads the scheme itself (OSC 11, 996); a replayed one waits for the sync.
+          if (enabled && attached) reportedDark = isDark();
+        }
+        return false;
+      });
+    }
+    parser.registerCsiHandler({ prefix: "?", final: "n" }, (params) => {
+      if (params[0] !== COLOR_SCHEME_QUERY) return false;
+      reportColorScheme();
+      return true;
+    });
+    parser.registerEscHandler?.({ final: "c" }, () => {
+      resetColorScheme();
+      return false;
+    });
   }
 
   term.attachCustomKeyEventHandler((ev) => {
@@ -181,6 +228,8 @@ export function createXtermSurface(handlers: TerminalSurfaceHandlers): TerminalS
     },
 
     reset() {
+      resetColorScheme();
+      attached = false;
       term.reset();
     },
 
@@ -212,6 +261,15 @@ export function createXtermSurface(handlers: TerminalSurfaceHandlers): TerminalS
       term.options.macOptionIsMeta = option_as_meta;
       if (host) host.style.backgroundColor = theme.background || "#000";
       webgl?.clearTextureAtlas();
+      syncColorScheme();
+    },
+
+    connected() {
+      // Queued behind the replay, so it sees the subscription state the replay ends with.
+      term.write("", () => {
+        attached = true;
+        syncColorScheme();
+      });
     },
 
     focus() {

@@ -22,6 +22,7 @@ class FakeSurface implements TerminalSurface {
   available: TerminalGeometry | null = { cols: 120, rows: 40 };
   written: { bytes: string; cols: number; rows: number }[] = [];
   resets = 0;
+  connections = 0;
   disposed = false;
   private fontReady!: () => void;
   private readyPromise = new Promise<void>((resolve) => (this.fontReady = resolve));
@@ -58,6 +59,9 @@ class FakeSurface implements TerminalSurface {
     this.gpu = enabled;
   }
   refreshAppearance() {}
+  connected() {
+    this.connections++;
+  }
   focus() {
     this.focused = true;
   }
@@ -602,6 +606,25 @@ describe("terminal view: input", () => {
     surface.handlers.onUserBytes([1]);
 
     expect(pty.writes).toHaveLength(0);
+  });
+
+  it("reports replies dropped before the connection is live", async () => {
+    mountIn(newContainer());
+    view.setShown(true);
+    await surface.loadFont();
+    expect(surface.handlers.onReply([1])).toBe(false);
+    await pty.acceptConnect();
+    expect(surface.handlers.onReply([2])).toBe(true);
+    expect(pty.writes).toEqual([[2]]);
+  });
+
+  it("tells the surface once the connection is live", async () => {
+    mountIn(newContainer());
+    view.setShown(true);
+    await surface.loadFont();
+    expect(surface.connections).toBe(0);
+    await pty.acceptConnect();
+    expect(surface.connections).toBe(1);
   });
 
   it("sends protocol replies without notifying user input", async () => {
