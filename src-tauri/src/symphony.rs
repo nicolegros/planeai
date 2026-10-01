@@ -570,6 +570,7 @@ mod tests {
                 }),
                 on_notify: None,
                 on_restart: None,
+                on_resume: None,
                 on_complete: None,
                 auto_dispatch: Some(AutoDispatchConfig {
                     poll_interval_ms: 30000,

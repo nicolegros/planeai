@@ -5,7 +5,7 @@
  * workspace exactly as the sidebar does, landing in the linked session when one exists.
  * Sessions therefore only need listing when no visible task can route to them.
  */
-import type { Project, Session, TaskItem } from "./types";
+import { sessionTaskProjectId, type Project, type Session, type TaskItem } from "./types";
 
 /** Canonical task status order, matching the sidebar and task panel. */
 const STATUS_ORDER = ["in_progress", "in_review", "todo", "done"] as const;
@@ -98,6 +98,6 @@ export function computeCommandMenuSessions(
   return sessions.filter((session) => {
     if (isLoopSession(session.id)) return true;
     if (!session.task_key) return true;
-    return !routable.has(`${session.project_id}\u0000${session.task_key}`);
+    return !routable.has(`${sessionTaskProjectId(session)}\u0000${session.task_key}`);
   });
 }

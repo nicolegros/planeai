@@ -194,17 +194,16 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn subprocess_with_augmented_path_finds_tools() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let bin_path = dir.path().join("my-test-tool");
-        std::fs::write(&bin_path, "#!/bin/sh\necho found").unwrap();
-        std::fs::set_permissions(&bin_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // A symlink, not a freshly written script: a concurrent test's fork can inherit the
+        // script's write handle, making exec fail with "Text file busy".
+        std::os::unix::fs::symlink("/bin/echo", dir.path().join("my-test-tool")).unwrap();
 
         // Build a PATH that includes our temp dir (simulating augmented_path including a dir)
         let aug_path = format!("{}:{}", dir.path().display(), augmented_path(&[]));
 
         let output = Command::new("/bin/sh")
-            .args(["-c", "my-test-tool"])
+            .args(["-c", "my-test-tool found"])
             .env("PATH", &aug_path)
             .output()
             .unwrap();
@@ -222,17 +221,16 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn subprocess_with_minimal_path_cannot_find_tools() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let bin_path = dir.path().join("my-hidden-tool");
-        std::fs::write(&bin_path, "#!/bin/sh\necho found").unwrap();
-        std::fs::set_permissions(&bin_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // A symlink, not a freshly written script: a concurrent test's fork can inherit the
+        // script's write handle, making exec fail with "Text file busy".
+        std::os::unix::fs::symlink("/bin/echo", dir.path().join("my-hidden-tool")).unwrap();
 
         // Simulate Spotlight's minimal PATH
         let minimal_path = "/usr/bin:/bin:/usr/sbin:/sbin";
 
         let output = Command::new("/bin/sh")
-            .args(["-c", "my-hidden-tool"])
+            .args(["-c", "my-hidden-tool found"])
             .env("PATH", minimal_path)
             .output()
             .unwrap();

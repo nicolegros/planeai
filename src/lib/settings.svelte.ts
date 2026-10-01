@@ -33,6 +33,7 @@ export interface TaskManager {
   templates?: TaskManagerTemplates | null;
   on_start?: LifecycleHook | null;
   on_notify?: LifecycleHook | null;
+  on_resume?: LifecycleHook | null;
   on_restart?: LifecycleHook | null;
   on_complete?: LifecycleHook | null;
   auto_dispatch?: AutoDispatchConfig | null;

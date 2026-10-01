@@ -193,6 +193,9 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
     // Track which session spawned this one (orchestration / parent-child relationships)
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT");
 
+    // Project owning `task_key` when the session runs in another project's repo; NULL means `project_id`.
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN task_project_id TEXT");
+
     // Legacy split layout persistence — stores the split tree JSON per session.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS session_layouts (
@@ -255,10 +258,18 @@ pub struct SessionRecord {
     pub auto_dispatched: bool,
     pub attached_once: bool,
     pub parent_session_id: Option<String>,
+    pub task_project_id: Option<String>,
+}
+
+impl SessionRecord {
+    /// The project whose TaskWorkspace this session belongs to.
+    pub fn task_project_id(&self) -> &str {
+        self.task_project_id.as_deref().unwrap_or(&self.project_id)
+    }
 }
 
 /// Column list matching production SESSION_COLUMNS + mru_position + auto_dispatched.
-const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, mru_position, auto_dispatched, attached_once, parent_session_id";
+const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, mru_position, auto_dispatched, attached_once, parent_session_id, task_project_id";
 
 fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SessionRecord> {
     Ok(SessionRecord {
@@ -283,6 +294,7 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SessionRecord> {
         auto_dispatched: row.get::<_, bool>(18).unwrap_or(false),
         attached_once: row.get::<_, bool>(19).unwrap_or(false),
         parent_session_id: row.get(20)?,
+        task_project_id: row.get(21)?,
     })
 }
 
@@ -302,6 +314,7 @@ pub struct CreateSessionParams {
     pub base_branch: Option<String>,
     pub auto_dispatched: bool,
     pub parent_session_id: Option<String>,
+    pub task_project_id: Option<String>,
 }
 
 // ─── ProjectService ──────────────────────────────────────────────────────────
@@ -481,6 +494,11 @@ impl ProjectService {
 
     pub fn delete(conn: &Connection, id: &str) -> SqlResult<()> {
         conn.execute("DELETE FROM sessions WHERE project_id = ?1", params![id])?;
+        // Sessions of other projects linked to this project's tasks fall back to their own project.
+        conn.execute(
+            "UPDATE sessions SET task_project_id = NULL WHERE task_project_id = ?1",
+            params![id],
+        )?;
         conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
         Ok(())
     }
@@ -525,10 +543,14 @@ pub struct SessionService;
 impl SessionService {
     /// Create a session record. Used by both Tauri and Iced launch paths.
     pub fn create(conn: &Connection, params: &CreateSessionParams) -> SqlResult<SessionRecord> {
+        let task_project_id = params
+            .task_project_id
+            .clone()
+            .filter(|id| params.task_key.is_some() && *id != params.project_id);
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, auto_approve, task_key, base_branch, auto_dispatched, parent_session_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, auto_approve, task_key, base_branch, auto_dispatched, parent_session_id, task_project_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 params.id,
                 params.project_id,
@@ -545,6 +567,7 @@ impl SessionService {
                 params.base_branch,
                 params.auto_dispatched,
                 params.parent_session_id,
+                task_project_id,
             ],
         )?;
         Ok(SessionRecord {
@@ -569,6 +592,7 @@ impl SessionService {
             auto_dispatched: params.auto_dispatched,
             attached_once: false,
             parent_session_id: params.parent_session_id.clone(),
+            task_project_id,
         })
     }
 

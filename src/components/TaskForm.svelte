@@ -241,6 +241,7 @@
               autoApprove,
               provider,
               taskKey: createdTask.key,
+              taskProjectId: null,
               taskPrompt: prompt,
             });
             if (warning) showSnackbar(warning, "success");

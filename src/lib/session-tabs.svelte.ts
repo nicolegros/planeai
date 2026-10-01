@@ -3,6 +3,8 @@ export interface Tab {
   id?: string;
   index: number;
   label: string;
+  /** Muted display-only suffix, never persisted with the label. */
+  detail?: string;
   icon?: string;
   modified?: boolean;
   customTitle?: boolean;

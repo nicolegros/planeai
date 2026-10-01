@@ -236,6 +236,7 @@ fn session_create_outputs_toon_with_session_id() {
         pr_state: None,
         attached_once: false,
         parent_session_id: Some("pppppppp-1111-2222-3333-444444444444".to_string()),
+        task_project_id: None,
     };
 
     let (output, code) = session_create_output(&session);

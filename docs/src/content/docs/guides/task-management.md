@@ -34,6 +34,11 @@ Tasks appear once you type — the menu's default view stays a short list of act
 While a task is focused, every "new session" entry point (**⌘N** then **S**, "New session" in the command menu, the sidebar button) opens the form with that task and its project already selected.
 The session name defaults to the task title; additional sessions on the same task are numbered, for example "Fix login (2)", and the name stays editable.
 
+A task's work can span repositories.
+Pick another project in the form and the task stays linked: the picker keeps it pinned with its project name, and a hint shows which project owns it.
+The new agent runs in the other project's repository but opens in the task's workspace, next to its sibling agents, with the repository's project name shown on its tab.
+If that repository lacks the task's base branch, the form uses the repository's default branch instead.
+
 To rename a session, pick "Rename session" in the command menu or double-click its agent tab, type the new name, and press **Enter**.
 The workspace tabs follow the new name.
 
@@ -113,29 +118,33 @@ The session and task stay linked. When the agent signals completion, the task mo
 
 ## Lifecycle hooks
 
-Hooks run shell commands at task state transitions. Configure them in **Preferences → Task Management** (⌘, / Ctrl+,) or directly in your `config.json`:
+Hooks move the linked task to a status when its agent session changes state.
+Configure them in **Preferences → Task Management** (⌘, / Ctrl+,) or directly in your `config.json`:
 
 ```jsonc
 {
-  "task_manager": {
-    "lifecycle_hooks": {
-      "on_start": "echo 'Starting {{task.key}}'",
-      "on_complete": "git add -A && git commit -m 'feat({{task.key | slugify}}): {{task.title}}'",
-      "on_notify": "say '{{task.key}} needs attention'",
-      "on_restart": "git stash && git pull --rebase",
-    },
+  "task_management": {
+    "on_start": { "move_to": "in_progress" },
+    "on_notify": { "move_to": "in_review" },
+    "on_resume": { "move_to": "in_progress" },
+    "on_restart": { "move_to": "in_progress" },
+    "on_complete": { "move_to": "done" },
   },
 }
 ```
 
-| Hook          | Fires when                                                |
-| ------------- | --------------------------------------------------------- |
-| `on_start`    | A task is dispatched to an agent session                  |
-| `on_complete` | The agent signals it's done (session archived or deleted) |
-| `on_notify`   | The agent signals idle (needs attention)                  |
-| `on_restart`  | A failed task's session is restarted                      |
+| Hook          | Fires when                                          |
+| ------------- | --------------------------------------------------- |
+| `on_start`    | A session is created from the task                  |
+| `on_notify`   | The agent goes idle and waits for you               |
+| `on_resume`   | The agent's hook reports new work after going idle  |
+| `on_restart`  | An exited session linked to the task is restarted   |
+| `on_complete` | A session linked to the task is archived or deleted |
 
-Hooks run in the working directory of the task's git worktree. They support the same `{{template}}` syntax as other planeai templates (see [Configuration](/planeai/guides/configuration/)).
+A hook left unset never fires.
+`on_resume` needs an agent with PlaneAI hooks installed, since terminal output alone cannot tell a redraw from new work.
+It only moves a task whose status is still the `on_notify` target, and does nothing without `on_notify`.
+Valid statuses are `todo`, `in_progress`, `in_review`, and `done`.
 
 :::tip
 All task management settings — templates, lifecycle hooks, and auto-dispatch — are available in **Preferences → Task Management**. You don't need to edit JSON if you prefer a GUI.

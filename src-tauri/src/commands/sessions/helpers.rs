@@ -32,10 +32,9 @@ pub(crate) fn fire_task_hook(
     cfg: &config::Config,
     session: &db::Session,
     hook_name: &str,
-    cwd: &str,
     conn: &rusqlite::Connection,
 ) {
-    crate::session_ops::fire_task_hook(cfg, session, hook_name, cwd, conn);
+    crate::session_ops::fire_task_hook(cfg, session, hook_name, conn);
 }
 
 /// Check if a provider has hook-based idle detection.
@@ -139,6 +138,7 @@ mod tests {
             pr_state: None,
             attached_once: false,
             parent_session_id: None,
+            task_project_id: None,
         }
     }
 
@@ -148,7 +148,7 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         let session = test_session(None);
         // Should not panic — just returns early
-        fire_task_hook(&cfg, &session, "on_complete", "/tmp/myapp", &conn);
+        fire_task_hook(&cfg, &session, "on_complete", &conn);
     }
 
     #[test]
@@ -160,11 +160,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         let session = test_session(Some("PROJ-1"));
         // Should not panic — returns early when no task_management configured
-        fire_task_hook(&cfg, &session, "on_complete", "/tmp/myapp", &conn);
+        fire_task_hook(&cfg, &session, "on_complete", &conn);
     }
 
     #[test]
-    fn fire_task_hook_with_matching_project_derives_prefix() {
+    fn fire_task_hook_unknown_task_project_returns_early() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
         db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
@@ -175,6 +175,7 @@ mod tests {
                 on_start: None,
                 on_notify: None,
                 on_restart: None,
+                on_resume: None,
                 on_complete: Some(config::LifecycleHook {
                     move_to: "done".into(),
                 }),
@@ -183,10 +184,9 @@ mod tests {
             ..config::Config::default()
         };
 
+        // `proj-1` is not a registered project, so the hook never opens the global task DB.
         let session = test_session(Some("MYA-1"));
-        // Runs through the full path — project matched, prefix derived.
-        // The task update won't find the task (no task tables), but doesn't error.
-        fire_task_hook(&cfg, &session, "on_complete", "/tmp/myapp/src", &conn);
+        fire_task_hook(&cfg, &session, "on_complete", &conn);
     }
 
     #[test]
@@ -201,6 +201,7 @@ mod tests {
                 on_start: None,
                 on_notify: None,
                 on_restart: None,
+                on_resume: None,
                 on_complete: Some(config::LifecycleHook {
                     move_to: "done".into(),
                 }),
@@ -211,6 +212,6 @@ mod tests {
 
         let session = test_session(Some("MYA-1"));
         // Unknown hook name — does nothing
-        fire_task_hook(&cfg, &session, "on_unknown", "/tmp/myapp", &conn);
+        fire_task_hook(&cfg, &session, "on_unknown", &conn);
     }
 }

@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::config::Config;
 use crate::db::{self, Session};
-use crate::session_ops::{fire_task_hook, session_cwd};
+use crate::session_ops::fire_task_hook;
 
 pub trait RestartOps {
     fn create_tmux_session(
@@ -99,7 +99,7 @@ pub fn restart(
     // Two agents on the same task share one rmux workspace, so the key comes from
     // the session's task linkage rather than its id.
     let rmux_workspace = planeai_rmux::WorkspaceKey::for_session(
-        &session.project_id,
+        session.task_project_id(),
         session.task_key.as_deref(),
         &session.id,
     )
@@ -137,10 +137,8 @@ pub fn restart(
         .ok_or_else(|| format!("session not found after restore: {id}"))?;
 
     // Fire task hook after restore
-    if let Some(ref _key) = updated.task_key {
-        if let Some(cwd) = session_cwd(conn, &updated) {
-            fire_task_hook(config, &updated, "on_restart", &cwd, conn);
-        }
+    if updated.task_key.is_some() {
+        fire_task_hook(config, &updated, "on_restart", conn);
     }
 
     Ok(updated)
@@ -254,6 +252,7 @@ mod tests {
         calls: RefCell<Vec<(String, String, String, String)>>,
         daemon_calls: RefCell<Vec<(String, String, String)>>,
         rmux_calls: RefCell<Vec<(String, String, String)>>,
+        rmux_workspaces: RefCell<Vec<String>>,
         fail_resume: bool,
     }
 
@@ -263,6 +262,7 @@ mod tests {
                 calls: RefCell::new(vec![]),
                 daemon_calls: RefCell::new(vec![]),
                 rmux_calls: RefCell::new(vec![]),
+                rmux_workspaces: RefCell::new(vec![]),
                 fail_resume: false,
             }
         }
@@ -272,6 +272,7 @@ mod tests {
                 calls: RefCell::new(vec![]),
                 daemon_calls: RefCell::new(vec![]),
                 rmux_calls: RefCell::new(vec![]),
+                rmux_workspaces: RefCell::new(vec![]),
                 fail_resume: true,
             }
         }
@@ -286,6 +287,9 @@ mod tests {
             cwd: &str,
             _extra_path_dirs: &[String],
         ) -> Result<(), String> {
+            self.rmux_workspaces
+                .borrow_mut()
+                .push(_workspace.as_str().to_string());
             self.rmux_calls.borrow_mut().push((
                 session_id.to_string(),
                 cmd.to_string(),
@@ -468,6 +472,38 @@ mod tests {
         assert_eq!(ops.calls.borrow().len(), 0);
         assert_eq!(ops.daemon_calls.borrow().len(), 1);
         assert_eq!(ops.daemon_calls.borrow()[0].0, id);
+    }
+
+    #[test]
+    fn restart_rmux_session_rejoins_its_tasks_workspace_across_projects() {
+        let conn = setup_db();
+        let owner = db::create_project(&conn, "owner", "/tmp/owner").unwrap();
+        let repo = db::create_project(&conn, "repo", "/tmp/repo").unwrap();
+        let id = "cccc2222-4444-5555-6666-777788889999";
+        db::create_session_with_params(
+            &conn,
+            &planeai_core::services::CreateSessionParams {
+                id: id.to_string(),
+                project_id: repo.id.to_string(),
+                name: "cross".to_string(),
+                branch: "main".to_string(),
+                backend: planeai_rmux::BACKEND.to_string(),
+                task_key: Some("OWN-1".to_string()),
+                task_project_id: Some(owner.id.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        db::mark_session_exited(&conn, id).unwrap();
+
+        let ops = MockRestartOps::new();
+        restart(&conn, id, &Config::default(), &ops).unwrap();
+
+        let expected = planeai_rmux::WorkspaceKey::for_session(&owner.id, Some("OWN-1"), id).name();
+        assert_eq!(
+            *ops.rmux_workspaces.borrow(),
+            vec![expected.as_str().to_string()]
+        );
     }
 
     #[test]

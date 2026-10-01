@@ -4,7 +4,7 @@
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { listen } from "@tauri-apps/api/event";
   import { sessions as sessionsApi, pty, notify, sessionLogs, editor as editorApi, updater } from "./lib/api";
-  import type { Session, Project, TaskItem } from "./lib/types";
+  import { sessionTaskProjectId, type Session, type Project, type TaskItem } from "./lib/types";
   import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
   import { isTerminalPaneFocused, releaseTerminalDomFocus } from "./lib/terminal-focus";
   import * as projectStore from "./lib/project-store.svelte";
@@ -116,13 +116,13 @@
   const activeTaskWorkspace = $derived.by(() => {
     if (selectedTaskWorkspace) return selectedTaskWorkspace;
     if (!activeSession?.task_key) return null;
-    const project = projects.find((candidate) => candidate.id === activeSession.project_id);
+    const project = projects.find((candidate) => candidate.id === sessionTaskProjectId(activeSession));
     const task = project ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === activeSession.task_key) : undefined;
     return task && project ? { task, project } : null;
   });
   const activeTaskSessions = $derived(
     activeTaskWorkspace
-      ? sessions.filter((session) => session.project_id === activeTaskWorkspace.project.id && session.task_key === activeTaskWorkspace.task.key)
+      ? sessions.filter((session) => sessionTaskProjectId(session) === activeTaskWorkspace.project.id && session.task_key === activeTaskWorkspace.task.key)
       : [],
   );
   const isEmptyTaskWorkspace = $derived(!!activeTaskWorkspace && activeTaskSessions.length === 0);
@@ -273,7 +273,7 @@
     const session = sessions.find((candidate) => candidate.id === sessionId);
     if (!session) return null;
     return session.task_key
-      ? { key: `task:${session.project_id}:${session.task_key}`, projectId: session.project_id, taskKey: session.task_key }
+      ? { key: toTaskWorkspaceId(sessionTaskProjectId(session), session.task_key), projectId: sessionTaskProjectId(session), taskKey: session.task_key }
       : { key: `session:${session.id}`, projectId: session.project_id, taskKey: null };
   }
 
@@ -282,7 +282,7 @@
       const sessionId = workspace.key.slice("session:".length);
       return sessions.filter((session) => session.id === sessionId);
     }
-    return sessions.filter((session) => session.project_id === workspace.projectId && session.task_key === workspace.taskKey);
+    return sessions.filter((session) => sessionTaskProjectId(session) === workspace.projectId && session.task_key === workspace.taskKey);
   }
 
   // Selecting another agent in the same task keeps the shared workspace loaded and
@@ -564,9 +564,17 @@
       id: tabEntry.ptyKey,
       index: tabIndexForEntry(tabEntry, visualIndex),
       label: tabEntry.label,
+      detail: tabEntry.type === "agent" ? crossProjectName(ptyKeyToSessionId(tabEntry.ptyKey)) : undefined,
       icon: tabEntry.icon,
       customTitle: tabEntry.customTitle,
     }));
+  }
+
+  /** Names the repo an agent runs in when it differs from its task's project. */
+  function crossProjectName(sessionId: string): string | undefined {
+    const session = sessions.find((candidate) => candidate.id === sessionId);
+    if (!session || sessionTaskProjectId(session) === session.project_id) return undefined;
+    return projects.find((project) => project.id === session.project_id)?.name;
   }
 
   function tabIndexForEntry(tabEntry: import("./lib/split-tree.svelte").TabEntry, fallback: number): number {
@@ -991,7 +999,7 @@
         ? async (id) => {
             const found = sessions.find((candidate) => candidate.id === id);
             if (!found?.task_key) return;
-            const project = projects.find((candidate) => candidate.id === found.project_id);
+            const project = projects.find((candidate) => candidate.id === sessionTaskProjectId(found));
             if (project) await taskStore.moveTask(found.task_key, "done", project.path);
           }
         : undefined,
@@ -1016,7 +1024,7 @@
   function selectWorkspaceSession(sessionId: string, opts: { explicit?: boolean } = {}): void {
     const session = sessions.find((candidate) => candidate.id === sessionId);
     if (session?.task_key) {
-      const project = projects.find((candidate) => candidate.id === session.project_id);
+      const project = projects.find((candidate) => candidate.id === sessionTaskProjectId(session));
       const task = project ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === session.task_key) : undefined;
       if (project && task) {
         selectedTaskWorkspace = { project, task };
@@ -1057,7 +1065,7 @@
     selectedTaskWorkspace = { task, project };
     touchWorkspaceMru(toTaskWorkspaceId(project.id, task.key));
     loopStore.setActiveLoopId(null);
-    const linked = sessions.find((session) => session.project_id === project.id && session.task_key === task.key);
+    const linked = sessions.find((session) => sessionTaskProjectId(session) === project.id && session.task_key === task.key);
     if (linked) {
       const alreadyActive = linked.id === activeSessionId;
       selectWorkspaceSession(linked.id, { explicit: false });
@@ -1083,7 +1091,7 @@
     if (!workspace) { archivedTaskSessions = []; return; }
     sessionsApi.listArchived().then((items) => {
       if (activeTaskWorkspace?.task.key === workspace.task.key && activeTaskWorkspace.project.id === workspace.project.id) {
-        archivedTaskSessions = items.filter((session) => session.project_id === workspace.project.id && session.task_key === workspace.task.key);
+        archivedTaskSessions = items.filter((session) => sessionTaskProjectId(session) === workspace.project.id && session.task_key === workspace.task.key);
       }
     }).catch(() => { archivedTaskSessions = []; });
   });
@@ -1110,7 +1118,7 @@
     const valid = getSwitchableIds();
     const persisted = getMruList().map((id) => {
       const session = sessions.find((candidate) => candidate.id === id);
-      return session?.task_key ? toTaskWorkspaceId(session.project_id, session.task_key) : id;
+      return session?.task_key ? toTaskWorkspaceId(sessionTaskProjectId(session), session.task_key) : id;
     });
     return [...workspaceMru, ...persisted, ...sidebarSessionOrder]
       .filter((id, index, all) => valid.has(id) && all.indexOf(id) === index);
@@ -1165,6 +1173,7 @@
     const cleanupEvents = orchestrator.startEventListeners();
     const cleanupSymphony = orchestrator.startSymphonyPolling();
     const cleanupLoopListener = loopStore.startLoopEventListener(() => projectStore.getProjects().map((p) => p.id));
+    const cleanupTaskListener = taskStore.startTaskEventListener(() => projectStore.getProjects().map((p) => p.path));
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
     const unlistenShellPtyExit = listen<{ pty_key: string }>("pty-exited", (event) => {
@@ -1405,7 +1414,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenShellPtyExit.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); cleanupTaskListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenShellPtyExit.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 

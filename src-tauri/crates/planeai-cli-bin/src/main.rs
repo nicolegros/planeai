@@ -73,6 +73,9 @@ enum SessionAction {
         provider: Option<String>,
         #[arg(long)]
         task_key: Option<String>,
+        /// Project (name or id) owning --task-key, when the session runs in another project
+        #[arg(long, requires = "task_key")]
+        task_project: Option<String>,
         #[arg(long)]
         prompt: Option<String>,
         /// Parent session ID (for orchestration tracking)
@@ -394,6 +397,9 @@ enum AxiSessionAction {
         provider: Option<String>,
         #[arg(long)]
         task_key: Option<String>,
+        /// Project (name or id) owning --task-key, when the session runs in another project
+        #[arg(long, requires = "task_key")]
+        task_project: Option<String>,
         #[arg(long)]
         prompt: Option<String>,
     },
@@ -575,6 +581,7 @@ fn main() {
                 yolo,
                 provider,
                 task_key,
+                task_project,
                 prompt,
                 parent,
                 pretty,
@@ -591,6 +598,7 @@ fn main() {
                     yolo,
                     provider,
                     task_key,
+                    task_project,
                     prompt,
                     parent_session_id,
                 };
@@ -1165,6 +1173,7 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
             yolo,
             provider,
             task_key,
+            task_project,
             prompt,
         } => {
             let parent_session_id = std::env::var("PLANEAI_SESSION_ID").ok();
@@ -1179,6 +1188,7 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                 yolo,
                 provider,
                 task_key,
+                task_project,
                 prompt,
                 parent_session_id,
             };

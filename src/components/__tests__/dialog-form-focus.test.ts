@@ -12,7 +12,10 @@ import { stubLayoutAsVisible, flushFrames } from "./dom-visibility";
 
 vi.mock("../../lib/api", () => ({
   sessions: { launch: vi.fn(() => new Promise(() => {})) },
-  projects: { listBranches: vi.fn(() => Promise.resolve(["main"])) },
+  projects: {
+    listBranches: vi.fn(() => Promise.resolve(["main"])),
+    detectDefaultBranch: vi.fn(() => Promise.resolve("main")),
+  },
   tasks: { list: vi.fn(() => Promise.resolve([])), listAll: vi.fn(() => Promise.resolve([])) },
 }));
 

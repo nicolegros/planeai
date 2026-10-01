@@ -53,11 +53,9 @@ pub fn archive(
 
     // Fire task hook before mutation
     if let (Some(cfg), Some(ref key)) = (config, &session.task_key) {
-        if let Some(cwd) = session_cwd(conn, &session) {
-            eprintln!("[session] firing on_complete hook for task {key}");
-            tracing::info!(task_key = %key, "firing on_complete hook");
-            fire_task_hook(cfg, &session, "on_complete", &cwd, conn);
-        }
+        eprintln!("[session] firing on_complete hook for task {key}");
+        tracing::info!(task_key = %key, "firing on_complete hook");
+        fire_task_hook(cfg, &session, "on_complete", conn);
     }
 
     // Kill the agent backend process.
@@ -198,9 +196,7 @@ pub fn destroy(
 
     // Fire task hook before mutation
     if let (Some(cfg), Some(_)) = (config, &session.task_key) {
-        if let Some(cwd) = session_cwd(conn, &session) {
-            fire_task_hook(cfg, &session, "on_complete", &cwd, conn);
-        }
+        fire_task_hook(cfg, &session, "on_complete", conn);
     }
 
     // Soft-delete
@@ -235,25 +231,28 @@ pub fn destroy(
     })
 }
 
-pub fn session_cwd(conn: &Connection, session: &Session) -> Option<String> {
-    if let Some(ref wt) = session.worktree_path {
-        return Some(wt.clone());
-    }
-    db::get_project(conn, &session.project_id)
+/// The project whose task store holds the session's task, which may differ from the repo it runs in.
+fn task_owner_project(conn: &Connection, session: &Session) -> Option<db::Project> {
+    db::get_project(conn, session.task_project_id())
         .ok()
         .flatten()
-        .map(|p| p.path)
 }
 
-/// Fire a task manager lifecycle hook (on_start, on_notify, on_restart, on_complete).
-/// Uses the caller's connection — no new DB connections opened.
-pub fn fire_task_hook(
-    cfg: &Config,
-    session: &Session,
-    hook_name: &str,
-    cwd: &str,
-    conn: &Connection,
-) {
+/// `on_resume` only moves a task whose status is still the `on_notify` target.
+fn resume_applies(
+    tm: &crate::config::TaskManager,
+    current: Option<planeai_tasks::model::Status>,
+) -> bool {
+    let notified = tm
+        .on_notify
+        .as_ref()
+        .and_then(|hook| planeai_tasks::model::Status::parse(&hook.move_to));
+    notified.is_some() && notified == current
+}
+
+/// Fire a task manager lifecycle hook (on_start, on_notify, on_restart, on_resume, on_complete).
+/// Reads the session through the caller's connection and opens the task store to move the task.
+pub fn fire_task_hook(cfg: &Config, session: &Session, hook_name: &str, conn: &Connection) {
     let task_key = match &session.task_key {
         Some(k) => k,
         None => return,
@@ -266,16 +265,13 @@ pub fn fire_task_hook(
         "on_start" => tm.on_start.as_ref(),
         "on_notify" => tm.on_notify.as_ref(),
         "on_restart" => tm.on_restart.as_ref(),
+        "on_resume" => tm.on_resume.as_ref(),
         "on_complete" => tm.on_complete.as_ref(),
         _ => None,
     };
     if let Some(h) = hook {
         let db_path = planeai_paths::db_path();
-        let projects = db::list_projects(conn).unwrap_or_default();
-        let Some(project) = projects
-            .iter()
-            .find(|p| crate::util::is_project_path_or_descendant(cwd, &p.path))
-        else {
+        let Some(project) = task_owner_project(conn, session) else {
             return;
         };
         if let (Some(status), Ok(repo)) = (
@@ -285,6 +281,12 @@ pub fn fire_task_hook(
                 &project.prefix,
             ),
         ) {
+            if hook_name == "on_resume" {
+                use planeai_tasks::provider::TaskProvider;
+                if !resume_applies(tm, repo.get(task_key).ok().map(|task| task.status)) {
+                    return;
+                }
+            }
             match planeai_core::task_lifecycle::move_task_with_lifecycle(&repo, task_key, status) {
                 Ok((_task, events)) => {
                     forward_task_lifecycle(planeai_core::task_lifecycle::TaskLifecycleBatch::new(
@@ -1362,6 +1364,83 @@ mod tests {
     }
 
     #[test]
+    fn resume_only_reverts_the_on_notify_move() {
+        use planeai_tasks::model::Status;
+        let hook = |status: &str| {
+            Some(crate::config::LifecycleHook {
+                move_to: status.to_string(),
+            })
+        };
+        let tm = crate::config::TaskManager {
+            templates: None,
+            on_start: None,
+            on_notify: hook("in_review"),
+            on_restart: None,
+            on_resume: hook("in_progress"),
+            on_complete: None,
+            auto_dispatch: None,
+        };
+
+        assert!(resume_applies(&tm, Some(Status::InReview)));
+        assert!(!resume_applies(&tm, Some(Status::Done)));
+        assert!(!resume_applies(&tm, Some(Status::Todo)));
+        assert!(!resume_applies(&tm, None));
+        let without_notify = crate::config::TaskManager {
+            on_notify: None,
+            ..tm
+        };
+        assert!(!resume_applies(&without_notify, Some(Status::InReview)));
+    }
+
+    #[test]
+    fn task_hooks_resolve_the_task_owner_not_the_session_repo() {
+        let conn = setup_db();
+        let owner = db::create_project(&conn, "owner", "/tmp/owner").unwrap();
+        let repo = db::create_project(&conn, "repo", "/tmp/repo").unwrap();
+        let session = db::create_session_with_params(
+            &conn,
+            &planeai_core::services::CreateSessionParams {
+                id: "sess-cross".to_string(),
+                project_id: repo.id.to_string(),
+                name: "agent".to_string(),
+                branch: "own-1/fix".to_string(),
+                worktree_path: Some("/tmp/worktrees/repo/abc".to_string()),
+                backend: "daemon".to_string(),
+                auto_approve: true,
+                task_key: Some("OWN-1".to_string()),
+                task_project_id: Some(owner.id.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(task_owner_project(&conn, &session).unwrap().id, owner.id);
+    }
+
+    #[test]
+    fn task_hooks_resolve_worktree_sessions_to_their_project() {
+        let conn = setup_db();
+        let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let session = db::create_session_with_params(
+            &conn,
+            &planeai_core::services::CreateSessionParams {
+                id: "sess-wt".to_string(),
+                project_id: project.id.to_string(),
+                name: "agent".to_string(),
+                branch: "mya-1/fix".to_string(),
+                worktree_path: Some("/tmp/.planeai/worktrees/myapp/abc".to_string()),
+                backend: "daemon".to_string(),
+                auto_approve: true,
+                task_key: Some("MYA-1".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(task_owner_project(&conn, &session).unwrap().id, project.id);
+    }
+
+    #[test]
     fn format_table_renders_correct_columns() {
         let projects = vec![db::Project {
             id: "proj-1".to_string(),
@@ -1391,6 +1470,7 @@ mod tests {
             pr_state: None,
             attached_once: false,
             parent_session_id: None,
+            task_project_id: None,
         }];
 
         let table = format_table(&sessions, &projects);

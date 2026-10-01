@@ -21,6 +21,8 @@ pub struct SessionCreateOpts {
     pub yolo: bool,
     pub provider: Option<String>,
     pub task_key: Option<String>,
+    /// Name or id of the project owning `task_key`; defaults to `project`.
+    pub task_project: Option<String>,
     pub prompt: Option<String>,
     pub parent_session_id: Option<String>,
 }
@@ -64,7 +66,15 @@ pub struct SessionPlan {
     pub task_key: Option<String>,
     pub base_branch: Option<String>,
     pub project_id: String,
+    /// Project owning `task_key` when it differs from `project_id`.
+    pub task_project_id: Option<String>,
     pub parent_session_id: Option<String>,
+}
+
+impl SessionPlan {
+    fn workspace_project_id(&self) -> &str {
+        self.task_project_id.as_deref().unwrap_or(&self.project_id)
+    }
 }
 
 pub fn build_session_plan(
@@ -142,6 +152,7 @@ pub fn build_session_plan(
         task_key: opts.task_key.clone(),
         base_branch: opts.base_branch.clone(),
         project_id: project.id.clone(),
+        task_project_id: None,
         parent_session_id: opts.parent_session_id.clone(),
     })
 }
@@ -241,7 +252,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             &mut path_buf,
         );
         let workspace = planeai_rmux::WorkspaceKey::for_session(
-            &plan.project_id,
+            plan.workspace_project_id(),
             plan.task_key.as_deref(),
             &plan.session_id,
         )
@@ -270,31 +281,37 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
         let _ = tmux_name;
     }
 
-    let session = db::create_session_with_id(
+    // Store worktree_path so gates and agents know where to run.
+    // For redirected sessions (branch already in another worktree), store that path.
+    // For worktree-created sessions, store the new worktree path.
+    // Cleanup guards against deleting non-loop-managed worktrees via branch name check.
+    let worktree_path = if was_redirected {
+        Some(effective_working_dir)
+    } else {
+        match &plan.branch_strategy {
+            BranchStrategy::Worktree { path, .. } => Some(path.clone()),
+            BranchStrategy::Checkout { .. } => None,
+        }
+    };
+    let session = db::create_session_with_params(
         conn,
-        &plan.session_id,
-        &plan.project_id,
-        &plan.session_name,
-        plan.tmux_name.as_deref(),
-        &plan.branch,
-        // Store worktree_path so gates and agents know where to run.
-        // For redirected sessions (branch already in another worktree), store that path.
-        // For worktree-created sessions, store the new worktree path.
-        // Cleanup guards against deleting non-loop-managed worktrees via branch name check.
-        if was_redirected {
-            Some(effective_working_dir.as_str())
-        } else {
-            match &plan.branch_strategy {
-                BranchStrategy::Worktree { path, .. } => Some(path.as_str()),
-                BranchStrategy::Checkout { .. } => None,
-            }
+        &planeai_core::services::CreateSessionParams {
+            id: plan.session_id.clone(),
+            project_id: plan.project_id.clone(),
+            name: plan.session_name.clone(),
+            tmux_name: plan.tmux_name.clone(),
+            branch: plan.branch.clone(),
+            worktree_path,
+            worktree_owned: Some(true),
+            provider: Some(plan.provider.clone()),
+            backend: plan.backend.clone(),
+            auto_approve: plan.yolo,
+            task_key: plan.task_key.clone(),
+            task_project_id: plan.task_project_id.clone(),
+            base_branch: plan.base_branch.clone(),
+            parent_session_id: plan.parent_session_id.clone(),
+            ..Default::default()
         },
-        Some(&plan.provider),
-        &plan.backend,
-        plan.yolo,
-        plan.task_key.as_deref(),
-        plan.base_branch.as_deref(),
-        plan.parent_session_id.as_deref(),
     )
     .map_err(|e| e.to_string())?;
 
@@ -330,14 +347,36 @@ pub fn create_session(conn: &Connection, opts: SessionCreateOpts) -> Result<db::
         .find(|p| p.name == project_name)
         .ok_or_else(|| format!("unknown project: {project_name}"))?;
 
+    let task_project_id = resolve_task_project_id(&projects, proj, &opts)?;
+
     let session_id = uuid::Uuid::new_v4().to_string();
-    let plan = build_session_plan(&session_id, &opts, &env, proj)?;
+    let mut plan = build_session_plan(&session_id, &opts, &env, proj)?;
+    plan.task_project_id = task_project_id;
 
     execute_plan(&plan, conn, &env)?;
 
     db::get_session(conn, &session_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "session created but not found in database".to_string())
+}
+
+/// Resolve `--task-project` to a project id; None when it names the session's own project.
+fn resolve_task_project_id(
+    projects: &[db::Project],
+    session_project: &db::Project,
+    opts: &SessionCreateOpts,
+) -> Result<Option<String>, String> {
+    let Some(task_project) = &opts.task_project else {
+        return Ok(None);
+    };
+    if opts.task_key.is_none() {
+        return Err("--task-project requires --task-key".to_string());
+    }
+    let owner = projects
+        .iter()
+        .find(|p| p.id == *task_project || p.name == *task_project)
+        .ok_or_else(|| format!("unknown task project: {task_project}"))?;
+    Ok((owner.id != session_project.id).then(|| owner.id.clone()))
 }
 
 /// Options for a sibling session in the invoking agent's TaskWorkspace.
@@ -385,6 +424,7 @@ pub fn create_workspace_sibling(
             yolo: opts.yolo,
             provider: opts.provider.or(parent.provider.clone()),
             task_key: Some(task_key),
+            task_project: parent.task_project_id.clone(),
             prompt: opts.prompt,
             parent_session_id: Some(parent.id),
         },
@@ -448,6 +488,50 @@ mod tests {
         }
     }
 
+    fn task_opts(task_key: Option<&str>, task_project: Option<&str>) -> SessionCreateOpts {
+        SessionCreateOpts {
+            project: "myapp".to_string(),
+            branch: "feat-x".to_string(),
+            name: None,
+            new_branch: true,
+            worktree: false,
+            base_branch: None,
+            yolo: false,
+            provider: None,
+            task_key: task_key.map(str::to_string),
+            task_project: task_project.map(str::to_string),
+            prompt: None,
+            parent_session_id: None,
+        }
+    }
+
+    #[test]
+    fn task_project_resolves_by_name_or_id_and_ignores_the_own_project() {
+        let own = test_project();
+        let owner = db::Project {
+            id: "proj-2".to_string(),
+            name: "owner".to_string(),
+            ..test_project()
+        };
+        let projects = [own.clone(), owner];
+        let resolve = |task_project| {
+            resolve_task_project_id(&projects, &own, &task_opts(Some("OWN-1"), task_project))
+        };
+
+        assert_eq!(resolve(Some("owner")).unwrap().as_deref(), Some("proj-2"));
+        assert_eq!(resolve(Some("proj-2")).unwrap().as_deref(), Some("proj-2"));
+        assert_eq!(resolve(Some("myapp")).unwrap(), None);
+        assert_eq!(resolve(None).unwrap(), None);
+        assert_eq!(
+            resolve(Some("nope")).unwrap_err(),
+            "unknown task project: nope"
+        );
+        assert_eq!(
+            resolve_task_project_id(&projects, &own, &task_opts(None, Some("owner"))).unwrap_err(),
+            "--task-project requires --task-key"
+        );
+    }
+
     #[test]
     fn plan_checkout_mode() {
         let opts = SessionCreateOpts {
@@ -460,6 +544,7 @@ mod tests {
             yolo: false,
             provider: None,
             task_key: None,
+            task_project: None,
             prompt: None,
             parent_session_id: None,
         };
@@ -498,6 +583,7 @@ mod tests {
             yolo: false,
             provider: None,
             task_key: None,
+            task_project: None,
             prompt: None,
             parent_session_id: None,
         };
@@ -548,6 +634,7 @@ mod tests {
             yolo: false,
             provider: None,
             task_key: None,
+            task_project: None,
             prompt: None,
             parent_session_id: None,
         };
@@ -576,6 +663,7 @@ mod tests {
             yolo: true,
             provider: None,
             task_key: None,
+            task_project: None,
             prompt: None,
             parent_session_id: None,
         };
@@ -607,6 +695,7 @@ mod tests {
             yolo: false,
             provider: Some("nonexistent".to_string()),
             task_key: None,
+            task_project: None,
             prompt: None,
             parent_session_id: None,
         };

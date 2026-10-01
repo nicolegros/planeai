@@ -24,11 +24,20 @@ pub struct Session {
     pub pr_state: Option<String>,
     pub attached_once: bool,
     pub parent_session_id: Option<String>,
+    /// Project owning `task_key` when it differs from `project_id`.
+    pub task_project_id: Option<String>,
+}
+
+impl Session {
+    /// The project whose TaskWorkspace this session belongs to.
+    pub fn task_project_id(&self) -> &str {
+        self.task_project_id.as_deref().unwrap_or(&self.project_id)
+    }
 }
 
 /// Column list for SELECT statements returning a Session.
 /// Keep in sync with `row_to_session`.
-pub const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, attached_once, parent_session_id";
+pub const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, attached_once, parent_session_id, task_project_id";
 
 /// Map a row (selected with SESSION_COLUMNS) to a Session struct.
 pub fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
@@ -52,6 +61,7 @@ pub fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
         pr_state: row.get(16)?,
         attached_once: row.get(17)?,
         parent_session_id: row.get(18)?,
+        task_project_id: row.get(19)?,
     })
 }
 
@@ -169,6 +179,7 @@ fn record_to_session(r: planeai_core::services::SessionRecord) -> Session {
         pr_state: r.pr_state,
         attached_once: r.attached_once,
         parent_session_id: r.parent_session_id,
+        task_project_id: r.task_project_id,
     }
 }
 
@@ -281,59 +292,31 @@ pub fn create_session_with_id(
     base_branch: Option<&str>,
     parent_session_id: Option<&str>,
 ) -> Result<Session> {
-    create_session_with_id_and_worktree_ownership(
+    create_session_with_params(
         conn,
-        id,
-        project_id,
-        name,
-        tmux_name,
-        branch,
-        worktree_path,
-        true,
-        provider,
-        backend,
-        auto_approve,
-        task_key,
-        base_branch,
-        parent_session_id,
+        &planeai_core::services::CreateSessionParams {
+            id: id.to_string(),
+            project_id: project_id.to_string(),
+            name: name.to_string(),
+            tmux_name: tmux_name.map(str::to_string),
+            branch: branch.to_string(),
+            worktree_path: worktree_path.map(str::to_string),
+            provider: provider.map(str::to_string),
+            backend: backend.to_string(),
+            auto_approve,
+            task_key: task_key.map(str::to_string),
+            base_branch: base_branch.map(str::to_string),
+            parent_session_id: parent_session_id.map(str::to_string),
+            ..Default::default()
+        },
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn create_session_with_id_and_worktree_ownership(
+pub fn create_session_with_params(
     conn: &Connection,
-    id: &str,
-    project_id: &str,
-    name: &str,
-    tmux_name: Option<&str>,
-    branch: &str,
-    worktree_path: Option<&str>,
-    worktree_owned: bool,
-    provider: Option<&str>,
-    backend: &str,
-    auto_approve: bool,
-    task_key: Option<&str>,
-    base_branch: Option<&str>,
-    parent_session_id: Option<&str>,
+    params: &planeai_core::services::CreateSessionParams,
 ) -> Result<Session> {
-    let params = planeai_core::services::CreateSessionParams {
-        id: id.to_string(),
-        project_id: project_id.to_string(),
-        name: name.to_string(),
-        tmux_name: tmux_name.map(|s| s.to_string()),
-        branch: branch.to_string(),
-        worktree_path: worktree_path.map(|s| s.to_string()),
-        worktree_owned: Some(worktree_owned),
-        provider: provider.map(|s| s.to_string()),
-        backend: backend.to_string(),
-        auto_approve,
-        task_key: task_key.map(|s| s.to_string()),
-        base_branch: base_branch.map(|s| s.to_string()),
-        parent_session_id: parent_session_id.map(|s| s.to_string()),
-        ..Default::default()
-    };
-    let record = planeai_core::services::SessionService::create(conn, &params)?;
-    Ok(record_to_session(record))
+    planeai_core::services::SessionService::create(conn, params).map(record_to_session)
 }
 
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
@@ -470,24 +453,61 @@ mod tests {
     }
 
     #[test]
+    fn test_task_project_id_links_a_session_to_another_projects_task() {
+        let conn = setup();
+        let owner = create_project(&conn, "owner", "/tmp/owner").unwrap();
+        let repo = create_project(&conn, "repo", "/tmp/repo").unwrap();
+        let create = |id: &str, task_project_id: Option<&str>| {
+            create_session_with_params(
+                &conn,
+                &planeai_core::services::CreateSessionParams {
+                    id: id.to_string(),
+                    project_id: repo.id.to_string(),
+                    name: "agent".to_string(),
+                    branch: "main".to_string(),
+                    backend: "daemon".to_string(),
+                    auto_approve: true,
+                    task_key: Some("OWN-1".to_string()),
+                    task_project_id: task_project_id.map(str::to_string),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+
+        let linked = create("sess-linked", Some(&owner.id));
+        assert_eq!(linked.task_project_id(), owner.id);
+        let loaded = get_session(&conn, "sess-linked").unwrap().unwrap();
+        assert_eq!(loaded.task_project_id.as_deref(), Some(owner.id.as_str()));
+
+        // Naming the session's own project stores no override.
+        let own = create("sess-own", Some(&repo.id));
+        assert_eq!(own.task_project_id, None);
+        assert_eq!(own.task_project_id(), repo.id);
+
+        delete_project(&conn, &owner.id).unwrap();
+        let orphaned = get_session(&conn, "sess-linked").unwrap().unwrap();
+        assert_eq!(orphaned.task_project_id, None);
+        assert_eq!(orphaned.task_project_id(), repo.id);
+    }
+
+    #[test]
     fn test_reused_worktree_is_persisted_as_unowned() {
         let conn = setup();
         let project = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        create_session_with_id_and_worktree_ownership(
+        create_session_with_params(
             &conn,
-            "sess-shared",
-            &project.id,
-            "shared worktree session",
-            None,
-            "feat/shared",
-            Some("/tmp/shared-worktree"),
-            false,
-            None,
-            "daemon",
-            true,
-            None,
-            None,
-            None,
+            &planeai_core::services::CreateSessionParams {
+                id: "sess-shared".to_string(),
+                project_id: project.id.to_string(),
+                name: "shared worktree session".to_string(),
+                branch: "feat/shared".to_string(),
+                worktree_path: Some("/tmp/shared-worktree".to_string()),
+                worktree_owned: Some(false),
+                backend: "daemon".to_string(),
+                auto_approve: true,
+                ..Default::default()
+            },
         )
         .unwrap();
 

@@ -385,6 +385,7 @@ fn main() {
             edit_task_item,
             move_task_item,
             fire_task_notify_hook,
+            fire_task_resume_hook,
             fe_list_directory,
             fe_list_all_paths,
             fe_create_file,

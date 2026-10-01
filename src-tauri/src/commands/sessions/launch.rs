@@ -51,6 +51,7 @@ pub async fn launch_session(
     auto_approve: bool,
     provider: Option<String>,
     task_key: Option<String>,
+    task_project_id: Option<String>,
     task_prompt: Option<String>,
 ) -> Result<LaunchResult, String> {
     let task_key = require_task_key(task_key)?;
@@ -62,16 +63,24 @@ pub async fn launch_session(
     let (project_name, repo_path) = crate::commands::blocking({
         let conn = state.0.clone();
         let project_id = project_id.clone();
+        let task_project_id = task_project_id.clone();
         move || {
             let conn = conn.lock().map_err(|e| e.to_string())?;
             let project = db::get_project(&conn, &project_id)
                 .map_err(|e| e.to_string())?
                 .filter(|project| project.status == "active")
                 .ok_or_else(|| "Project not found or archived.".to_string())?;
+            if let Some(task_project_id) = &task_project_id {
+                db::get_project(&conn, task_project_id)
+                    .map_err(|e| e.to_string())?
+                    .filter(|project| project.status == "active")
+                    .ok_or_else(|| "Task project not found or archived.".to_string())?;
+            }
             Ok((project.name, project.path))
         }
     })
     .await?;
+    let workspace_project_id = task_project_id.as_deref().unwrap_or(&project_id);
     tracing::info!(task_prompt = ?task_prompt, auto_approve, provider = ?provider, task_key = ?task_key, "launch_session called");
     // Phase 1: gather params from config (holding config lock briefly)
     let (cmd, provider_key, hook_enabled, backend, scrollback_bytes, extra_path_dirs) = {
@@ -191,7 +200,7 @@ pub async fn launch_session(
             spawn_in_rmux(
                 &app,
                 &session_id,
-                &project_id,
+                workspace_project_id,
                 Some(task_key.as_str()),
                 &working_dir,
                 &cmd,
@@ -264,21 +273,25 @@ pub async fn launch_session(
         ns.register_session(&session_id, display_name, &project_name, hook_enabled);
     }
 
-    let session = db::create_session_with_id_and_worktree_ownership(
+    let session = db::create_session_with_params(
         &conn,
-        &session_id,
-        &project_id,
-        &name,
-        tmux_name.as_deref(),
-        &branch,
-        worktree_path.as_deref(),
-        created_worktree,
-        Some(&provider_key),
-        &backend,
-        auto_approve,
-        Some(&task_key),
-        effective_base_branch.as_deref(),
-        None,
+        &planeai_core::services::CreateSessionParams {
+            id: session_id,
+            project_id,
+            name,
+            tmux_name,
+            // Still needed by the rollback below.
+            branch: branch.clone(),
+            worktree_path: worktree_path.clone(),
+            worktree_owned: Some(created_worktree),
+            provider: Some(provider_key),
+            backend,
+            auto_approve,
+            task_key: Some(task_key),
+            task_project_id,
+            base_branch: effective_base_branch,
+            ..Default::default()
+        },
     )
     .map_err(|e| {
         let rp = repo_path.clone();
@@ -296,7 +309,7 @@ pub async fn launch_session(
 
     if session.task_key.is_some() {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-        fire_task_hook(&cfg, &session, "on_start", &repo_path, &conn);
+        fire_task_hook(&cfg, &session, "on_start", &conn);
     }
 
     // If we reused an existing worktree, check if another active session is already there
@@ -401,7 +414,7 @@ async fn spawn_in_daemon(
 async fn spawn_in_rmux(
     app: &AppHandle,
     session_id: &str,
-    project_id: &str,
+    workspace_project_id: &str,
     task_key: Option<&str>,
     working_dir: &str,
     cmd: &str,
@@ -423,7 +436,7 @@ async fn spawn_in_rmux(
 
     // Every agent on the same task shares one rmux workspace.
     let workspace =
-        planeai_rmux::WorkspaceKey::for_session(project_id, task_key, session_id).name();
+        planeai_rmux::WorkspaceKey::for_session(workspace_project_id, task_key, session_id).name();
 
     tracing::info!(
         caller = "tauri",

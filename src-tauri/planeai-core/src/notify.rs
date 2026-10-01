@@ -135,7 +135,8 @@ impl NotifyState {
         // The hook is the authoritative signal for when the agent stops — PTY output
         // is just terminal rendering noise that may trail after the stop hook fires.
         let hook_enabled = self.meta.get(session_id).is_some_and(|m| m.hook_enabled);
-        if hook_enabled && self.get_state(session_id) == Some(AgentState::Idle) {
+        // Only hooks mark a hook-enabled session busy; a redraw after attach must not.
+        if hook_enabled && self.get_state(session_id) != Some(AgentState::Busy) {
             self.last_output
                 .insert(session_id.to_string(), Instant::now());
             return;
@@ -151,12 +152,17 @@ impl NotifyState {
     /// Transition to Busy from an authoritative hook signal (e.g., userPromptSubmit).
     /// Unlike `notify_output`, this always cancels any pending debounce and resets state,
     /// regardless of hook_enabled status.
-    pub fn notify_busy(&mut self, session_id: &str) {
+    ///
+    /// Returns true unless the agent was already busy, so repeated signals (one per tool
+    /// call) are not resumes; the first prompt after a restart is one.
+    pub fn notify_busy(&mut self, session_id: &str) -> bool {
+        let resumed = self.get_state(session_id) != Some(AgentState::Busy);
         self.states.insert(session_id.to_string(), AgentState::Busy);
         self.last_output
             .insert(session_id.to_string(), Instant::now());
         self.idle_since.remove(session_id);
         self.notified.remove(session_id);
+        resumed
     }
 
     pub fn acknowledge(&mut self, session_id: &str) {
@@ -313,6 +319,7 @@ mod tests {
     fn silence_check_skipped_for_hook_enabled_sessions() {
         let mut state = NotifyState::new();
         state.register_session("s1", "test", "project", true);
+        let _ = state.notify_busy("s1");
         state.notify_output("s1");
         state.advance_time("s1", Duration::from_secs(10));
         assert!(!state.check_silence("s1"));
@@ -347,6 +354,31 @@ mod tests {
     }
 
     #[test]
+    fn busy_hook_is_a_resume_unless_already_busy() {
+        let mut state = NotifyState::new();
+        state.register_session("s1", "test", "project", true);
+        assert!(state.notify_busy("s1"));
+        // Repeated busy signals while working (one per tool call).
+        assert!(!state.notify_busy("s1"));
+
+        state.notify_stop_debounced("s1");
+        state.advance_time("s1", Duration::from_secs(3));
+        assert!(state.check_debounce("s1"));
+        assert_eq!(state.get_state("s1"), Some(AgentState::Idle));
+        assert!(state.notify_busy("s1"));
+    }
+
+    #[test]
+    fn first_prompt_after_restart_resumes_a_hook_session_despite_redraw_output() {
+        let mut state = NotifyState::new();
+        state.register_session("s1", "test", "project", true);
+        // The attach redraw must not mark it busy; only hooks do.
+        state.notify_output("s1");
+        assert_ne!(state.get_state("s1"), Some(AgentState::Busy));
+        assert!(state.notify_busy("s1"));
+    }
+
+    #[test]
     fn debounced_stop_cancelled_by_busy_hook() {
         // An explicit busy hook signal (notify_busy) SHOULD cancel the debounce.
         let mut state = NotifyState::new();
@@ -355,7 +387,7 @@ mod tests {
         state.notify_stop_debounced("s1");
         state.advance_time("s1", Duration::from_secs(1));
         // Busy hook fires (user submitted a new prompt)
-        state.notify_busy("s1");
+        let _ = state.notify_busy("s1");
         state.advance_time("s1", Duration::from_secs(2));
         assert!(!state.check_debounce("s1"));
     }
@@ -419,7 +451,7 @@ mod tests {
         state.register_session("s1", "agent-1", "project-a", true);
 
         // Simulate: agent worked, then stopped → Idle
-        state.notify_busy("s1");
+        let _ = state.notify_busy("s1");
         assert_eq!(state.get_state("s1"), Some(AgentState::Busy));
         let fired = state.notify_stop_immediate("s1");
         assert!(fired);

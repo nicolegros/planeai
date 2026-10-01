@@ -23,6 +23,7 @@ function makeSession(id: string, projectId: string, taskKey: string | null = nul
     tab_count: 1,
     base_branch: null,
     task_key: taskKey,
+    task_project_id: null,
   };
 }
 
