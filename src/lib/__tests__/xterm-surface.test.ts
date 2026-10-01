@@ -59,15 +59,23 @@ describe("color scheme reports (DEC mode 2031)", () => {
 
   function setup() {
     const replies: string[] = [];
+    const pty = { live: true };
     const surface = createXtermSurface({
       onData: () => {},
       onUserBytes: () => {},
-      onReply: (bytes) => replies.push(String.fromCharCode(...bytes)),
+      onReply: (bytes) => {
+        if (pty.live) replies.push(String.fromCharCode(...bytes));
+        return pty.live;
+      },
       onTitle: () => {},
     });
     const write = (data: string) =>
       new Promise<void>((resolve) => surface.write(encoder.encode(data), resolve));
-    return { surface, replies, write };
+    const attach = () => {
+      surface.connected();
+      return write("");
+    };
+    return { surface, replies, pty, write, attach };
   }
 
   beforeEach(() => {
@@ -75,7 +83,8 @@ describe("color scheme reports (DEC mode 2031)", () => {
   });
 
   it("reports mode 2031 as resettable before it is enabled, and set after", async () => {
-    const { replies, write } = setup();
+    const { replies, write, attach } = setup();
+    await attach();
     await write("\x1b[?2031$p");
     await write("\x1b[?2031h");
     await write("\x1b[?2031$p");
@@ -91,8 +100,10 @@ describe("color scheme reports (DEC mode 2031)", () => {
   });
 
   it("notifies subscribed apps when the scheme flips", async () => {
-    const { surface, replies, write } = setup();
+    const { surface, replies, write, attach } = setup();
+    await attach();
     await write("\x1b[?1004;2031h");
+    surface.refreshAppearance();
     theme.dark = true;
     surface.refreshAppearance();
     surface.refreshAppearance();
@@ -102,7 +113,8 @@ describe("color scheme reports (DEC mode 2031)", () => {
   });
 
   it("stays silent for apps that did not subscribe or unsubscribed", async () => {
-    const { surface, replies, write } = setup();
+    const { surface, replies, write, attach } = setup();
+    await attach();
     theme.dark = true;
     surface.refreshAppearance();
     await write("\x1b[?2031h\x1b[?2031l");
@@ -111,13 +123,74 @@ describe("color scheme reports (DEC mode 2031)", () => {
     expect(replies).toEqual([]);
   });
 
-  it("drops the subscription on terminal reset", async () => {
-    const { surface, replies, write } = setup();
+  it("retries a flip the PTY did not receive once the app is reachable", async () => {
+    const { surface, replies, pty, write, attach } = setup();
+    await attach();
+    await write("\x1b[?2031h");
+    pty.live = false;
+    theme.dark = true;
+    surface.refreshAppearance();
+    pty.live = true;
+    await attach();
+    await attach();
+    expect(replies).toEqual(["\x1b[?997;1n"]);
+  });
+
+  it("brings a subscriber restored by the replay up to date", async () => {
+    const { replies, write, attach } = setup();
+    const replay = write("\x1b[?2031h");
+    await attach();
+    await replay;
+    expect(replies).toEqual(["\x1b[?997;2n"]);
+  });
+
+  it("stays silent when the replay shows the subscriber already quit", async () => {
+    const { replies, write, attach } = setup();
+    const replay = write("\x1b[?2031h\x1b[?2031l");
+    await attach();
+    await replay;
+    expect(replies).toEqual([]);
+  });
+
+  it("drops the subscription on surface reset", async () => {
+    const { surface, replies, write, attach } = setup();
+    await attach();
     await write("\x1b[?2031h");
     surface.reset();
+    theme.dark = true;
+    surface.refreshAppearance();
+    expect(replies).toEqual([]);
+    await write("\x1b[?2031h");
+    await attach();
+    expect(replies).toEqual(["\x1b[?997;1n"]);
+  });
+
+  it("drops the subscription on RIS", async () => {
+    const { surface, replies, write, attach } = setup();
+    await attach();
     await write("\x1b[?2031h\x1bc");
     theme.dark = true;
     surface.refreshAppearance();
     expect(replies).toEqual([]);
+  });
+
+  it("treats a subscription after a runtime RIS as a starting app", async () => {
+    const { surface, replies, write, attach } = setup();
+    await attach();
+    await write("\x1bc\x1b[?2031h");
+    surface.refreshAppearance();
+    theme.dark = true;
+    surface.refreshAppearance();
+    expect(replies).toEqual(["\x1b[?997;1n"]);
+  });
+
+  it("holds reports until the replay before attach is parsed", async () => {
+    const { surface, replies, write, attach } = setup();
+    await write("\x1b[?2031h");
+    theme.dark = true;
+    surface.refreshAppearance();
+    expect(replies).toEqual([]);
+    await attach();
+    expect(replies).toEqual(["\x1b[?997;1n"]);
   });
 });

@@ -20,8 +20,8 @@ export interface TerminalSurfaceHandlers {
   onData: (data: string) => void;
   /** Bytes produced by paste or terminal shortcuts. */
   onUserBytes: (bytes: number[]) => void;
-  /** Protocol replies and reports (e.g. DECRQM, color scheme changes) that are not user input. */
-  onReply: (bytes: number[]) => void;
+  /** Protocol replies and reports (e.g. DECRQM, color scheme changes) that are not user input; returns whether they reached the PTY. */
+  onReply: (bytes: number[]) => boolean;
   onTitle: (title: string) => void;
 }
 
@@ -38,6 +38,8 @@ export interface TerminalSurface {
   reset(): void;
   setGpu(enabled: boolean): void;
   refreshAppearance(): void;
+  /** Called once per connection when it goes live; reports a color scheme subscription the replay left on. */
+  connected(): void;
   focus(): void;
   blur(): void;
   dispose(): void;
@@ -164,7 +166,9 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
       writeUserBytes(bytes);
     },
     onReply: (bytes) => {
-      if (isLive()) pty.write(ptyKey, bytes);
+      if (!isLive()) return false;
+      pty.write(ptyKey, bytes);
+      return true;
     },
     onTitle: (title) => options.onTitle?.(title),
   });
@@ -261,6 +265,7 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
         attempt.status = "live";
         // Bring the PTY to the surface's size; the kernel ignores a no-op.
         pty.resize(ptyKey, currentGeometry());
+        surface.connected();
         deliver(attempt, (e) => e.attached?.());
       })
       .catch((error) => {

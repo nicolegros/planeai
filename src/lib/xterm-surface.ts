@@ -80,9 +80,22 @@ export function createXtermSurface(handlers: TerminalSurfaceHandlers): TerminalS
   let host: HTMLElement | null = null;
 
   let colorSchemeReports = false;
-  let reportedDark = isDark();
+  // Scheme the app last received; null when a replayed subscription has not been reported yet.
+  let reportedDark: boolean | null = null;
+  // Output parsed after the attach sync comes from apps running now, not from the replay.
+  let attached = false;
   const reply = (text: string) => handlers.onReply(Array.from(encoder.encode(text)));
-  const reportColorScheme = (dark: boolean) => reply(`\x1b[?997;${dark ? 1 : 2}n`);
+  const reportColorScheme = () => {
+    const dark = isDark();
+    if (reply(`\x1b[?997;${dark ? 1 : 2}n`)) reportedDark = dark;
+  };
+  const syncColorScheme = () => {
+    if (attached && colorSchemeReports && isDark() !== reportedDark) reportColorScheme();
+  };
+  const resetColorScheme = () => {
+    colorSchemeReports = false;
+    reportedDark = null;
+  };
 
   // xterm answers DECRQM incorrectly; report every mode but 2031 as "not recognized".
   const parser = (term as unknown as { parser?: CsiParser }).parser;
@@ -102,20 +115,24 @@ export function createXtermSurface(handlers: TerminalSurfaceHandlers): TerminalS
       ["l", false],
     ] as const) {
       parser.registerCsiHandler({ prefix: "?", final }, (params) => {
-        if (params.includes(COLOR_SCHEME_MODE)) colorSchemeReports = enabled;
+        if (params.includes(COLOR_SCHEME_MODE)) {
+          colorSchemeReports = enabled;
+          // A starting app reads the scheme itself (OSC 11, 996); a replayed one waits for the sync.
+          if (enabled && attached) reportedDark = isDark();
+        }
         return false;
       });
     }
     parser.registerCsiHandler({ prefix: "?", final: "n" }, (params) => {
       if (params[0] !== COLOR_SCHEME_QUERY) return false;
-      reportColorScheme(isDark());
+      reportColorScheme();
       return true;
     });
+    parser.registerEscHandler?.({ final: "c" }, () => {
+      resetColorScheme();
+      return false;
+    });
   }
-  parser?.registerEscHandler?.({ final: "c" }, () => {
-    colorSchemeReports = false;
-    return false;
-  });
 
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== "keydown") return true;
@@ -211,7 +228,8 @@ export function createXtermSurface(handlers: TerminalSurfaceHandlers): TerminalS
     },
 
     reset() {
-      colorSchemeReports = false;
+      resetColorScheme();
+      attached = false;
       term.reset();
     },
 
@@ -243,9 +261,15 @@ export function createXtermSurface(handlers: TerminalSurfaceHandlers): TerminalS
       term.options.macOptionIsMeta = option_as_meta;
       if (host) host.style.backgroundColor = theme.background || "#000";
       webgl?.clearTextureAtlas();
-      const dark = isDark();
-      if (dark !== reportedDark && colorSchemeReports) reportColorScheme(dark);
-      reportedDark = dark;
+      syncColorScheme();
+    },
+
+    connected() {
+      // Queued behind the replay, so it sees the subscription state the replay ends with.
+      term.write("", () => {
+        attached = true;
+        syncColorScheme();
+      });
     },
 
     focus() {
