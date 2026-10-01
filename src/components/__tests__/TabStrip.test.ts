@@ -69,4 +69,50 @@ describe("TabStrip", () => {
     expect(doubleClick).toHaveBeenCalledWith("session-1");
     unmount(component);
   });
+
+  function mountDraggable(onTabDrop: (e: DragEvent, index: number) => void) {
+    const target = document.body.appendChild(document.createElement("div"));
+    return mount(TabStrip, {
+      target,
+      props: {
+        tabs: [
+          { id: "a", label: "A", icon: "bot", type: "agent" },
+          { id: "a:1", label: "Shell", icon: "terminal", type: "shell" },
+        ],
+        activeTabId: "a",
+        draggable: true,
+        onSelectTab: vi.fn(),
+        onTabDrop,
+      },
+    });
+  }
+
+  function dragTo(element: Element, clientX: number) {
+    element.dispatchEvent(new MouseEvent("dragover", { bubbles: true, cancelable: true, clientX }));
+    element.dispatchEvent(new MouseEvent("drop", { bubbles: true, cancelable: true, clientX }));
+  }
+
+  it("drops at the end anywhere past the last tab", async () => {
+    const drop = vi.fn();
+    const component = mountDraggable(drop);
+    await tick();
+
+    dragTo(document.querySelector('[role="tablist"]')!, 500);
+    expect(drop).toHaveBeenCalledWith(expect.anything(), 2);
+    unmount(component);
+  });
+
+  it("drops before or after a tab by which half of it is under the pointer", async () => {
+    const drop = vi.fn();
+    const component = mountDraggable(drop);
+    await tick();
+    const first = document.querySelectorAll('[role="tab"]')[0].parentElement!;
+    first.getBoundingClientRect = () => ({ left: 0, width: 100 }) as DOMRect;
+
+    dragTo(first, 20);
+    expect(drop).toHaveBeenLastCalledWith(expect.anything(), 0);
+    dragTo(first, 80);
+    expect(drop).toHaveBeenLastCalledWith(expect.anything(), 1);
+    unmount(component);
+  });
 });
