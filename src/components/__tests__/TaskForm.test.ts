@@ -275,3 +275,89 @@ describe("TaskForm - Start session toggle", () => {
     expect(onSubmitted).toHaveBeenCalled();
   });
 });
+
+describe("TaskForm - Random default title", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function titleInput(target: HTMLElement) {
+    return target.querySelector("[data-field='title'] input") as HTMLInputElement;
+  }
+
+  it("prefills a kebab-case random title in create mode", () => {
+    const target = renderForm();
+    expect(titleInput(target).value).toMatch(/^[a-z]+-[a-z]+$/);
+  });
+
+  it("keeps the provided initial title", () => {
+    const target = renderForm({ initial: { title: "Given title" } });
+    expect(titleInput(target).value).toBe("Given title");
+  });
+
+  it("does not generate a title in edit mode", () => {
+    const target = renderForm({ mode: "edit", initial: { key: "TASK-1" } });
+    expect(titleInput(target).value).toBe("");
+  });
+
+  it("enables submit with the generated title", () => {
+    const target = renderForm();
+    const submitBtn = target.querySelector("button[type='submit']") as HTMLButtonElement;
+    expect(submitBtn.disabled).toBe(false);
+  });
+
+  it("selects the generated title on focus", () => {
+    const target = renderForm();
+    document.body.appendChild(target);
+    const input = titleInput(target);
+    input.focus();
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+    target.remove();
+  });
+
+  it("keeps the selection when focusing the generated title with a click", () => {
+    const target = renderForm();
+    document.body.appendChild(target);
+    const input = titleInput(target);
+    input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    input.focus();
+    const mouseup = new MouseEvent("mouseup", { bubbles: true, cancelable: true });
+    input.dispatchEvent(mouseup);
+    expect(mouseup.defaultPrevented).toBe(true);
+
+    const nextMouseup = new MouseEvent("mouseup", { bubbles: true, cancelable: true });
+    input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    input.dispatchEvent(nextMouseup);
+    expect(nextMouseup.defaultPrevented).toBe(false);
+    target.remove();
+  });
+
+  it("generates a title when the initial title is empty", () => {
+    const target = renderForm({ initial: { title: "" } });
+    expect(titleInput(target).value).toMatch(/^[a-z]+-[a-z]+$/);
+  });
+
+  it("does not select the title on focus once edited", () => {
+    const target = renderForm();
+    document.body.appendChild(target);
+    const input = titleInput(target);
+    input.value = "My own title";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    input.setSelectionRange(input.value.length, input.value.length);
+    input.blur();
+    input.focus();
+    expect(input.selectionStart).toBe(input.value.length);
+    target.remove();
+  });
+
+  it("submits the generated title when left untouched", async () => {
+    const target = renderForm();
+    const generated = titleInput(target).value;
+    target.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true }));
+    await tick();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockCreateTask).toHaveBeenCalledWith(expect.objectContaining({ title: generated }));
+  });
+});

@@ -7,6 +7,7 @@
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { renderTemplate } from "../lib/render-template";
+  import { randomTaskName } from "../lib/random-task-name";
   import { LoaderCircle } from "@lucide/svelte";
   import * as taskStore from "../lib/task-store.svelte";
 
@@ -38,7 +39,11 @@
   const providerKeys = $derived(Object.keys(config.providers ?? {}));
 
   // svelte-ignore state_referenced_locally
-  let formTitle = $state(initial.title ?? "");
+  const generatedTitle = mode === "create" && !initial.title ? randomTaskName() : "";
+  // svelte-ignore state_referenced_locally
+  let formTitle = $state(initial.title || generatedTitle);
+  // WebKit's mouseup after a click-to-focus would collapse the selection made on focus.
+  let keepTitleSelection = false;
   // svelte-ignore state_referenced_locally
   let formDescription = $state(initial.description ?? "");
   // svelte-ignore state_referenced_locally
@@ -308,7 +313,13 @@
 
     <div class="space-y-1" data-field="title">
       <Label>Title <span class="font-mono text-[10px] px-1 rounded {badge}">T</span></Label>
-      <Input bind:value={formTitle} placeholder="Task title" />
+      <Input
+        bind:value={formTitle}
+        placeholder="Task title"
+        onfocus={(e) => { if (generatedTitle && formTitle === generatedTitle) e.currentTarget.select(); }}
+        onmousedown={(e) => { keepTitleSelection = !!generatedTitle && formTitle === generatedTitle && document.activeElement !== e.currentTarget; }}
+        onmouseup={(e) => { if (keepTitleSelection) e.preventDefault(); keepTitleSelection = false; }}
+      />
     </div>
 
     <div class="space-y-1" data-field="desc">
