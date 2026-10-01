@@ -1,7 +1,6 @@
 <script lang="ts">
   import { getActiveZone, getExplorerReturnZone } from "../lib/focus.svelte";
-  import { getDiffTabActive } from "../lib/tab-layout.svelte";
-  import { getActiveSessionId } from "../lib/session-orchestrator.svelte";
+  import { taskWorkspaceLayout } from "../lib/task-workspace-layout.svelte";
   import { MOD_ENTER_HINT, MOD_LABEL } from "../lib/keyboard";
 
   const TERMINAL_HINTS = [
@@ -49,10 +48,7 @@
     { k: MOD_ENTER_HINT, l: "Send feedback" },
   ];
 
-  let isDiffActive = $derived((() => {
-    const sid = getActiveSessionId();
-    return sid ? (getDiffTabActive()[sid] ?? false) : false;
-  })());
+  let isDiffActive = $derived(taskWorkspaceLayout.focusedTab()?.type === "diff");
 
   let activeZone = $derived(getActiveZone());
   let hints = $derived(activeZone === "explorer"

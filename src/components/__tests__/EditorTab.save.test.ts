@@ -15,12 +15,17 @@ vi.mock("../../lib/settings.svelte", () => ({
 }));
 vi.mock("../../lib/session-orchestrator.svelte", () => ({ recordUserInput: vi.fn() }));
 vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
+const workspace = vi.hoisted(() => ({ layout: null as Layout | null }));
+vi.mock("../../lib/task-workspace-layout.svelte", async () => {
+  const { focusedTabOf } = await import("../../lib/layout-tree");
+  return { taskWorkspaceLayout: { focusedTab: () => focusedTabOf(workspace.layout) } };
+});
 vi.mock("../../lib/vim-registry", () => ({
   registerEditor: vi.fn(),
   unregisterEditor: vi.fn(),
 }));
 
-import * as splitTree from "../../lib/split-tree.svelte";
+import { createLayout, focusTab, type Layout } from "../../lib/layout-tree";
 import { _resetEditorResources, saveActiveEditorResource } from "../../lib/editor-resources";
 import EditorTab from "../EditorTab.svelte";
 
@@ -38,8 +43,7 @@ describe("EditorTab save command wiring", () => {
     mockGit.readFile.mockResolvedValue("const answer = 42;\n");
     mockGit.writeFile.mockResolvedValue(undefined);
 
-    splitTree.resetTree();
-    splitTree.initTree(
+    workspace.layout = createLayout(
       [
         { ptyKey: SESSION, label: "Agent", icon: "bot", type: "agent" },
         { ptyKey: PTY_KEY, label: "example.ts", icon: "file", type: "editor", filePath: FILE },
@@ -68,7 +72,7 @@ describe("EditorTab save command wiring", () => {
     if (component) unmount(component);
     component = null;
     target.remove();
-    splitTree.resetTree();
+    workspace.layout = null;
   });
 
   it("saves the front editor tab through the workspace layout", async () => {
@@ -85,7 +89,7 @@ describe("EditorTab save command wiring", () => {
     await tick();
     await vi.waitFor(() => expect(mockGit.readFile).toHaveBeenCalled());
 
-    splitTree.focusTab(SESSION);
+    workspace.layout = focusTab(workspace.layout!, SESSION);
 
     expect(saveActiveEditorResource()).toBe(false);
     expect(mockGit.writeFile).not.toHaveBeenCalled();

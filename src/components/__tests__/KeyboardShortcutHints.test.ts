@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 
-vi.mock("../../lib/session-orchestrator.svelte", () => ({
-  getActiveSessionId: () => null,
-}));
-vi.mock("../../lib/tab-layout.svelte", () => ({
-  getDiffTabActive: () => ({}),
+const layout = vi.hoisted(() => ({ focusedTabType: null as string | null }));
+vi.mock("../../lib/task-workspace-layout.svelte", () => ({
+  taskWorkspaceLayout: {
+    focusedTab: () => (layout.focusedTabType ? { type: layout.focusedTabType } : null),
+  },
 }));
 
 import KeyboardHelperBar from "../KeyboardHelperBar.svelte";
@@ -50,6 +50,7 @@ describe("editor feedback shortcut hints", () => {
     for (const target of targets) target.remove();
     components = [];
     targets = [];
+    layout.focusedTabType = null;
     focusTerminal();
     vi.useRealTimers();
   });
@@ -63,6 +64,16 @@ describe("editor feedback shortcut hints", () => {
     expect(target.textContent).toContain("Comment");
     expect(target.textContent).toContain(MOD_ENTER_HINT);
     expect(target.textContent).toContain("Send feedback");
+  });
+
+  it("shows diff navigation hints while the focused pane shows a diff", async () => {
+    layout.focusedTabType = "diff";
+    focusTerminal();
+    const target = mountHelperBar();
+    await tick();
+
+    expect(target.textContent).toContain("Hunk");
+    expect(target.textContent).toContain("Unified/Split");
   });
 
   it("lists the feedback send shortcut in the editor shortcut reference", async () => {

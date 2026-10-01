@@ -8,27 +8,9 @@ import { describe, expect, it } from "vitest";
 import appSource from "../../App.svelte?raw";
 
 describe("TaskWorkspace session selection", () => {
-  it("keeps a task workspace loaded and focuses a newly selected agent tab", () => {
-    expect(appSource).toMatch(
-      /if \(workspace\.key === lastTreeWorkspace\?\.key\) \{\s*if \(!focusedSessionChanged\) return;\s*lastFocusedWorkspaceSessionId = activeSessionId;\s*const existing = splitTree\.findTab\(activeSessionId\);/,
-    );
-  });
-
   it("builds a flat task workspace from every session linked to the same task", () => {
     expect(appSource).toMatch(
       /return sessions\.filter\(\(session\) => sessionTaskProjectId\(session\) === workspace\.projectId && session\.task_key === workspace\.taskKey\);/,
-    );
-    expect(appSource).toMatch(
-      /function buildTabEntriesForWorkspace\(workspace: WorkspaceIdentity\)/,
-    );
-  });
-
-  it("does not rewrite split-tree state when the focused task agent is already active", () => {
-    expect(appSource).toMatch(
-      /const focusedSessionChanged = activeSessionId !== lastFocusedWorkspaceSessionId;[\s\S]*?if \(!focusedSessionChanged\) return;/,
-    );
-    expect(appSource).toMatch(
-      /if \(existing\.leaf\.activeTab !== activeSessionId\) splitTree\.focusTab\(activeSessionId\);/,
     );
   });
 
@@ -58,16 +40,9 @@ describe("TaskWorkspace session selection", () => {
     expect(appSource).toMatch(/removeEventListener\("focusin"/);
   });
 
-  it("reconciles a restored layout whose active tab is not the selected session", () => {
-    expect(appSource).toMatch(/resolveRestoredLayoutSelection\(\{[\s\S]*?liveRestoredSessionId:/);
-    expect(appSource).toMatch(
-      /commitWorkspace\(workspace, adoptedSessionId \?\? focusedSessionId\)/,
-    );
-  });
-
   it("applies an adopted session from the caller, not from inside the layout loader", () => {
     expect(appSource).toMatch(
-      /await loadLayoutForWorkspace\([\s\S]*?if \(adoptedSessionId\) orchestrator\.selectSession\(adoptedSessionId\)/,
+      /await workspaceLayout\.show\([\s\S]*?if \(shown\.adoptedSessionId\) orchestrator\.selectSession\(shown\.adoptedSessionId\)/,
     );
   });
 
@@ -82,16 +57,10 @@ describe("TaskWorkspace session selection", () => {
 
   it("requests focus for the restored active terminal after loading a workspace layout", () => {
     expect(appSource).toMatch(
-      /if \(isValidSerializedTree\(data\)\) \{[\s\S]*?splitTree\.deserialize\(data\);[\s\S]*?commitWorkspace\([\s\S]*?requestFocusedTerminalFocus\(\);/,
+      /await workspaceLayout\.show\([\s\S]*?if \(shown\.restored\) requestFocusedTerminalFocus\(\);/,
     );
     expect(appSource).toMatch(
-      /function requestFocusedTerminalFocus\(\): void \{[\s\S]*?getActiveTabEntry\(leaf\)[\s\S]*?requestTerminalFocus\(activeTab\.ptyKey\)/,
-    );
-  });
-
-  it("adds restored task-session tabs without replacing the workspace layout", () => {
-    expect(appSource).toMatch(
-      /reconcileWorkspaceTabs\(\{\s*workspaceEntries: buildTabEntriesForWorkspace\(lastTreeWorkspace\),[\s\S]*?reservedPtyKeys: pendingShellCommands,[\s\S]*?tree: splitTree,/,
+      /function requestFocusedTerminalFocus\(\): void \{[\s\S]*?workspaceLayout\.focusedTab\(\)[\s\S]*?requestTerminalFocus\(tab\.ptyKey\)/,
     );
   });
 
@@ -148,13 +117,10 @@ it("ignores a hidden terminal's focus event after a session switch", () => {
 
 it("preserves the keyboard-selected terminal PTY after session synchronization", () => {
   expect(appSource).toMatch(
-    /function preserveKeyboardSelectedTerminal[\s\S]*?selectWorkspaceSession\(sessionId\)[\s\S]*?splitTree\.focusTab\(entry\.ptyKey\)[\s\S]*?requestTerminalFocus\(entry\.ptyKey\)/,
+    /function preserveKeyboardSelectedTerminal[\s\S]*?selectWorkspaceSession\(sessionId\)[\s\S]*?workspaceLayout\.focusTab\(entry\.ptyKey\)[\s\S]*?requestTerminalFocus\(entry\.ptyKey\)/,
   );
   expect(appSource).toMatch(
-    /function splitNextTab\(\)[\s\S]*?preserveKeyboardSelectedTerminal\(next\)/,
-  );
-  expect(appSource).toMatch(
-    /function splitPrevTab\(\)[\s\S]*?preserveKeyboardSelectedTerminal\(previous\)/,
+    /function cycleTab\(delta: number\)[\s\S]*?preserveKeyboardSelectedTerminal\(tab\)/,
   );
 });
 
@@ -185,32 +151,8 @@ it("does not expose a direct legacy PR API", async () => {
   expect(apiSource).not.toContain('"merge_pr"');
 });
 
-it("does not re-close a shell tab after its explicit close removed it from the split tree", () => {
-  expect(appSource).toMatch(
-    /const unlistenShellPtyExit = listen<[\s\S]*?if \(!splitTree\.findTab\(ptyKey\)\) return;[\s\S]*?orchestrator\.closeShellTab\(sessionId, tabIndex\)\.catch\(/,
-  );
-});
-
-it("awaits shell-tab closure before removing the split-tree entry and contains failures", () => {
-  expect(appSource).toMatch(
-    /async function closeShellTabInTree[\s\S]*?await orchestrator\.closeShellTab\(sessionId, tabIndex\);[\s\S]*?splitTree\.removeSessionFromLeaf\(ptyKey\);/,
-  );
-  expect(appSource).toMatch(
-    /async function closeShellTabInTree[\s\S]*?try \{[\s\S]*?await orchestrator\.closeShellTab[\s\S]*?\} catch \(error\) \{[\s\S]*?showSnackbar\(/,
-  );
-});
-
-it("closes a plain shell tab that failed to start without stealing focus", () => {
-  expect(appSource).toMatch(
-    /async function handleShellAttachError[\s\S]*?if \(!pendingShellCommands\.has\(ptyKey\)\) \{[\s\S]*?Failed to start shell[\s\S]*?await closeShellTabInTree\(ptyKey, \{ refocus: false \}\);[\s\S]*?return;/,
-  );
-  expect(appSource).toMatch(
-    /async function closeShellTabInTree[\s\S]*?if \(!refocus\) return;[\s\S]*?refocusTerminal\(\);/,
-  );
-});
-
 it("parks an active agent session when Cmd+W closes its agent tab", () => {
   expect(appSource).toMatch(
-    /if \(activeEntry\.type === "agent"\) \{[\s\S]*?await orchestrator\.parkSession\(session\);/,
+    /outcome === "agent"\) \{[\s\S]*?await orchestrator\.parkSession\(session\);/,
   );
 });

@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as splitTree from "../split-tree.svelte";
-import type { TabEntry } from "../split-tree.svelte";
+import * as tree from "../layout-tree";
+import type { Layout, TabEntry } from "../layout-tree";
+
+const workspace = vi.hoisted(() => ({ layout: null as Layout | null }));
+vi.mock("../task-workspace-layout.svelte", async () => {
+  const { focusedTabOf } = await import("../layout-tree");
+  return { taskWorkspaceLayout: { focusedTab: () => focusedTabOf(workspace.layout) } };
+});
 import {
   _resetEditorResources,
   activeEditorResourceKey,
@@ -23,18 +29,18 @@ const editor: TabEntry = {
 };
 
 beforeEach(() => {
-  splitTree.resetTree();
+  workspace.layout = null;
   _resetEditorResources();
 });
 
 describe("activeEditorResourceKey", () => {
   it("returns the front editor tab of the focused pane", () => {
-    splitTree.initTree([agent, editor], EDITOR_KEY);
+    workspace.layout = tree.createLayout([agent, editor], EDITOR_KEY);
     expect(activeEditorResourceKey()).toBe(EDITOR_KEY);
   });
 
   it("returns null when the front tab is not an editor", () => {
-    splitTree.initTree([agent, editor], SESSION);
+    workspace.layout = tree.createLayout([agent, editor], SESSION);
     expect(activeEditorResourceKey()).toBeNull();
   });
 
@@ -43,10 +49,9 @@ describe("activeEditorResourceKey", () => {
   });
 
   it("ignores an editor tab that is open in an unfocused pane", () => {
-    splitTree.initTree([agent], SESSION);
-    const otherLeafId = splitTree.splitFocusedLeaf("vertical")!;
-    splitTree.addSessionToLeaf(otherLeafId, editor);
-    splitTree.setFocusedLeaf(splitTree.getLeafForSession(SESSION)!.id);
+    const split = tree.splitFocused(tree.createLayout([agent], SESSION), "vertical")!;
+    const withEditor = tree.addTab(split.layout, split.leafId, editor);
+    workspace.layout = tree.focusTab(withEditor, SESSION);
 
     expect(activeEditorResourceKey()).toBeNull();
   });
@@ -54,7 +59,7 @@ describe("activeEditorResourceKey", () => {
 
 describe("saveActiveEditorResource", () => {
   it("saves the editor tab in the focused pane", () => {
-    splitTree.initTree([agent, editor], EDITOR_KEY);
+    workspace.layout = tree.createLayout([agent, editor], EDITOR_KEY);
     const save = vi.fn();
     registerEditorResource(EDITOR_KEY, { save });
 
@@ -63,7 +68,10 @@ describe("saveActiveEditorResource", () => {
   });
 
   it("saves the file in front, not another open file of the same session", () => {
-    splitTree.initTree([agent, { ...editor, ptyKey: OTHER_EDITOR_KEY }, editor], EDITOR_KEY);
+    workspace.layout = tree.createLayout(
+      [agent, { ...editor, ptyKey: OTHER_EDITOR_KEY }, editor],
+      EDITOR_KEY,
+    );
     const front = vi.fn();
     const other = vi.fn();
     registerEditorResource(EDITOR_KEY, { save: front });
@@ -75,7 +83,7 @@ describe("saveActiveEditorResource", () => {
   });
 
   it("does nothing when the front tab is a terminal", () => {
-    splitTree.initTree([agent, editor], SESSION);
+    workspace.layout = tree.createLayout([agent, editor], SESSION);
     const save = vi.fn();
     registerEditorResource(EDITOR_KEY, { save });
 
@@ -84,7 +92,7 @@ describe("saveActiveEditorResource", () => {
   });
 
   it("does nothing once the editor tab has unmounted", () => {
-    splitTree.initTree([agent, editor], EDITOR_KEY);
+    workspace.layout = tree.createLayout([agent, editor], EDITOR_KEY);
     const save = vi.fn();
     registerEditorResource(EDITOR_KEY, { save });
     unregisterEditorResource(EDITOR_KEY);

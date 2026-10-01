@@ -4,26 +4,25 @@
    * Renders tabs with border-b-2 underline style, a "+" button, and an optional close button.
    */
   import { Bot, Terminal, GitCompare, FileCode, X } from "@lucide/svelte";
-  import type { Tab } from "../lib/session-tabs.svelte";
+  import type { PaneTab } from "../lib/task-workspace-layout.svelte";
 
   interface Props {
-    tabs: Tab[];
-    activeTabIndex: number;
-    activeTabId?: string;
+    tabs: PaneTab[];
+    activeTabId: string;
     focused?: boolean;
     showAddButton?: boolean;
     showCloseButton?: boolean;
     draggable?: boolean;
-    onSelectTab: (index: number, tabId?: string) => void;
+    onSelectTab: (tabId: string) => void;
     onAddTab?: () => void;
     onClose?: () => void;
-    onTabDragStart?: (e: DragEvent, tabIndex: number, tabId?: string) => void;
+    onTabDragStart?: (e: DragEvent, tabId: string) => void;
     onTabDrop?: (e: DragEvent, insertIndex: number) => void;
     onTabDragOver?: (e: DragEvent) => void;
-    onTabDoubleClick?: (index: number, tabId?: string) => void;
+    onTabDoubleClick?: (tabId: string) => void;
   }
 
-  let { tabs, activeTabIndex, activeTabId, focused = true, showAddButton = true, showCloseButton = false, draggable = false, onSelectTab, onAddTab, onClose, onTabDragStart, onTabDrop, onTabDragOver, onTabDoubleClick }: Props = $props();
+  let { tabs, activeTabId, focused = true, showAddButton = true, showCloseButton = false, draggable = false, onSelectTab, onAddTab, onClose, onTabDragStart, onTabDrop, onTabDragOver, onTabDoubleClick }: Props = $props();
 
   const TAB_ICONS: Record<string, typeof Bot> = { bot: Bot, "git-compare": GitCompare, file: FileCode, terminal: Terminal };
 
@@ -48,9 +47,9 @@
 </script>
 
 <div class="flex items-stretch h-[38px] flex-1" role="tablist" aria-label="Pane tabs">
-  {#each tabs as tab, i (tab.id ?? tab.index)}
+  {#each tabs as tab, i (tab.id)}
     {@const Icon = TAB_ICONS[tab.icon ?? 'terminal'] ?? Terminal}
-    {@const isActive = activeTabId ? tab.id === activeTabId : tab.index === activeTabIndex}
+    {@const isActive = tab.id === activeTabId}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="relative flex items-stretch"
@@ -67,9 +66,9 @@
         class="flex items-center gap-[7px] px-[13px] text-[12.5px] font-medium select-none border-b-2 transition-colors
           {isActive && focused ? 'border-accent text-t1' : isActive ? 'border-transparent text-t1' : 'border-transparent text-t2 hover:text-t1'}"
         draggable={draggable ? "true" : undefined}
-        ondragstart={draggable ? (e) => onTabDragStart?.(e, tab.index, tab.id) : undefined}
-        onclick={() => onSelectTab(tab.index, tab.id)}
-        ondblclick={onTabDoubleClick ? () => onTabDoubleClick(tab.index, tab.id) : undefined}
+        ondragstart={draggable ? (e) => onTabDragStart?.(e, tab.id) : undefined}
+        onclick={() => onSelectTab(tab.id)}
+        ondblclick={onTabDoubleClick ? () => onTabDoubleClick(tab.id) : undefined}
       >
         <Icon size={13} class={isActive && focused ? 'text-accent' : 'text-t3'} />
         {tab.label}

@@ -4,8 +4,8 @@
    * Internal nodes render two children with a divider.
    * Leaf nodes delegate to the parent via the `renderLeaf` snippet.
    */
-  import type { TreeNode, SplitNode, LeafNode } from "../lib/split-tree.svelte";
-  import { setRatio } from "../lib/split-tree.svelte";
+  import type { TreeNode, SplitNode, LeafNode } from "../lib/layout-tree";
+  import { taskWorkspaceLayout } from "../lib/task-workspace-layout.svelte";
   import SplitDivider from "./SplitDivider.svelte";
   import SplitContainer from "./SplitContainer.svelte";
   import type { Snippet } from "svelte";
@@ -38,8 +38,8 @@
     <SplitDivider
       direction={split.direction}
       currentRatio={split.ratio}
-      onResize={(ratio) => setRatio(split.id, ratio)}
-      onDoubleClick={() => setRatio(split.id, 0.5)}
+      onResize={(ratio) => taskWorkspaceLayout.setRatio(split.id, ratio)}
+      onDoubleClick={() => taskWorkspaceLayout.setRatio(split.id, 0.5)}
     />
     <div
       class="split-child"

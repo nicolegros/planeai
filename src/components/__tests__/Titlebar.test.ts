@@ -33,14 +33,12 @@ const baseProps = {
   projectName: "PlaneAI",
   sessionName: "Migration",
   sidebarVisible: true,
-  tabs: [{ index: 0, label: "Agent", icon: "bot" }],
-  activeTabIndex: 0,
-  sessionId: "session-42",
+  tabs: [{ id: "session-42", label: "Agent", icon: "bot", type: "agent" as const }],
+  activeTabId: "session-42",
   symphonyStatus: null,
   runningCount: 1,
   activeProvider: "kiro",
   onSelectTab: vi.fn(),
-  onCloseTab: vi.fn(),
   onAddTab: vi.fn(),
 };
 

@@ -31,7 +31,6 @@ const mockLaunch = vi.fn((_params?: unknown) =>
       worktree_path: null,
       provider: "claude",
       backend: "direct",
-      tab_count: 1,
       base_branch: "main",
       task_key: "TASK-2",
     },
