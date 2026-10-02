@@ -70,6 +70,7 @@ fn load_reads_existing_config_file() {
         sidebar_group_by: None,
         hide_task_keys: None,
         hide_project_labels: None,
+        post_merge_action: None,
         daemon_scrollback_bytes: None,
         scrollback_lines: None,
         web_links: None,
@@ -1009,4 +1010,34 @@ fn detect_provider_binaries_covers_configured_and_preset_agents() {
     assert!(found.contains_key("claude"));
     assert!(found.contains_key("codex"));
     assert!(found.contains_key("copilot"));
+}
+
+#[test]
+fn post_merge_action_survives_a_settings_update_round_trip() {
+    // `update_config` deserializes the frontend payload into `Config`; an unknown field is
+    // silently dropped, which used to discard the user's post-merge choice.
+    let mut payload = serde_json::to_value(Config::default()).unwrap();
+    payload["post_merge_action"] = serde_json::json!("destroy");
+    let config: Config = serde_json::from_value(payload).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    save(dir.path(), &config).unwrap();
+
+    let (reloaded, warnings) = load(dir.path());
+
+    assert!(warnings.is_empty());
+    assert_eq!(reloaded.post_merge_action, Some(PostMergeAction::Destroy));
+}
+
+#[test]
+fn unknown_post_merge_action_is_reported_as_a_config_error() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"post_merge_action": "explode"}"#,
+    )
+    .unwrap();
+
+    let (_, warnings) = load(dir.path());
+
+    assert_eq!(warnings.len(), 1);
 }

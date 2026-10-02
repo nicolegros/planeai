@@ -73,6 +73,15 @@ pub enum SidebarGroupBy {
     Status,
 }
 
+/// What happens to a task's session when the post-merge prompt times out.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PostMergeAction {
+    Archive,
+    Destroy,
+    Keep,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub appearance: Appearance,
@@ -99,6 +108,9 @@ pub struct Config {
     /// Only affects the status grouping, where rows from several projects are mixed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_project_labels: Option<bool>,
+    /// `None` archives, matching the frontend default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_merge_action: Option<PostMergeAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_scrollback_bytes: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -359,6 +371,7 @@ impl Default for Config {
             sidebar_group_by: None,
             hide_task_keys: None,
             hide_project_labels: None,
+            post_merge_action: None,
             daemon_scrollback_bytes: None,
             scrollback_lines: None,
             web_links: None,
