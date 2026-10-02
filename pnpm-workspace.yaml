@@ -1,8 +1,5 @@
 minimumReleaseAge: 10080
 
-minimumReleaseAgeExclude:
-  - nanoid
-
 onlyBuiltDependencies:
   - esbuild
   - "@tailwindcss/oxide"
