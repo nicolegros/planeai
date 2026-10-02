@@ -54,11 +54,11 @@
     {#if stacked}{@render resetButton()}{/if}
   </div>
   {#if stacked}
-    <div class:pointer-events-none={disabled} class:opacity-50={disabled}>{@render children()}</div>
+    <div class:pointer-events-none={disabled}>{@render children()}</div>
   {:else}
     <div class="flex shrink-0 items-center gap-2">
       {@render resetButton()}
-      <div class:pointer-events-none={disabled} class:opacity-50={disabled}>{@render children()}</div>
+      <div class:pointer-events-none={disabled}>{@render children()}</div>
     </div>
   {/if}
 </SettingAnchor>

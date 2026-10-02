@@ -49,6 +49,7 @@
 
   let loaded = $state(false);
   let inventory = $state<PluginInventory[]>([]);
+  let inventoryLoaded = $state(false);
   let windowWidth = $state(typeof window !== "undefined" ? window.innerWidth : 1024);
   let searchEl = $state<HTMLInputElement | null>(null);
   let unlistenNavigate: UnlistenFn | undefined;
@@ -126,7 +127,8 @@
     plugins
       .list()
       .then((list) => (inventory = list))
-      .catch((error) => console.warn("Failed to list plugins:", error));
+      .catch((error) => console.warn("Failed to list plugins:", error))
+      .finally(() => (inventoryLoaded = true));
     // Reveal the target now that its page can render, whether it came from the URL or an early event.
     if (settingsWindow.location.kind === "category" && settingsWindow.location.settingId) navigateSettings(settingsWindow.location);
   });
@@ -240,7 +242,9 @@
           </div>
         {/key}
       {:else if location.kind === "plugin"}
-        <p class="text-[13px] text-t3">This plugin page is not available. The plugin may be disabled or still starting.</p>
+        <p class="text-[13px] text-t3">
+          {inventoryLoaded ? "This plugin page is not available. The plugin may be disabled or still starting." : "Loading plugin…"}
+        </p>
       {:else if activeCategory}
         {@const Icon = ICONS[activeCategory.id]}
         <header class="mb-7 flex items-center gap-3">

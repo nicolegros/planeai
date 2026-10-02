@@ -201,6 +201,17 @@ describe("navigation", () => {
     expect(listenOrder).toBeLessThan(mocks.loadSettings.mock.invocationCallOrder[0]);
   });
 
+  it("shows loading, not an error, while a plugin deep link waits for the plugin list", async () => {
+    let resolvePlugins!: (list: unknown[]) => void;
+    mocks.pluginsList.mockReturnValue(new Promise((resolve) => (resolvePlugins = resolve)));
+    await render("/?page=preferences&plugin=jira%3Apreferences");
+    expect(document.body.textContent).toContain("Loading plugin…");
+    expect(document.body.textContent).not.toContain("not available");
+    resolvePlugins([]);
+    await flush();
+    expect(document.body.textContent).toContain("This plugin page is not available");
+  });
+
   it("nests plugin preference pages under Plugins and opens them", async () => {
     mocks.pluginsList.mockResolvedValue([
       {
