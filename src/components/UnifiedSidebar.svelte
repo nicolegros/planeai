@@ -1,14 +1,14 @@
 <script lang="ts">
   import { projects as projectsApi } from "../lib/api";
-  import { sessionTaskProjectId, type TaskItem, type Session, type Project, type PluginInventory, type PluginSessionAction, type PluginUiContribution, type LoopRunSummary, type LoopSessionItem } from "../lib/types";
+  import { sessionTaskProjectId, type TaskItem, type Session, type Project, type PluginInventory, type PluginSessionAction, type PluginUiContribution, type LoopRunSummary } from "../lib/types";
   import type { PluginSessionContext } from "../lib/plugin-sdk";
   import { pluginSessionActionsForProvider } from "../lib/plugin-session-actions";
   import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
-  import { isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "../lib/sidebar-session-order";
-  import { SESSIONS_SECTION_KEY, TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, isCollapsedByDefault, type SidebarLoopRow, type SidebarSection, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
-  import { currentLoopSessions, currentSidebarModel } from "../lib/sidebar-model-store.svelte";
+  import { isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId, toLoopId } from "../lib/sidebar-session-order";
+  import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, resolveSidebarGroupBy, sidebarNavItemKey, sidebarNavItems, type SidebarLoopRow, type SidebarNavItem, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
+  import { getSidebarModel } from "../lib/sidebar-model-store.svelte";
   import { sidebarViewMenuItems } from "../lib/sidebar-view-menu";
   import { projectContextMenuItems } from "../lib/project-context-menu";
   import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare, Play, Square } from "@lucide/svelte";
@@ -92,18 +92,17 @@
   const activeSessionId = $derived(orchestrator.getActiveSessionId());
   const agentStates = $derived(orchestrator.getAgentStates());
   const zone = $derived(getActiveZone());
-  const loopSessionsMap = $derived(currentLoopSessions());
-  const sections = $derived(currentSidebarModel(loopSessionsMap));
-  const groupBy = $derived(getSettings().sidebar_group_by ?? "project");
+  const sections = $derived(getSidebarModel());
+  const groupBy = $derived(resolveSidebarGroupBy(getSettings()));
   const showTaskKeys = $derived(!getSettings().hide_task_keys);
   // Project labels only make sense when rows from several projects are mixed.
   const showProjectLabels = $derived(groupBy === "status" && !getSettings().hide_project_labels);
 
   let navRef = $state<HTMLElement | undefined>(undefined);
   let sidebarWidth = $state(getLayoutWidth("sidebar", 266));
-  // Only sections the user explicitly toggled are stored; the rest fall back to their default.
+  // Only sections the user set away from their default are stored. Loop ids are short-lived, so loops stay in memory only.
   let collapsedSections = $state<Record<string, boolean>>(getCollapsedSections());
-  $effect(() => setCollapsedSections(collapsedSections));
+  $effect(() => setCollapsedSections(Object.fromEntries(Object.entries(collapsedSections).filter(([key]) => !isLoopId(key)))));
   let renameValue = $state("");
   let fadingSessionIds = $state<Set<string>>(new Set());
 
@@ -131,18 +130,14 @@
     projectAutoMode[project.id] = !current;
   }
 
-  function isCollapsed(key: string): boolean {
-    return collapsedSections[key] ?? isCollapsedByDefault(key);
+  function isCollapsed(key: string, fallback: boolean): boolean {
+    return collapsedSections[key] ?? fallback;
   }
 
-  // Empty projects default to collapsed unless explicitly toggled
-  function isProjectCollapsed(section: Extract<SidebarSection, { kind: "project" }>): boolean {
-    return collapsedSections[section.key] ?? (section.orphans.length === 0 && section.taskCount === 0);
-  }
-
-  function setCollapsed(key: string, collapsed: boolean) {
-    if (collapsedSections[key] === collapsed) return;
-    collapsedSections = { ...collapsedSections, [key]: collapsed };
+  function setCollapsed(key: string, collapsed: boolean, fallback: boolean) {
+    if (isCollapsed(key, fallback) === collapsed) return;
+    const { [key]: _previous, ...rest } = collapsedSections;
+    collapsedSections = collapsed === fallback ? rest : { ...rest, [key]: collapsed };
   }
 
   // Rename
@@ -166,7 +161,7 @@
   // Context menus
   let contextMenu = $state<{ x: number; y: number; session: Session } | null>(null);
   let projectContextMenu = $state<{ x: number; y: number; project: Project } | null>(null);
-  let taskContextMenu = $state<{ x: number; y: number; task: TaskItem; project: Project } | null>(null);
+  let taskContextMenu = $state<{ x: number; y: number; row: SidebarTaskRow } | null>(null);
   let loopContextMenu = $state<{ x: number; y: number; loop: LoopRunSummary } | null>(null);
   let viewMenu = $state<{ x: number; y: number } | null>(null);
   let loopSessionContextMenu = $state<{ x: number; y: number; session: Session; loopId: string } | null>(null);
@@ -201,12 +196,12 @@
 
   function onContextMenu(e: MouseEvent, session: Session) { e.preventDefault(); contextMenu = { x: e.clientX, y: e.clientY, session }; }
   function onProjectContextMenu(e: MouseEvent, project: Project) { e.preventDefault(); projectContextMenu = { x: e.clientX, y: e.clientY, project }; }
-  function onTaskContextMenu(e: MouseEvent, task: TaskItem, project: Project) { e.preventDefault(); taskContextMenu = { x: e.clientX, y: e.clientY, task, project }; }
+  function onTaskContextMenu(e: MouseEvent, row: SidebarTaskRow) { e.preventDefault(); taskContextMenu = { x: e.clientX, y: e.clientY, row }; }
 
-  // Rows and project headers have their own menus; empty space, group headers and the sessions section open view options.
+  // Empty space and group headers open view options. Rows, inputs, project headers and plugin slots keep their own menus.
   function onNavContextMenu(e: MouseEvent) {
     if (e.defaultPrevented) return;
-    if (e.composedPath().some((node) => node instanceof HTMLElement && node.dataset.pluginSidebarSlot !== undefined)) return;
+    if (e.composedPath().some((node) => node instanceof HTMLElement && (node.tagName === "LI" || node.tagName === "INPUT" || node.isContentEditable || node.dataset.pluginSidebarSlot !== undefined))) return;
     e.preventDefault();
     viewMenu = { x: e.clientX, y: e.clientY };
   }
@@ -223,12 +218,8 @@
   /** If previewing a session (not a loop), this is the session ID; otherwise null */
   const previewSessionId = $derived(previewId && !isLoopId(previewId) ? previewId : null);
 
-  function sessionForTask(key: string): Session | undefined {
-    return sessions.find(s => s.task_key === key);
-  }
-
-  function toggleSection(key: string, collapsed = isCollapsed(key)) {
-    setCollapsed(key, !collapsed);
+  function toggleSection(key: string, fallback: boolean) {
+    setCollapsed(key, !isCollapsed(key, fallback), fallback);
   }
 
   function handleTaskClick(task: TaskItem, project: Project) {
@@ -251,68 +242,40 @@
     }, 200);
   }
 
-  async function moveTask(task: TaskItem, project: Project, status: string, followSelection = false) {
-    await taskStore.moveTask(task.key, status, project.path);
+  async function moveTask(row: SidebarTaskRow, status: string, followSelection = false) {
+    const { task, project } = row;
+    const selectedBefore = getSelectedIndex();
+    try {
+      await taskStore.moveTask(task.key, status, project.path);
+    } catch (error) {
+      console.error("Failed to move task:", error);
+      showSnackbar("Failed to move task.");
+      return;
+    }
     onSessionsChanged?.();
-    if (followSelection) selectTaskOrItsGroup(project.id, task.key);
+    // Only follow when the user has not moved the selection while the move was in flight.
+    if (followSelection && getSelectedIndex() === selectedBefore) selectTaskOrItsGroup(project.id, task.key);
   }
 
   // After a status change the task lives in another group; keep the keyboard selection on it,
   // or on its group header when that group is collapsed.
   function selectTaskOrItsGroup(projectId: string, taskKey: string) {
-    const taskIdx = flatNavIndex.get(`task:${toTaskWorkspaceId(projectId, taskKey)}`);
+    const taskIdx = flatNavIndex.get(navKey.task(projectId, taskKey));
     if (taskIdx !== undefined) { setSelectedIndex(taskIdx); return; }
     for (const section of sections) {
       const groups = section.kind === "project" ? section.groups : section.kind === "status" ? [section.group] : [];
       const group = groups.find((g) => g.rows.some((r) => r.project.id === projectId && r.task.key === taskKey));
       if (!group) continue;
-      const groupIdx = flatNavIndex.get(`group:${group.key}`) ?? (section.kind === "project" ? flatNavIndex.get(`project:${section.project.id}`) : undefined);
+      const groupIdx = flatNavIndex.get(navKey.group(group.key)) ?? flatNavIndex.get(navKey.project(section.key));
       if (groupIdx !== undefined) setSelectedIndex(groupIdx);
       return;
     }
   }
 
   // Flat nav list for keyboard navigation
-  type NavItem =
-    | { type: "project_header"; section: Extract<SidebarSection, { kind: "project" }> }
-    | { type: "group_header"; key: string; parentKey: string | null }
-    | { type: "loop"; loop: LoopRunSummary }
-    | { type: "loop_session"; session: Session; loopId: string; item: LoopSessionItem }
-    | { type: "orphan"; session: Session }
-    | { type: "task"; task: TaskItem; project: Project }
-    | { type: "plugin"; contributionKey: string; row: PluginSidebarNavRow };
+  type NavItem = SidebarNavItem | { type: "plugin"; contributionKey: string; row: PluginSidebarNavRow };
   const flatNav = $derived.by(() => {
-    const result: NavItem[] = [];
-    const pushLoopsAndOrphans = (loops: SidebarLoopRow[], orphans: SidebarSessionRow[]) => {
-      for (const { loop } of loops) {
-        result.push({ type: "loop", loop });
-        if (collapsedSections[`loop:${loop.id}`]) continue;
-        for (const item of loopSessionsMap[loop.id] ?? []) {
-          const session = sessions.find(s => s.id === item.session_id);
-          if (session) result.push({ type: "loop_session", session, loopId: loop.id, item });
-        }
-      }
-      for (const { session } of orphans) result.push({ type: "orphan", session });
-    };
-    const pushGroup = (key: string, rows: SidebarTaskRow[], parentKey: string | null) => {
-      result.push({ type: "group_header", key, parentKey });
-      if (isCollapsed(key)) return;
-      for (const { task, project } of rows) result.push({ type: "task", task, project });
-    };
-    for (const section of sections) {
-      if (section.kind === "project") {
-        result.push({ type: "project_header", section });
-        if (isProjectCollapsed(section)) continue;
-        pushLoopsAndOrphans(section.loops, section.orphans);
-        for (const group of section.groups) pushGroup(group.key, group.rows, section.key);
-      } else if (section.kind === "sessions") {
-        result.push({ type: "group_header", key: section.key, parentKey: null });
-        if (isCollapsed(section.key)) continue;
-        pushLoopsAndOrphans(section.loops, section.orphans);
-      } else {
-        pushGroup(section.key, section.group.rows, null);
-      }
-    }
+    const result: NavItem[] = sidebarNavItems(sections, isCollapsed);
     for (const contribution of activePluginContributions.filter((item) => item.contribution.placement === "sidebar.section")) {
       const contributionKey = `${contribution.plugin.id}:${contribution.contribution.id}`;
       for (const row of getPluginSidebarRows(contributionKey)) {
@@ -326,13 +289,7 @@
   const flatNavIndex = $derived.by(() => {
     const map = new Map<string, number>();
     flatNav.forEach((item, i) => {
-      if (item.type === "project_header") map.set(item.section.key, i);
-      else if (item.type === "group_header") map.set(`group:${item.key}`, i);
-      else if (item.type === "loop") map.set(`loop:${item.loop.id}`, i);
-      else if (item.type === "loop_session") map.set(`loop_session:${item.session.id}`, i);
-      else if (item.type === "orphan") map.set(`orphan:${item.session.id}`, i);
-      else if (item.type === "task") map.set(`task:${toTaskWorkspaceId(item.project.id, item.task.key)}`, i);
-      else if (item.type === "plugin") map.set(`plugin:${item.contributionKey}:${item.row.id}`, i);
+      map.set(item.type === "plugin" ? `plugin:${item.contributionKey}:${item.row.id}` : sidebarNavItemKey(item), i);
     });
     return map;
   });
@@ -407,15 +364,15 @@
 
     let target: string | undefined;
     if (selectedLoopId) {
-      target = `loop:${selectedLoopId}`;
+      target = navKey.loop(selectedLoopId);
     } else if (activeSessionId) {
-      target = flatNavIndex.has(`loop_session:${activeSessionId}`)
-        ? `loop_session:${activeSessionId}`
-        : flatNavIndex.has(`orphan:${activeSessionId}`)
-          ? `orphan:${activeSessionId}`
+      target = flatNavIndex.has(navKey.loopSession(activeSessionId))
+        ? navKey.loopSession(activeSessionId)
+        : flatNavIndex.has(navKey.orphan(activeSessionId))
+          ? navKey.orphan(activeSessionId)
           : (() => {
               const active = sessions.find((session) => session.id === activeSessionId);
-              return active?.task_key ? `task:${toTaskWorkspaceId(sessionTaskProjectId(active), active.task_key)}` : undefined;
+              return active?.task_key ? navKey.task(sessionTaskProjectId(active), active.task_key) : undefined;
             })();
     }
 
@@ -441,19 +398,19 @@
 
     if (action.type === "collapse") {
       if (current.type === "project_header") {
-        setCollapsed(current.section.key, true);
+        setCollapsed(current.section.key, true, current.section.defaultCollapsed);
       } else if (current.type === "loop") {
-        setCollapsed(`loop:${current.loop.id}`, true);
+        setCollapsed(toLoopId(current.loop.id), true, false);
       } else if (current.type === "loop_session") {
         // Jump to parent loop
-        const loopIdx = flatNavIndex.get(`loop:${current.loopId}`);
+        const loopIdx = flatNavIndex.get(navKey.loop(current.loopId));
         if (loopIdx !== undefined) setSelectedIndex(loopIdx);
       } else if (current.type === "group_header") {
-        if (!isCollapsed(current.key)) {
-          setCollapsed(current.key, true);
+        if (!isCollapsed(current.key, current.defaultCollapsed)) {
+          setCollapsed(current.key, true, current.defaultCollapsed);
         } else if (current.parentKey) {
           // Already collapsed group → jump to project header
-          const parentIdx = flatNavIndex.get(current.parentKey);
+          const parentIdx = flatNavIndex.get(navKey.project(current.parentKey));
           if (parentIdx !== undefined) setSelectedIndex(parentIdx);
         }
       } else if (current.type === "task" || current.type === "orphan") {
@@ -472,11 +429,11 @@
 
     if (action.type === "expand") {
       if (current.type === "project_header") {
-        setCollapsed(current.section.key, false);
+        setCollapsed(current.section.key, false, current.section.defaultCollapsed);
       } else if (current.type === "loop") {
-        setCollapsed(`loop:${current.loop.id}`, false);
+        setCollapsed(toLoopId(current.loop.id), false, false);
       } else if (current.type === "group_header") {
-        setCollapsed(current.key, false);
+        setCollapsed(current.key, false, current.defaultCollapsed);
       } else if (current.type === "plugin") {
         current.row.onExpand?.();
       }
@@ -485,7 +442,7 @@
 
     if (current.type === "project_header") {
       if (action.type === "select") {
-        toggleSection(current.section.key, isProjectCollapsed(current.section));
+        toggleSection(current.section.key, current.section.defaultCollapsed);
       } else if (action.type === "edit") {
         onEditProject(current.section.project);
       }
@@ -493,7 +450,7 @@
     }
 
     if (current.type === "group_header") {
-      if (action.type === "select") toggleSection(current.key);
+      if (action.type === "select") toggleSection(current.key, current.defaultCollapsed);
       return;
     }
 
@@ -518,15 +475,15 @@
       else if (action.type === "restart") onRestartSession(session);
       else if (action.type === "review") { onSelectSession(session.id); onToggleDiff?.(); }
     } else if (current.type === "task") {
-      const task = current.task;
-      if (action.type === "select") handleTaskClick(task, current.project);
-      else if (action.type === "start_session") onPickTask(task, current.project.path);
+      const { task, project, linkedSession: linked } = current.row;
+      if (action.type === "select") handleTaskClick(task, project);
+      else if (action.type === "start_session") onPickTask(task, project.path);
       else if (action.type === "edit") taskPanelRef?.openEdit(task);
-      else if (action.type === "status") moveTask(task, current.project, action.status, true);
-      else if (action.type === "review") { const linked = sessionForTask(task.key); if (linked) { onSelectSession(linked.id); onToggleDiff?.(); } }
-      else if (action.type === "archive") { const linked = sessionForTask(task.key); if (linked) fadeOutThenAct(linked.id, () => onArchiveSession(linked)); }
-      else if (action.type === "delete") { const linked = sessionForTask(task.key); if (linked) onDeleteSession(linked); }
-      else if (action.type === "restart") { const linked = sessionForTask(task.key); if (linked) onRestartSession(linked); }
+      else if (action.type === "status") moveTask(current.row, action.status, true);
+      else if (action.type === "review") { if (linked) { onSelectSession(linked.id); onToggleDiff?.(); } }
+      else if (action.type === "archive") { if (linked) fadeOutThenAct(linked.id, () => onArchiveSession(linked)); }
+      else if (action.type === "delete") { if (linked) onDeleteSession(linked); }
+      else if (action.type === "restart") { if (linked) onRestartSession(linked); }
     } else if (current.type === "plugin" && action.type === "select") {
       current.row.onSelect?.();
     }
@@ -550,26 +507,34 @@
   {#if showProjectLabels}<span class="shrink-0 max-w-[40%] truncate text-[10px] text-t3" title={project.path}>{project.name}</span>{/if}
 {/snippet}
 
-{#snippet groupHeader(key: string, label: string, count: number, dotClass: string | null, level: "top" | "sub")}
-  {@const navIdx = flatNavIndex.get(`group:${key}`) ?? -1}
-  {@const isSelected = zone === 'sidebar' && navIdx === getSelectedIndex()}
-  {@const collapsed = isCollapsed(key)}
+{#snippet sectionHeader(navIdx: number, collapsed: boolean, onToggle: () => void, label: string, count: number, extras: { dotClass?: string | null; title?: string; oncontextmenu?: (e: MouseEvent) => void; autoDispatch?: boolean })}
+  <button
+    data-nav-index={navIdx}
+    class="w-full px-2 mb-1 text-[11px] font-semibold text-t2 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-panel-hi {zone === 'sidebar' && navIdx === getSelectedIndex() ? 'ring-2 ring-accent' : ''}"
+    title={extras.title}
+    aria-expanded={!collapsed}
+    onclick={onToggle}
+    oncontextmenu={extras.oncontextmenu}
+  >
+    {#if extras.dotClass}<span class="size-1.5 shrink-0 rounded-full {extras.dotClass}"></span>{/if}
+    {label}
+    <span class="ml-auto font-normal text-t3">{count}</span>
+    {#if extras.autoDispatch}<Zap class="size-2.5 text-status-running" />{/if}
+    {#if collapsed}<ChevronRight class="size-3 shrink-0 text-t3" />{:else}<ChevronDown class="size-3 shrink-0 text-t3" />{/if}
+  </button>
+{/snippet}
+
+{#snippet groupHeader(key: string, defaultCollapsed: boolean, label: string, count: number, dotClass: string | null, level: "top" | "sub")}
+  {@const navIdx = flatNavIndex.get(navKey.group(key)) ?? -1}
+  {@const collapsed = isCollapsed(key, defaultCollapsed)}
   {#if level === "top"}
-    <button
-      data-nav-index={navIdx}
-      class="w-full px-2 mb-1 text-[11px] font-semibold text-t2 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-panel-hi {isSelected ? 'ring-2 ring-accent' : ''}"
-      onclick={() => toggleSection(key)}
-    >
-      {#if dotClass}<span class="size-1.5 shrink-0 rounded-full {dotClass}"></span>{/if}
-      {label}
-      <span class="ml-auto font-normal text-t3">{count}</span>
-      {#if collapsed}<ChevronRight class="size-3 shrink-0 text-t3" />{:else}<ChevronDown class="size-3 shrink-0 text-t3" />{/if}
-    </button>
+    {@render sectionHeader(navIdx, collapsed, () => toggleSection(key, defaultCollapsed), label, count, { dotClass })}
   {:else}
     <button
       data-nav-index={navIdx}
-      class="w-full flex items-center gap-1.5 pl-2 pr-2 py-1 text-[9.5px] font-semibold text-t2 uppercase tracking-[.05em] hover:opacity-80 rounded-lg {isSelected ? 'ring-2 ring-accent' : ''}"
-      onclick={() => toggleSection(key)}
+      class="w-full flex items-center gap-1.5 pl-2 pr-2 py-1 text-[9.5px] font-semibold text-t2 uppercase tracking-[.05em] hover:opacity-80 rounded-lg {zone === 'sidebar' && navIdx === getSelectedIndex() ? 'ring-2 ring-accent' : ''}"
+      aria-expanded={!collapsed}
+      onclick={() => toggleSection(key, defaultCollapsed)}
     >
       {#if dotClass}<span class="size-1.5 rounded-full {dotClass}"></span>{/if}
       {label}
@@ -582,14 +547,12 @@
 {#snippet loopList(loops: SidebarLoopRow[])}
   {#if loops.length > 0}
     <ul class="space-y-0.5 mb-1">
-      {#each loops as { loop, project } (loop.id)}
-        {@const loopNavIdx = flatNavIndex.get(`loop:${loop.id}`) ?? -1}
+      {#each loops as { loop, project, children: childSessions } (loop.id)}
+        {@const loopNavIdx = flatNavIndex.get(navKey.loop(loop.id)) ?? -1}
         {@const isLoopSelected = zone === 'sidebar' && loopNavIdx === getSelectedIndex()}
         {@const isLoopDashboardActive = loop.id === selectedLoopId}
         {@const isLoopPreviewing = loop.id === previewLoopId}
-        {@const loopKey = `loop:${loop.id}`}
-        {@const loopCollapsed = collapsedSections[loopKey] ?? false}
-        {@const childSessions = loopSessionsMap[loop.id] ?? []}
+        {@const loopCollapsed = isCollapsed(toLoopId(loop.id), false)}
         <li>
           <!-- Loop item (aligned with status section headers) -->
           <div class="flex items-center gap-1.5">
@@ -646,44 +609,41 @@
           <!-- Indented child sessions -->
           {#if !loopCollapsed && childSessions.length > 0}
             <ul class="space-y-0.5 mt-0.5">
-              {#each childSessions as item (item.session_id)}
-                {@const childSession = sessions.find(s => s.id === item.session_id)}
-                {#if childSession}
-                  {@const childNavIdx = flatNavIndex.get(`loop_session:${childSession.id}`) ?? -1}
-                  {@const isChildActive = childSession.id === activeSessionId && !selectedLoopId}
-                  {@const isChildSelected = zone === 'sidebar' && childNavIdx === getSelectedIndex()}
-                  {@const isChildPreviewing = childSession.id === previewSessionId}
-                  <li>
-                    <div class="session-row relative flex items-center gap-1.5">
-                      <span class="w-[2px] self-stretch rounded-full transition-opacity {isChildActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
-                      <button
-                        data-nav-index={childNavIdx}
-                        class="flex-1 min-w-0 text-left py-[6px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg pl-4 pr-2
-                          {isChildActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
-                          {isChildPreviewing ? 'ring-2 ring-accent' : isChildSelected ? 'ring-2 ring-accent' : ''}"
-                        onclick={() => { onSelectSession(childSession.id); focusTerminal(); }}
-                        oncontextmenu={(e) => { e.preventDefault(); loopSessionContextMenu = { x: e.clientX, y: e.clientY, session: childSession, loopId: loop.id }; }}
-                      >
-                        <span class="shrink-0 font-mono text-[10px] text-t3">{item.role}</span>
-                        <span class="truncate font-medium text-t1">{childSession.name || childSession.branch}</span>
-                        <span class="ml-auto shrink-0 flex items-center gap-1.5">
-                          {#if orchestrator.getReviewReady()[childSession.id]}
-                            <Lightbulb class="size-3.5 text-status-review animate-pulse" />
-                          {:else if childSession.status === 'exited'}
-                            <span class="font-mono text-[9px] text-t3 bg-panel-hi rounded px-[5px] py-[1px]">exited</span>
-                          {:else if agentStates[childSession.id] === 'Busy'}
-                            <LoaderCircle class="size-3 animate-spin text-t2" />
-                          {/if}
-                        </span>
-                      </button>
-                      {#each sessionIndicatorContributions as item (`${childSession.id}:${item.plugin.id}:${item.contribution.id}`)}
-                        <div class="absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 pointer-events-none" data-plugin-session-indicator={childSession.id}>
-                          <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={pluginSessionContext(childSession)} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} />
-                        </div>
-                      {/each}
-                    </div>
-                  </li>
-                {/if}
+              {#each childSessions as { item, session: childSession } (item.session_id)}
+                {@const childNavIdx = flatNavIndex.get(navKey.loopSession(childSession.id)) ?? -1}
+                {@const isChildActive = childSession.id === activeSessionId && !selectedLoopId}
+                {@const isChildSelected = zone === 'sidebar' && childNavIdx === getSelectedIndex()}
+                {@const isChildPreviewing = childSession.id === previewSessionId}
+                <li>
+                  <div class="session-row relative flex items-center gap-1.5">
+                    <span class="w-[2px] self-stretch rounded-full transition-opacity {isChildActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
+                    <button
+                      data-nav-index={childNavIdx}
+                      class="flex-1 min-w-0 text-left py-[6px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg pl-4 pr-2
+                        {isChildActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
+                        {isChildPreviewing ? 'ring-2 ring-accent' : isChildSelected ? 'ring-2 ring-accent' : ''}"
+                      onclick={() => { onSelectSession(childSession.id); focusTerminal(); }}
+                      oncontextmenu={(e) => { e.preventDefault(); loopSessionContextMenu = { x: e.clientX, y: e.clientY, session: childSession, loopId: loop.id }; }}
+                    >
+                      <span class="shrink-0 font-mono text-[10px] text-t3">{item.role}</span>
+                      <span class="truncate font-medium text-t1">{childSession.name || childSession.branch}</span>
+                      <span class="ml-auto shrink-0 flex items-center gap-1.5">
+                        {#if orchestrator.getReviewReady()[childSession.id]}
+                          <Lightbulb class="size-3.5 text-status-review animate-pulse" />
+                        {:else if childSession.status === 'exited'}
+                          <span class="font-mono text-[9px] text-t3 bg-panel-hi rounded px-[5px] py-[1px]">exited</span>
+                        {:else if agentStates[childSession.id] === 'Busy'}
+                          <LoaderCircle class="size-3 animate-spin text-t2" />
+                        {/if}
+                      </span>
+                    </button>
+                    {#each sessionIndicatorContributions as item (`${childSession.id}:${item.plugin.id}:${item.contribution.id}`)}
+                      <div class="absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 pointer-events-none" data-plugin-session-indicator={childSession.id}>
+                        <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={pluginSessionContext(childSession)} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} />
+                      </div>
+                    {/each}
+                  </div>
+                </li>
               {/each}
             </ul>
           {/if}
@@ -697,7 +657,7 @@
   {#if orphans.length > 0}
     <ul class="space-y-0.5 mb-1">
       {#each orphans as { session, project } (session.id)}
-        {@const globalIndex = flatNavIndex.get(`orphan:${session.id}`) ?? -1}
+        {@const globalIndex = flatNavIndex.get(navKey.orphan(session.id)) ?? -1}
         {@const isActive = session.id === activeSessionId && !selectedLoopId}
         {@const isSelected = zone === 'sidebar' && globalIndex === getSelectedIndex()}
         {@const isPreviewing = session.id === previewSessionId}
@@ -748,10 +708,10 @@
 
 {#snippet taskList(rows: SidebarTaskRow[])}
   <ul class="space-y-0.5">
-    {#each rows as { task, project } (`${project.id}:${task.key}`)}
-      {@const linked = sessionForTask(task.key)}
+    {#each rows as row (`${row.project.id}:${row.task.key}`)}
+      {@const { task, project, linkedSession: linked } = row}
       {@const isActive = (selectedTaskWorkspace?.projectId === project.id && selectedTaskWorkspace.taskKey === task.key) || (linked?.id === activeSessionId && !selectedLoopId)}
-      {@const taskNavIdx = flatNavIndex.get(`task:${toTaskWorkspaceId(project.id, task.key)}`) ?? -1}
+      {@const taskNavIdx = flatNavIndex.get(navKey.task(project.id, task.key)) ?? -1}
       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
       {@const isPreviewing = (linked?.id === previewSessionId) || (previewTaskWorkspace?.projectId === project.id && previewTaskWorkspace.taskKey === task.key)}
       <li class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
@@ -764,7 +724,7 @@
               {isPreviewing ? 'ring-2 ring-accent' : isSelected ? 'ring-2 ring-accent' : ''}"
             title={showTaskKeys ? undefined : task.key}
             onclick={() => handleTaskClick(task, project)}
-            oncontextmenu={(e) => onTaskContextMenu(e, task, project)}
+            oncontextmenu={(e) => onTaskContextMenu(e, row)}
           >
           {@render projectLabel(project)}
           <!-- The parent prefix is dropped next to a project label to keep at most two small labels before the title. -->
@@ -847,30 +807,22 @@
       {#each sections as section (section.key)}
         {#if section.kind === "project"}
           {@const project = section.project}
-          {@const projectCollapsed = isProjectCollapsed(section)}
-          {@const projectNavIdx = flatNavIndex.get(section.key) ?? -1}
-          {@const isProjectSelected = zone === 'sidebar' && projectNavIdx === getSelectedIndex()}
+          {@const projectCollapsed = isCollapsed(section.key, section.defaultCollapsed)}
+          {@const projectNavIdx = flatNavIndex.get(navKey.project(section.key)) ?? -1}
           <div>
-            <button
-              data-nav-index={projectNavIdx}
-              class="w-full px-2 mb-1 text-[11px] font-semibold text-t2 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-panel-hi {isProjectSelected ? 'ring-2 ring-accent' : ''}"
-              title={project.path}
-              onclick={() => toggleSection(section.key, projectCollapsed)}
-              oncontextmenu={(e) => onProjectContextMenu(e, project)}
-            >
-              {project.name}
-              <span class="ml-auto font-normal text-t3">{section.orphans.length + section.taskCount}</span>
-              {#if projectAutoMode[project.id]}<Zap class="size-2.5 text-status-running" />{/if}
-              {#if projectCollapsed}<ChevronRight class="size-3 shrink-0 text-t3" />{:else}<ChevronDown class="size-3 shrink-0 text-t3" />{/if}
-            </button>
+            {@render sectionHeader(projectNavIdx, projectCollapsed, () => toggleSection(section.key, section.defaultCollapsed), project.name, section.orphans.length + section.taskCount, {
+              title: project.path,
+              oncontextmenu: (e) => onProjectContextMenu(e, project),
+              autoDispatch: projectAutoMode[project.id],
+            })}
 
             {#if !projectCollapsed}
               {@render loopList(section.loops)}
               {@render orphanList(section.orphans)}
               {#each section.groups as group (group.key)}
                 <div>
-                  {@render groupHeader(group.key, TASK_STATUS_LABELS[group.status], group.rows.length, TASK_STATUS_DOT_CLASSES[group.status], "sub")}
-                  {#if !isCollapsed(group.key)}{@render taskList(group.rows)}{/if}
+                  {@render groupHeader(group.key, group.defaultCollapsed, TASK_STATUS_LABELS[group.status], group.rows.length, TASK_STATUS_DOT_CLASSES[group.status], "sub")}
+                  {#if !isCollapsed(group.key, group.defaultCollapsed)}{@render taskList(group.rows)}{/if}
                 </div>
               {/each}
               {#if section.orphans.length === 0 && section.taskCount === 0}
@@ -880,16 +832,16 @@
           </div>
         {:else if section.kind === "sessions"}
           <div>
-            {@render groupHeader(section.key, "Sessions", section.loops.length + section.orphans.length, null, "top")}
-            {#if !isCollapsed(section.key)}
+            {@render groupHeader(section.key, section.defaultCollapsed, "Sessions", section.loops.length + section.orphans.length, null, "top")}
+            {#if !isCollapsed(section.key, section.defaultCollapsed)}
               {@render loopList(section.loops)}
               {@render orphanList(section.orphans)}
             {/if}
           </div>
         {:else}
           <div>
-            {@render groupHeader(section.key, TASK_STATUS_LABELS[section.group.status], section.group.rows.length, TASK_STATUS_DOT_CLASSES[section.group.status], "top")}
-            {#if !isCollapsed(section.key)}{@render taskList(section.group.rows)}{/if}
+            {@render groupHeader(section.key, section.defaultCollapsed, TASK_STATUS_LABELS[section.group.status], section.group.rows.length, TASK_STATUS_DOT_CLASSES[section.group.status], "top")}
+            {#if !isCollapsed(section.key, section.defaultCollapsed)}{@render taskList(section.group.rows)}{/if}
           </div>
         {/if}
       {:else}
@@ -1001,11 +953,12 @@
 
 <!-- Task context menu -->
 {#if taskContextMenu}
-  {@const menuTask = taskContextMenu.task}
-  {@const linkedSession = sessionForTask(menuTask.key)}
+  {@const menuRow = taskContextMenu.row}
+  {@const menuTask = menuRow.task}
+  {@const linkedSession = menuRow.linkedSession}
   {@const statusChildren = STATUS_OPTIONS
     .filter(s => s.value !== menuTask.status)
-    .map(s => ({ label: s.label, onSelect: () => moveTask(menuTask, taskContextMenu!.project, s.value) }))}
+    .map(s => ({ label: s.label, onSelect: () => moveTask(menuRow, s.value) }))}
   <ContextMenu
     x={taskContextMenu.x}
     y={taskContextMenu.y}

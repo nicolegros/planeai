@@ -822,5 +822,9 @@ fn unknown_sidebar_group_by_is_reported_as_a_config_error() {
     let (_, warnings) = load(dir.path());
 
     assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("sidebar_group_by") || warnings[0].contains("statu"));
+    assert!(
+        warnings[0].contains("unknown variant `statu`"),
+        "{}",
+        warnings[0]
+    );
 }

@@ -1,5 +1,6 @@
 import type { MenuItem } from "../components/ui/ContextMenu.svelte";
 import type { AppConfig } from "./settings.svelte";
+import { resolveSidebarGroupBy } from "./sidebar-model";
 
 type SidebarViewSettings = Pick<
   AppConfig,
@@ -11,16 +12,18 @@ export function sidebarViewMenuItems(
   settings: SidebarViewSettings,
   update: (patch: Partial<SidebarViewSettings>) => void,
 ): MenuItem[] {
-  const groupBy = settings.sidebar_group_by ?? "project";
+  const groupBy = resolveSidebarGroupBy(settings);
   return [
     {
       label: "Group by project",
       checked: groupBy === "project",
+      radio: true,
       onSelect: () => update({ sidebar_group_by: "project" }),
     },
     {
       label: "Group by status",
       checked: groupBy === "status",
+      radio: true,
       onSelect: () => update({ sidebar_group_by: "status" }),
     },
     { separator: true },

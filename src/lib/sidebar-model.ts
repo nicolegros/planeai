@@ -2,12 +2,25 @@
  * Sidebar model: the single source of the sidebar's sections and row order.
  * Rendering, keyboard navigation and session cycling all derive from it so they never drift apart.
  */
-import type { LoopRunSummary, LoopSessionItem, Project, Session, TaskItem } from "./types";
+import {
+  sessionTaskProjectId,
+  type LoopRunSummary,
+  type LoopSessionItem,
+  type Project,
+  type Session,
+  type TaskItem,
+} from "./types";
 import { shouldHideProject, toLoopId, toTaskWorkspaceId } from "./sidebar-session-order";
 
 export type SidebarGroupBy = "project" | "status";
 
-export const TASK_STATUSES = ["in_progress", "in_review", "todo", "done"] as const;
+export function resolveSidebarGroupBy(settings: {
+  sidebar_group_by?: SidebarGroupBy | null;
+}): SidebarGroupBy {
+  return settings.sidebar_group_by ?? "project";
+}
+
+const TASK_STATUSES = ["in_progress", "in_review", "todo", "done"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
 export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
@@ -24,35 +37,16 @@ export const TASK_STATUS_DOT_CLASSES: Record<TaskStatus, string> = {
   done: "bg-status-running",
 };
 
-export const SESSIONS_SECTION_KEY = "sessions";
-
-export function projectSectionKey(projectId: string): string {
-  return `project:${projectId}`;
-}
-
-export function statusSectionKey(status: TaskStatus): string {
-  return `status:${status}`;
-}
-
-export function projectStatusKey(projectId: string, status: TaskStatus): string {
-  return `project-status:${projectId}:${status}`;
-}
-
-/** Done groups start collapsed in both modes; every other section starts expanded. */
-export function isCollapsedByDefault(key: string): boolean {
-  return (
-    key === statusSectionKey("done") || (key.startsWith("project-status:") && key.endsWith(":done"))
-  );
-}
-
 export interface SidebarTaskRow {
   task: TaskItem;
   project: Project;
+  linkedSession: Session | undefined;
 }
 
 export interface SidebarLoopRow {
   loop: LoopRunSummary;
   project: Project;
+  children: { item: LoopSessionItem; session: Session }[];
 }
 
 export interface SidebarSessionRow {
@@ -64,21 +58,31 @@ export interface SidebarStatusGroup {
   key: string;
   status: TaskStatus;
   rows: SidebarTaskRow[];
+  defaultCollapsed: boolean;
+}
+
+export interface SidebarProjectSection {
+  kind: "project";
+  key: string;
+  project: Project;
+  loops: SidebarLoopRow[];
+  orphans: SidebarSessionRow[];
+  groups: SidebarStatusGroup[];
+  /** All of the project's tasks, including ones hidden by hideDoneTasks. */
+  taskCount: number;
+  defaultCollapsed: boolean;
 }
 
 export type SidebarSection =
+  | SidebarProjectSection
   | {
-      kind: "project";
+      kind: "sessions";
       key: string;
-      project: Project;
       loops: SidebarLoopRow[];
       orphans: SidebarSessionRow[];
-      groups: SidebarStatusGroup[];
-      /** All of the project's tasks, including ones hidden by hideDoneTasks. */
-      taskCount: number;
+      defaultCollapsed: boolean;
     }
-  | { kind: "sessions"; key: string; loops: SidebarLoopRow[]; orphans: SidebarSessionRow[] }
-  | { kind: "status"; key: string; group: SidebarStatusGroup };
+  | { kind: "status"; key: string; group: SidebarStatusGroup; defaultCollapsed: boolean };
 
 export interface SidebarModelInput {
   groupBy: SidebarGroupBy;
@@ -86,12 +90,12 @@ export interface SidebarModelInput {
   sessions: Session[];
   tasksByProject: Record<string, TaskItem[]>;
   loopsByProject: Record<string, LoopRunSummary[]>;
-  loopSessionIds: Set<string>;
+  loopSessions: Record<string, LoopSessionItem[]>;
   hideDoneTasks: boolean;
   hideEmptyProjects: boolean;
 }
 
-export function normalizeTaskStatus(status: string): TaskStatus {
+function normalizeTaskStatus(status: string): TaskStatus {
   return (TASK_STATUSES as readonly string[]).includes(status) ? (status as TaskStatus) : "todo";
 }
 
@@ -106,20 +110,27 @@ function groupRows(
   const byStatus = new Map<TaskStatus, SidebarTaskRow[]>();
   for (const row of rows) {
     const status = normalizeTaskStatus(row.task.status);
-    byStatus.set(status, [...(byStatus.get(status) ?? []), row]);
+    let list = byStatus.get(status);
+    if (!list) byStatus.set(status, (list = []));
+    list.push(row);
   }
   const groups: SidebarStatusGroup[] = [];
   for (const status of TASK_STATUSES) {
     if (status === "done" && hideDoneTasks) continue;
     const statusRows = byStatus.get(status);
-    if (!statusRows?.length) continue;
+    if (!statusRows) continue;
     statusRows.sort(
       (a, b) =>
         b.task.priority - a.task.priority ||
         (projectOrder.get(a.project.id) ?? 0) - (projectOrder.get(b.project.id) ?? 0) ||
         keyCollator.compare(a.task.key, b.task.key),
     );
-    groups.push({ key: keyFor(status), status, rows: statusRows });
+    groups.push({
+      key: keyFor(status),
+      status,
+      rows: statusRows,
+      defaultCollapsed: status === "done",
+    });
   }
   return groups;
 }
@@ -130,46 +141,74 @@ export function buildSidebarModel(input: SidebarModelInput): SidebarSection[] {
     sessions,
     tasksByProject,
     loopsByProject,
-    loopSessionIds,
+    loopSessions,
     hideDoneTasks,
     hideEmptyProjects,
   } = input;
   const projects = input.projects.filter((p) => !p.hidden);
   const projectOrder = new Map(projects.map((p, i) => [p.id, i]));
-  const allTaskKeys = new Set(
-    Object.values(tasksByProject)
-      .flat()
-      .map((t) => t.key),
+
+  // Tasks are identified by project and key: keys may repeat across projects.
+  const taskId = (projectId: string, key: string) => `${projectId}:${key}`;
+  const existingTasks = new Set(
+    input.projects.flatMap((p) => (tasksByProject[p.path] ?? []).map((t) => taskId(p.id, t.key))),
+  );
+  const sessionsById = new Map(sessions.map((s) => [s.id, s]));
+  const sessionsByTask = new Map<string, Session>();
+  for (const s of sessions) {
+    if (!s.task_key) continue;
+    const id = taskId(sessionTaskProjectId(s), s.task_key);
+    if (!sessionsByTask.has(id)) sessionsByTask.set(id, s);
+  }
+  const loopSessionIds = new Set(
+    Object.values(loopSessions).flatMap((items) => items.map((i) => i.session_id)),
   );
 
   const loopsFor = (project: Project): SidebarLoopRow[] =>
-    (loopsByProject[project.id] ?? []).map((loop) => ({ loop, project }));
+    (loopsByProject[project.id] ?? []).map((loop) => ({
+      loop,
+      project,
+      children: (loopSessions[loop.id] ?? []).flatMap((item) => {
+        const session = sessionsById.get(item.session_id);
+        return session ? [{ item, session }] : [];
+      }),
+    }));
   const orphansFor = (project: Project): SidebarSessionRow[] =>
     sessions
       .filter(
         (s) =>
           s.project_id === project.id &&
-          (!s.task_key || !allTaskKeys.has(s.task_key)) &&
-          !loopSessionIds.has(s.id),
+          !loopSessionIds.has(s.id) &&
+          (!s.task_key || !existingTasks.has(taskId(sessionTaskProjectId(s), s.task_key))),
       )
       .map((session) => ({ session, project }));
   const tasksFor = (project: Project): SidebarTaskRow[] =>
-    (tasksByProject[project.path] ?? []).map((task) => ({ task, project }));
+    (tasksByProject[project.path] ?? []).map((task) => ({
+      task,
+      project,
+      linkedSession: sessionsByTask.get(taskId(project.id, task.key)),
+    }));
 
   if (groupBy === "status") {
     const sections: SidebarSection[] = [];
     const loops = projects.flatMap(loopsFor);
     const orphans = projects.flatMap(orphansFor);
     if (loops.length + orphans.length > 0) {
-      sections.push({ kind: "sessions", key: SESSIONS_SECTION_KEY, loops, orphans });
+      sections.push({ kind: "sessions", key: "sessions", loops, orphans, defaultCollapsed: false });
     }
-    for (const group of groupRows(
+    const groups = groupRows(
       projects.flatMap(tasksFor),
       projectOrder,
       hideDoneTasks,
-      statusSectionKey,
-    )) {
-      sections.push({ kind: "status", key: group.key, group });
+      (s) => `status:${s}`,
+    );
+    for (const group of groups) {
+      sections.push({
+        kind: "status",
+        key: group.key,
+        group,
+        defaultCollapsed: group.defaultCollapsed,
+      });
     }
     return sections;
   }
@@ -179,52 +218,127 @@ export function buildSidebarModel(input: SidebarModelInput): SidebarSection[] {
     const loops = loopsFor(project);
     const orphans = orphansFor(project);
     const rows = tasksFor(project);
-    const groups = groupRows(rows, projectOrder, hideDoneTasks, (status) =>
-      projectStatusKey(project.id, status),
+    const groups = groupRows(
+      rows,
+      projectOrder,
+      hideDoneTasks,
+      (status) => `project-status:${project.id}:${status}`,
     );
     const visibleTaskCount = groups.reduce((n, g) => n + g.rows.length, 0);
     if (shouldHideProject(orphans.length, visibleTaskCount, hideEmptyProjects, loops.length))
       continue;
     sections.push({
       kind: "project",
-      key: projectSectionKey(project.id),
+      key: `project:${project.id}`,
       project,
       loops,
       orphans,
       groups,
       taskCount: rows.length,
+      // Empty projects start collapsed.
+      defaultCollapsed: orphans.length === 0 && rows.length === 0,
     });
   }
   return sections;
+}
+
+export type SidebarNavItem =
+  | { type: "project_header"; section: SidebarProjectSection }
+  | { type: "group_header"; key: string; parentKey: string | null; defaultCollapsed: boolean }
+  | { type: "loop"; loop: LoopRunSummary }
+  | { type: "loop_session"; session: Session; loopId: string; item: LoopSessionItem }
+  | { type: "orphan"; session: Session }
+  | { type: "task"; row: SidebarTaskRow };
+
+/** Resolves a section's collapse state; `fallback` is its default when the user never toggled it. */
+export type IsCollapsed = (key: string, fallback: boolean) => boolean;
+
+/** Lookup keys of nav items, shared by sidebarNavItemKey and every index lookup. */
+export const navKey = {
+  project: (sectionKey: string) => sectionKey,
+  group: (sectionKey: string) => `group:${sectionKey}`,
+  loop: (loopId: string) => toLoopId(loopId),
+  loopSession: (sessionId: string) => `loop_session:${sessionId}`,
+  orphan: (sessionId: string) => `orphan:${sessionId}`,
+  task: (projectId: string, taskKey: string) => toTaskWorkspaceId(projectId, taskKey),
+};
+
+/** Sidebar rows in display order, skipping the content of collapsed sections. */
+export function sidebarNavItems(
+  sections: SidebarSection[],
+  isCollapsed: IsCollapsed = () => false,
+): SidebarNavItem[] {
+  const items: SidebarNavItem[] = [];
+  const pushSessions = (loops: SidebarLoopRow[], orphans: SidebarSessionRow[]) => {
+    for (const { loop, children } of loops) {
+      items.push({ type: "loop", loop });
+      // Loops start expanded and use their loop ID as collapse key.
+      if (isCollapsed(toLoopId(loop.id), false)) continue;
+      for (const { item, session } of children)
+        items.push({ type: "loop_session", session, loopId: loop.id, item });
+    }
+    for (const { session } of orphans) items.push({ type: "orphan", session });
+  };
+  const pushGroup = (group: SidebarStatusGroup, parentKey: string | null) => {
+    items.push({
+      type: "group_header",
+      key: group.key,
+      parentKey,
+      defaultCollapsed: group.defaultCollapsed,
+    });
+    if (isCollapsed(group.key, group.defaultCollapsed)) return;
+    for (const row of group.rows) items.push({ type: "task", row });
+  };
+
+  for (const section of sections) {
+    if (section.kind === "project") {
+      items.push({ type: "project_header", section });
+      if (isCollapsed(section.key, section.defaultCollapsed)) continue;
+      pushSessions(section.loops, section.orphans);
+      for (const group of section.groups) pushGroup(group, section.key);
+    } else if (section.kind === "sessions") {
+      items.push({
+        type: "group_header",
+        key: section.key,
+        parentKey: null,
+        defaultCollapsed: section.defaultCollapsed,
+      });
+      if (isCollapsed(section.key, section.defaultCollapsed)) continue;
+      pushSessions(section.loops, section.orphans);
+    } else {
+      pushGroup(section.group, null);
+    }
+  }
+  return items;
+}
+
+/** Unique lookup key of a nav item, used to find its index in the flat list. */
+export function sidebarNavItemKey(item: SidebarNavItem): string {
+  switch (item.type) {
+    case "project_header":
+      return navKey.project(item.section.key);
+    case "group_header":
+      return navKey.group(item.key);
+    case "loop":
+      return navKey.loop(item.loop.id);
+    case "loop_session":
+      return navKey.loopSession(item.session.id);
+    case "orphan":
+      return navKey.orphan(item.session.id);
+    case "task":
+      return navKey.task(item.row.project.id, item.row.task.key);
+  }
 }
 
 /**
  * Navigation IDs in sidebar display order, ignoring collapse state.
  * Loop dashboards are "loop:<id>", loop and unlinked sessions are bare session IDs, tasks are task workspace IDs.
  */
-export function sidebarNavigationOrder(
-  sections: SidebarSection[],
-  loopSessions: Record<string, LoopSessionItem[]>,
-): string[] {
-  const ids: string[] = [];
-  const pushLoops = (loops: SidebarLoopRow[]) => {
-    for (const { loop } of loops) {
-      ids.push(toLoopId(loop.id));
-      for (const child of loopSessions[loop.id] ?? []) ids.push(child.session_id);
-    }
-  };
-  const pushTasks = (group: SidebarStatusGroup) => {
-    for (const { task, project } of group.rows) ids.push(toTaskWorkspaceId(project.id, task.key));
-  };
-
-  for (const section of sections) {
-    if (section.kind === "status") {
-      pushTasks(section.group);
-      continue;
-    }
-    pushLoops(section.loops);
-    for (const { session } of section.orphans) ids.push(session.id);
-    if (section.kind === "project") section.groups.forEach(pushTasks);
-  }
-  return ids;
+export function sidebarNavigationOrder(sections: SidebarSection[]): string[] {
+  return sidebarNavItems(sections).flatMap((item) => {
+    if (item.type === "loop") return [toLoopId(item.loop.id)];
+    if (item.type === "loop_session" || item.type === "orphan") return [item.session.id];
+    if (item.type === "task") return [toTaskWorkspaceId(item.row.project.id, item.row.task.key)];
+    return [];
+  });
 }

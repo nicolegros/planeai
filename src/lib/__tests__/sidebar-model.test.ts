@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSidebarModel,
-  isCollapsedByDefault,
+  sidebarNavItemKey,
+  sidebarNavItems,
   sidebarNavigationOrder,
   type SidebarModelInput,
   type SidebarSection,
@@ -33,7 +34,12 @@ function task(
   };
 }
 
-function session(id: string, projectId: string, taskKey: string | null = null): Session {
+function session(
+  id: string,
+  projectId: string,
+  taskKey: string | null = null,
+  taskProjectId: string | null = null,
+): Session {
   return {
     id,
     project_id: projectId,
@@ -47,7 +53,7 @@ function session(id: string, projectId: string, taskKey: string | null = null): 
     backend: "local",
     base_branch: null,
     task_key: taskKey,
-    task_project_id: null,
+    task_project_id: taskProjectId,
   };
 }
 
@@ -62,7 +68,7 @@ function input(overrides: Partial<SidebarModelInput> = {}): SidebarModelInput {
     sessions: [],
     tasksByProject: {},
     loopsByProject: {},
-    loopSessionIds: new Set(),
+    loopSessions: {},
     hideDoneTasks: false,
     hideEmptyProjects: false,
     ...overrides,
@@ -132,14 +138,65 @@ describe("buildSidebarModel - project mode", () => {
         ],
         tasksByProject: { [beta.path]: [task("B-1", "todo")] },
         loopsByProject: { beta: [loop("l1", "beta")] },
-        loopSessionIds: new Set(["s4"]),
+        loopSessions: {
+          l1: [
+            { session_id: "s4" } as LoopSessionItem,
+            { session_id: "missing" } as LoopSessionItem,
+          ],
+        },
       }),
     );
     const [a, b] = sections;
     if (a.kind !== "project" || b.kind !== "project") throw new Error("expected project sections");
     expect(a.orphans.map((r) => r.session.id)).toEqual(["s1"]);
     expect(b.orphans.map((r) => r.session.id)).toEqual(["s3"]);
-    expect(b.loops.map((r) => r.loop.id)).toEqual(["l1"]);
+    expect(b.loops.map((r) => [r.loop.id, r.children.map((c) => c.session.id)])).toEqual([
+      ["l1", ["s4"]],
+    ]);
+  });
+
+  it("matches sessions to tasks by project and key when keys repeat across projects", () => {
+    const sections = buildSidebarModel(
+      input({
+        projects: [alpha, beta],
+        sessions: [
+          session("on-beta", "beta", "X-1"),
+          session("cross", "alpha", "Y-1", "beta"),
+          session("stray", "alpha", "Y-1"),
+        ],
+        tasksByProject: {
+          [alpha.path]: [task("X-1", "todo")],
+          [beta.path]: [task("X-1", "todo"), task("Y-1", "todo")],
+        },
+      }),
+    );
+    const [a, b] = sections;
+    if (a.kind !== "project" || b.kind !== "project") throw new Error("expected project sections");
+    const linked = (section: typeof a) =>
+      section.groups.flatMap((g) => g.rows.map((r) => [r.task.key, r.linkedSession?.id ?? null]));
+    expect(linked(a)).toEqual([["X-1", null]]);
+    expect(linked(b)).toEqual([
+      ["X-1", "on-beta"],
+      ["Y-1", "cross"],
+    ]);
+    // alpha has no Y-1 task, so a session linking Y-1 in its own project is unlinked.
+    expect(a.orphans.map((r) => r.session.id)).toEqual(["stray"]);
+  });
+
+  it("collapses Done groups and empty projects by default", () => {
+    const sections = buildSidebarModel(
+      input({
+        projects: [alpha, beta],
+        tasksByProject: { [alpha.path]: [task("A-1", "done"), task("A-2", "todo")] },
+      }),
+    );
+    const [a, b] = sections;
+    if (a.kind !== "project" || b.kind !== "project") throw new Error("expected project sections");
+    expect([a.defaultCollapsed, b.defaultCollapsed]).toEqual([false, true]);
+    expect(a.groups.map((g) => [g.status, g.defaultCollapsed])).toEqual([
+      ["todo", false],
+      ["done", true],
+    ]);
   });
 
   it("drops the done group when hideDoneTasks is on", () => {
@@ -251,21 +308,20 @@ describe("buildSidebarModel - status mode", () => {
   });
 });
 
-describe("isCollapsedByDefault", () => {
-  it("collapses done groups in both modes and nothing else", () => {
-    expect(isCollapsedByDefault("status:done")).toBe(true);
-    expect(isCollapsedByDefault("project-status:alpha:done")).toBe(true);
-    expect(isCollapsedByDefault("status:todo")).toBe(false);
-    expect(isCollapsedByDefault("project-status:alpha:in_progress")).toBe(false);
-    expect(isCollapsedByDefault("sessions")).toBe(false);
-    expect(isCollapsedByDefault("loop:done")).toBe(false);
-  });
-});
-
 describe("sidebarNavigationOrder", () => {
   const loopSessions: Record<string, LoopSessionItem[]> = {
     l1: [{ session_id: "ls1" } as LoopSessionItem],
   };
+
+  it("excludes hidden projects", () => {
+    const sections = buildSidebarModel(
+      input({
+        projects: [alpha, project("hidden", { hidden: true })],
+        sessions: [session("s1", "alpha"), session("s2", "hidden")],
+      }),
+    );
+    expect(sidebarNavigationOrder(sections)).toEqual(["s1"]);
+  });
 
   it("follows project mode display order", () => {
     const sections = buildSidebarModel(
@@ -273,14 +329,14 @@ describe("sidebarNavigationOrder", () => {
         projects: [alpha, beta],
         sessions: [session("s1", "alpha"), session("ls1", "alpha")],
         loopsByProject: { alpha: [loop("l1", "alpha")] },
-        loopSessionIds: new Set(["ls1"]),
+        loopSessions,
         tasksByProject: {
           [alpha.path]: [task("A-1", "todo"), task("A-2", "in_progress")],
           [beta.path]: [task("B-1", "todo")],
         },
       }),
     );
-    expect(sidebarNavigationOrder(sections, loopSessions)).toEqual([
+    expect(sidebarNavigationOrder(sections)).toEqual([
       "loop:l1",
       "ls1",
       "s1",
@@ -297,19 +353,53 @@ describe("sidebarNavigationOrder", () => {
         projects: [alpha, beta],
         sessions: [session("s1", "beta"), session("ls1", "alpha")],
         loopsByProject: { alpha: [loop("l1", "alpha")] },
-        loopSessionIds: new Set(["ls1"]),
+        loopSessions,
         tasksByProject: {
           [alpha.path]: [task("A-1", "todo")],
           [beta.path]: [task("B-1", "in_progress")],
         },
       }),
     );
-    expect(sidebarNavigationOrder(sections, loopSessions)).toEqual([
+    expect(sidebarNavigationOrder(sections)).toEqual([
       "loop:l1",
       "ls1",
       "s1",
       "task:beta:B-1",
       "task:alpha:A-1",
+    ]);
+  });
+});
+
+describe("sidebarNavItems", () => {
+  const sections = () =>
+    buildSidebarModel(
+      input({
+        groupBy: "status",
+        projects: [alpha],
+        sessions: [session("s1", "alpha")],
+        tasksByProject: { [alpha.path]: [task("A-1", "todo"), task("A-2", "done")] },
+      }),
+    );
+
+  it("skips the rows of collapsed sections using their defaults", () => {
+    const collapsed: Record<string, boolean> = { sessions: true };
+    const items = sidebarNavItems(sections(), (key, fallback) => collapsed[key] ?? fallback);
+    expect(items.map(sidebarNavItemKey)).toEqual([
+      "group:sessions",
+      "group:status:todo",
+      "task:alpha:A-1",
+      "group:status:done",
+    ]);
+  });
+
+  it("lists every row when nothing is collapsed", () => {
+    expect(sidebarNavItems(sections()).map(sidebarNavItemKey)).toEqual([
+      "group:sessions",
+      "orphan:s1",
+      "group:status:todo",
+      "task:alpha:A-1",
+      "group:status:done",
+      "task:alpha:A-2",
     ]);
   });
 });

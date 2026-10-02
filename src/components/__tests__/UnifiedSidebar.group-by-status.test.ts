@@ -2,16 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import type { Project, Session, TaskItem } from "../../lib/types";
 
-const { configGet, configUpdate, projectList, sessionList, taskListAll, taskMove } = vi.hoisted(
-  () => ({
+const { configGet, configUpdate, projectList, sessionList, showSnackbar, taskListAll, taskMove } =
+  vi.hoisted(() => ({
+    showSnackbar: vi.fn(),
     configGet: vi.fn(),
     configUpdate: vi.fn(),
     projectList: vi.fn(),
     sessionList: vi.fn(),
     taskListAll: vi.fn(),
     taskMove: vi.fn(),
-  }),
-);
+  }));
 
 vi.mock("../../lib/api", () => ({
   config: { get: configGet, update: configUpdate, refresh: configGet },
@@ -37,6 +37,8 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
   emit: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar }));
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: vi.fn(() => ({ onCloseRequested: vi.fn().mockResolvedValue(() => {}) })),
@@ -212,7 +214,7 @@ describe("UnifiedSidebar grouped by status", () => {
     );
     flushSync();
     const groupByProject = [
-      ...document.querySelectorAll<HTMLButtonElement>("[role='menuitemcheckbox']"),
+      ...document.querySelectorAll<HTMLButtonElement>("[role='menuitemradio']"),
     ].find((b) => b.textContent!.trim() === "Group by project")!;
     expect(groupByProject.getAttribute("aria-checked")).toBe("false");
 
@@ -233,14 +235,15 @@ describe("UnifiedSidebar grouped by status", () => {
     row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     flushSync();
 
-    expect(document.querySelector("[role='menuitemcheckbox']")).toBeNull();
+    expect(document.querySelector("[role='menuitemradio'], [role='menuitemcheckbox']")).toBeNull();
     expect(texts(document.body, "[role='menuitem']")).toContain("Edit task");
-    expect(mounted.target.querySelector("button[aria-label='View options']")).toBeNull();
   });
 
   it("keeps the keyboard selection on a task after its status changes", async () => {
     mounted = await mountSidebar({ sidebar_group_by: "status" });
     focusSidebar();
+    // Let the auto-focus on the active session settle before choosing a row.
+    flushSync();
     const index = navButtons(mounted.target).findIndex((b) => b.textContent!.includes("A-2"));
     setSelectedIndex(index);
 
@@ -259,6 +262,75 @@ describe("UnifiedSidebar grouped by status", () => {
       ]);
     });
     expect(taskMove).toHaveBeenCalledWith("A-2", "in_progress", alpha.path);
+  });
+
+  it("reports a failed status change and keeps the selection", async () => {
+    taskMove.mockRejectedValueOnce(new Error("transition refused"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    focusSidebar();
+    // Let the auto-focus on the active session settle before choosing a row.
+    flushSync();
+    const index = navButtons(mounted.target).findIndex((b) => b.textContent!.includes("A-2"));
+    setSelectedIndex(index);
+
+    for (const key of ["s", "p"]) {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    }
+
+    await vi.waitFor(() => expect(showSnackbar).toHaveBeenCalledWith("Failed to move task."));
+    expect(getSelectedIndex()).toBe(index);
+  });
+
+  it("drives the view menu from the keyboard without moving the sidebar selection", async () => {
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    focusSidebar();
+    // Let the auto-focus on the active session settle before choosing a row.
+    flushSync();
+    setSelectedIndex(2);
+    mounted.target
+      .querySelector("nav")!
+      .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    flushSync();
+    await vi.waitFor(() =>
+      expect(document.activeElement?.textContent?.trim()).toBe("Group by project"),
+    );
+
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+    );
+    expect(document.activeElement?.textContent?.trim()).toBe("Group by status");
+    expect(getSelectedIndex()).toBe(2);
+
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    flushSync();
+    expect(document.querySelector("[role='menu']")).toBeNull();
+  });
+
+  it("ignores right-clicks inside rows that have no menu of their own", async () => {
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const li = mounted.target.querySelector("nav li")!;
+    li.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    flushSync();
+    expect(document.querySelector("[role='menuitemradio']")).toBeNull();
+  });
+
+  it("stores only collapse states that differ from the default", async () => {
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const doneHeader = () =>
+      navButtons(mounted!.target).find((b) => b.textContent!.trim().startsWith("Done"))!;
+
+    doneHeader().click();
+    flushSync();
+    expect(JSON.parse(localStorage.getItem("planeai:layout:sidebar-collapsed")!)).toEqual({
+      "status:done": false,
+    });
+
+    doneHeader().click();
+    flushSync();
+    expect(JSON.parse(localStorage.getItem("planeai:layout:sidebar-collapsed")!)).toEqual({});
   });
 
   it("remembers collapsed groups across remounts", async () => {

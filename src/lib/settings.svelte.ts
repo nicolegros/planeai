@@ -1,6 +1,7 @@
 import { config as configApi } from "./api";
 import { emit } from "@tauri-apps/api/event";
 import { loadTheme } from "./theme-loader";
+import type { SidebarGroupBy } from "./sidebar-model";
 
 export type AppearanceMode = "system" | "light" | "dark";
 
@@ -80,7 +81,7 @@ export interface AppConfig {
   projects_base_path?: string | null;
   hide_done_tasks?: boolean | null;
   hide_empty_projects?: boolean | null;
-  sidebar_group_by?: "project" | "status" | null;
+  sidebar_group_by?: SidebarGroupBy | null;
   hide_task_keys?: boolean | null;
   hide_project_labels?: boolean | null;
   scrollback_lines?: number | null;

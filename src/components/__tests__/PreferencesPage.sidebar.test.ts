@@ -54,12 +54,6 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(()
 
 import PreferencesPage from "../PreferencesPage.svelte";
 
-function findButton(label: string) {
-  return Array.from(document.querySelectorAll("button")).find(
-    (candidate) => candidate.textContent?.trim() === label,
-  );
-}
-
 // The Sidebar section lives on the default "Appearance" tab.
 async function render() {
   const host = document.createElement("div");
@@ -92,14 +86,10 @@ describe("sidebar preferences", () => {
   it("defaults to project grouping with both labels shown and project labels disabled", async () => {
     const { host, component } = await render();
 
-    const radios = [
-      ...host.querySelectorAll<HTMLButtonElement>(
-        "[role='radiogroup'][aria-label='Group tasks by'] [role='radio']",
-      ),
-    ];
-    expect(radios.map((r) => [r.textContent?.trim(), r.getAttribute("aria-checked")])).toEqual([
-      ["Project", "true"],
-      ["Status", "false"],
+    const radios = [...host.querySelectorAll<HTMLInputElement>("input[name='sidebar-group-by']")];
+    expect(radios.map((r) => [r.closest("label")?.textContent?.trim(), r.checked])).toEqual([
+      ["Project", true],
+      ["Status", false],
     ]);
     expect(checkbox(host, "Show task keys").checked).toBe(true);
     expect(checkbox(host, "Show project labels").checked).toBe(true);
@@ -112,7 +102,9 @@ describe("sidebar preferences", () => {
     mocks.config.sidebar_group_by = "status";
     const { host, component } = await render();
 
-    findButton("Project")!.click();
+    host
+      .querySelector<HTMLInputElement>("input[name='sidebar-group-by'][value='project']")!
+      .click();
     checkbox(host, "Show task keys").click();
     expect(checkbox(host, "Show project labels").disabled).toBe(false);
     checkbox(host, "Show project labels").click();

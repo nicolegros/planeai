@@ -14,7 +14,7 @@
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { sidebarNavigationOrder } from "./lib/sidebar-model";
-  import { currentLoopSessions, currentSidebarModel } from "./lib/sidebar-model-store.svelte";
+  import { getSidebarModel } from "./lib/sidebar-model-store.svelte";
   import { isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { isTerminal, isActive as isLoopActive } from "./lib/loop-status";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
@@ -176,10 +176,7 @@
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
 
   // Session IDs in sidebar display order (includes loop:<id> entries)
-  const sidebarSessionOrder = $derived.by(() => {
-    const loopSessions = currentLoopSessions();
-    return sidebarNavigationOrder(currentSidebarModel(loopSessions), loopSessions);
-  });
+  const sidebarSessionOrder = $derived(sidebarNavigationOrder(getSidebarModel()));
 
   // ─── TaskWorkspace layout ───────────────────────────────────────────────────
   const layoutTree = $derived(workspaceLayout.layout?.tree ?? null);

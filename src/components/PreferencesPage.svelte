@@ -17,6 +17,7 @@
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { checkForUpdates, getSettingsUpdateState, initUpdateListener, resetManualUpdateState, setInstalling, setLaunchUpdateAvailable } from "../lib/updater.svelte";
   import { Select, Input, Button, Dialog } from "./ui";
+  import { resolveSidebarGroupBy } from "../lib/sidebar-model";
   import { Palette, Bot, ListTodo, Settings, RefreshCw, Puzzle, Code } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
   import type { PluginInventory, PluginUiContribution } from "../lib/types";
@@ -165,7 +166,7 @@
 
   const backendValue = $derived(config.session_backend ?? "auto");
   const vimEnabled = $derived(config.vim_mode ?? true);
-  const sidebarGroupBy = $derived(config.sidebar_group_by ?? "project");
+  const sidebarGroupBy = $derived(resolveSidebarGroupBy(config));
   const lspEnabled = $derived(config.language_servers?.enabled ?? true);
   const languageServerProfiles = $derived(config.language_servers?.profiles ?? []);
   let showLanguageServerProfileDialog = $state(false);
@@ -424,15 +425,20 @@
     <section class="space-y-3">
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Sidebar</h2>
       <div class="flex items-center gap-3">
-        <span class="text-sm text-t1">Group tasks by</span>
+        <span class="text-sm text-t1" aria-hidden="true">Group tasks by</span>
         <div class="inline-flex gap-1 rounded-lg bg-panel-hi p-0.5" role="radiogroup" aria-label="Group tasks by">
-          {#each [{ value: "project", label: "Project" }, { value: "status", label: "Status" }] as option (option.value)}
-            <button
-              role="radio"
-              aria-checked={sidebarGroupBy === option.value}
-              class="px-4 py-2 rounded-md text-[12px] font-medium transition-colors {sidebarGroupBy === option.value ? 'bg-accent text-on-accent' : 'text-t2 hover:text-t1'}"
-              onclick={() => updateSettings({ sidebar_group_by: option.value as "project" | "status" })}
-            >{option.label}</button>
+          {#each [{ value: "project", label: "Project" }, { value: "status", label: "Status" }] as const as option (option.value)}
+            <label class="px-4 py-2 rounded-md text-[12px] font-medium transition-colors cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent {sidebarGroupBy === option.value ? 'bg-accent text-on-accent' : 'text-t2 hover:text-t1'}">
+              <input
+                type="radio"
+                name="sidebar-group-by"
+                value={option.value}
+                checked={sidebarGroupBy === option.value}
+                onchange={() => updateSettings({ sidebar_group_by: option.value })}
+                class="sr-only"
+              />
+              {option.label}
+            </label>
           {/each}
         </div>
       </div>

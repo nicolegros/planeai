@@ -7,7 +7,7 @@ planeai includes a built-in task tracker designed for AI agent workflows. Tasks 
 
 ## The task board
 
-Tasks appear in the sidebar, grouped by project and status. Each status group shows tasks sorted by priority (highest first):
+Tasks appear in the sidebar, grouped by project and status. Each status group shows tasks sorted by priority (highest first), then by task key. Done groups start collapsed:
 
 | Status          | Meaning                                |
 | --------------- | -------------------------------------- |
