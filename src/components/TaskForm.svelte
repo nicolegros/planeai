@@ -329,17 +329,20 @@
 
     <div class="space-y-1" data-field="title">
       <Label>Title <span class="font-mono text-[10px] px-1 rounded {badge}">T</span></Label>
-      <Input
-        bind:value={formTitle}
-        placeholder="Task title"
-        onfocus={selectUntouchedTitle}
-        onmousedown={armTitleSelectionGuard}
-        onmouseup={releaseTitleSelectionGuard}
-        aria-describedby={titleUntouched ? titleNoteId : undefined}
-      />
-      {#if titleUntouched}
-        <p id={titleNoteId} class="text-xs text-t3">Randomly generated name - type to replace it.</p>
-      {/if}
+      <div>
+        <Input
+          bind:value={formTitle}
+          placeholder="Task title"
+          class="block"
+          onfocus={selectUntouchedTitle}
+          onmousedown={armTitleSelectionGuard}
+          onmouseup={releaseTitleSelectionGuard}
+          aria-describedby={titleUntouched ? titleNoteId : undefined}
+        />
+        {#if titleUntouched}
+          <p id={titleNoteId} class="mt-0.5 text-xs text-t3">Randomly generated name - type to replace it.</p>
+        {/if}
+      </div>
     </div>
 
     <div class="space-y-1" data-field="desc">
