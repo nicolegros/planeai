@@ -352,6 +352,28 @@ describe("TaskForm - Random default title", () => {
     target.remove();
   });
 
+  it("shows a note describing the generated title", () => {
+    const target = renderForm();
+    const input = titleInput(target);
+    const note = target.querySelector(`#${input.getAttribute("aria-describedby")}`);
+    expect(note?.textContent).toContain("Randomly generated");
+  });
+
+  it("hides the note once the title is edited", () => {
+    const target = renderForm();
+    const input = titleInput(target);
+    input.value = "My own title";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    expect(target.textContent).not.toContain("Randomly generated");
+    expect(input.hasAttribute("aria-describedby")).toBe(false);
+  });
+
+  it("does not show the note for a provided title", () => {
+    const target = renderForm({ initial: { title: "Given title" } });
+    expect(target.textContent).not.toContain("Randomly generated");
+  });
+
   it("submits the generated title when left untouched", async () => {
     const target = renderForm();
     const generated = titleInput(target).value;

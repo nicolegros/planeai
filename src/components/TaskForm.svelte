@@ -43,6 +43,8 @@
   // svelte-ignore state_referenced_locally
   let formTitle = $state(initial.title || generatedTitle);
   const titleUntouched = $derived(generatedTitle !== "" && formTitle === generatedTitle);
+  const uid = $props.id();
+  const titleNoteId = `${uid}-title-note`;
   // WebKit's mouseup after a click-to-focus would collapse the selection made on focus.
   let keepTitleSelection = false;
 
@@ -333,7 +335,11 @@
         onfocus={selectUntouchedTitle}
         onmousedown={armTitleSelectionGuard}
         onmouseup={releaseTitleSelectionGuard}
+        aria-describedby={titleUntouched ? titleNoteId : undefined}
       />
+      {#if titleUntouched}
+        <p id={titleNoteId} class="text-xs text-t3">Randomly generated name - type to replace it.</p>
+      {/if}
     </div>
 
     <div class="space-y-1" data-field="desc">
