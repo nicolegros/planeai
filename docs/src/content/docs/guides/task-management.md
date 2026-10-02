@@ -23,6 +23,20 @@ Click any task to interact with it:
 
 Right-click a task to open the context menu with quick actions: start session, edit, or move to a different status.
 
+### Grouping by status
+
+To see the work of every project in one list, group the sidebar by status.
+Choose **Status** under **Preferences → Appearance → Sidebar** (⌘, / Ctrl+,), or right-click empty space or a group header in the sidebar to open the view options.
+
+The sidebar then shows a **Sessions** section first, holding loops and sessions that are not linked to a task, followed by one section per status: Running, Needs review, To do, and Done.
+Each section mixes the tasks of every visible project, sorted by priority, then by project order, then by task key.
+Each row shows its project name before the task key.
+Project actions, such as editing a project or toggling auto-dispatch, are only available when the sidebar is grouped by project.
+
+The same places turn off task keys ("Show task keys") and, when grouping by status, project names ("Show project labels").
+These choices are saved in `config.json` as `sidebar_group_by`, `hide_task_keys`, and `hide_project_labels`.
+Done sections start collapsed, and the sidebar remembers which sections you collapse.
+
 ### Finding a task from the keyboard
 
 Open the command menu (**⌘K** / **Ctrl+K**) and start typing a task key or title. Tasks from every project are searchable, so you do not need an active session in the right project first. Selecting a task does the same thing as clicking it in the sidebar.
@@ -163,7 +177,7 @@ When [auto-dispatch](/planeai/guides/auto-dispatch/) is enabled, tasks flow thro
 
 ### Enabling auto-dispatch
 
-Auto-dispatch is enabled **per project**. Right-click a project in the sidebar and select **Auto-dispatch** to toggle it on. When active, a ⚡ icon appears next to the project name.
+Auto-dispatch is enabled **per project**. With the sidebar grouped by project, right-click a project and select **Auto-dispatch** to toggle it on. When active, a ⚡ icon appears next to the project name.
 
 You also need the global auto-dispatch configuration — either toggle it in **Preferences → Task Management** (⌘, / Ctrl+,) or set it in your `config.json`:
 

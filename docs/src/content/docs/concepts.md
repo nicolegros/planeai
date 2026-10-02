@@ -42,7 +42,8 @@ Choose based on whether you need sessions to survive app closures. If you do, us
 
 A project is a registered directory on your filesystem — typically a git repository. Registering a project tells planeai where your code lives so it can create sessions, worktrees, and tasks scoped to that codebase.
 
-The sidebar organizes everything by project: tasks appear under the project they belong to, and sessions are grouped by their associated project. You can have multiple projects registered simultaneously.
+By default the sidebar organizes everything by project: tasks appear under the project they belong to, and sessions are grouped by their associated project. You can have multiple projects registered simultaneously.
+You can also group the sidebar by task status to see the work of every project in one list.
 
 ## Tasks
 
@@ -57,7 +58,7 @@ Tasks are planeai's built-in work tracker. Each task represents a unit of work �
 - **Parent** — optional parent task for subtask hierarchies
 - **Base branch** — which git branch to start from when creating a worktree
 
-Tasks appear in the sidebar grouped by status. Clicking a task either jumps to its linked session (if one exists) or starts a new session for it. You can create tasks from the GUI, the CLI, or directly from an agent session using the built-in agent skills.
+Tasks appear in the sidebar grouped by status, either inside each project or across all projects. Clicking a task either jumps to its linked session (if one exists) or starts a new session for it. You can create tasks from the GUI, the CLI, or directly from an agent session using the built-in agent skills.
 
 The bundled Jira plugin manages Jira Cloud OAuth and manual configured-source synchronization. Synced issues are imported as PlaneAI tasks, appear in the sidebar, and can be assigned to a PlaneAI project as child tasks. Writeback and periodic synchronization remain deferred. See the [Task Management guide](/planeai/guides/task-management/#jira-integration) for the current scope.
 

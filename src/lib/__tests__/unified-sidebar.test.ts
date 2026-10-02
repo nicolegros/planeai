@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeSidebarSessionOrder } from "../sidebar-session-order";
+import { buildSidebarModel, sidebarNavigationOrder } from "../sidebar-model";
 import type { Session, TaskItem, Project } from "../types";
 
 // Test the derivation logic used by UnifiedSidebar
@@ -54,15 +54,6 @@ function getOrphanSessions(sessions: Session[], allTaskKeys: Set<string>): Sessi
   return sessions.filter((s) => !s.task_key || !allTaskKeys.has(s.task_key));
 }
 
-function groupByStatus(items: TaskItem[]): Record<string, TaskItem[]> {
-  const statusOrder = ["in_progress", "in_review", "todo", "done"];
-  const groups: Record<string, TaskItem[]> = {};
-  for (const s of statusOrder) groups[s] = [];
-  for (const t of items) (groups[t.status] ?? (groups["todo"] ??= [])).push(t);
-  for (const s of statusOrder) groups[s]?.sort((a, b) => b.priority - a.priority);
-  return groups;
-}
-
 describe("unified sidebar logic", () => {
   describe("hidden projects", () => {
     it("excludes hidden project sessions from sidebar keyboard navigation", () => {
@@ -70,7 +61,18 @@ describe("unified sidebar logic", () => {
       const hidden = makeProject("p2", "hidden", "/hidden", true);
       const sessions = [makeSession("s1", visible.id), makeSession("s2", hidden.id)];
 
-      expect(computeSidebarSessionOrder([visible, hidden], sessions, {}, false)).toEqual(["s1"]);
+      const sections = buildSidebarModel({
+        groupBy: "project",
+        projects: [visible, hidden],
+        sessions,
+        tasksByProject: {},
+        loopsByProject: {},
+        loopSessionIds: new Set(),
+        hideDoneTasks: false,
+        hideEmptyProjects: false,
+      });
+
+      expect(sidebarNavigationOrder(sections, {})).toEqual(["s1"]);
     });
   });
 
@@ -103,38 +105,6 @@ describe("unified sidebar logic", () => {
       ];
       const orphans = getOrphanSessions(sessions, new Set(["PLA-1", "PLA-2"]));
       expect(orphans.map((s) => s.id)).toEqual(["s2", "s4"]);
-    });
-  });
-
-  describe("task grouping by status", () => {
-    it("groups tasks into status buckets", () => {
-      const tasks = [
-        makeTask("T-1", "todo"),
-        makeTask("T-2", "in_progress"),
-        makeTask("T-3", "done"),
-        makeTask("T-4", "todo"),
-      ];
-      const groups = groupByStatus(tasks);
-      expect(groups["todo"]).toHaveLength(2);
-      expect(groups["in_progress"]).toHaveLength(1);
-      expect(groups["done"]).toHaveLength(1);
-      expect(groups["in_review"]).toHaveLength(0);
-    });
-
-    it("sorts by priority descending within group", () => {
-      const tasks = [
-        { ...makeTask("T-1", "todo"), priority: 1 },
-        { ...makeTask("T-2", "todo"), priority: 3 },
-        { ...makeTask("T-3", "todo"), priority: 2 },
-      ];
-      const groups = groupByStatus(tasks);
-      expect(groups["todo"].map((t) => t.key)).toEqual(["T-2", "T-3", "T-1"]);
-    });
-
-    it("handles empty input", () => {
-      const groups = groupByStatus([]);
-      expect(groups["todo"]).toHaveLength(0);
-      expect(groups["in_progress"]).toHaveLength(0);
     });
   });
 

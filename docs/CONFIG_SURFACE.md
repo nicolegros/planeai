@@ -25,6 +25,9 @@ These are normal options users should configure.
 | `scrollback_lines`        | number   | —            | Terminal scrollback line limit                                            |
 | `sound_enabled`           | bool     | `true`       | Play a chime when an agent finishes a task                                |
 | `post_merge_action`       | string   | `"archive"`  | Default action after PR merge timeout: `archive`, `destroy`, `keep`       |
+| `sidebar_group_by`        | string   | `"project"`  | Sidebar top-level grouping: `project` or `status`                         |
+| `hide_task_keys`          | bool     | `false`      | Hide task keys on sidebar task rows                                       |
+| `hide_project_labels`     | bool     | `false`      | Hide project names on sidebar rows when grouped by status                 |
 
 ### 2. Advanced compatibility config
 

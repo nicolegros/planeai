@@ -80,6 +80,9 @@ export interface AppConfig {
   projects_base_path?: string | null;
   hide_done_tasks?: boolean | null;
   hide_empty_projects?: boolean | null;
+  sidebar_group_by?: "project" | "status" | null;
+  hide_task_keys?: boolean | null;
+  hide_project_labels?: boolean | null;
   scrollback_lines?: number | null;
   web_links?: boolean | null;
   auto_open_review?: boolean | null;
