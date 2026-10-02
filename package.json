@@ -48,7 +48,7 @@
     "@auto-it/upload-assets": "^11.3.6",
     "@sveltejs/vite-plugin-svelte": "6.2.4",
     "@tailwindcss/vite": "4.3.3",
-    "@tauri-apps/cli": "2.11.4",
+    "@tauri-apps/cli": "2.11.5",
     "@typescript/typescript6": "6.0.2",
     "auto": "^11.3.6",
     "jsdom": "30.0.1",
