@@ -1,3 +1,4 @@
+use planeai_core::agent_hooks::session_scoped_command;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -576,18 +577,21 @@ pub fn normalize_base_path(raw: &str) -> String {
 
 /// Build the full launch command for a provider, optionally appending the yolo flag.
 pub fn launch_command(provider: &Provider, yolo: bool) -> String {
+    let command = session_scoped_command(&provider.command);
     match (yolo, &provider.yolo_flag) {
-        (true, Some(flag)) => format!("{} {}", provider.command, flag),
-        _ => provider.command.clone(),
+        (true, Some(flag)) => format!("{command} {flag}"),
+        _ => command,
     }
 }
 
 /// Build the command for restarting a session: use interactive resume if available, otherwise fresh launch.
 pub fn restart_command_for_provider(provider: &Provider) -> String {
-    if let Some(ref resume_cmd) = provider.resume_command {
-        return resume_cmd.clone();
-    }
-    provider.command.clone()
+    session_scoped_command(
+        provider
+            .resume_command
+            .as_ref()
+            .unwrap_or(&provider.command),
+    )
 }
 
 /// Resolve the effective session backend: use config value if set, otherwise default to local.

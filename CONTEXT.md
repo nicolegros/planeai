@@ -132,6 +132,8 @@ Notify scripts ignore any event they do not map explicitly, so a hook config new
 Codex `PermissionRequest` is not hooked: with `approvals_reviewer = "auto_review"` it fires for every escalated command even though no human is needed.
 Codex only runs hooks the user has trusted: it asks on the first launch after installation.
 Until the hooks are trusted, Codex sessions stay busy because hook-enabled sessions skip silence detection.
+Codex sessions launch with `--no-daemon` (`agent_hooks::session_scoped_command`): the shared Codex app-server daemon runs hooks with the environment of whichever session started it, so every session's events would carry that one session's `PLANEAI_SESSION_ID`.
+The flag is only added when the installed Codex lists it in `--help`, and never when the command already sets `--no-daemon` or `--remote`.
 The Codex hook command keeps `$HOME` unexpanded so a `hooks.json` kept in dotfiles stays portable, and planeai rewrites the file in place so a symlinked `hooks.json` is preserved.
 
 For tmux-backend sessions, the CLI sends prompts directly via `tmux send-keys -l` without going through the GUI.
