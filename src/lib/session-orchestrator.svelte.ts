@@ -16,6 +16,7 @@ import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
 import { getCycleState } from "./tab-switcher.svelte";
 import { taskWorkspaceLayout } from "./task-workspace-layout.svelte";
+import { PROVIDER_BACKEND } from "./plugin-providers";
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -376,14 +377,22 @@ export function startSymphonyPolling(): () => void {
 
 // ─── Quit confirmation helper ────────────────────────────────────────────────
 
-export function getActiveDirectCount(): number {
-  return sessions.filter((s) => s.status === "active" && s.backend === "direct").length;
+/** Local PTYs die with the app, and so does a provider session's in-flight turn. */
+export function countSessionsLostOnQuit(
+  candidates: Pick<Session, "id" | "status" | "backend">[],
+  states: Record<string, string>,
+): number {
+  return candidates.filter(
+    (s) =>
+      s.status === "active" &&
+      (s.backend === "local" || (s.backend === PROVIDER_BACKEND && states[s.id] === "Busy")),
+  ).length;
 }
 
 export function setupQuitGuard(onShowConfirm: (count: number) => void): Promise<() => void> {
   return getCurrentWindow().onCloseRequested(async (event) => {
     flushMru().catch(() => {});
-    const count = getActiveDirectCount();
+    const count = countSessionsLostOnQuit(sessions, agentStates);
     if (count > 0) {
       event.preventDefault();
       onShowConfirm(count);

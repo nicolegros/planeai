@@ -571,6 +571,11 @@ pub fn send_prompt(
             ops.notify_socket_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to local PTY");
         }
+        // The GUI owns provider runtimes, so prompts take the same route as local PTYs.
+        "plugin" => {
+            ops.notify_socket_send(&session.id, text)?;
+            tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to plugin provider");
+        }
         "daemon" => {
             ops.daemon_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via daemon data connection");
@@ -1562,6 +1567,41 @@ mod tests {
         // Local backend sends via notify socket
         assert_eq!(ops.sent_keys.borrow().len(), 0);
         assert_eq!(ops.sent_socket.borrow().len(), 1);
+    }
+
+    #[test]
+    fn send_prompt_plugin_backend_uses_notify_socket() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "ccccdddd-1111-2222-3333-444455556666";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "provider-session",
+            None,
+            "main",
+            None,
+            Some("claude-headless:claude"),
+            "plugin",
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let ops = MockPromptOps::new(true);
+        let result = send_prompt(&conn, "cccc", "hello provider", &ops).unwrap();
+        assert_eq!(result.backend, "plugin");
+        assert_eq!(ops.sent_keys.borrow().len(), 0);
+        assert_eq!(
+            ops.sent_socket.borrow().as_slice(),
+            &[(id.to_string(), "hello provider".to_string())]
+        );
     }
 
     #[test]

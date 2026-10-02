@@ -49,6 +49,9 @@ enum PluginAction {
         /// JSONL scenario of plugin RPC requests to run after handshake
         #[arg(long)]
         scenario: Option<std::path::PathBuf>,
+        /// Send this prompt to the first declared provider and require it to reach idle
+        #[arg(long)]
+        provider_turn: Option<String>,
     },
 }
 
@@ -533,9 +536,11 @@ fn main() {
     let command = match cli.command {
         Commands::Plugin { action } => {
             let result = match action {
-                PluginAction::Test { package, scenario } => {
-                    plugin_test::run(&package, scenario.as_deref())
-                }
+                PluginAction::Test {
+                    package,
+                    scenario,
+                    provider_turn,
+                } => plugin_test::run(&package, scenario.as_deref(), provider_turn.as_deref()),
             };
             if let Err(error) = result {
                 eprintln!("plugin test failed: {error:#}");

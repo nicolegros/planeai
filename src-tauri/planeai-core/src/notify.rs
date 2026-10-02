@@ -45,6 +45,8 @@ pub struct NotifyState {
     meta: HashMap<String, SessionMeta>,
     notified: std::collections::HashSet<String>,
     idle_since: HashMap<String, Instant>,
+    /// Sessions whose status comes only from their plugin provider (ADR-0013).
+    provider_owned: std::collections::HashSet<String>,
     #[cfg(any(test, feature = "test-support"))]
     time_offset: HashMap<String, Duration>,
 }
@@ -63,6 +65,7 @@ impl NotifyState {
             meta: HashMap::new(),
             notified: std::collections::HashSet::new(),
             idle_since: HashMap::new(),
+            provider_owned: std::collections::HashSet::new(),
             #[cfg(any(test, feature = "test-support"))]
             time_offset: HashMap::new(),
         }
@@ -83,6 +86,15 @@ impl NotifyState {
                 hook_enabled,
             },
         );
+    }
+
+    /// Hand a session's status to its plugin provider: hook and PTY signals stop applying.
+    pub fn mark_provider_owned(&mut self, session_id: &str) {
+        self.provider_owned.insert(session_id.to_string());
+    }
+
+    pub fn is_provider_owned(&self, session_id: &str) -> bool {
+        self.provider_owned.contains(session_id)
     }
 
     pub fn get_meta(&self, session_id: &str) -> Option<&SessionMeta> {
@@ -171,6 +183,9 @@ impl NotifyState {
 
     pub fn check_silence(&mut self, session_id: &str) -> bool {
         if self.get_state(session_id) != Some(AgentState::Busy) {
+            return false;
+        }
+        if self.is_provider_owned(session_id) {
             return false;
         }
         // Skip sessions without meta (not registered) or with hooks enabled
@@ -313,6 +328,19 @@ mod tests {
         assert!(!state.notify_stop("s1"));
         state.notify_output("s1");
         assert!(state.notify_stop("s1"));
+    }
+
+    #[test]
+    fn silence_check_skipped_for_provider_owned_sessions() {
+        let mut state = NotifyState::new();
+        state.register_session("s1", "test", "project", false);
+        state.mark_provider_owned("s1");
+        state.notify_busy("s1");
+        state.advance_time("s1", SILENCE_THRESHOLD + Duration::from_secs(1));
+        assert!(!state.check_silence("s1"));
+        assert_eq!(state.get_state("s1"), Some(AgentState::Busy));
+        assert!(state.is_provider_owned("s1"));
+        assert!(!state.is_provider_owned("s2"));
     }
 
     #[test]

@@ -219,3 +219,47 @@ pub async fn migrate_legacy_jira(
         .map_err(|error| format!("failed to emit Jira migration update: {error}"))?;
     Ok(completed)
 }
+
+#[tauri::command]
+pub async fn local_plugin_provider_ui_source(
+    plugin_id: String,
+    provider_id: String,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<String, String> {
+    runtime
+        .0
+        .local_provider_ui_source(&plugin_id, &provider_id)
+        .await
+}
+
+/// Called when a provider session's UI mounts; resumes it after an app or plugin restart.
+#[tauri::command]
+pub async fn provider_session_ensure(
+    session_id: String,
+    app: AppHandle,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<(), String> {
+    let context = crate::plugin_providers::load_context(&app, &session_id).await?;
+    crate::plugin_providers::ensure(&runtime.0, &context).await
+}
+
+#[tauri::command]
+pub async fn provider_session_send(
+    session_id: String,
+    text: String,
+    app: AppHandle,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<(), String> {
+    let context = crate::plugin_providers::load_context(&app, &session_id).await?;
+    crate::plugin_providers::send(&runtime.0, &context, &text).await
+}
+
+#[tauri::command]
+pub async fn provider_session_interrupt(
+    session_id: String,
+    app: AppHandle,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<(), String> {
+    let context = crate::plugin_providers::load_context(&app, &session_id).await?;
+    crate::plugin_providers::interrupt(&runtime.0, &context).await
+}

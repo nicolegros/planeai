@@ -3,7 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { jiraDepartedInteractionEntrypoint, jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
-  import { plugins, projects as projectsApi, tasks as tasksApi } from "../lib/api";
+  import { plugins, projects as projectsApi, providerSessions, tasks as tasksApi } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import { getAllTasks } from "../lib/task-store.svelte";
@@ -12,7 +12,7 @@
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import { focusSidebar } from "../lib/focus.svelte";
   import { isDark } from "../lib/settings.svelte";
-  import type { PluginInventory, PluginUiContribution } from "../lib/types";
+  import type { PluginInventory, PluginUiContribution, ProviderSessionEvent } from "../lib/types";
 
   interface Props {
     plugin: PluginInventory;
@@ -49,6 +49,7 @@
     message?: string;
     height?: number;
     width?: number;
+    text?: unknown;
   };
 
   let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, getFocusedAgentSession = () => undefined }: Props = $props();
@@ -172,12 +173,13 @@
 
   function createLocalPluginFrame(root: ShadowRoot, sessionContext?: PluginSessionContext): PluginUiDisposer {
     const isTitlebar = contribution.placement === "titlebar";
+    const providerSession = contribution.placement === "session.main" ? sessionContext : undefined;
     const isSessionIndicator = contribution.placement === "session.indicator";
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
     frame.className =
-      contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
+      contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.main" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
         ? "block h-full w-full border-0"
         : isSessionIndicator
           ? "block h-4 w-4 border-0"
@@ -190,7 +192,7 @@
       frame.style.height = "16px";
       frame.style.pointerEvents = "none";
       frame.tabIndex = -1;
-    } else if (contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "titlebar") {
+    } else if (contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.main" || contribution.placement === "titlebar") {
       frame.style.height = "100%";
     } else if (contribution.placement === "session.panel") {
       frame.style.height = "360px";
@@ -213,6 +215,7 @@
         const pending = new Map();
         const registrations = new Map();
         const dataChangeListeners = new Set();
+        const sessionEventListeners = new Set();
         const send = (message) => parent.postMessage(message, "*");
         let sessionPanelContentObserver = null;
         let contentHeightPending = false;
@@ -323,6 +326,14 @@
             },
             notify: (message, kind = "error") => send({ type: "notify", message, kind }),
           },
+          session: {
+            send: (text) => request("session-send", { text }),
+            interrupt: () => request("session-interrupt"),
+            onEvent: (listener) => {
+              sessionEventListeners.add(listener);
+              return () => sessionEventListeners.delete(listener);
+            },
+          },
         };
         addEventListener("message", async (event) => {
           if (event.source !== parent) return;
@@ -335,6 +346,10 @@
           }
           if (message.type === "data-changed") {
             for (const listener of dataChangeListeners) listener();
+            return;
+          }
+          if (message.type === "session-event") {
+            for (const listener of sessionEventListeners) listener(message.event);
             return;
           }
           if (message.type === "response") {
@@ -355,6 +370,7 @@
           if (message.type === "dispose") {
             if (typeof cleanup === "function") cleanup();
             cleanup = null;
+            sessionEventListeners.clear();
             sessionPanelContentObserver?.disconnect();
             sessionPanelContentObserver = null;
             removeEventListener("keydown", forwardEscapeToHost);
@@ -451,6 +467,20 @@
           .updateSettings(plugin.id, message.params as Record<string, unknown>)
           .then((value) => respond(message.requestId, true, value))
           .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "session-send" || message.type === "session-interrupt") {
+        if (!providerSession) {
+          respond(message.requestId, false, "session controls are available only to provider session UIs");
+          return;
+        }
+        if (message.type === "session-send" && typeof message.text !== "string") {
+          respond(message.requestId, false, "session.send requires text");
+          return;
+        }
+        void (message.type === "session-send"
+          ? providerSessions.send(providerSession.id, message.text as string)
+          : providerSessions.interrupt(providerSession.id))
+          .then(() => respond(message.requestId, true, null))
+          .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "data-changed") {
         void plugins
           .dataChanged(plugin.id)
@@ -509,9 +539,15 @@
         showLoadFailure(root, message.message ?? "local UI bundle failed to load");
       }
     };
+    // A provider UI mounts only once its session is driven by the current sidecar.
+    const loadSource = (): Promise<string> =>
+      providerSession
+        ? providerSessions
+            .ensure(providerSession.id)
+            .then(() => plugins.localProviderUiSource(plugin.id, contribution.id))
+        : plugins.localUiSource(plugin.id, contribution.id);
     const initialise = (): void => {
-      void plugins
-        .localUiSource(plugin.id, contribution.id)
+      void loadSource()
         .then((source) => {
           const context = JSON.parse(JSON.stringify({ plugin, contribution, session: sessionContext })) as {
             plugin: PluginInventory;
@@ -525,11 +561,24 @@
 
     const refreshData = (): void => frame.contentWindow?.postMessage({ type: "data-changed" }, "*");
     if (isSessionIndicator) refreshLocalPluginData = refreshData;
+    let framed = true;
+    let unlistenSessionEvents: (() => void) | undefined;
+    if (providerSession) {
+      void listen<ProviderSessionEvent>("plugin-provider-session-event", ({ payload }) => {
+        if (payload.plugin_id !== plugin.id || payload.session_id !== providerSession.id) return;
+        frame.contentWindow?.postMessage({ type: "session-event", event: { seq: payload.seq, payload: payload.payload } }, "*");
+      }).then((unlisten) => {
+        if (framed) unlistenSessionEvents = unlisten;
+        else unlisten();
+      });
+    }
     window.addEventListener("message", onMessage);
     frame.addEventListener("load", initialise, { once: true });
     root.replaceChildren(frame);
     if (autofocus) focusFrame();
     return () => {
+      framed = false;
+      unlistenSessionEvents?.();
       if (refreshLocalPluginTheme === refreshTheme) refreshLocalPluginTheme = null;
       if (refreshLocalPluginData === refreshData) refreshLocalPluginData = null;
       window.removeEventListener("message", onMessage);
@@ -722,7 +771,7 @@
       ? plugin.source_kind === "builtin"
         ? "pointer-events-none"
         : "h-full w-full pointer-events-auto"
-      : contribution.placement === "main-pane" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
+      : contribution.placement === "main-pane" || contribution.placement === "session.main" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
         ? "h-full w-full"
         : contribution.placement === "session.indicator"
           ? "h-4 w-4 shrink-0 pointer-events-none"

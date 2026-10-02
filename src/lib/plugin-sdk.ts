@@ -75,6 +75,21 @@ export interface PluginUiHost {
     openModal(options: PluginModalOptions): PluginModalControls;
     openProjectForm(): Promise<Project | null>;
   };
+  /**
+   * Present only for a provider's session UI. Input goes through the host so CLI,
+   * recipes and the UI share one delivery path; events are the sidecar's own
+   * `host.session.event` payloads, in `seq` order, for this session only.
+   */
+  session?: {
+    send(text: string): Promise<void>;
+    interrupt(): Promise<void>;
+    onEvent(listener: (event: PluginSessionEvent) => void): () => void;
+  };
+}
+
+export interface PluginSessionEvent {
+  seq: number;
+  payload: unknown;
 }
 
 export interface PluginSessionContext {

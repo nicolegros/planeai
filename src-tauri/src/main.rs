@@ -18,6 +18,7 @@ mod notify;
 mod output_observer;
 mod paths;
 mod plugin_packages;
+mod plugin_providers;
 mod plugins;
 mod pty;
 mod pty_planeai_core_adapter;
@@ -429,6 +430,10 @@ fn main() {
             plugin_settings,
             update_plugin_settings,
             local_plugin_ui_source,
+            local_plugin_provider_ui_source,
+            provider_session_ensure,
+            provider_session_send,
+            provider_session_interrupt,
             plugin_data_changed,
             jira_migration_status,
             migrate_legacy_jira,

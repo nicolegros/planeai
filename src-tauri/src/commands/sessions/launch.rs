@@ -7,6 +7,8 @@ use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 use crate::config;
 use crate::db;
 use crate::git;
+use crate::plugin_providers::{self, PROVIDER_BACKEND};
+use crate::plugins::PluginRuntimeHandle;
 use crate::state::{ConfigState, DaemonState, DbState, NotifyHandle, ProjectOperationState};
 #[cfg(not(windows))]
 use crate::tmux;
@@ -40,6 +42,7 @@ pub async fn launch_session(
     notify: State<'_, NotifyHandle>,
     config_state: State<'_, ConfigState>,
     operations: State<'_, ProjectOperationState>,
+    runtime: State<'_, PluginRuntimeHandle>,
     project_id: String,
     project_name: String,
     repo_path: String,
@@ -82,36 +85,55 @@ pub async fn launch_session(
     .await?;
     let workspace_project_id = task_project_id.as_deref().unwrap_or(&project_id);
     tracing::info!(task_prompt = ?task_prompt, auto_approve, provider = ?provider, task_key = ?task_key, "launch_session called");
-    // Phase 1: gather params from config (holding config lock briefly)
-    let (cmd, provider_key, hook_enabled, backend, scrollback_bytes, extra_path_dirs) = {
-        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-        let pk = provider.unwrap_or_else(|| cfg.default_provider.clone());
-        let provider_def = cfg
-            .providers
-            .get(&pk)
-            .ok_or_else(|| format!("Unknown provider: {pk}"))?;
-
-        let core_provider = planeai_core::session_launch::ProviderConfig {
-            command: provider_def.command.clone(),
-            yolo_flag: provider_def.yolo_flag.clone(),
-            prompt_command: provider_def.prompt_command.clone(),
-        };
-        let launch_cmd = planeai_core::session_launch::build_provider_launch_command(
-            &core_provider,
-            auto_approve,
-            task_prompt.as_deref(),
-            false, // manual launches are not autonomous
-            None,  // autonomous_prompt_template not used for manual launches
-        );
-        let c = launch_cmd.command;
-        tracing::info!(command = %c, prompt_injected = launch_cmd.prompt_was_injected, approve_applied = launch_cmd.auto_approve_was_applied, "launch command built");
-
-        let he = provider_has_hook(&pk, &cfg);
-        let be = config::resolve_backend(&cfg).to_string();
-        let sb = 1_048_576;
-        let epd = cfg.resolved_extra_path_dirs();
-        (c, pk, he, be, sb, epd)
+    // Plugin providers have no command: their sidecar runs the agent (ADR-0013).
+    let runtime_provider = match provider.as_deref() {
+        Some(key) if plugin_providers::parse_provider_key(key).is_some() => {
+            plugin_providers::resolve(&runtime.0, key).await?;
+            Some(key.to_string())
+        }
+        _ => None,
     };
+    // Phase 1: gather params from config (holding config lock briefly)
+    let (cmd, provider_key, hook_enabled, backend, scrollback_bytes, extra_path_dirs) =
+        if let Some(key) = runtime_provider {
+            let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+            (
+                String::new(),
+                key,
+                true,
+                PROVIDER_BACKEND.to_string(),
+                0,
+                cfg.resolved_extra_path_dirs(),
+            )
+        } else {
+            let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+            let pk = provider.unwrap_or_else(|| cfg.default_provider.clone());
+            let provider_def = cfg
+                .providers
+                .get(&pk)
+                .ok_or_else(|| format!("Unknown provider: {pk}"))?;
+
+            let core_provider = planeai_core::session_launch::ProviderConfig {
+                command: provider_def.command.clone(),
+                yolo_flag: provider_def.yolo_flag.clone(),
+                prompt_command: provider_def.prompt_command.clone(),
+            };
+            let launch_cmd = planeai_core::session_launch::build_provider_launch_command(
+                &core_provider,
+                auto_approve,
+                task_prompt.as_deref(),
+                false, // manual launches are not autonomous
+                None,  // autonomous_prompt_template not used for manual launches
+            );
+            let c = launch_cmd.command;
+            tracing::info!(command = %c, prompt_injected = launch_cmd.prompt_was_injected, approve_applied = launch_cmd.auto_approve_was_applied, "launch command built");
+
+            let he = provider_has_hook(&pk, &cfg);
+            let be = config::resolve_backend(&cfg).to_string();
+            let sb = 1_048_576;
+            let epd = cfg.resolved_extra_path_dirs();
+            (c, pk, he, be, sb, epd)
+        };
 
     // Phase 2: async work — detect base branch, git worktree/checkout
     let effective_base_branch = {
@@ -195,8 +217,17 @@ pub async fn launch_session(
     };
 
     // Phase 3: async backend spawn — no locks held
-    if backend == "daemon" || backend == planeai_rmux::BACKEND {
-        let spawn_result = if backend == planeai_rmux::BACKEND {
+    if backend == "daemon" || backend == planeai_rmux::BACKEND || backend == PROVIDER_BACKEND {
+        let spawn_result = if backend == PROVIDER_BACKEND {
+            let context = plugin_providers::SessionRuntimeContext {
+                session_id: session_id.clone(),
+                provider_key: provider_key.clone(),
+                cwd: working_dir.clone(),
+                yolo: auto_approve,
+                extra_path_dirs: extra_path_dirs.clone(),
+            };
+            plugin_providers::start(&runtime.0, &context, task_prompt.as_deref()).await
+        } else if backend == planeai_rmux::BACKEND {
             spawn_in_rmux(
                 &app,
                 &session_id,
@@ -271,6 +302,9 @@ pub async fn launch_session(
         let mut ns = notify.0.lock().unwrap();
         let display_name = if name.is_empty() { &branch } else { &name };
         ns.register_session(&session_id, display_name, &project_name, hook_enabled);
+        if backend == PROVIDER_BACKEND {
+            ns.mark_provider_owned(&session_id);
+        }
     }
 
     let session = db::create_session_with_params(

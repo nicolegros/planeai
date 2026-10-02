@@ -84,6 +84,10 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
 }
 
 fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHandle) {
+    if ignores_socket_status(msg, state) {
+        tracing::debug!(session_id = %msg.session_id, event = ?msg.event, "ignored hook status for provider-owned session");
+        return;
+    }
     match msg.event {
         NotifyEvent::SessionCreated => {
             tracing::info!(session_id = %msg.session_id, "[DEBUG-lsr1] session created via socket — emitting to webview");
@@ -156,6 +160,25 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 .0
                 .dispatch_task_lifecycle(batch);
         }
+        NotifyEvent::SendPrompt if is_provider_session(app, &msg.session_id) => {
+            let Some(text) = msg.text.clone() else {
+                return;
+            };
+            let app = app.clone();
+            let session_id = msg.session_id.clone();
+            tauri::async_runtime::spawn(async move {
+                let supervisor = app.state::<crate::plugins::PluginRuntimeHandle>().0.clone();
+                let result = match crate::plugin_providers::load_context(&app, &session_id).await {
+                    Ok(context) => {
+                        crate::plugin_providers::send(&supervisor, &context, &text).await
+                    }
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = result {
+                    tracing::warn!(%session_id, %error, "send_prompt to provider session failed");
+                }
+            });
+        }
         NotifyEvent::SendPrompt => {
             if let Some(text) = &msg.text {
                 let pty_manager = app.state::<crate::state::PtyState>().0.clone();
@@ -169,6 +192,100 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
             }
         }
     }
+}
+
+/// Provider sessions get busy/idle/attention from their plugin only (ADR-0013);
+/// the user's own agent hooks still fire inside them and must not compete.
+fn ignores_socket_status(msg: &NotifyMessage, state: &SharedNotifyState) -> bool {
+    matches!(
+        msg.event,
+        NotifyEvent::Busy | NotifyEvent::Stop | NotifyEvent::Notification
+    ) && state.lock().unwrap().is_provider_owned(&msg.session_id)
+}
+
+fn is_provider_session(app: &AppHandle, session_id: &str) -> bool {
+    app.state::<crate::state::NotifyHandle>()
+        .0
+        .lock()
+        .unwrap()
+        .is_provider_owned(session_id)
+}
+
+/// Apply a status reported by a session's plugin provider.
+pub fn apply_provider_status(
+    app: &AppHandle,
+    session_id: &str,
+    status: crate::plugin_providers::ProviderSessionStatus,
+) {
+    use crate::plugin_providers::ProviderSessionStatus;
+    let state = app.state::<crate::state::NotifyHandle>().0.clone();
+    match status {
+        ProviderSessionStatus::Busy => {
+            let resumed = {
+                let mut s = state.lock().unwrap();
+                s.mark_provider_owned(session_id);
+                s.notify_busy(session_id)
+            };
+            emit_state_change(app, session_id, AgentState::Busy);
+            if resumed {
+                let _ = app.emit(
+                    "agent-resumed",
+                    serde_json::json!({ "session_id": session_id }),
+                );
+            }
+        }
+        ProviderSessionStatus::Idle | ProviderSessionStatus::NeedsAttention => {
+            let fired = {
+                let mut s = state.lock().unwrap();
+                s.mark_provider_owned(session_id);
+                s.notify_stop_immediate(session_id)
+            };
+            if fired {
+                emit_state_change(app, session_id, AgentState::Idle);
+                fire_notification(app, session_id, &state);
+            }
+        }
+        ProviderSessionStatus::Exited => mark_provider_session_exited(app, session_id),
+    }
+}
+
+fn mark_provider_session_exited(app: &AppHandle, session_id: &str) {
+    let app = app.clone();
+    let session_id = session_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        let db = app.state::<crate::state::DbState>().0.clone();
+        let id = session_id.clone();
+        let exited = crate::commands::blocking(move || {
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            let Some(session) = crate::db::get_session(&conn, &id).map_err(|e| e.to_string())?
+            else {
+                return Ok(None);
+            };
+            if session.status != "active" {
+                return Ok(None);
+            }
+            crate::db::mark_session_exited(&conn, &id).map_err(|e| e.to_string())?;
+            Ok(Some(session))
+        })
+        .await;
+        match exited {
+            Ok(Some(session)) => {
+                let _ = app.emit("pty-exited", serde_json::json!({ "pty_key": session_id }));
+                let _ = app.emit("sessions-changed", ());
+                app.state::<crate::plugins::PluginRuntimeHandle>()
+                    .0
+                    .dispatch_session_lifecycle(
+                        crate::commands::sessions::lifecycle::session_lifecycle_event(
+                            &session, "active", "exited",
+                        ),
+                    );
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%session_id, %error, "failed to mark provider session exited")
+            }
+        }
+    });
 }
 
 /// Start the silence checker thread.

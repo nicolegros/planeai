@@ -11,6 +11,7 @@
     backend_entrypoint: "planeai-plugin-jira",
     capabilities: [],
     ui_contributions: [{ id: "dashboard", label: "Dashboard", placement: "main-pane", entrypoint: "jira-status", order: null, shortcut: null }],
+    providers: [],
     installed_hash: null,
     installed_path: null,
     original_display_path: null,

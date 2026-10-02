@@ -46,6 +46,8 @@
   import LoopDashboard from "./components/LoopDashboard.svelte";
   import EmptyTaskWorkspace from "./components/EmptyTaskWorkspace.svelte";
   import PluginContributionHost from "./components/PluginContributionHost.svelte";
+  import ProviderSessionView from "./components/ProviderSessionView.svelte";
+  import { PROVIDER_BACKEND, runtimeProviders } from "./lib/plugin-providers";
   import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
@@ -1194,6 +1196,7 @@
         {projects}
         {sessions}
         {taskPrefill}
+        runtimeProviders={runtimeProviders(pluginInventory)}
         currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
         onCreateTask={() => {
           showSessionForm = false;
@@ -1332,7 +1335,17 @@
             {@const isActiveInLeaf = tabEntry.ptyKey === activeEntry?.ptyKey}
             {@const project = session ? projects.find((p) => p.id === session.project_id) : null}
             {#if isTerminalTab(tabEntry)}
-              {#if session}
+              {#if session && tabEntry.type === "agent" && session.backend === PROVIDER_BACKEND}
+              <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
+                <ProviderSessionView
+                  {session}
+                  inventory={pluginInventory}
+                  autofocus={isActiveInLeaf && sessionId === activeSessionId}
+                  onNavigate={openPluginContribution}
+                  onOpenPreferences={openPreferences}
+                />
+              </div>
+              {:else if session}
               <!-- Wrapper hides inactive tabs; Terminal's visible prop also pauses during loop overlay -->
               <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
                 <Terminal
@@ -1572,7 +1585,7 @@
               <span class="text-[13px] font-semibold text-t1">{quitDirectCount} active session{quitDirectCount > 1 ? 's' : ''} will be terminated.</span>
               <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
             </div>
-            <p class="text-[11px] text-t3">Direct sessions don't survive app quit.</p>
+            <p class="text-[11px] text-t3">Local sessions and running chat turns don't survive app quit.</p>
           </div>
           <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
             <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showQuitConfirm = false; }}>

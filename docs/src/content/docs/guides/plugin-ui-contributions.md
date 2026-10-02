@@ -21,7 +21,7 @@ my-plugin/
     └── entry.js
 ```
 
-`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs or `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API; local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
+`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, or the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
 
 Every backend and UI path must be a package-relative file path: no absolute paths and no `..`. The active platform's backend must exist and be executable. On Unix, its executable mode is preserved in the imported copy.
 
@@ -31,7 +31,7 @@ Every backend and UI path must be a package-relative file path: no absolute path
   "id": "local-fixture",
   "name": "Local Fixture",
   "version": "0.1.0",
-  "host_api_version": "planeai.plugin-host.v1",
+  "host_api_version": "planeai.plugin-host.v3",
   "source_kind": "local",
   "backend_entrypoints": {
     "macos-arm64": "bin/macos-arm64/planeai-plugin-fixture",
@@ -47,7 +47,9 @@ Every backend and UI path must be a package-relative file path: no absolute path
     "sessions.read",
     "tasks.read",
     "tasks.create",
-    "task-events"
+    "task-events",
+    "session-events",
+    "providers"
   ],
   "ui_contributions": [
     {
@@ -55,6 +57,14 @@ Every backend and UI path must be a package-relative file path: no absolute path
       "label": "Fixture",
       "placement": "main-pane",
       "entrypoint": "ui/entry.js"
+    }
+  ],
+  "providers": [
+    {
+      "id": "echo",
+      "label": "Echo (fixture)",
+      "entrypoint": "ui/chat.js",
+      "supports": ["yolo"]
     }
   ]
 }
@@ -64,7 +74,7 @@ The platform key is the current OS and architecture: `macos-arm64`, `macos-x64`,
 
 ### Capabilities
 
-Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `tasks.read`, `tasks.create`, `tasks.transition`, and `task-events`; duplicates and all other local capabilities are rejected.
+Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `tasks.read`, `tasks.create`, `tasks.transition`, `task-events`, and `providers`; duplicates and all other local capabilities are rejected.
 
 - `settings` permits sidecar callbacks `host.settings.get` and `host.settings.replace`.
 - `projects.read` permits `host.projects.list`, returning non-hidden active projects.
@@ -78,6 +88,7 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
 - `tasks.create` permits `host.tasks.createChild`. It requires `projectPath`, `parentKey`, `title`, `description`, and a plugin-scoped `operationId`; PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
 - `tasks.transition` permits `host.sessions.transitionLinkedTask` with `{ "session_id", "status" }`. PlaneAI resolves the task strictly from that session's linked task key, changes its lifecycle status, and emits the normal task lifecycle batch (including automatic parent completion).
 - `task-events` permits event delivery only when the handshake also subscribes to `task.lifecycle`.
+- `providers` permits declaring `providers` (host API v3 only) and the provider session contract described in [Providers](#providers). It is required exactly when `providers` is declared.
 - `session-events` permits best-effort `plugin.sessionLifecycle` delivery only when the handshake also subscribes to `session.lifecycle`. Events describe committed host session status changes and include the session/project identity, branch, linked task key, previous status, and new status.
 
 The sandbox UI can use the same read/create operations directly through `context.host.rpc.call("projects.list")`, `context.host.rpc.call("sessions.list")`, `context.host.rpc.call("task.get", { key })`, and `context.host.rpc.call("tasks.createChild", params)`. The sidecar uses matching nested callbacks with the `host.` prefix. PlaneAI derives the owning plugin identity for both transports and applies identical manifest capability checks.
@@ -115,6 +126,46 @@ The host supplies `PLANEAI_PLUGIN_DATA_DIR` and `PLANEAI_PLUGIN_SECRETS_DIR`. St
 The host also supplies `PATH`. A GUI launch (Spotlight, Finder, Dock) inherits a minimal `PATH` from the OS that excludes user-local bin directories, so PlaneAI replaces it with the same augmented `PATH` it gives agent sessions: the user's `extra_path_dirs` config, then conventional developer directories (`~/.local/bin`, `~/.cargo/bin`, `~/go/bin`, `/opt/homebrew/bin`, `/usr/local/bin`), then the inherited `PATH`. A backend that shells out to a CLI can rely on plain `PATH` lookup. If a user installs a tool somewhere unconventional (version-manager shims, for example), they add that directory to `extra_path_dirs` in `~/.config/planeai/config.json`.
 
 Task lifecycle delivery is best-effort and isolated from PlaneAI task commits. Subscribe in the handshake, declare `task-events`, make handlers idempotent, and log failures to stderr. The fixture handles `plugin.taskLifecycle` and emits a lifecycle diagnostic.
+
+## Providers
+
+A plugin can run sessions itself. Each entry in `providers` becomes a **runtime-backed provider** that users pick when creating a session, beside the command providers from their config. The session is a normal PlaneAI session (worktree, branch, linked task, sidebar status and lifecycle), but the plugin runs the agent and its UI replaces the terminal in the session's agent tab. See ADR-0013.
+
+```json
+"host_api_version": "planeai.plugin-host.v3",
+"capabilities": ["providers"],
+"providers": [
+  { "id": "echo", "label": "Echo (fixture)", "entrypoint": "ui/chat.js", "supports": ["yolo"] }
+]
+```
+
+`id` follows the plugin id rules and must be unique; the provider key users see in sessions and configs is `<plugin id>:<provider id>`. `entrypoint` is a package-relative UI bundle with the same rules as UI contributions. `supports` may list `yolo` when the provider honors auto-approve; otherwise PlaneAI disables auto-approve for it. Unknown fields and features are rejected. The v3 contract is unstable until the first provider plugin ships, so expect changes.
+
+PlaneAI calls these sidecar methods; each must return promptly and do its work asynchronously:
+
+| Method                       | Params                                                                       | Meaning                                                                                                                                    |
+| ---------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `provider.session.start`     | `session_id`, `provider_id`, `cwd`, `env`, `yolo`, optional `initial_prompt` | A new session was created. Run the agent in `cwd` with `env` (it carries `PLANEAI_SESSION_ID`, `PLANEAI_SOCKET` and the augmented `PATH`). |
+| `provider.session.resume`    | same as start, without `initial_prompt`                                      | The current sidecar does not drive this existing session yet, after an app restart or plugin reload. Restore it; do not replay prompts.    |
+| `provider.session.send`      | `session_id`, `text`                                                         | Input from the chat UI, the CLI, recipes and loops, or another plugin's `sessions.prompt`.                                                 |
+| `provider.session.interrupt` | `session_id`                                                                 | Stop the current turn.                                                                                                                     |
+| `provider.session.stop`      | `session_id`, `reason` (`archive`, `destroy` or `exit`)                      | The session ended. Release its process; on `destroy`, delete its data.                                                                     |
+
+`provider.*` methods are reserved for PlaneAI: plugin UI cannot call them, and `planeai-cli plugin test` scenarios cannot send them.
+
+The sidecar reports back with JSON-RPC **notifications** (frames without an `id`), which PlaneAI reads at any time, not only during a request:
+
+- `host.session.status` with `{ "session_id", "status" }`, where status is `busy`, `idle`, `needs_attention` or `exited`. It drives the sidebar, attention notifications and the quit confirmation. It is the only status source for the session: PlaneAI ignores hook and PTY signals for provider sessions, even though the user's agent hooks still run inside them. `exited` marks the session exited.
+- `host.session.event` with `{ "session_id", "seq", "payload" }`. PlaneAI forwards `payload` unchanged to the session's mounted UI. `seq` must increase per session. Keep each frame under 64 KiB; send large outputs in pieces or let the UI fetch them.
+
+Notifications for sessions the sidecar has not started or resumed are dropped. Any other notification is still a protocol error.
+
+The provider UI receives the selected session in `context.session` and a session bridge on `context.host.session`:
+
+- `send(text)` and `interrupt()` route through PlaneAI to `provider.session.send` and `provider.session.interrupt`, so every input path behaves the same.
+- `onEvent(listener)` receives `{ seq, payload }` for this session only and returns an unsubscribe function.
+
+PlaneAI unmounts the UI when the user switches sessions, and resumes the session (if needed) before mounting it again, so the sidecar owns the transcript. To rebuild the view, subscribe first, fetch a snapshot through a plugin-defined `context.host.call(...)` method, then drop live events whose `seq` is at or below the snapshot's. The fixture's `ui/chat.js` and `fixture.providerSnapshot` show the pattern.
 
 ## UI contributions
 
@@ -209,9 +260,14 @@ planeai-cli plugin test \
 planeai-cli plugin test \
   --package src-tauri/plugins/local-fixture \
   --scenario src-tauri/plugins/local-fixture/scenarios/cancellation.jsonl
+
+# Run one provider turn: send a prompt and require busy, an event, then idle.
+planeai-cli plugin test \
+  --package src-tauri/plugins/local-fixture \
+  --provider-turn "hello"
 ```
 
-The command validates every declared local backend path and the current-platform executable, creates temporary host-owned `PLANEAI_PLUGIN_DATA_DIR` and `PLANEAI_PLUGIN_SECRETS_DIR` directories, forwards only manifest-granted host capabilities during handshake, delivers a task lifecycle batch only when both sides opt in, rejects malformed or mismatched JSON-RPC output, and verifies clean shutdown. A scenario is newline-delimited JSON objects containing `method`, optional `params`, and optional `timeout_ms`. A positive `timeout_ms` (at most 5000) makes the harness send `$/cancelRequest` when the call remains pending and requires the original request to finish with error code `-32800`. Use the checked-in scenarios as executable examples. Browser UI lifecycle remains covered by your own DOM test using the documented `mount` context and disposer.
+The command validates every declared local backend path and the current-platform executable, creates temporary host-owned `PLANEAI_PLUGIN_DATA_DIR` and `PLANEAI_PLUGIN_SECRETS_DIR` directories, forwards only manifest-granted host capabilities during handshake, delivers a task lifecycle batch only when both sides opt in, rejects malformed or mismatched JSON-RPC output, and verifies clean shutdown. A scenario is newline-delimited JSON objects containing `method`, optional `params`, and optional `timeout_ms`. A positive `timeout_ms` (at most 5000) makes the harness send `$/cancelRequest` when the call remains pending and requires the original request to finish with error code `-32800`. Use the checked-in scenarios as executable examples. For a plugin that declares providers, the harness also starts and stops a session with the first provider and validates every provider notification (known session, increasing `seq`, documented status). `--provider-turn <text>` additionally sends one prompt and requires a `busy` then `idle` turn with at least one event; skip it for providers that call a real model. Browser UI lifecycle remains covered by your own DOM test using the documented `mount` context and disposer.
 
 ## v1 limitations and author checklist
 

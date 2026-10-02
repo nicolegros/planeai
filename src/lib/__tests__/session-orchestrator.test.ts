@@ -65,6 +65,7 @@ import {
   _resetForTests as resetEditorFeedback,
 } from "../editor-feedback.svelte";
 import {
+  countSessionsLostOnQuit,
   getSessions,
   getActiveSessionId,
   loadSessions,
@@ -756,5 +757,24 @@ describe("selection explicitness", () => {
     const active = getActiveSessionId();
     expect(active).toBe("s1");
     expect(isSelectionExplicit(active!)).toBe(false);
+  });
+});
+
+describe("countSessionsLostOnQuit", () => {
+  it("counts active local sessions and busy provider sessions only", () => {
+    const sessions = [
+      { id: "local", status: "active", backend: "local" },
+      { id: "local-exited", status: "exited", backend: "local" },
+      { id: "daemon", status: "active", backend: "daemon" },
+      { id: "chat-busy", status: "active", backend: "plugin" },
+      { id: "chat-idle", status: "active", backend: "plugin" },
+    ] as const;
+    expect(
+      countSessionsLostOnQuit([...sessions], {
+        "chat-busy": "Busy",
+        "chat-idle": "Idle",
+        daemon: "Busy",
+      }),
+    ).toBe(2);
   });
 });

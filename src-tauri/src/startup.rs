@@ -358,6 +358,9 @@ pub fn register_active_sessions(
             .map(|pk| provider_has_hook(pk, cfg))
             .unwrap_or(false);
         ns.register_session(&session.id, display_name, project_name, hook_enabled);
+        if session.backend == crate::plugin_providers::PROVIDER_BACKEND {
+            ns.mark_provider_owned(&session.id);
+        }
     }
 }
 

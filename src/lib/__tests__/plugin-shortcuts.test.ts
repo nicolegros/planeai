@@ -13,6 +13,7 @@ const plugin = {
   backend_entrypoint: "bin/github",
   capabilities: [],
   ui_contributions: [],
+  providers: [],
   installed_hash: null,
   installed_path: null,
   original_display_path: null,

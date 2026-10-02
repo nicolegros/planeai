@@ -8,6 +8,7 @@
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { renderTemplate } from "../lib/render-template";
   import { LoaderCircle } from "@lucide/svelte";
+  import { supportsYolo, type RuntimeProvider } from "../lib/plugin-providers";
 
   interface TaskPrefill { key: string; title: string; description: string; branch: string; name: string; prompt: string; baseBranch?: string; projectId?: string | null; }
   interface Props {
@@ -18,12 +19,14 @@
     onCreateTask: () => void;
     taskPrefill?: TaskPrefill | null;
     currentProjectId?: string | null;
+    /** Providers contributed by running plugins, offered after the configured ones. */
+    runtimeProviders?: RuntimeProvider[];
   }
 
-  let { projects, sessions, onCreated, onCancel, onCreateTask, taskPrefill = null, currentProjectId = null }: Props = $props();
+  let { projects, sessions, onCreated, onCancel, onCreateTask, taskPrefill = null, currentProjectId = null, runtimeProviders = [] }: Props = $props();
 
   const config = $derived(getSettings());
-  const providerKeys = $derived(Object.keys(config.providers));
+  const providerKeys = $derived([...Object.keys(config.providers), ...runtimeProviders.map((provider) => provider.key)]);
 
   let mode = $state<"task">("task");
   // svelte-ignore state_referenced_locally
@@ -37,6 +40,9 @@
   let useWorktree = $state(false);
   let autoApprove = $state(true);
   let selectedProvider = $state("");
+  const providerKey = $derived(selectedProvider || config.default_provider);
+  const selectedRuntimeProvider = $derived(runtimeProviders.find((provider) => provider.key === providerKey) ?? null);
+  const autoApproveSupported = $derived(!selectedRuntimeProvider || supportsYolo(selectedRuntimeProvider.provider));
   let newBranchName = $state("");
 
   // svelte-ignore state_referenced_locally
@@ -238,8 +244,8 @@
         const { session, warning } = await sessionsApi.launch({
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch: worktreeBranch, isNewBranch: true,
-          name: sessionName, useWorktree: true, baseBranch, autoApprove,
-          provider: selectedProvider || config.default_provider,
+          name: sessionName, useWorktree: true, baseBranch, autoApprove: autoApprove && autoApproveSupported,
+          provider: providerKey,
           taskKey: taskKeyParam, taskProjectId: taskProjectIdParam, taskPrompt: taskPromptParam,
         });
         if (warning) showSnackbar(warning, "success");
@@ -251,8 +257,8 @@
         const { session, warning } = await sessionsApi.launch({
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch, isNewBranch, name: sessionName,
-          useWorktree: false, baseBranch: isNewBranch ? baseBranch : null, autoApprove,
-          provider: selectedProvider || config.default_provider,
+          useWorktree: false, baseBranch: isNewBranch ? baseBranch : null, autoApprove: autoApprove && autoApproveSupported,
+          provider: providerKey,
           taskKey: taskKeyParam, taskProjectId: taskProjectIdParam, taskPrompt: taskPromptParam,
         });
         if (warning) showSnackbar(warning, "success");
@@ -321,13 +327,13 @@
     <div class="flex items-center gap-4">
       <Checkbox id="use-worktree" label="Worktree" bind:checked={useWorktree} tabindex={-1} />
       <span class="font-mono text-[10px] px-1 rounded {badge}">W</span>
-      <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} tabindex={-1} />
+      <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} disabled={!autoApproveSupported} title={autoApproveSupported ? undefined : `${selectedRuntimeProvider?.provider.label} does not support auto-approve`} tabindex={-1} />
       <span class="font-mono text-[10px] px-1 rounded {badge}">A</span>
     </div>
     {#if providerKeys.length > 1}
       <div class="flex items-center gap-2">
         <span class="text-[11px] text-t3">Provider</span>
-        <span class="text-[12px] text-t1 font-medium">{selectedProvider || config.default_provider}</span>
+        <span class="text-[12px] text-t1 font-medium">{selectedRuntimeProvider?.provider.label ?? providerKey}</span>
         <span class="font-mono text-[10px] px-1 rounded {badge}">P</span>
       </div>
     {/if}

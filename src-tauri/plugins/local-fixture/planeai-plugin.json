@@ -3,7 +3,7 @@
   "id": "local-fixture",
   "name": "Local Fixture",
   "version": "0.1.0",
-  "host_api_version": "planeai.plugin-host.v1",
+  "host_api_version": "planeai.plugin-host.v3",
   "source_kind": "local",
   "backend_entrypoints": {
     "macos-arm64": "bin/macos-arm64/planeai-plugin-fixture",
@@ -20,9 +20,23 @@
     "tasks.read",
     "tasks.create",
     "task-events",
-    "session-events"
+    "session-events",
+    "providers"
   ],
   "ui_contributions": [
-    { "id": "fixture", "label": "Fixture", "placement": "main-pane", "entrypoint": "ui/entry.js" }
+    {
+      "id": "fixture",
+      "label": "Fixture",
+      "placement": "main-pane",
+      "entrypoint": "ui/entry.js"
+    }
+  ],
+  "providers": [
+    {
+      "id": "echo",
+      "label": "Echo (fixture)",
+      "entrypoint": "ui/chat.js",
+      "supports": ["yolo"]
+    }
   ]
 }
