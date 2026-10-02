@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed. The `planeai.plugin-host.v3` contract is unstable and may change freely until the first provider plugin ships end to end.
+Proposed.
+The `planeai.plugin-host.v3` contract is unstable and may change freely until the first provider plugin ships end to end.
+It partially supersedes ADR-0011's rejection of plugins reusing the session runtime.
 
 ## Context
 
@@ -20,17 +22,37 @@ The host read sidecar stdout only while a request was in flight, and an unsolici
 
 A trusted local plugin can provide **session runtimes**, which PlaneAI offers as providers.
 
-- **Contract.** A manifest using `planeai.plugin-host.v3` may declare `providers: [{ id, label, entrypoint, supports }]` together with the `providers` capability. `supports` currently accepts `yolo`. Bundled plugins cannot declare providers.
-- **Domain.** A runtime-backed provider has the key `<plugin id>:<provider id>`. It is listed beside configured command providers and is chosen when a session is created. Its sessions use the `plugin` session backend.
-- **Ownership.** The host owns the session row, worktree, branch, task link, lifecycle, status display, notifications and prompt routing. The plugin owns the agent process, the conversation, its transcript and the chat UI.
-- **Host to sidecar.** `provider.session.start` (with an optional `initial_prompt`), `provider.session.resume`, `provider.session.send`, `provider.session.interrupt` and `provider.session.stop` (`archive`, `destroy` or `exit`). Each one returns promptly; work happens asynchronously. Plugin UI cannot call `provider.*` methods directly.
+- **Contract.** A manifest using `planeai.plugin-host.v3` may declare `providers: [{ id, label, entrypoint, supports }]` together with the `providers` capability.
+  `supports` currently accepts `yolo`.
+  Bundled plugins cannot declare providers.
+- **Domain.** A runtime-backed provider has the key `<plugin id>:<provider id>`.
+  It is listed beside configured command providers and is chosen when a session is created.
+  Its sessions use the `plugin` session backend.
+- **Ownership.** The host owns the session row, worktree, branch, task link, lifecycle, status display, notifications and prompt routing.
+  The plugin owns the agent process, the conversation, its transcript and the chat UI.
+- **Host to sidecar.** `provider.session.start` (with an optional `initial_prompt`), `provider.session.resume`, `provider.session.send`, `provider.session.interrupt` and `provider.session.stop` (`archive`, `destroy` or `exit`).
+  Each one returns promptly; work happens asynchronously.
+  Plugin UI cannot call `provider.*` methods directly.
 - **Environment.** Start and resume carry the session's working directory and an `env` with `PLANEAI_SESSION_ID`, `PLANEAI_SOCKET` and the augmented `PATH`, so the agent can still spawn sub-sessions and manage tasks.
-- **Sidecar to host.** A JSON-RPC notification `host.session.status { session_id, status }` with `busy`, `idle`, `needs_attention` or `exited`, and `host.session.event { session_id, seq, payload }`. The host forwards `payload` opaquely to the session's mounted UI. `seq` increases per session.
-- **Transport.** The host owns sidecar stdout through a dedicated reader task for the process lifetime. Provider notifications are routed as they arrive; every other frame keeps the existing request path and its error semantics. A notification for a session the sidecar does not drive is dropped.
-- **Status.** The provider is the only status source for its sessions. Hook and PTY status signals for those sessions are ignored, although the user's own agent hooks still run inside them.
-- **UI.** The provider's entrypoint replaces the terminal in the session's agent tab. Its bridge adds `host.session.send`, `host.session.interrupt` and `host.session.onEvent`. The host makes sure the current sidecar drives the session (resuming it if needed) before mounting the UI. The plugin rebuilds its view after a remount by subscribing first, then fetching its own snapshot and dropping events at or below the snapshot's `seq`.
+- **Sidecar to host.** A JSON-RPC notification `host.session.status { session_id, status }` with `busy`, `idle`, `needs_attention` or `exited`, and `host.session.event { session_id, seq, payload }`.
+  The host forwards `payload` opaquely to the session's mounted UI.
+  `seq` increases per session.
+- **Transport.** The host owns sidecar stdout through a dedicated reader task for the process lifetime.
+  Provider notifications are routed as they arrive; every other frame keeps the existing request path and its error semantics.
+  A notification for a session the sidecar does not drive is dropped.
+- **Status.** The provider is the only status source for its sessions.
+  Hook and PTY status signals for those sessions are ignored, although the user's own agent hooks still run inside them.
+  `needs_attention` shows as idle with an attention notification, as hook-driven terminal sessions do.
+- **UI.** The provider's entrypoint replaces the terminal in the session's agent tab.
+  Its bridge adds `host.session.send`, `host.session.interrupt` and `host.session.onEvent`.
+  The host makes sure the current sidecar drives the session (resuming it if needed) before mounting the UI.
+  The plugin rebuilds its view after a remount by subscribing first, then fetching its own snapshot in frame-sized pages and dropping events at or below the snapshot's `seq`.
 - **Prompt routing.** Every host path that prompts a session (CLI, recipes and loops, `sessions.prompt`, the chat UI) reaches `provider.session.send`.
-- **Lifecycle.** Runtimes still die with the app. Sessions resume lazily through the provider on next use. Ending a session through any path stops its provider session. Quitting the app while a provider session is busy asks for confirmation.
+  Routing follows the session's stored backend.
+- **Lifecycle.** Runtimes still die with the app.
+  Sessions resume lazily through the provider on next use.
+  Ending a session through any path stops its provider session, including CLI archive, CLI delete and task completion, which the GUI reconciles when notified.
+  Quitting the app while a provider session is busy asks for confirmation.
 
 ## Consequences
 
@@ -44,6 +66,9 @@ A trusted local plugin can provide **session runtimes**, which PlaneAI offers as
 
 - Handing a running session off to its agent's TUI in a terminal tab, under a single-driver lock (`provider.session.handoff`).
 - Launching runtime-backed sessions from the CLI, which has no plugin runtime.
+- Launching runtime-backed sessions from recipes, loop candidates and symphony, which resolve providers from the config file only.
+- Using a runtime-backed provider as `default_provider`.
+- A distinct needs-attention state in the session list.
 - Declaring v3 stable.
 
 ## Rejected alternatives

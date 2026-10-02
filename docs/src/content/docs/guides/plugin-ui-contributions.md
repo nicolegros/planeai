@@ -129,7 +129,10 @@ Task lifecycle delivery is best-effort and isolated from PlaneAI task commits. S
 
 ## Providers
 
-A plugin can run sessions itself. Each entry in `providers` becomes a **runtime-backed provider** that users pick when creating a session, beside the command providers from their config. The session is a normal PlaneAI session (worktree, branch, linked task, sidebar status and lifecycle), but the plugin runs the agent and its UI replaces the terminal in the session's agent tab. See ADR-0013.
+A plugin can run sessions itself.
+Each entry in `providers` becomes a **runtime-backed provider** that users pick when creating a session, beside the command providers from their config.
+The session is a normal PlaneAI session (worktree, branch, linked task, sidebar status and lifecycle), but the plugin runs the agent and its UI replaces the terminal in the session's agent tab.
+See ADR-0013.
 
 ```json
 "host_api_version": "planeai.plugin-host.v3",
@@ -139,7 +142,11 @@ A plugin can run sessions itself. Each entry in `providers` becomes a **runtime-
 ]
 ```
 
-`id` follows the plugin id rules and must be unique; the provider key users see in sessions and configs is `<plugin id>:<provider id>`. `entrypoint` is a package-relative UI bundle with the same rules as UI contributions. `supports` may list `yolo` when the provider honors auto-approve; otherwise PlaneAI disables auto-approve for it. Unknown fields and features are rejected. The v3 contract is unstable until the first provider plugin ships, so expect changes.
+`id` follows the plugin id rules and must be unique; the provider key users see in sessions and configs is `<plugin id>:<provider id>`.
+`entrypoint` is a package-relative UI bundle with the same rules as UI contributions.
+`supports` may list `yolo` when the provider honors auto-approve; otherwise PlaneAI disables auto-approve for it.
+Unknown fields and features are rejected.
+The v3 contract is unstable until the first provider plugin ships, so expect changes.
 
 PlaneAI calls these sidecar methods; each must return promptly and do its work asynchronously:
 
@@ -155,17 +162,27 @@ PlaneAI calls these sidecar methods; each must return promptly and do its work a
 
 The sidecar reports back with JSON-RPC **notifications** (frames without an `id`), which PlaneAI reads at any time, not only during a request:
 
-- `host.session.status` with `{ "session_id", "status" }`, where status is `busy`, `idle`, `needs_attention` or `exited`. It drives the sidebar, attention notifications and the quit confirmation. It is the only status source for the session: PlaneAI ignores hook and PTY signals for provider sessions, even though the user's agent hooks still run inside them. `exited` marks the session exited.
-- `host.session.event` with `{ "session_id", "seq", "payload" }`. PlaneAI forwards `payload` unchanged to the session's mounted UI. `seq` must increase per session. Keep each frame under 64 KiB; send large outputs in pieces or let the UI fetch them.
+- `host.session.status` with `{ "session_id", "status" }`, where status is `busy`, `idle`, `needs_attention` or `exited`.
+  It drives the sidebar, attention notifications and the quit confirmation.
+  It is the only status source for the session: PlaneAI ignores hook and PTY signals for provider sessions, even though the user's agent hooks still run inside them.
+  `exited` marks the session exited.
+- `host.session.event` with `{ "session_id", "seq", "payload" }`.
+  PlaneAI forwards `payload` unchanged to the session's mounted UI.
+  `seq` must increase per session.
+  Keep each frame under 64 KiB; send large outputs in pieces or let the UI fetch them.
 
-Notifications for sessions the sidecar has not started or resumed are dropped. Any other notification is still a protocol error.
+Notifications for sessions the sidecar has not started or resumed are dropped.
+Any other notification is still a protocol error.
 
 The provider UI receives the selected session in `context.session` and a session bridge on `context.host.session`:
 
 - `send(text)` and `interrupt()` route through PlaneAI to `provider.session.send` and `provider.session.interrupt`, so every input path behaves the same.
 - `onEvent(listener)` receives `{ seq, payload }` for this session only and returns an unsubscribe function.
 
-PlaneAI unmounts the UI when the user switches sessions, and resumes the session (if needed) before mounting it again, so the sidecar owns the transcript. To rebuild the view, subscribe first, fetch a snapshot through a plugin-defined `context.host.call(...)` method, then drop live events whose `seq` is at or below the snapshot's. Every response is one frame, so a long transcript must come back in pages (for example, events after a given `seq` until the sidecar reports no more), or a single oversized response stops the runtime. The fixture's `ui/chat.js` and `fixture.providerSnapshot` show the pattern on a transcript small enough for one page.
+PlaneAI unmounts the UI when the user switches sessions, and resumes the session (if needed) before mounting it again, so the sidecar owns the transcript.
+To rebuild the view, subscribe first, fetch a snapshot through a plugin-defined `context.host.call(...)` method, then drop live events whose `seq` is at or below the snapshot's.
+Every response is one frame, so a long transcript must come back in pages (for example, events after a given `seq` until the sidecar reports no more), or a single oversized response stops the runtime.
+The fixture's `ui/chat.js` and `fixture.providerSnapshot` show the pattern on a transcript small enough for one page.
 
 ## UI contributions
 
