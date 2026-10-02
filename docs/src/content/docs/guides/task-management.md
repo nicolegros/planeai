@@ -64,7 +64,7 @@ There are three ways to create tasks, each suited to a different workflow.
 
 Press **⌘N** (macOS) or **Ctrl+N** (Linux/Windows) to open the new item modal, then press **T** to create a task. Alternatively, open the command menu (**⌘K** / **Ctrl+K**) and search for "create task". The create dialog has fields for:
 
-- **Title** — short, actionable description (required)
+- **Title** — short, actionable description (required). Prefilled with a random name such as `jubilant-waffle`; focusing the untouched name selects it, so typing replaces it.
 - **Description** — detailed context for the agent. Be thorough — the agent relies entirely on this.
 - **Priority** — numeric value. Higher priority tasks get dispatched first.
 - **Base branch** — which git branch to create the worktree from (defaults to `main`)

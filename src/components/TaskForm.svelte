@@ -7,6 +7,7 @@
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { renderTemplate } from "../lib/render-template";
+  import { randomTaskName } from "../lib/random-task-name";
   import { LoaderCircle } from "@lucide/svelte";
   import * as taskStore from "../lib/task-store.svelte";
 
@@ -38,7 +39,27 @@
   const providerKeys = $derived(Object.keys(config.providers ?? {}));
 
   // svelte-ignore state_referenced_locally
-  let formTitle = $state(initial.title ?? "");
+  const generatedTitle = mode === "create" && !initial.title ? randomTaskName() : "";
+  // svelte-ignore state_referenced_locally
+  let formTitle = $state(initial.title || generatedTitle);
+  const titleUntouched = $derived(generatedTitle !== "" && formTitle === generatedTitle);
+  const uid = $props.id();
+  const titleNoteId = `${uid}-title-note`;
+  // WebKit's mouseup after a click-to-focus would collapse the selection made on focus.
+  let keepTitleSelection = false;
+
+  function selectUntouchedTitle(e: FocusEvent & { currentTarget: HTMLInputElement }) {
+    if (titleUntouched) e.currentTarget.select();
+  }
+
+  function armTitleSelectionGuard(e: MouseEvent & { currentTarget: HTMLInputElement }) {
+    keepTitleSelection = titleUntouched && document.activeElement !== e.currentTarget;
+  }
+
+  function releaseTitleSelectionGuard(e: MouseEvent) {
+    if (keepTitleSelection) e.preventDefault();
+    keepTitleSelection = false;
+  }
   // svelte-ignore state_referenced_locally
   let formDescription = $state(initial.description ?? "");
   // svelte-ignore state_referenced_locally
@@ -308,7 +329,20 @@
 
     <div class="space-y-1" data-field="title">
       <Label>Title <span class="font-mono text-[10px] px-1 rounded {badge}">T</span></Label>
-      <Input bind:value={formTitle} placeholder="Task title" />
+      <div>
+        <Input
+          bind:value={formTitle}
+          placeholder="Task title"
+          class="block"
+          onfocus={selectUntouchedTitle}
+          onmousedown={armTitleSelectionGuard}
+          onmouseup={releaseTitleSelectionGuard}
+          aria-describedby={titleUntouched ? titleNoteId : undefined}
+        />
+        {#if titleUntouched}
+          <p id={titleNoteId} class="mt-0.5 text-xs text-t3">Randomly generated name - type to replace it.</p>
+        {/if}
+      </div>
     </div>
 
     <div class="space-y-1" data-field="desc">
