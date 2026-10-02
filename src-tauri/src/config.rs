@@ -66,6 +66,13 @@ fn invalid_editor_config() -> EditorConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarGroupBy {
+    Project,
+    Status,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub appearance: Appearance,
@@ -84,6 +91,14 @@ pub struct Config {
     pub hide_done_tasks: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_empty_projects: Option<bool>,
+    /// Top-level sidebar grouping; `None` groups by project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_group_by: Option<SidebarGroupBy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hide_task_keys: Option<bool>,
+    /// Only affects the status grouping, where rows from several projects are mixed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hide_project_labels: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_scrollback_bytes: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -337,6 +352,9 @@ impl Default for Config {
             projects_base_path: None,
             hide_done_tasks: None,
             hide_empty_projects: None,
+            sidebar_group_by: None,
+            hide_task_keys: None,
+            hide_project_labels: None,
             daemon_scrollback_bytes: None,
             scrollback_lines: None,
             web_links: None,

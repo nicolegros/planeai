@@ -13,7 +13,9 @@
   import { findPluginShortcut } from "./lib/plugin-shortcuts";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
-  import { computeSidebarSessionOrder, isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
+  import { sidebarNavigationOrder } from "./lib/sidebar-model";
+  import { getSidebarModel } from "./lib/sidebar-model-store.svelte";
+  import { isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { isTerminal, isActive as isLoopActive } from "./lib/loop-status";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { openFileWithConfiguredEditor } from "./lib/file-editor";
@@ -174,15 +176,7 @@
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
 
   // Session IDs in sidebar display order (includes loop:<id> entries)
-  const sidebarSessionOrder = $derived(computeSidebarSessionOrder(
-    projects,
-    sessions,
-    taskStore.getTasksByProject(),
-    !!getSettings().hide_done_tasks,
-    Object.fromEntries(projects.map((p) => [p.id, loopStore.getLoopsForProject(p.id)])),
-    Object.fromEntries(projects.flatMap((p) => loopStore.getLoopsForProject(p.id)).map((l) => [l.id, loopStore.getSessionsForLoop(l.id)])),
-    new Set(projects.flatMap((p) => loopStore.getLoopsForProject(p.id)).flatMap((l) => loopStore.getSessionsForLoop(l.id).map((s) => s.session_id))),
-  ));
+  const sidebarSessionOrder = $derived(sidebarNavigationOrder(getSidebarModel()));
 
   // ─── TaskWorkspace layout ───────────────────────────────────────────────────
   const layoutTree = $derived(workspaceLayout.layout?.tree ?? null);
