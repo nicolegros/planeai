@@ -48,7 +48,7 @@
   import PluginContributionHost from "./components/PluginContributionHost.svelte";
   import ProviderSessionView from "./components/ProviderSessionView.svelte";
   import { PROVIDER_BACKEND, runtimeProviders } from "./lib/plugin-providers";
-  import { handoffTabFor, startHandoff } from "./lib/provider-handoff";
+  import { forgetHandoff, handoffTabFor, startHandoff } from "./lib/provider-handoff";
   import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi, providerSessions } from "./lib/api";
@@ -542,7 +542,10 @@
     const closed = ptyKey ? await workspaceLayout.closeTab(ptyKey) : "missing";
     if (closed === "starting") throw new Error("The terminal is still starting.");
     // Closing the tab hands the session back; without one there is nothing left to close.
-    if (closed === "missing") await providerSessions.handback(sessionId);
+    if (closed === "missing") {
+      forgetHandoff(sessionId);
+      await providerSessions.handback(sessionId);
+    }
   }
 
   // ─── Project management ─────────────────────────────────────────────────────

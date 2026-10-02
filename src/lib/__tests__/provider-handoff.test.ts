@@ -9,6 +9,7 @@ const { showSnackbar } = vi.hoisted(() => ({ showSnackbar: vi.fn() }));
 vi.mock("../snackbar.svelte", () => ({ showSnackbar }));
 
 import {
+  forgetHandoff,
   handoffTabFor,
   quoteArgument,
   shellCommand,
@@ -55,8 +56,17 @@ describe("provider handoff", () => {
     await startHandoff("s5", () => "s5:1");
     handback.mockRejectedValueOnce(new Error("plugin is not running"));
     await expect(shellTabClosed("s5:1")).resolves.toBeUndefined();
-    expect(showSnackbar).toHaveBeenCalledWith(expect.stringContaining("Return to chat"));
+    expect(showSnackbar).toHaveBeenCalledWith(
+      expect.stringContaining("could not return to the chat"),
+    );
     expect(handoffTabFor("s5")).toBeUndefined();
+  });
+
+  it("opens a fresh tab after forgetting a handoff whose tab vanished", async () => {
+    await startHandoff("s6", () => "s6:1");
+    forgetHandoff("s6");
+    expect(handoffTabFor("s6")).toBeUndefined();
+    await expect(startHandoff("s6", () => "s6:2")).resolves.toBe("s6:2");
   });
 
   it("returns the session to the chat when no pane can hold the terminal", async () => {

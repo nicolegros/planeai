@@ -64,6 +64,7 @@ function setup(persisted: Record<string, Layout> = {}) {
       }),
     },
     closeShell: vi.fn(async (_sessionId: string, _index: number) => {}),
+    shellGone: vi.fn(async (_ptyKey: string) => {}),
     getTerminalCommand: vi.fn(async (_sessionId: string, filePath: string) => `nvim ${filePath}`),
     disposeView: vi.fn(),
   } satisfies TaskWorkspaceLayoutDeps;
@@ -289,6 +290,16 @@ describe("shell tabs", () => {
     expect(workspace.findTab(ptyKey)).toBeNull();
     expect(deps.disposeView).toHaveBeenCalledWith(ptyKey);
     expect(deps.closeShell).toHaveBeenCalledWith("a", 1);
+  });
+
+  it("reports a self-exited shell as gone even when its backend close fails", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = workspace.openShell("a")!;
+    deps.closeShell.mockRejectedValueOnce(new Error("daemon shell-tab kill timed out"));
+    await expect(workspace.shellExited(ptyKey)).rejects.toThrow("timed out");
+    expect(deps.shellGone).toHaveBeenCalledWith(ptyKey);
+    expect(workspace.findTab(ptyKey)).toBeNull();
   });
 
   it("does not close again when the exit follows an explicit close", async () => {

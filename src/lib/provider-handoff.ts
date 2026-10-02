@@ -56,6 +56,12 @@ async function openHandoffTab(
   return ptyKey;
 }
 
+/** Drop a handoff whose tab is already gone, so the next handoff opens a fresh one. */
+export function forgetHandoff(sessionId: string): void {
+  const ptyKey = handoffTabFor(sessionId);
+  if (ptyKey) handoffTabs.delete(ptyKey);
+}
+
 /**
  * Every successful shell tab close passes through here; a handoff tab returns its
  * session to the chat. A failed handback never fails the close: the tab is gone.
@@ -68,7 +74,7 @@ export async function shellTabClosed(ptyKey: string): Promise<void> {
     await providerSessions.handback(sessionId);
   } catch (error) {
     showSnackbar(
-      `The session could not return to the chat: ${String(error)}. Use Return to chat to retry.`,
+      `The session could not return to the chat: ${String(error)}. Try again from the session's chat.`,
     );
   }
 }
