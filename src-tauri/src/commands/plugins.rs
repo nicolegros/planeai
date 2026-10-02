@@ -274,7 +274,8 @@ pub async fn provider_session_handoff(
 #[tauri::command]
 pub async fn provider_session_handback(
     session_id: String,
+    app: AppHandle,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
-    crate::plugin_providers::handback(&runtime.0, &session_id).await
+    crate::plugin_providers::handback(&app, &runtime.0, &session_id).await
 }

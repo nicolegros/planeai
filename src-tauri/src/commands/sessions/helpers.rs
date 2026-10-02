@@ -50,7 +50,7 @@ pub(crate) fn register_notify_session(
     } else {
         &session.name
     };
-    let provider_owned = session.backend == crate::plugin_providers::PROVIDER_BACKEND;
+    let provider_owned = session.backend == crate::session_ops::PROVIDER_BACKEND;
     let hook_enabled = provider_owned
         || session
             .provider
@@ -137,7 +137,7 @@ mod tests {
         let cfg = config::Config::default();
         let mut ns = planeai_core::notify::NotifyState::new();
         let mut provider = test_session(None);
-        provider.backend = crate::plugin_providers::PROVIDER_BACKEND.into();
+        provider.backend = crate::session_ops::PROVIDER_BACKEND.into();
         provider.provider = Some("claude-headless:claude".into());
         register_notify_session(&mut ns, &provider, "proj", &cfg);
         assert!(ns.is_provider_owned("test-id"));

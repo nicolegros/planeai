@@ -2,7 +2,18 @@ use std::collections::HashSet;
 use std::path::{Component, Path};
 
 use anyhow::{anyhow, bail, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+/// What a declared provider can do beyond running sessions.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderFeature {
+    /// Honors PlaneAI's auto-approve.
+    Yolo,
+    /// Can continue a session in the agent's own terminal UI.
+    Handoff,
+}
 
 const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
 const RECIPIENT_HOST_API_VERSION: &str = "planeai.plugin-host.v2";
@@ -32,7 +43,6 @@ const MANIFEST_FIELDS: &[&str] = &[
     "providers",
 ];
 const PROVIDER_FIELDS: &[&str] = &["id", "label", "entrypoint", "supports"];
-const PROVIDER_FEATURES: &[&str] = &["yolo", "handoff"];
 const UI_CONTRIBUTION_FIELDS: &[&str] = &[
     "id",
     "label",
@@ -282,15 +292,14 @@ fn validate_providers(object: &Map<String, Value>, plugin_id: &str) -> Result<()
                 .as_array()
                 .ok_or_else(|| anyhow!("provider supports must be an array"))?,
         };
-        let mut seen = HashSet::new();
+        let mut seen = Vec::new();
         for feature in features {
-            let feature = feature
-                .as_str()
-                .filter(|feature| PROVIDER_FEATURES.contains(feature))
-                .ok_or_else(|| anyhow!("provider supports an undocumented feature"))?;
-            if !seen.insert(feature) {
+            let feature = ProviderFeature::deserialize(feature)
+                .map_err(|_| anyhow!("provider supports an undocumented feature"))?;
+            if seen.contains(&feature) {
                 bail!("provider declares duplicate supported features");
             }
+            seen.push(feature);
         }
     }
     Ok(())

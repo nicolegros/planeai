@@ -99,9 +99,9 @@ export interface PluginUiContribution {
   shortcut: string | null;
 }
 
-/** A session runtime declared by a plugin; its UI replaces the agent terminal (ADR-0013). */
 export type ProviderFeature = "yolo" | "handoff";
 
+/** A session runtime declared by a plugin; its UI replaces the agent terminal (ADR-0013). */
 export interface PluginProvider {
   id: string;
   label: string;

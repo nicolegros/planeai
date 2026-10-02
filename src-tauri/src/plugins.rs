@@ -182,14 +182,7 @@ pub struct PluginProvider {
     pub supports: Vec<ProviderFeature>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderFeature {
-    /// Honors PlaneAI's auto-approve.
-    Yolo,
-    /// Can continue a session in the agent's own terminal UI.
-    Handoff,
-}
+pub use planeai_plugin_contract::ProviderFeature;
 
 impl PluginProvider {
     pub fn supports(&self, feature: ProviderFeature) -> bool {
@@ -706,13 +699,18 @@ fn request_queue_timeout_error(method: &str) -> String {
     format!("plugin RPC {method} request queue timed out")
 }
 
+/// Prefix for requests refused before any byte reached the sidecar.
+const REQUEST_NOT_SENT: &str = "plugin RPC request not sent: ";
+
 fn is_fatal_plugin_runtime_error(error: &str) -> bool {
     // A valid JSON-RPC error is an application-level response and leaves the
     // connection usable. A request that never acquired the local queue also
     // leaves the sidecar untouched. Any other request failure means stdout or
     // the request protocol can no longer be trusted, so retire this runtime
     // before another request can consume a stale or malformed frame.
-    !error.starts_with("plugin RPC error ") && !error.ends_with(" request queue timed out")
+    !error.starts_with("plugin RPC error ")
+        && !error.starts_with(REQUEST_NOT_SENT)
+        && !error.ends_with(" request queue timed out")
 }
 
 pub fn bundled_manifests() -> Result<Vec<PluginManifest>, String> {
@@ -1467,7 +1465,8 @@ impl RuntimeProcess {
             .await
             .map_err(|_| request_queue_timeout_error(method))?;
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let frame = encode_json_rpc_line(request_id, method, params)?;
+        let frame = encode_json_rpc_line(request_id, method, params)
+            .map_err(|error| format!("{REQUEST_NOT_SENT}{error}"))?;
         self.write_request_frame(&frame, deadline).await?;
 
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -4820,6 +4819,22 @@ mod tests {
             assert!(is_host_controlled_plugin_method(method), "{method}");
         }
         assert!(!is_host_controlled_plugin_method("fixture.status"));
+    }
+
+    #[test]
+    fn oversized_requests_leave_the_runtime_running() {
+        let error = encode_json_rpc_line(
+            1,
+            "provider.session.send",
+            serde_json::json!({ "text": "x".repeat(70_000) }),
+        )
+        .map(|_| ())
+        .map_err(|error| format!("{REQUEST_NOT_SENT}{error}"))
+        .unwrap_err();
+        assert!(!is_fatal_plugin_runtime_error(&error));
+        assert!(is_fatal_plugin_runtime_error(
+            "plugin process closed stdout unexpectedly"
+        ));
     }
 
     #[cfg(unix)]

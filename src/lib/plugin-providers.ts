@@ -19,7 +19,7 @@ export function runtimeProviders(inventory: PluginInventory[]): RuntimeProvider[
   return inventory
     .filter((plugin) => plugin.state === "running" && plugin.capabilities.includes("providers"))
     .flatMap((plugin) =>
-      (plugin.providers ?? []).map((provider) => ({
+      plugin.providers.map((provider) => ({
         key: runtimeProviderKey(plugin.id, provider.id),
         plugin,
         provider,
@@ -38,7 +38,7 @@ export function findRuntimeProvider(
   const pluginId = key.slice(0, separator);
   const providerId = key.slice(separator + 1);
   const plugin = inventory.find((candidate) => candidate.id === pluginId);
-  const provider = plugin?.providers?.find((candidate) => candidate.id === providerId);
+  const provider = plugin?.providers.find((candidate) => candidate.id === providerId);
   return plugin && provider ? { plugin, provider } : null;
 }
 

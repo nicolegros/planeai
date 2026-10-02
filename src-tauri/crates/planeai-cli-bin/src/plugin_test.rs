@@ -12,6 +12,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
+use planeai_plugin_contract::ProviderFeature;
 use serde_json::{json, Map, Value};
 
 #[cfg(test)]
@@ -115,8 +116,8 @@ fn first_provider(manifest: &Value) -> Option<(String, bool)> {
     let provider = manifest.get("providers")?.as_array()?.first()?;
     let handoff = provider
         .get("supports")
-        .and_then(Value::as_array)
-        .is_some_and(|features| features.iter().any(|feature| feature == "handoff"));
+        .and_then(|features| serde_json::from_value::<Vec<ProviderFeature>>(features.clone()).ok())
+        .is_some_and(|features| features.contains(&ProviderFeature::Handoff));
     Some((provider.get("id")?.as_str()?.to_owned(), handoff))
 }
 

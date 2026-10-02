@@ -14,11 +14,13 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::db;
 use crate::plugins::{PluginProvider, PluginRuntimeSupervisor, ProviderFeature};
 
-pub use crate::session_ops::PROVIDER_BACKEND;
+use crate::session_ops::PROVIDER_BACKEND;
 /// Frontend event carrying opaque provider session events to the mounted UI.
 pub const SESSION_EVENT: &str = "plugin-provider-session-event";
 
 const EVENT_NOTIFICATION: &str = "host.session.event";
+/// Prompts must fit one JSON-RPC frame with room for the envelope.
+const MAX_PROMPT_BYTES: usize = 48 * 1024;
 const STATUS_NOTIFICATION: &str = "host.session.status";
 
 /// Provider keys are `<plugin id>:<provider id>`; plugin and provider ids never contain `:`.
@@ -300,16 +302,38 @@ pub async fn start(
     }
     let mut params = context.params(&resolved.provider);
     if let Some(prompt) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
+        check_prompt_size(prompt)?;
         params.insert("initial_prompt".into(), prompt.into());
     }
-    bind_and_request(
+    let started = bind_and_request(
         supervisor,
         &context.session_id,
         &resolved,
         "provider.session.start",
         params,
     )
-    .await
+    .await;
+    if started.is_err() {
+        // A start cancelled by its deadline may still be running in the sidecar,
+        // and the launch rollback is about to remove its worktree.
+        let stop =
+            serde_json::json!({ "session_id": context.session_id, "reason": StopReason::Destroy });
+        let _ = supervisor
+            .provider_request(&resolved.plugin_id, "provider.session.stop", stop)
+            .await;
+    }
+    started
+}
+
+fn check_prompt_size(text: &str) -> Result<(), String> {
+    if text.len() > MAX_PROMPT_BYTES {
+        return Err(format!(
+            "The message is too long ({} KB); the limit is {} KB.",
+            text.len() / 1024,
+            MAX_PROMPT_BYTES / 1024
+        ));
+    }
+    Ok(())
 }
 
 /// Make sure the current sidecar instance drives this session, resuming it after
@@ -378,6 +402,7 @@ async fn send(
     if text.trim().is_empty() {
         return Err("prompt text must not be empty".to_string());
     }
+    check_prompt_size(text)?;
     ensure(supervisor, context).await?;
     request_bound(
         supervisor,
@@ -463,16 +488,16 @@ fn validate_handoff_argv(argv: Vec<String>) -> Result<Vec<String>, String> {
 
 /// The terminal that continued a session closed; the provider drives it again.
 pub async fn handback(
+    app: &AppHandle,
     supervisor: &PluginRuntimeSupervisor,
     session_id: &str,
 ) -> Result<(), String> {
-    // A sidecar restarted during the handoff has no detached state to restore.
-    let Some(binding) = supervisor.provider_sessions().get(session_id) else {
+    // A sidecar restarted during the handoff restores the handoff from its transcript,
+    // so it must be resumed to hear that the terminal closed. Ended sessions need nothing.
+    let Ok(context) = load_context(app, session_id).await else {
         return Ok(());
     };
-    if supervisor.running_instance(&binding.plugin_id).await != Some(binding.instance) {
-        return Ok(());
-    }
+    ensure(supervisor, &context).await?;
     request_bound(
         supervisor,
         session_id,
@@ -710,6 +735,14 @@ mod tests {
         assert!(validate_handoff_argv(vec![]).is_err());
         assert!(validate_handoff_argv(vec!["claude".into(), String::new()]).is_err());
         assert!(validate_handoff_argv(vec!["claude\0".into()]).is_err());
+    }
+
+    #[test]
+    fn prompts_must_fit_one_frame() {
+        assert!(check_prompt_size(&"x".repeat(MAX_PROMPT_BYTES)).is_ok());
+        assert!(check_prompt_size(&"x".repeat(MAX_PROMPT_BYTES + 1))
+            .unwrap_err()
+            .contains("too long"));
     }
 
     #[test]

@@ -7,8 +7,9 @@ use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 use crate::config;
 use crate::db;
 use crate::git;
-use crate::plugin_providers::{self, PROVIDER_BACKEND};
+use crate::plugin_providers;
 use crate::plugins::PluginRuntimeHandle;
+use crate::session_ops::PROVIDER_BACKEND;
 use crate::state::{ConfigState, DaemonState, DbState, NotifyHandle, ProjectOperationState};
 #[cfg(not(windows))]
 use crate::tmux;
