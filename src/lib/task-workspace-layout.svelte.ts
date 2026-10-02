@@ -58,8 +58,8 @@ export interface TaskWorkspaceLayoutDeps {
   store: LayoutStore;
   /** Kill a shell tab's backend process. Rejects when it may still be running. */
   closeShell: (sessionId: string, index: number) => Promise<unknown>;
-  /** A shell tab's process exited by itself; it is gone whatever its backend close reports. */
-  shellGone?: (ptyKey: string) => Promise<void>;
+  /** A shell tab left the layout, closed or exited by itself; it never rejects. */
+  shellClosed?: (ptyKey: string) => Promise<void>;
   getTerminalCommand: (sessionId: string, filePath: string) => Promise<string>;
   disposeView: (ptyKey: string) => void;
   saveDelayMs?: number;
@@ -241,6 +241,7 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     // shell running with no UI to reach it.
     await deps.closeShell(parts.sessionId, parts.index);
     removeShell(ptyKey);
+    await deps.shellClosed?.(ptyKey);
   }
 
   return {
@@ -471,7 +472,8 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       if (parts?.kind !== "shell" || goneShells.has(ptyKey)) return;
       pendingCommands.delete(ptyKey);
       removeShell(ptyKey);
-      await deps.shellGone?.(ptyKey);
+      // The process is gone even when finalizing its backend fails below.
+      await deps.shellClosed?.(ptyKey);
       await deps.closeShell(parts.sessionId, parts.index);
     },
 
@@ -600,10 +602,8 @@ export const taskWorkspaceLayout = createTaskWorkspaceLayout({
         ? sessionsApi.saveTaskWorkspaceLayout(workspace.projectId, workspace.taskKey, layoutJson)
         : sessionsApi.saveLayout(workspace.sessionId, layoutJson),
   },
-  // Hand back only once the shell is gone, so the terminal and the chat never both drive it.
-  closeShell: (sessionId, index) =>
-    pty.closeTab(sessionId, index).then(() => shellTabClosed(shellPtyKey(sessionId, index))),
-  shellGone: shellTabClosed,
+  closeShell: (sessionId, index) => pty.closeTab(sessionId, index),
+  shellClosed: shellTabClosed,
   getTerminalCommand: (sessionId, filePath) => editorApi.getTerminalCommand(sessionId, filePath),
   disposeView: disposeTerminalView,
   onSaveError: (workspace, error) =>

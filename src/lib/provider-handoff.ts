@@ -63,8 +63,8 @@ export function forgetHandoff(sessionId: string): void {
 }
 
 /**
- * Every successful shell tab close passes through here; a handoff tab returns its
- * session to the chat. A failed handback never fails the close: the tab is gone.
+ * Every shell tab that leaves the layout, closed or exited by itself, passes through
+ * here; a handoff tab returns its session to the chat. A failed handback never fails the close.
  */
 export async function shellTabClosed(ptyKey: string): Promise<void> {
   const sessionId = handoffTabs.get(ptyKey);

@@ -64,7 +64,7 @@ function setup(persisted: Record<string, Layout> = {}) {
       }),
     },
     closeShell: vi.fn(async (_sessionId: string, _index: number) => {}),
-    shellGone: vi.fn(async (_ptyKey: string) => {}),
+    shellClosed: vi.fn(async (_ptyKey: string) => {}),
     getTerminalCommand: vi.fn(async (_sessionId: string, filePath: string) => `nvim ${filePath}`),
     disposeView: vi.fn(),
   } satisfies TaskWorkspaceLayoutDeps;
@@ -298,8 +298,20 @@ describe("shell tabs", () => {
     const ptyKey = workspace.openShell("a")!;
     deps.closeShell.mockRejectedValueOnce(new Error("daemon shell-tab kill timed out"));
     await expect(workspace.shellExited(ptyKey)).rejects.toThrow("timed out");
-    expect(deps.shellGone).toHaveBeenCalledWith(ptyKey);
+    expect(deps.shellClosed).toHaveBeenCalledWith(ptyKey);
     expect(workspace.findTab(ptyKey)).toBeNull();
+  });
+
+  it("reports an explicitly closed shell only once its backend confirms", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = workspace.openShell("a")!;
+    deps.closeShell.mockRejectedValueOnce(new Error("shell may still be running"));
+    await expect(workspace.closeTab(ptyKey)).rejects.toThrow("may still be running");
+    expect(deps.shellClosed).not.toHaveBeenCalled();
+    await workspace.closeTab(ptyKey);
+    expect(deps.shellClosed).toHaveBeenCalledOnce();
+    expect(deps.shellClosed).toHaveBeenCalledWith(ptyKey);
   });
 
   it("does not close again when the exit follows an explicit close", async () => {
