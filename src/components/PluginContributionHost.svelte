@@ -24,6 +24,9 @@
     autofocus?: boolean;
     closeOnEscape?: boolean;
     session?: PluginSessionContext;
+    /** Provider session UIs only: continue the session in a terminal tab, and come back. */
+    onSessionHandoff?: () => Promise<void>;
+    onSessionHandback?: () => Promise<void>;
     /** Resolves the focused session at action time for local plugin recipients. */
     getFocusedAgentSession?: () => PluginSessionContext | undefined;
   }
@@ -52,7 +55,7 @@
     text?: unknown;
   };
 
-  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, getFocusedAgentSession = () => undefined }: Props = $props();
+  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, onSessionHandoff, onSessionHandback, getFocusedAgentSession = () => undefined }: Props = $props();
   const serializedSession = $derived(session ? JSON.stringify(session) : "");
   let container = $state<HTMLElement>();
   let disposer: PluginUiDisposer | null = null;
@@ -329,6 +332,8 @@
           session: {
             send: (text) => request("session-send", { text }),
             interrupt: () => request("session-interrupt"),
+            handoff: () => request("session-handoff"),
+            handback: () => request("session-handback"),
             onEvent: (listener) => {
               sessionEventListeners.add(listener);
               return () => sessionEventListeners.delete(listener);
@@ -466,6 +471,15 @@
         void plugins
           .updateSettings(plugin.id, message.params as Record<string, unknown>)
           .then((value) => respond(message.requestId, true, value))
+          .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "session-handoff" || message.type === "session-handback") {
+        const action = message.type === "session-handoff" ? onSessionHandoff : onSessionHandback;
+        if (!providerSession || !action) {
+          respond(message.requestId, false, "terminal handoff is not available here");
+          return;
+        }
+        void action()
+          .then(() => respond(message.requestId, true, null))
           .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "session-send" || message.type === "session-interrupt") {
         if (!providerSession) {

@@ -276,6 +276,8 @@ export const providerSessions = {
   send: (sessionId: string, text: string) =>
     invoke<void>("provider_session_send", { sessionId, text }),
   interrupt: (sessionId: string) => invoke<void>("provider_session_interrupt", { sessionId }),
+  handoff: (sessionId: string) => invoke<string[]>("provider_session_handoff", { sessionId }),
+  handback: (sessionId: string) => invoke<void>("provider_session_handback", { sessionId }),
 };
 
 export const preferences = {

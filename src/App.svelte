@@ -48,9 +48,10 @@
   import PluginContributionHost from "./components/PluginContributionHost.svelte";
   import ProviderSessionView from "./components/ProviderSessionView.svelte";
   import { PROVIDER_BACKEND, runtimeProviders } from "./lib/plugin-providers";
+  import { handoffTabFor, startHandoff } from "./lib/provider-handoff";
   import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
-  import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
+  import { loops as loopsApi, plugins as pluginsApi, providerSessions } from "./lib/api";
   import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { taskWorkspaceLayout as workspaceLayout, toPaneTabs, workspaceOf, type PaneTab, type WorkspaceAgent, type WorkspaceIdentity } from "./lib/task-workspace-layout.svelte";
   import { activeTabOf, findLeaf, tabsOf, type LeafNode, type NavDirection, type SplitDirection, type TabEntry } from "./lib/layout-tree";
@@ -529,6 +530,20 @@
       loopToDelete = null;
     });
   });
+
+  // ─── Provider session terminal handoff ─────────────────────────────────────
+
+  async function handoffProviderSession(sessionId: string): Promise<void> {
+    await startHandoff(sessionId, (command, label) => workspaceLayout.openCommand(sessionId, command, label));
+  }
+
+  async function handbackProviderSession(sessionId: string): Promise<void> {
+    const ptyKey = handoffTabFor(sessionId);
+    const closed = ptyKey ? await workspaceLayout.closeTab(ptyKey) : "missing";
+    if (closed === "starting") throw new Error("The terminal is still starting.");
+    // Closing the tab hands the session back; without one there is nothing left to close.
+    if (closed === "missing") await providerSessions.handback(sessionId);
+  }
 
   // ─── Project management ─────────────────────────────────────────────────────
   async function openPreferences(location?: SettingsLocation) {
@@ -1343,6 +1358,8 @@
                   autofocus={isActiveInLeaf && sessionId === activeSessionId}
                   onNavigate={openPluginContribution}
                   onOpenPreferences={openPreferences}
+                  onHandoff={handoffProviderSession}
+                  onHandback={handbackProviderSession}
                 />
               </div>
               {:else if session}

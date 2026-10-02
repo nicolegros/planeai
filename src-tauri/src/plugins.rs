@@ -186,6 +186,10 @@ impl PluginProvider {
     pub fn supports_yolo(&self) -> bool {
         self.supports.iter().any(|feature| feature == "yolo")
     }
+
+    pub fn supports_handoff(&self) -> bool {
+        self.supports.iter().any(|feature| feature == "handoff")
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

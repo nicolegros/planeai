@@ -1,0 +1,49 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { handoff, handback } = vi.hoisted(() => ({
+  handoff: vi.fn(async () => ["/opt/claude", "--resume", "s1", "--permission-mode", "plan"]),
+  handback: vi.fn(async () => {}),
+}));
+vi.mock("../api", () => ({ providerSessions: { handoff, handback } }));
+
+import {
+  handoffTabFor,
+  quoteArgument,
+  shellCommand,
+  shellTabClosed,
+  startHandoff,
+} from "../provider-handoff";
+
+describe("provider handoff", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("quotes arguments for POSIX shells and cmd.exe", () => {
+    expect(shellCommand(["/opt/claude", "--resume", "s1"], false)).toBe("/opt/claude --resume s1");
+    expect(quoteArgument("it's here", false)).toBe(`'it'\\''s here'`);
+    expect(quoteArgument("C:\\Program Files\\claude.exe", true)).toBe(
+      '"C:\\Program Files\\claude.exe"',
+    );
+    expect(quoteArgument("plain", true)).toBe("plain");
+  });
+
+  it("opens one terminal tab per session and hands back when it closes", async () => {
+    const open = vi.fn(() => "s1:4");
+    await expect(startHandoff("s1", open)).resolves.toBe("s1:4");
+    expect(open).toHaveBeenCalledWith("/opt/claude --resume s1 --permission-mode plan", "Terminal");
+    await expect(startHandoff("s1", open)).resolves.toBe("s1:4");
+    expect(handoff).toHaveBeenCalledOnce();
+    expect(handoffTabFor("s1")).toBe("s1:4");
+
+    await shellTabClosed("s2:1");
+    expect(handback).not.toHaveBeenCalled();
+    await shellTabClosed("s1:4");
+    expect(handback).toHaveBeenCalledWith("s1");
+    expect(handoffTabFor("s1")).toBeUndefined();
+  });
+
+  it("returns the session to the chat when no pane can hold the terminal", async () => {
+    await expect(startHandoff("s3", () => null)).rejects.toThrow("no pane");
+    expect(handback).toHaveBeenCalledWith("s3");
+    expect(handoffTabFor("s3")).toBeUndefined();
+  });
+});

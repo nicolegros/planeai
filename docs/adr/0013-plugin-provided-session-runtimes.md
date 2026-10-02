@@ -23,7 +23,7 @@ The host read sidecar stdout only while a request was in flight, and an unsolici
 A trusted local plugin can provide **session runtimes**, which PlaneAI offers as providers.
 
 - **Contract.** A manifest using `planeai.plugin-host.v3` may declare `providers: [{ id, label, entrypoint, supports }]` together with the `providers` capability.
-  `supports` currently accepts `yolo`.
+  `supports` currently accepts `yolo` and `handoff`.
   Bundled plugins cannot declare providers.
 - **Domain.** A runtime-backed provider has the key `<plugin id>:<provider id>`.
   It is listed beside configured command providers and is chosen when a session is created.
@@ -49,6 +49,9 @@ A trusted local plugin can provide **session runtimes**, which PlaneAI offers as
   The plugin rebuilds its view after a remount by subscribing first, then fetching its own snapshot in frame-sized pages and dropping events at or below the snapshot's `seq`.
 - **Prompt routing.** Every host path that prompts a session (CLI, recipes and loops, `sessions.prompt`, the chat UI) reaches `provider.session.send`.
   Routing follows the session's stored backend.
+- **Terminal handoff.** A provider that supports `handoff` can hand a session to its agent's own TUI.
+  `provider.session.handoff` detaches the provider and returns the `argv` that continues the conversation, which the host runs in a shell tab of the same session.
+  Closing that tab calls `provider.session.handback`, so only one side ever drives the conversation.
 - **Lifecycle.** Runtimes still die with the app.
   Sessions resume lazily through the provider on next use.
   Ending a session through any path stops its provider session, including CLI archive, CLI delete and task completion, which the GUI reconciles when notified.
@@ -64,7 +67,6 @@ A trusted local plugin can provide **session runtimes**, which PlaneAI offers as
 
 ## Deferred
 
-- Handing a running session off to its agent's TUI in a terminal tab, under a single-driver lock (`provider.session.handoff`).
 - Launching runtime-backed sessions from the CLI, which has no plugin runtime.
 - Launching runtime-backed sessions from recipes, loop candidates and symphony, which resolve providers from the config file only.
 - Using a runtime-backed provider as `default_provider`.

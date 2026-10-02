@@ -66,8 +66,14 @@ pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>)
         }
         request_id += 1;
     }
-    if let Some(provider_id) = first_provider_id(&manifest) {
-        request_id = check_provider(&mut process, request_id, &provider_id, provider_turn)?;
+    if let Some((provider_id, handoff)) = first_provider(&manifest) {
+        request_id = check_provider(
+            &mut process,
+            request_id,
+            &provider_id,
+            handoff,
+            provider_turn,
+        )?;
     } else if provider_turn.is_some() {
         bail!("--provider-turn requires a plugin that declares providers");
     }
@@ -105,14 +111,13 @@ pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>)
     Ok(())
 }
 
-fn first_provider_id(manifest: &Value) -> Option<String> {
-    manifest
-        .get("providers")?
-        .as_array()?
-        .first()?
-        .get("id")?
-        .as_str()
-        .map(str::to_owned)
+fn first_provider(manifest: &Value) -> Option<(String, bool)> {
+    let provider = manifest.get("providers")?.as_array()?.first()?;
+    let handoff = provider
+        .get("supports")
+        .and_then(Value::as_array)
+        .is_some_and(|features| features.iter().any(|feature| feature == "handoff"));
+    Some((provider.get("id")?.as_str()?.to_owned(), handoff))
 }
 
 /// Exercise the provider session contract: start, an optional full turn that must
@@ -121,6 +126,7 @@ fn check_provider(
     process: &mut PluginProcess,
     mut request_id: u64,
     provider_id: &str,
+    handoff: bool,
     provider_turn: Option<&str>,
 ) -> Result<u64> {
     let cwd = process._state.data_dir.display().to_string();
@@ -155,6 +161,36 @@ fn check_provider(
         if process.provider_events_received == 0 {
             bail!("provider turn completed without emitting a host.session.event");
         }
+    }
+    if handoff {
+        let result = process
+            .call(
+                request_id,
+                "provider.session.handoff",
+                json!({ "session_id": PROVIDER_TEST_SESSION }),
+            )
+            .context("provider.session.handoff failed")?;
+        request_id += 1;
+        result
+            .get("argv")
+            .and_then(Value::as_array)
+            .filter(|argv| {
+                !argv.is_empty()
+                    && argv
+                        .iter()
+                        .all(|arg| arg.as_str().is_some_and(|arg| !arg.is_empty()))
+            })
+            .ok_or_else(|| {
+                anyhow!("provider.session.handoff must return a nonempty argv of strings")
+            })?;
+        process
+            .call(
+                request_id,
+                "provider.session.handback",
+                json!({ "session_id": PROVIDER_TEST_SESSION }),
+            )
+            .context("provider.session.handback failed")?;
+        request_id += 1;
     }
     process
         .call(

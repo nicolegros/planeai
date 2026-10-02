@@ -145,6 +145,7 @@ See ADR-0013.
 `id` follows the plugin id rules and must be unique; the provider key users see in sessions and configs is `<plugin id>:<provider id>`.
 `entrypoint` is a package-relative UI bundle with the same rules as UI contributions.
 `supports` may list `yolo` when the provider honors auto-approve; otherwise PlaneAI disables auto-approve for it.
+It may also list `handoff` when the session can continue in the agent's own terminal UI.
 Unknown fields and features are rejected.
 The v3 contract is unstable until the first provider plugin ships, so expect changes.
 
@@ -157,6 +158,8 @@ PlaneAI calls these sidecar methods; each must return promptly and do its work a
 | `provider.session.send`      | `session_id`, `text`                                                         | Input from the chat UI, the CLI, recipes and loops, or another plugin's `sessions.prompt`.                                                 |
 | `provider.session.interrupt` | `session_id`                                                                 | Stop the current turn.                                                                                                                     |
 | `provider.session.stop`      | `session_id`, `reason` (`archive`, `destroy` or `exit`)                      | The session ended. Release its process; on `destroy`, delete its data.                                                                     |
+| `provider.session.handoff`   | `session_id`                                                                 | With `handoff` only. Stop driving the session and return `{ "argv": [...] }`, the command that continues it in a terminal.                 |
+| `provider.session.handback`  | `session_id`                                                                 | With `handoff` only. The terminal tab closed; drive the session again.                                                                     |
 
 `provider.*` methods are reserved for PlaneAI: plugin UI cannot call them, and `planeai-cli plugin test` scenarios cannot send them.
 
@@ -177,6 +180,9 @@ Any other notification is still a protocol error.
 The provider UI receives the selected session in `context.session` and a session bridge on `context.host.session`:
 
 - `send(text)` and `interrupt()` route through PlaneAI to `provider.session.send` and `provider.session.interrupt`, so every input path behaves the same.
+- `handoff()` asks the provider for its terminal command and opens it in a new shell tab of the session.
+  `handback()` closes that tab, which returns the session to the provider.
+  Both reject for providers without `handoff`.
 - `onEvent(listener)` receives `{ seq, payload }` for this session only and returns an unsubscribe function.
 
 PlaneAI unmounts the UI when the user switches sessions, and resumes the session (if needed) before mounting it again, so the sidecar owns the transcript.

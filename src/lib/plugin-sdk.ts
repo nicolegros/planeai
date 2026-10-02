@@ -84,6 +84,12 @@ export interface PluginUiHost {
     send(text: string): Promise<void>;
     interrupt(): Promise<void>;
     onEvent(listener: (event: PluginSessionEvent) => void): () => void;
+    /**
+     * For providers that support `handoff`: continue the session in its agent's
+     * TUI in a terminal tab. `handback` closes that tab and returns to the chat.
+     */
+    handoff(): Promise<void>;
+    handback(): Promise<void>;
   };
 }
 

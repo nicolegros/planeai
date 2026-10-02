@@ -11,11 +11,14 @@
     autofocus?: boolean;
     onNavigate: (pluginId: string, contributionId: string) => void;
     onOpenPreferences: () => void;
+    onHandoff: (sessionId: string) => Promise<void>;
+    onHandback: (sessionId: string) => Promise<void>;
   }
 
-  let { session, inventory, autofocus = false, onNavigate, onOpenPreferences }: Props = $props();
+  let { session, inventory, autofocus = false, onNavigate, onOpenPreferences, onHandoff, onHandback }: Props = $props();
 
   const resolved = $derived(findRuntimeProvider(inventory, session.provider));
+  const supportsHandoff = $derived(resolved?.provider.supports.includes("handoff") ?? false);
   const contribution = $derived(resolved ? providerContribution(resolved.provider) : null);
   const sessionContext = $derived<PluginSessionContext>({
     id: session.id,
@@ -38,6 +41,8 @@
       {onNavigate}
       onClose={() => {}}
       {onOpenPreferences}
+      onSessionHandoff={supportsHandoff ? () => onHandoff(session.id) : undefined}
+      onSessionHandback={supportsHandoff ? () => onHandback(session.id) : undefined}
     />
   {:else}
     <div class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center" role="status">

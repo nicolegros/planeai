@@ -32,7 +32,7 @@ const MANIFEST_FIELDS: &[&str] = &[
     "providers",
 ];
 const PROVIDER_FIELDS: &[&str] = &["id", "label", "entrypoint", "supports"];
-const PROVIDER_FEATURES: &[&str] = &["yolo"];
+const PROVIDER_FEATURES: &[&str] = &["yolo", "handoff"];
 const UI_CONTRIBUTION_FIELDS: &[&str] = &[
     "id",
     "label",
@@ -450,7 +450,7 @@ mod tests {
             "id": "chat",
             "label": "Chat",
             "entrypoint": "ui/chat.js",
-            "supports": ["yolo"]
+            "supports": ["yolo", "handoff"]
         }]);
         manifest
     }

@@ -183,6 +183,59 @@ describe("PluginContributionHost provider sessions", () => {
     );
   });
 
+  it("routes terminal handoff to the app only when the provider offers it", async () => {
+    const onSessionHandoff = vi.fn(async () => {});
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHost, {
+      target,
+      props: {
+        plugin,
+        contribution: providerContribution(provider),
+        session,
+        onNavigate: () => {},
+        onClose: () => {},
+        onSessionHandoff,
+      },
+    });
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    const postMessage = stubFrameWindow(frame);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "session-handoff", requestId: 5 },
+      }),
+    );
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "session-handback", requestId: 6 },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(postMessage).toHaveBeenCalledWith(
+        { type: "response", requestId: 5, ok: true, value: null },
+        "*",
+      ),
+    );
+    expect(onSessionHandoff).toHaveBeenCalledOnce();
+    expect(postMessage).toHaveBeenCalledWith(
+      {
+        type: "response",
+        requestId: 6,
+        ok: false,
+        error: "terminal handoff is not available here",
+      },
+      "*",
+    );
+  });
+
   it("rejects session controls from contributions that are not provider UIs", async () => {
     const frame = await mountHost({
       id: "panel",

@@ -434,6 +434,8 @@ fn main() {
             provider_session_ensure,
             provider_session_send,
             provider_session_interrupt,
+            provider_session_handoff,
+            provider_session_handback,
             plugin_data_changed,
             jira_migration_status,
             migrate_legacy_jira,

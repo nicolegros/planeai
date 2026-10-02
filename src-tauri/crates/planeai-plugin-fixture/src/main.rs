@@ -291,6 +291,15 @@ impl EchoProvider {
             "provider.session.interrupt" => {
                 (success(id, json!({})), vec![status(&session_id, "idle")])
             }
+            // The terminal stand-in prints a banner, then echoes what is typed until the tab closes.
+            "provider.session.handoff" => (
+                success(
+                    id,
+                    json!({ "argv": ["sh", "-c", "echo 'Echo provider continued in the terminal'; exec cat"] }),
+                ),
+                vec![status(&session_id, "idle")],
+            ),
+            "provider.session.handback" => (success(id, json!({})), Vec::new()),
             "provider.session.stop" => {
                 self.sessions.remove(&session_id);
                 (success(id, json!({ "stopped": true })), Vec::new())
@@ -466,6 +475,25 @@ mod tests {
         ));
         assert_eq!(snapshot["result"]["seq"], 2);
         assert_eq!(snapshot["result"]["events"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn echo_provider_hands_off_to_a_terminal_command() {
+        let mut provider = EchoProvider::default();
+        provider.handle(&provider_request(
+            "provider.session.start",
+            json!({ "session_id": "s1" }),
+        ));
+        let (response, _) = provider.handle(&provider_request(
+            "provider.session.handoff",
+            json!({ "session_id": "s1" }),
+        ));
+        assert_eq!(response["result"]["argv"][0], "sh");
+        let (response, _) = provider.handle(&provider_request(
+            "provider.session.handback",
+            json!({ "session_id": "s1" }),
+        ));
+        assert_eq!(response["result"], json!({}));
     }
 
     #[test]

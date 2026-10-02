@@ -263,3 +263,22 @@ pub async fn provider_session_interrupt(
     let context = crate::plugin_providers::load_context(&app, &session_id).await?;
     crate::plugin_providers::interrupt(&runtime.0, &context).await
 }
+
+/// Detach a provider session so its agent's TUI can continue it; returns that command.
+#[tauri::command]
+pub async fn provider_session_handoff(
+    session_id: String,
+    app: AppHandle,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<Vec<String>, String> {
+    let context = crate::plugin_providers::load_context(&app, &session_id).await?;
+    crate::plugin_providers::handoff(&runtime.0, &context).await
+}
+
+#[tauri::command]
+pub async fn provider_session_handback(
+    session_id: String,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<(), String> {
+    crate::plugin_providers::handback(&runtime.0, &session_id).await
+}

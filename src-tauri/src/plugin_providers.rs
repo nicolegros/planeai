@@ -397,6 +397,67 @@ async fn request_bound(
         .map(|_| ())
 }
 
+#[derive(Debug, Deserialize)]
+struct HandoffResponse {
+    argv: Vec<String>,
+}
+
+/// Hand a session's conversation to its agent's own TUI. The provider detaches
+/// and returns the command that continues the conversation in a terminal.
+pub async fn handoff(
+    supervisor: &PluginRuntimeSupervisor,
+    context: &SessionRuntimeContext,
+) -> Result<Vec<String>, String> {
+    let resolved = resolve(supervisor, &context.provider_key).await?;
+    if !resolved.provider.supports_handoff() {
+        return Err(format!(
+            "{} cannot continue in a terminal",
+            resolved.provider.label
+        ));
+    }
+    ensure(supervisor, context).await?;
+    let value = supervisor
+        .provider_request(
+            &resolved.plugin_id,
+            "provider.session.handoff",
+            serde_json::json!({ "session_id": context.session_id }),
+        )
+        .await?;
+    let response: HandoffResponse = serde_json::from_value(value)
+        .map_err(|error| format!("invalid provider handoff: {error}"))?;
+    validate_handoff_argv(response.argv)
+}
+
+fn validate_handoff_argv(argv: Vec<String>) -> Result<Vec<String>, String> {
+    if argv.is_empty()
+        || argv.len() > 64
+        || argv.iter().any(|arg| arg.is_empty() || arg.contains('\0'))
+    {
+        return Err(
+            "provider handoff must return a nonempty argv of nonempty arguments".to_string(),
+        );
+    }
+    Ok(argv)
+}
+
+/// The terminal that continued a session closed; the provider drives it again.
+pub async fn handback(
+    supervisor: &PluginRuntimeSupervisor,
+    session_id: &str,
+) -> Result<(), String> {
+    // A sidecar restarted during the handoff has no detached state to restore.
+    if supervisor.provider_sessions().get(session_id).is_none() {
+        return Ok(());
+    }
+    request_bound(
+        supervisor,
+        session_id,
+        "provider.session.handback",
+        serde_json::json!({ "session_id": session_id }),
+    )
+    .await
+}
+
 /// Stop a provider session that left the active state. Sessions the current
 /// sidecar never resumed have nothing running and need no request.
 pub async fn stop(supervisor: &PluginRuntimeSupervisor, session_id: &str, reason: &str) {
@@ -568,6 +629,25 @@ mod tests {
         assert_eq!(ended_reason(Some("archived")), Some("archive"));
         assert_eq!(ended_reason(Some("destroyed")), Some("destroy"));
         assert_eq!(ended_reason(None), Some("destroy"));
+    }
+
+    #[test]
+    fn handoff_argv_must_be_runnable() {
+        assert_eq!(
+            validate_handoff_argv(vec![
+                "/usr/local/bin/claude".into(),
+                "--resume".into(),
+                "s1".into()
+            ]),
+            Ok(vec![
+                "/usr/local/bin/claude".into(),
+                "--resume".into(),
+                "s1".into()
+            ])
+        );
+        assert!(validate_handoff_argv(vec![]).is_err());
+        assert!(validate_handoff_argv(vec!["claude".into(), String::new()]).is_err());
+        assert!(validate_handoff_argv(vec!["claude\0".into()]).is_err());
     }
 
     #[test]
