@@ -146,6 +146,7 @@ describe("PluginContributionHost", () => {
   });
 
   it("isolates local UI bundles in an opaque, script-only iframe with a message bridge", async () => {
+    localUiSource.mockReturnValue(new Promise(() => {}));
     target = document.createElement("div");
     document.body.append(target);
     component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
@@ -168,8 +169,8 @@ describe("PluginContributionHost", () => {
       expect(frame?.srcdoc).toContain('addEventListener("keydown", forwardSidebarKeydown)');
       expect(frame?.srcdoc).toContain("session: message.session");
     });
-    // jsdom does not execute iframe srcdoc. The production bridge loads source only after its frame loads.
-    expect(localUiSource).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(localUiSource).toHaveBeenCalledWith("local-fixture", "fixture"));
+    expect(localUiSource).toHaveBeenCalledOnce();
   });
 
   it("focuses a local session-panel iframe when the modal requests autofocus", async () => {
@@ -480,7 +481,8 @@ describe("PluginContributionHost", () => {
   });
 
   it("sends only structured-cloneable context when initializing a local UI iframe", async () => {
-    localUiSource.mockResolvedValue("export default { mount() { return () => {}; } };");
+    const source = Promise.withResolvers<string>();
+    localUiSource.mockReturnValue(source.promise);
     target = document.createElement("div");
     document.body.append(target);
     component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
@@ -492,6 +494,7 @@ describe("PluginContributionHost", () => {
       expect(next).toBeTruthy();
       return next!;
     });
+    await vi.waitFor(() => expect(localUiSource).toHaveBeenCalledWith("local-fixture", "fixture"));
     const postMessage = vi.fn((message: unknown) => {
       structuredClone(message);
     });
@@ -500,8 +503,7 @@ describe("PluginContributionHost", () => {
       value: { postMessage },
     });
 
-    frame.dispatchEvent(new Event("load"));
-    await vi.waitFor(() => expect(localUiSource).toHaveBeenCalledWith("local-fixture", "fixture"));
+    source.resolve("export default { mount() { return () => {}; } };");
     await vi.waitFor(() =>
       expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "init" }), "*"),
     );
