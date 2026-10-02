@@ -133,7 +133,8 @@ The session and task stay linked. When the agent signals completion, the task mo
 ## Lifecycle hooks
 
 Hooks move the linked task to a status when its agent session changes state.
-Configure them in **Preferences → Task Management** (⌘, / Ctrl+,) or directly in your `config.json`:
+New installs start with task management on and the hooks below set.
+Configure them in **Preferences → Tasks** (⌘, / Ctrl+,) or directly in your `config.json`:
 
 ```jsonc
 {
@@ -161,7 +162,7 @@ It only moves a task whose status is still the `on_notify` target, and does noth
 Valid statuses are `todo`, `in_progress`, `in_review`, and `done`.
 
 :::tip
-All task management settings — templates, lifecycle hooks, and auto-dispatch — are available in **Preferences → Task Management**. You don't need to edit JSON if you prefer a GUI.
+All task management settings — templates, lifecycle hooks, and auto-dispatch — are available in **Preferences → Tasks**. You don't need to edit JSON if you prefer a GUI.
 :::
 
 ## Auto-dispatch: the full lifecycle
@@ -179,7 +180,7 @@ When [auto-dispatch](/planeai/guides/auto-dispatch/) is enabled, tasks flow thro
 
 Auto-dispatch is enabled **per project**. With the sidebar grouped by project, right-click a project and select **Auto-dispatch** to toggle it on. When active, a ⚡ icon appears next to the project name.
 
-You also need the global auto-dispatch configuration — either toggle it in **Preferences → Task Management** (⌘, / Ctrl+,) or set it in your `config.json`:
+You also need the global auto-dispatch configuration — either toggle it in **Preferences → Tasks** (⌘, / Ctrl+,) or set it in your `config.json`:
 
 ```jsonc
 {

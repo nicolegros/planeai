@@ -23,6 +23,7 @@
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import { getPluginSidebarRows, type PluginSidebarNavRow } from "../lib/plugin-sidebar-navigation.svelte";
+  import { pluginPreferencesLocation, type SettingsLocation } from "../lib/settings-registry";
 
   interface Props {
     renamingSessionId: string | null;
@@ -31,7 +32,7 @@
     onArchiveSession: (session: Session) => void;
     onDeleteSession: (session: Session) => void;
     onRestartSession: (session: Session) => void;
-    onOpenPreferences: () => void;
+    onOpenPreferences: (location?: SettingsLocation) => void;
     onRenameSession: (id: string, name: string) => void;
     onStartRename: (id: string) => void;
     onDeleteProject: (project: Project) => void;
@@ -793,7 +794,7 @@
   </div>
 
   {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.header") as item (`${item.plugin.id}:${item.contribution.id}`)}
-    <div class="px-2 py-1" data-plugin-sidebar-slot="header"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} onFailure={() => markSidebarContributionFailed(item)} /></div>
+    <div class="px-2 py-1" data-plugin-sidebar-slot="header"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={() => onOpenPreferences(pluginPreferencesLocation(item.plugin))} onFailure={() => markSidebarContributionFailed(item)} /></div>
   {/each}
 
   <!-- Main content -->
@@ -854,22 +855,22 @@
 
     {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.section") as item (`${item.plugin.id}:${item.contribution.id}`)}
       <div data-plugin-sidebar-slot="section">
-        <PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} onFailure={() => markSidebarContributionFailed(item)} />
+        <PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={() => onOpenPreferences(pluginPreferencesLocation(item.plugin))} onFailure={() => markSidebarContributionFailed(item)} />
       </div>
     {/each}
 
     {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.navigation") as item (`${item.plugin.id}:${item.contribution.id}`)}
-      <div data-plugin-sidebar-slot="navigation"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} onFailure={() => markSidebarContributionFailed(item)} /></div>
+      <div data-plugin-sidebar-slot="navigation"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={() => onOpenPreferences(pluginPreferencesLocation(item.plugin))} onFailure={() => markSidebarContributionFailed(item)} /></div>
     {/each}
   </nav>
 
   {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.footer") as item (`${item.plugin.id}:${item.contribution.id}`)}
-    <div class="border-t border-border px-2 py-2" data-plugin-sidebar-slot="footer"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} onFailure={() => markSidebarContributionFailed(item)} /></div>
+    <div class="border-t border-border px-2 py-2" data-plugin-sidebar-slot="footer"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={() => onOpenPreferences(pluginPreferencesLocation(item.plugin))} onFailure={() => markSidebarContributionFailed(item)} /></div>
   {/each}
 
   <!-- Preferences footer -->
   <button
-    onclick={onOpenPreferences}
+    onclick={() => onOpenPreferences()}
     class="flex items-center gap-2 px-3 py-2.5 border-t border-border text-t2 text-[12px] hover:bg-panel-hi transition-colors"
   >
     <Settings class="size-3.5" />

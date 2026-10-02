@@ -2,7 +2,7 @@
   import { onMount, tick, untrack } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-  import { listen } from "@tauri-apps/api/event";
+  import { emitTo, listen } from "@tauri-apps/api/event";
   import { sessions as sessionsApi, pty, notify, sessionLogs, editor as editorApi, updater } from "./lib/api";
   import { sessionTaskProjectId, type Session, type Project, type TaskItem } from "./lib/types";
   import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
@@ -18,6 +18,7 @@
   import { isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { isTerminal, isActive as isLoopActive } from "./lib/loop-status";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
+  import { pluginPreferencesLocation, settingsLocationQuery, type SettingsLocation } from "./lib/settings-registry";
   import { openFileWithConfiguredEditor } from "./lib/file-editor";
   import { loadTheme } from "./lib/theme-loader";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
@@ -510,10 +511,15 @@
   }
 
   // ─── Project management ─────────────────────────────────────────────────────
-  async function openPreferences() {
+  async function openPreferences(location?: SettingsLocation) {
     const existing = await WebviewWindow.getByLabel("preferences");
-    if (existing) { existing.setFocus(); return; }
-    new WebviewWindow("preferences", { url: "index.html?page=preferences", title: "Preferences", width: 920, height: 680, minWidth: 760, minHeight: 520, parent: getCurrentWindow(), resizable: true, minimizable: false, maximizable: false });
+    if (existing) {
+      if (location) await emitTo("preferences", "preferences-navigate", location);
+      existing.setFocus();
+      return;
+    }
+    const [search, hash] = location ? settingsLocationQuery(location) : ["?page=preferences", ""];
+    new WebviewWindow("preferences", { url: `index.html${search}${hash}`, title: "Preferences", width: 920, height: 680, minWidth: 760, minHeight: 520, parent: getCurrentWindow(), resizable: true, minimizable: false, maximizable: false });
   }
 
   async function doRename(id: string, name: string) {
@@ -1421,7 +1427,7 @@
           <span class="text-sm font-medium text-t1">{activePlugin ? `${activePlugin.name} · ${activeContribution?.label ?? "Contribution"}` : "Plugin"}</span>
         </div>
         {#if activePlugin && activeContribution}
-          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} session={activeContribution.placement === "session.panel" ? activePluginSessionContext : undefined} getFocusedAgentSession={() => activePluginSessionContext} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} autofocus /></div>
+          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} session={activeContribution.placement === "session.panel" ? activePluginSessionContext : undefined} getFocusedAgentSession={() => activePluginSessionContext} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={() => openPreferences(pluginPreferencesLocation(activePlugin))} autofocus /></div>
         {:else}
           <div class="flex min-h-0 flex-1 items-center justify-center text-sm text-t3">Plugin contribution is no longer available.</div>
         {/if}
@@ -1640,7 +1646,7 @@
           openPluginContribution(pluginId, contributionId);
         }}
         onClose={closePluginContributionModal}
-        onOpenPreferences={openPreferences}
+        onOpenPreferences={() => openPreferences(pluginPreferencesLocation(modalPlugin))}
         closeOnEscape={true}
         autofocus={true}
       />
@@ -1659,7 +1665,7 @@
 
 {#each interactionPluginContributions as { plugin, contribution } (`${plugin.id}:${contribution.id}`)}
   <div class="pointer-events-none fixed inset-0 z-[90]" data-plugin-interaction-host={`${plugin.id}:${contribution.id}`}>
-    <PluginContributionHost {plugin} {contribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} />
+    <PluginContributionHost {plugin} {contribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={() => openPreferences(pluginPreferencesLocation(plugin))} />
   </div>
 {/each}
 <PostMergePrompt />

@@ -144,9 +144,9 @@
 
 <section class="space-y-3">
   <div class="flex items-center justify-between gap-4">
-    <div>
-      <h2 class="text-sm font-medium text-t3 uppercase tracking-wide">Plugins</h2>
-      <p class="mt-1 text-xs text-t3">Trusted local packages run as supervised subprocesses from PlaneAI-owned imported copies.</p>
+    <div class="ml-1 min-w-0">
+      <h2 class="text-[12px] font-medium text-t1">Installed plugins</h2>
+      <p class="mt-0.5 text-[12px] leading-snug text-t3">Trusted local packages run as supervised subprocesses from PlaneAI-owned imported copies.</p>
     </div>
     <div class="flex gap-2">
       <Button type="button" disabled={discovering} onclick={() => void discover()}>{discovering ? "Discovering…" : discoveryCandidates ? "Refresh discovery" : "Discover plugins"}</Button>

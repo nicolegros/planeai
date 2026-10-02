@@ -6,6 +6,8 @@ draft: false
 
 planeai is configured via a single JSON file at `~/.config/planeai/config.json` (or `%APPDATA%\planeai\config.json` on Windows). The file supports JSONC (comments allowed).
 
+Most settings are also available in **Preferences** (⌘, / Ctrl+,). Pick a category in the sidebar, or press ⌘F / Ctrl+F to search every setting by name or keyword. A setting changed from its default shows a reset button next to it.
+
 ## Providers
 
 Each provider defines how planeai launches and communicates with an AI agent CLI.
@@ -49,7 +51,7 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
 | `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations            |
 | `resume_command`             | Command to resume interactively when restarting an exited session |
 
-Existing configs can add Kiro, Claude Code, Copilot or Codex in one click from the presets under **Preferences → Models**.
+Kiro, Claude Code, Copilot and Codex are always listed under **Preferences → Agents**. Turn one on to add its preset entry, or off to remove it. The default agent cannot be turned off. Each agent shows whether its binary was found on the session PATH, and **Search paths** adds folders to `extra_path_dirs`.
 
 ### Notification hooks
 
@@ -173,7 +175,7 @@ Controls whether planeai plays audio notifications.
 | `true`  | Play a chime when an agent finishes a task (default) |
 | `false` | Disable all sound notifications                      |
 
-This setting is also available in **Preferences → Sound**.
+This setting is also available in **Preferences → General → Notifications**.
 
 ## Task Manager Integration
 

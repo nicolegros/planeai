@@ -11,8 +11,8 @@ injectTheme("");
 const page = new URLSearchParams(window.location.search).get("page");
 
 if (page === "preferences") {
-  import("./components/PreferencesPage.svelte").then(({ default: PreferencesPage }) => {
-    mount(PreferencesPage, { target: document.getElementById("app")! });
+  import("./components/settings/SettingsWindow.svelte").then(({ default: SettingsWindow }) => {
+    mount(SettingsWindow, { target: document.getElementById("app")! });
   });
 } else {
   // Check if we're in benchmark replay mode
