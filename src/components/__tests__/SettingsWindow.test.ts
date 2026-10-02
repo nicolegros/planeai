@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   config: {} as AppConfig,
   updateSettings: vi.fn(),
   refreshSettings: vi.fn(),
+  loadSettings: vi.fn(),
+  showSnackbar: vi.fn(),
   defaults: vi.fn(),
   detectProviders: vi.fn(),
   checkRmuxAvailable: vi.fn(),
@@ -60,13 +62,13 @@ vi.mock("../../lib/api", async (importOriginal) => {
   };
 });
 vi.mock("../../lib/settings.svelte", () => ({
-  loadSettings: vi.fn(),
+  loadSettings: mocks.loadSettings,
   getSettings: () => mocks.config,
   updateSettings: mocks.updateSettings,
   refreshSettings: mocks.refreshSettings,
 }));
 vi.mock("../../lib/theme-loader", () => ({ loadTheme: vi.fn() }));
-vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
+vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: mocks.showSnackbar }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: vi.fn() }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: vi.fn(), openUrl: vi.fn() }));
@@ -89,6 +91,7 @@ async function render(url = "/?page=preferences") {
   window.history.replaceState(null, "", url);
   const target = document.body.appendChild(document.createElement("div"));
   component = mount(SettingsWindow, { target });
+  await vi.waitFor(() => expect(target.textContent).not.toContain("Loading settings"));
   await flush();
   return target;
 }
@@ -134,6 +137,10 @@ async function search(query: string) {
   await flush();
 }
 
+// jsdom does not implement scrolling.
+const scrollIntoView = vi.fn();
+Element.prototype.scrollIntoView = scrollIntoView;
+
 beforeEach(() => {
   mocks.config = baseConfig();
   mocks.defaults.mockResolvedValue(baseConfig());
@@ -146,6 +153,7 @@ beforeEach(() => {
   mocks.updateSettings.mockResolvedValue(undefined);
   settingsWindow.query = "";
   settingsWindow.defaults = null;
+  settingsWindow.editorDraft = null;
   _resetForTests();
 });
 
@@ -179,6 +187,18 @@ describe("navigation", () => {
     await render("/?page=preferences&section=editor#vim-mode");
     expect(document.querySelector("h1")?.textContent).toBe("Editor");
     expect(settingsWindow.flashId).toBe("vim-mode");
+    await vi.waitFor(() =>
+      expect(scrollIntoView.mock.contexts).toContain(document.getElementById("setting-vim-mode")),
+    );
+  });
+
+  it("listens for navigation before loading, so an early deep link is not dropped", async () => {
+    await render();
+    const listenOrder =
+      mocks.listen.mock.invocationCallOrder[
+        mocks.listen.mock.calls.findIndex(([name]) => name === "preferences-navigate")
+      ];
+    expect(listenOrder).toBeLessThan(mocks.loadSettings.mock.invocationCallOrder[0]);
   });
 
   it("nests plugin preference pages under Plugins and opens them", async () => {
@@ -345,6 +365,49 @@ describe("agents", () => {
     expect(mocks.detectProviders).toHaveBeenCalledOnce();
   });
 
+  it("names the default agent picker for assistive technology", async () => {
+    await render("/?page=preferences&section=agents");
+    expect(document.querySelector('input[aria-label="Default agent"]')).not.toBeNull();
+  });
+
+  it("keeps only the latest detection when detections finish out of order", async () => {
+    await render("/?page=preferences&section=agents");
+    const pending: ((value: Record<string, string | null>) => void)[] = [];
+    mocks.detectProviders.mockImplementation(() => new Promise((resolve) => pending.push(resolve)));
+    toggle("Enable Codex").click();
+    toggle("Enable Copilot").click();
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    pending[1]({ codex: "/bin/codex", copilot: "/bin/copilot" });
+    await flush();
+    pending[0]({ codex: "/bin/codex" });
+    await flush();
+    expect(document.querySelector('[data-agent="copilot"]')?.textContent).toContain("/bin/copilot");
+  });
+
+  it("reports a failed agent update and still refreshes detection", async () => {
+    await render("/?page=preferences&section=agents");
+    mocks.detectProviders.mockClear();
+    mocks.updateSettings.mockRejectedValueOnce("invalid config");
+    toggle("Enable Codex").click();
+    await flush();
+    expect(mocks.showSnackbar).toHaveBeenCalledWith(
+      "Failed to save settings: invalid config",
+      "error",
+    );
+    expect(mocks.detectProviders).toHaveBeenCalledOnce();
+  });
+
+  it("highlights the agents list when a search jumps to it", async () => {
+    await render();
+    await search("agents");
+    const result = Array.from(
+      document.querySelectorAll('[aria-label="Search results"] button'),
+    ).find((el) => el.textContent?.includes("Agents › Agents"));
+    (result as HTMLButtonElement).click();
+    await flush();
+    expect(document.getElementById("setting-agents")?.className).toContain("ring-status-review");
+  });
+
   it("locks the default agent's switch", async () => {
     await render("/?page=preferences&section=agents");
     expect(toggle("Enable Kiro").disabled).toBe(true);
@@ -409,6 +472,22 @@ describe("sessions", () => {
 });
 
 describe("tasks", () => {
+  it("turns tasks on with the backend's recommended setup, fetching it if needed", async () => {
+    mocks.defaults.mockRejectedValueOnce("offline");
+    await render("/?page=preferences&section=tasks");
+    const recommended = { on_start: { move_to: "in_progress" } };
+    mocks.defaults.mockResolvedValueOnce({ ...baseConfig(), task_management: recommended });
+    toggle("Task management").click();
+    await flush();
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ task_management: recommended });
+  });
+
+  it("does not offer task settings in search while tasks are off", async () => {
+    await render();
+    await search("branch");
+    expect(document.body.textContent).toContain("No settings match");
+  });
+
   it("shows an unset hook as disabled instead of its suggested status", async () => {
     mocks.config.task_management = { on_start: { move_to: "in_progress" } };
     await render("/?page=preferences&section=tasks");
@@ -426,6 +505,23 @@ describe("editor", () => {
     radio("file-editor-mode", "external").click();
     await flush();
     await click("VS Code");
+    await click("Save editor settings");
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      editor: { mode: "external", command: "code", args: ["--reuse-window", "--goto", "{file}"] },
+    });
+  });
+
+  it("keeps unsaved editor edits across page switches and searches", async () => {
+    await render("/?page=preferences&section=editor");
+    radio("file-editor-mode", "external").click();
+    await flush();
+    await click("VS Code");
+    await click("General");
+    await search("vim");
+    document.querySelector<HTMLButtonElement>('[aria-label="Clear search"]')!.click();
+    await flush();
+    await click("Editor");
+    expect(radio("file-editor-mode", "external").checked).toBe(true);
     await click("Save editor settings");
     expect(mocks.updateSettings).toHaveBeenCalledWith({
       editor: { mode: "external", command: "code", args: ["--reuse-window", "--goto", "{file}"] },

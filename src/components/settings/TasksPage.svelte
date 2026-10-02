@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { getSettings, updateSettings, type AutoDispatchConfig, type TaskManager } from "../../lib/settings.svelte";
-  import { settingsWindow } from "./settings-window.svelte";
+  import { getSettings, type AutoDispatchConfig, type TaskManager } from "../../lib/settings.svelte";
+  import { showSnackbar } from "../../lib/snackbar.svelte";
+  import { loadDefaults, saveSettings } from "./settings-window.svelte";
   import { Switch } from "../ui";
   import SettingRow from "./SettingRow.svelte";
+  import SettingAnchor from "./SettingAnchor.svelte";
   import SettingsSection from "./SettingsSection.svelte";
   import TextField from "./TextField.svelte";
 
@@ -21,13 +23,14 @@
   const taskManagement = $derived(config.task_management ?? null);
 
   /** Turning tasks on restores the backend's recommended setup. */
-  function enable() {
-    const recommended = settingsWindow.defaults?.task_management;
-    if (recommended) void updateSettings({ task_management: recommended });
+  async function enable() {
+    const recommended = (await loadDefaults())?.task_management;
+    if (recommended) await saveSettings({ task_management: recommended });
+    else showSnackbar("Could not load the recommended task setup. Try again.", "error");
   }
 
   function patch(next: Partial<TaskManager>) {
-    void updateSettings({ task_management: { ...config.task_management, ...next } });
+    void saveSettings({ task_management: { ...config.task_management, ...next } });
   }
 
   function setTemplate(field: "branch" | "name" | "prompt", value: string) {
@@ -48,8 +51,7 @@
     <Switch
       label="Task management"
       checked={taskManagement !== null}
-      disabled={taskManagement === null && !settingsWindow.defaults?.task_management}
-      onCheckedChange={(on) => (on ? enable() : updateSettings({ task_management: null }))}
+      onCheckedChange={(on) => (on ? enable() : saveSettings({ task_management: null }))}
     />
   </SettingRow>
 </SettingsSection>
@@ -73,7 +75,7 @@
   </SettingsSection>
 
   <SettingsSection title="Status transitions" help="Move the linked task to a status when its session reaches a stage. Leave empty to disable.">
-    <div id="setting-lifecycle-hooks" data-setting-id="lifecycle-hooks" class="divide-y divide-border">
+    <SettingAnchor id="lifecycle-hooks" class="divide-y divide-border">
       {#each HOOKS as hook (hook.key)}
         <div class="flex items-center justify-between gap-6 px-4 py-2.5">
           <div class="min-w-0">
@@ -91,7 +93,7 @@
           />
         </div>
       {/each}
-    </div>
+    </SettingAnchor>
   </SettingsSection>
 
   <SettingsSection title="Auto-dispatch" help="Start agent sessions for tasks automatically.">

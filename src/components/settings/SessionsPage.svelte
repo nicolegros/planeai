@@ -1,10 +1,11 @@
 <script lang="ts">
   import { CircleAlert } from "@lucide/svelte";
   import { preferences } from "../../lib/api";
-  import { getSettings, updateSettings } from "../../lib/settings.svelte";
+  import { getSettings } from "../../lib/settings.svelte";
   import { Button, Dialog, SegmentedControl } from "../ui";
   import SettingRow from "./SettingRow.svelte";
   import SettingsSection from "./SettingsSection.svelte";
+  import { saveSettings } from "./settings-window.svelte";
 
   type Backend = "local" | "tmux" | "daemon" | "rmux";
 
@@ -33,8 +34,8 @@
   let cleanupMessage = $state("");
 
   $effect(() => {
-    preferences.checkTmuxAvailable().then((available) => (tmuxAvailable = available));
     // A failed check must not block the page; assume available and show no warning.
+    preferences.checkTmuxAvailable().then((available) => (tmuxAvailable = available)).catch(() => {});
     preferences.checkRmuxAvailable().then((available) => (rmuxAvailable = available)).catch(() => {});
   });
 
@@ -81,7 +82,7 @@
       label="Run sessions in"
       options={BACKENDS}
       value={backend}
-      onValueChange={(value) => updateSettings({ session_backend: value === "local" ? null : value })}
+      onValueChange={(value) => saveSettings({ session_backend: value === "local" ? null : value })}
     />
   </SettingRow>
 </SettingsSection>

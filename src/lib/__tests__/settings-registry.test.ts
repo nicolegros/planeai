@@ -49,26 +49,36 @@ describe("settings registry", () => {
 
 describe("searchSettings", () => {
   it("matches labels, keywords and section names case-insensitively", () => {
-    expect(searchSettings("TMUX", []).map((r) => r.id)).toContain("session-backend");
-    expect(searchSettings("font", []).map((r) => r.id)).toEqual(
+    expect(searchSettings("TMUX", [], defaults).map((r) => r.id)).toContain("session-backend");
+    expect(searchSettings("font", [], defaults).map((r) => r.id)).toEqual(
       expect.arrayContaining(["font-family", "font-size"]),
     );
-    expect(searchSettings("scrollback", []).map((r) => r.id)).toContain("scrollback-lines");
+    expect(searchSettings("scrollback", [], defaults).map((r) => r.id)).toContain(
+      "scrollback-lines",
+    );
   });
 
   it("requires every word of a multi-word query", () => {
-    const ids = searchSettings("font size", []).map((r) => r.id);
+    const ids = searchSettings("font size", [], defaults).map((r) => r.id);
     expect(ids).toContain("font-size");
     expect(ids).not.toContain("font-family");
   });
 
   it("ranks label matches before keyword-only matches", () => {
-    const ids = searchSettings("theme", []).map((r) => r.id);
+    const ids = searchSettings("theme", [], defaults).map((r) => r.id);
     expect(ids[0]).toBe("theme");
   });
 
+  it("leaves out settings their page does not show", () => {
+    expect(searchSettings("branch", [], config()).map((r) => r.id)).not.toContain(
+      "branch-template",
+    );
+    const withTasks = config({ task_management: {} });
+    expect(searchSettings("branch", [], withTasks).map((r) => r.id)).toContain("branch-template");
+  });
+
   it("returns nothing for a blank query", () => {
-    expect(searchSettings("   ", [])).toEqual([]);
+    expect(searchSettings("   ", [], defaults)).toEqual([]);
   });
 
   it("finds plugin pages by plugin name and contribution label", () => {
@@ -80,10 +90,10 @@ describe("searchSettings", () => {
         description: "Sync issues",
       },
     ];
-    expect(searchSettings("cloud", pages)).toEqual([
+    expect(searchSettings("cloud", pages, defaults)).toEqual([
       expect.objectContaining({ kind: "plugin", key: "jira:preferences", label: "Jira" }),
     ]);
-    expect(searchSettings("sync", pages).map((r) => r.id)).toContain("jira:preferences");
+    expect(searchSettings("sync", pages, defaults).map((r) => r.id)).toContain("jira:preferences");
   });
 });
 

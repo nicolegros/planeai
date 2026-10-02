@@ -1,4 +1,5 @@
 import type { AppConfig } from "./settings.svelte";
+import { DEFAULT_SCROLLBACK_LINES } from "./terminal-scrollback";
 
 export type SettingsCategoryId =
   | "general"
@@ -70,6 +71,8 @@ export interface SettingDefinition {
   description?: string;
   keywords?: readonly string[];
   macOnly?: boolean;
+  /** Whether the setting is on its page for this config; hidden settings are left out of search. */
+  available?: (config: AppConfig) => boolean;
   /** Effective value; present only for scalar settings that offer Reset. */
   value?: (config: AppConfig) => unknown;
   reset?: (config: AppConfig, defaults: AppConfig) => Partial<AppConfig>;
@@ -101,6 +104,8 @@ function appearance<K extends keyof AppConfig["appearance"]>(key: K) {
     }),
   };
 }
+
+const tasksEnabled = (config: AppConfig) => config.task_management != null;
 
 export const SETTINGS: readonly SettingDefinition[] = [
   // General
@@ -228,7 +233,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
     label: "Scrollback",
     description: "Lines kept per terminal. Applies to new terminals.",
     keywords: ["history", "buffer", "lines"],
-    ...optional("scrollback_lines", 20_000),
+    ...optional("scrollback_lines", DEFAULT_SCROLLBACK_LINES),
   },
   {
     id: "web-links",
@@ -302,6 +307,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
   },
   {
     id: "branch-template",
+    available: tasksEnabled,
     category: "tasks",
     section: "Templates",
     label: "Branch name",
@@ -309,6 +315,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
   },
   {
     id: "session-name-template",
+    available: tasksEnabled,
     category: "tasks",
     section: "Templates",
     label: "Session name",
@@ -316,6 +323,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
   },
   {
     id: "prompt-template",
+    available: tasksEnabled,
     category: "tasks",
     section: "Templates",
     label: "Initial prompt",
@@ -323,6 +331,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
   },
   {
     id: "lifecycle-hooks",
+    available: tasksEnabled,
     category: "tasks",
     section: "Status transitions",
     label: "Status transitions",
@@ -339,6 +348,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
   },
   {
     id: "auto-dispatch",
+    available: tasksEnabled,
     category: "tasks",
     section: "Auto-dispatch",
     label: "Auto-dispatch",
@@ -453,6 +463,7 @@ function matches(haystack: string, words: string[]): boolean {
 export function searchSettings(
   query: string,
   pluginPages: readonly PluginSettingsPage[],
+  config: AppConfig,
 ): SettingsSearchResult[] {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return [];
@@ -461,7 +472,7 @@ export function searchSettings(
 
   const scored: { result: SettingsSearchResult; score: number; order: number }[] = [];
   SETTINGS.forEach((setting, order) => {
-    if (setting.macOnly && !isMac) return;
+    if ((setting.macOnly && !isMac) || setting.available?.(config) === false) return;
     const label = setting.label.toLowerCase();
     const haystack = [
       label,

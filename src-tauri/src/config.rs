@@ -533,6 +533,37 @@ fn migrate_autonomous_prompt_template(config: &mut Config) -> bool {
     true
 }
 
+/// Existing config files keep the defaults they were written under: tasks off when the key
+/// is absent, and review auto-open on when absent or null (the frontend once read null as on).
+fn keep_pre_existing_defaults(user_val: &mut serde_json::Value) {
+    let Some(obj) = user_val.as_object_mut() else {
+        return;
+    };
+    obj.entry("task_management")
+        .or_insert(serde_json::Value::Null);
+    if obj
+        .get("auto_open_review")
+        .is_none_or(serde_json::Value::is_null)
+    {
+        obj.insert(
+            "auto_open_review".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+}
+
+/// Used when an existing config.json cannot be read: behave like an existing user, never a
+/// new install, so a typo does not switch on new-install defaults such as task management.
+fn invalid_config_fallback() -> Config {
+    Config {
+        editor: Some(invalid_editor_config()),
+        onboarding_completed: Some(true),
+        task_management: None,
+        auto_open_review: Some(true),
+        ..Config::default()
+    }
+}
+
 pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
     let config_path = config_dir.join("config.json");
     if config_path.exists() {
@@ -542,31 +573,19 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         let mut user_val: serde_json::Value = match serde_json::from_reader(stripped) {
             Ok(v) => v,
             Err(e) => {
-                let config = Config {
-                    editor: Some(invalid_editor_config()),
-                    onboarding_completed: Some(true),
-                    ..Config::default()
-                };
+                let config = invalid_config_fallback();
                 return (config, vec![format!("Failed to parse config.json: {e}")]);
             }
         };
         // Migrate legacy task_managers → task_management
         migrate_legacy_task_managers(&mut user_val);
-        // Configs written before tasks defaulted on omitted the key when off; keep them off.
-        if let Some(obj) = user_val.as_object_mut() {
-            obj.entry("task_management")
-                .or_insert(serde_json::Value::Null);
-        }
+        keep_pre_existing_defaults(&mut user_val);
         let default_val = serde_json::to_value(Config::default()).unwrap();
         let merged = merge_top_level(default_val, user_val);
         let mut config: Config = match serde_json::from_value(merged) {
             Ok(config) => config,
             Err(error) => {
-                let config = Config {
-                    editor: Some(invalid_editor_config()),
-                    onboarding_completed: Some(true),
-                    ..Config::default()
-                };
+                let config = invalid_config_fallback();
                 return (
                     config,
                     vec![format!("Failed to deserialize config.json: {error}")],

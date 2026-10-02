@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Pencil, Plus, Trash2 } from "@lucide/svelte";
-  import { getSettings, updateSettings, type EditorSettings, type LanguageServerProfile } from "../../lib/settings.svelte";
+  import { getSettings, type LanguageServerProfile } from "../../lib/settings.svelte";
   import { EDITOR_PRESETS, editorDraft, validateEditorSettings, type EditorMode } from "../../lib/editor-settings";
   import {
     emptyLanguageServerProfileDraft,
@@ -10,16 +10,17 @@
   } from "../../lib/language-server-profile";
   import { Button, Dialog, SegmentedControl, Switch } from "../ui";
   import SettingRow from "./SettingRow.svelte";
+  import SettingAnchor from "./SettingAnchor.svelte";
   import SettingsSection from "./SettingsSection.svelte";
   import TextField from "./TextField.svelte";
+  import { saveSettings, settingsWindow } from "./settings-window.svelte";
 
   const config = $derived(getSettings());
   const lspEnabled = $derived(config.language_servers?.enabled ?? true);
   const profiles = $derived(config.language_servers?.profiles ?? []);
 
   // The editor command is validated as a whole, so it is edited as a draft and saved explicitly.
-  // svelte-ignore state_referenced_locally
-  let draft = $state<EditorSettings>(editorDraft(config.editor));
+  const draft = $derived(settingsWindow.editorDraft ?? editorDraft(config.editor));
   let draftError = $state("");
 
   let profileDialogOpen = $state(false);
@@ -27,8 +28,12 @@
   let profileDraft = $state<LanguageServerProfileDraft>(emptyLanguageServerProfileDraft());
   let profileError = $state("");
 
+  function setDraft(next: typeof draft) {
+    settingsWindow.editorDraft = next;
+  }
+
   function setMode(mode: EditorMode) {
-    draft = editorDraft(draft, mode);
+    setDraft(editorDraft(draft, mode));
     draftError = "";
   }
 
@@ -39,11 +44,11 @@
       return;
     }
     draftError = "";
-    void updateSettings({ editor: draft.mode === "embedded" ? null : { ...draft, command: draft.command.trim() } });
+    void saveSettings({ editor: draft.mode === "embedded" ? null : { ...draft, command: draft.command.trim() } });
   }
 
   function setLanguageServers(next: { enabled?: boolean; profiles?: LanguageServerProfile[] }) {
-    void updateSettings({
+    void saveSettings({
       language_servers: { ...config.language_servers, enabled: next.enabled ?? lspEnabled, profiles: next.profiles ?? profiles },
     });
   }
@@ -85,7 +90,7 @@
               type="button"
               class="rounded-md border border-border-s px-2 py-0.5 text-[12px] text-t2 hover:bg-panel-hi hover:text-t1"
               onclick={() => {
-                draft = { ...draft, command: preset.command, args: [...preset.args] };
+                setDraft({ ...draft, command: preset.command, args: [...preset.args] });
                 draftError = "";
               }}
             >{preset.label}</button>
@@ -93,7 +98,7 @@
         </div>
         <div class="space-y-1">
           <label class="text-[12px] text-t2" for="editor-command">Executable</label>
-          <TextField id="editor-command" mono width="w-full" value={draft.command} placeholder="e.g. code or nvim" onchange={(e) => { draft.command = e.currentTarget.value; draftError = ""; }} />
+          <TextField id="editor-command" mono width="w-full" value={draft.command} placeholder="e.g. code or nvim" onchange={(e) => { setDraft({ ...draft, command: e.currentTarget.value }); draftError = ""; }} />
         </div>
         <div class="space-y-1">
           <label class="text-[12px] text-t2" for="editor-args">Arguments (one per line)</label>
@@ -102,7 +107,7 @@
             class="min-h-20 w-full rounded-md border border-border-s bg-panel px-2 py-1.5 font-mono text-[12px] text-t1 placeholder:text-t3 focus:outline-none focus:ring-1 focus:ring-accent"
             value={draft.args.join("\n")}
             placeholder={"--goto\n{file}"}
-            oninput={(e) => { draft.args = e.currentTarget.value.split("\n").filter(Boolean); draftError = ""; }}
+            oninput={(e) => { setDraft({ ...draft, args: e.currentTarget.value.split("\n").filter(Boolean) }); draftError = ""; }}
           ></textarea>
         </div>
       </div>
@@ -114,7 +119,7 @@
 
 <SettingsSection title="Keybindings">
   <SettingRow id="vim-mode">
-    <Switch label="Vim keybindings" checked={config.vim_mode ?? true} onCheckedChange={(vim_mode) => updateSettings({ vim_mode })} />
+    <Switch label="Vim keybindings" checked={config.vim_mode ?? true} onCheckedChange={(vim_mode) => saveSettings({ vim_mode })} />
   </SettingRow>
 </SettingsSection>
 
@@ -122,7 +127,7 @@
   <SettingRow id="language-servers">
     <Switch label="Code intelligence" checked={lspEnabled} onCheckedChange={(enabled) => setLanguageServers({ enabled })} />
   </SettingRow>
-  <div id="setting-language-server-profiles" data-setting-id="language-server-profiles">
+  <SettingAnchor id="language-server-profiles">
     <div class="flex items-center justify-between gap-6 px-4 py-3">
       <div class="min-w-0">
         <p class="text-[13px] text-t1">Custom profiles</p>
@@ -146,7 +151,7 @@
         />
       </div>
     {/each}
-  </div>
+  </SettingAnchor>
 </SettingsSection>
 
 <Dialog

@@ -2,12 +2,15 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { CircleCheck, CircleAlert, Folder, Pencil, Plus, Trash2, X } from "@lucide/svelte";
   import { config as configApi } from "../../lib/api";
-  import { getSettings, updateSettings, type AppConfig } from "../../lib/settings.svelte";
+  import { showSnackbar } from "../../lib/snackbar.svelte";
+  import { getSettings, type AppConfig } from "../../lib/settings.svelte";
   import { addCustomAgentPatch, agentRows, disableAgentPatch, enableAgentPatch, setDefaultAgentPatch, type AgentRow } from "../../lib/agent-settings";
   import { Button, Select, Switch } from "../ui";
   import AgentDialog, { type AgentDialogResult } from "./AgentDialog.svelte";
   import SettingRow from "./SettingRow.svelte";
+  import SettingAnchor from "./SettingAnchor.svelte";
   import SettingsSection from "./SettingsSection.svelte";
+  import { saveSettings } from "./settings-window.svelte";
 
   const config = $derived(getSettings());
   let detected = $state<Record<string, string | null>>({});
@@ -18,9 +21,14 @@
   let dialog = $state<{ editing: AgentRow | null } | null>(null);
   let dialogError = $state("");
 
+  let detectRequest = 0;
+
   async function detect() {
+    const request = ++detectRequest;
     try {
-      detected = await configApi.detectProviders();
+      const result = await configApi.detectProviders();
+      // Detections can finish out of order; only the latest reflects the current config.
+      if (request === detectRequest) detected = result;
     } catch (error) {
       console.warn("Agent detection failed:", error);
     }
@@ -33,7 +41,7 @@
   /** Detection reads the backend's config, so it must run after the update lands. */
   async function apply(patch: Partial<AppConfig> | null) {
     if (!patch) return;
-    await updateSettings(patch);
+    await saveSettings(patch);
     await detect();
   }
 
@@ -66,9 +74,13 @@
   }
 
   async function addSearchPath() {
-    const selected = await open({ directory: true, multiple: false });
-    if (typeof selected !== "string" || searchPaths.includes(selected)) return;
-    await apply({ extra_path_dirs: [...searchPaths, selected] });
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (typeof selected !== "string" || searchPaths.includes(selected)) return;
+      await apply({ extra_path_dirs: [...searchPaths, selected] });
+    } catch (error) {
+      showSnackbar(`Failed to add a search path: ${error}`, "error");
+    }
   }
 
   function removeSearchPath(path: string) {
@@ -83,13 +95,14 @@
         items={enabledRows.map((row) => ({ value: row.key, label: row.label }))}
         value={config.default_provider}
         onValueChange={(key) => apply(setDefaultAgentPatch(config, key))}
+        ariaLabel="Default agent"
       />
     </div>
   </SettingRow>
 </SettingsSection>
 
 <SettingsSection title="Agents" help="Built-in agents are always listed; turn on the ones you use. Agents not found on your PATH can still be turned on." bare>
-  <div id="setting-agents" data-setting-id="agents" class="divide-y divide-border overflow-hidden rounded-xl border border-border-s bg-panel">
+  <SettingAnchor id="agents" class="divide-y divide-border overflow-hidden rounded-xl border border-border-s bg-panel">
     {#each rows as row (row.key)}
       <div class="flex items-center gap-3 px-4 py-2.5" data-agent={row.key}>
         <div class="min-w-0 flex-1">
@@ -137,7 +150,7 @@
     <button type="button" class="flex w-full items-center gap-2 px-4 py-2.5 text-[12px] text-t2 hover:bg-panel-hi hover:text-t1" onclick={() => openDialog(null)}>
       <Plus size={13} />Add custom agent
     </button>
-  </div>
+  </SettingAnchor>
 </SettingsSection>
 
 <SettingsSection title="Search paths">

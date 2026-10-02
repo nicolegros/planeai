@@ -1014,6 +1014,6 @@
     x={viewMenu.x}
     y={viewMenu.y}
     onClose={() => (viewMenu = null)}
-    items={sidebarViewMenuItems(getSettings(), (patch) => updateSettings(patch))}
+    items={sidebarViewMenuItems(getSettings(), (patch) => updateSettings(patch).catch((error) => showSnackbar(`Failed to save settings: ${error}`, "error")))}
   />
 {/if}

@@ -1099,3 +1099,46 @@ fn recommended_task_management_moves_tasks_through_the_standard_statuses() {
     );
     assert_eq!(templates.name.as_deref(), Some("{key:upper}: {title}"));
 }
+
+#[test]
+fn existing_config_without_auto_open_review_keeps_it_on() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"default_provider": "kiro"}"#,
+    )
+    .unwrap();
+
+    let (config, _) = load(dir.path());
+
+    assert_eq!(config.auto_open_review, Some(true));
+}
+
+#[test]
+fn existing_config_with_null_auto_open_review_keeps_it_on() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"auto_open_review": null}"#,
+    )
+    .unwrap();
+
+    let (config, _) = load(dir.path());
+
+    assert_eq!(config.auto_open_review, Some(true));
+}
+
+#[test]
+fn broken_config_falls_back_to_existing_user_behavior() {
+    for content in ["{ not json", r#"{"post_merge_action": "explode"}"#] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("config.json"), content).unwrap();
+
+        let (config, warnings) = load(dir.path());
+
+        assert_eq!(warnings.len(), 1, "{content}");
+        assert_eq!(config.task_management, None, "{content}");
+        assert_eq!(config.auto_open_review, Some(true), "{content}");
+        assert_eq!(config.onboarding_completed, Some(true), "{content}");
+    }
+}

@@ -1,4 +1,6 @@
-import type { AppConfig } from "../../lib/settings.svelte";
+import { config as configApi } from "../../lib/api";
+import { updateSettings, type AppConfig, type EditorSettings } from "../../lib/settings.svelte";
+import { showSnackbar } from "../../lib/snackbar.svelte";
 import type { SettingsLocation } from "../../lib/settings-registry";
 
 const FLASH_MS = 1400;
@@ -10,6 +12,8 @@ export const settingsWindow = $state({
   flashId: null as string | null,
   /** `Config::default()` from the backend; `null` until loaded, which hides Reset. */
   defaults: null as AppConfig | null,
+  /** Unsaved file-editor edits, kept across page switches; cleared when config reloads. */
+  editorDraft: null as EditorSettings | null,
 });
 
 let flashTimer: ReturnType<typeof setTimeout> | undefined;
@@ -32,4 +36,27 @@ function revealSetting(id: string) {
   flashTimer = setTimeout(() => {
     settingsWindow.flashId = null;
   }, FLASH_MS);
+}
+
+/** Saves a change from a settings page; on failure the store has rolled back and the user is told. */
+export async function saveSettings(patch: Partial<AppConfig>): Promise<boolean> {
+  try {
+    await updateSettings(patch);
+    return true;
+  } catch (error) {
+    showSnackbar(`Failed to save settings: ${error}`, "error");
+    return false;
+  }
+}
+
+/** Backend defaults, fetched on first use and retried on later calls if that fetch failed. */
+export async function loadDefaults(): Promise<AppConfig | null> {
+  if (!settingsWindow.defaults) {
+    try {
+      settingsWindow.defaults = await configApi.defaults();
+    } catch (error) {
+      console.warn("Failed to load config defaults:", error);
+    }
+  }
+  return settingsWindow.defaults;
 }

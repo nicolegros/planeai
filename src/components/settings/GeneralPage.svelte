@@ -1,12 +1,14 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
   import { updater } from "../../lib/api";
-  import { getSettings, updateSettings, type AppConfig } from "../../lib/settings.svelte";
+  import { getSettings, type AppConfig } from "../../lib/settings.svelte";
+  import { showSnackbar } from "../../lib/snackbar.svelte";
   import { checkForUpdates, getSettingsUpdateState, setInstalling } from "../../lib/updater.svelte";
   import { Button, SegmentedControl, Switch } from "../ui";
   import TextField from "./TextField.svelte";
   import SettingRow from "./SettingRow.svelte";
   import SettingsSection from "./SettingsSection.svelte";
+  import { saveSettings } from "./settings-window.svelte";
 
   const config = $derived(getSettings());
   const appUpdateState = $derived(getSettingsUpdateState());
@@ -22,8 +24,12 @@
   });
 
   async function pickProjectsFolder() {
-    const selected = await open({ directory: true, multiple: false, defaultPath: config.projects_base_path ?? undefined });
-    if (selected) void updateSettings({ projects_base_path: selected as string });
+    try {
+      const selected = await open({ directory: true, multiple: false, defaultPath: config.projects_base_path ?? undefined });
+      if (selected) await saveSettings({ projects_base_path: selected as string });
+    } catch (error) {
+      showSnackbar(`Failed to set the projects folder: ${error}`, "error");
+    }
   }
 
   async function checkForAppUpdates() {
@@ -49,7 +55,7 @@
     <div class="flex items-center gap-2">
       <TextField
         value={config.projects_base_path ?? ""}
-        onchange={(e) => updateSettings({ projects_base_path: e.currentTarget.value || null })}
+        onchange={(e) => saveSettings({ projects_base_path: e.currentTarget.value || null })}
         placeholder="e.g. ~/Developer"
         aria-label="Projects folder"
         mono
@@ -66,20 +72,20 @@
       label="If the merge prompt is ignored"
       options={[{ value: "archive", label: "Archive" }, { value: "destroy", label: "Destroy" }, { value: "keep", label: "Keep" }]}
       value={config.post_merge_action ?? "archive"}
-      onValueChange={(value) => updateSettings({ post_merge_action: value as AppConfig["post_merge_action"] })}
+      onValueChange={(value) => saveSettings({ post_merge_action: value as AppConfig["post_merge_action"] })}
     />
   </SettingRow>
 </SettingsSection>
 
 <SettingsSection title="Review">
   <SettingRow id="auto-open-review">
-    <Switch label="Open review when an agent finishes" checked={config.auto_open_review ?? false} onCheckedChange={(checked) => updateSettings({ auto_open_review: checked })} />
+    <Switch label="Open review when an agent finishes" checked={config.auto_open_review ?? false} onCheckedChange={(checked) => saveSettings({ auto_open_review: checked })} />
   </SettingRow>
 </SettingsSection>
 
 <SettingsSection title="Notifications">
   <SettingRow id="sound">
-    <Switch label="Play a sound when an agent finishes" checked={config.sound_enabled ?? true} onCheckedChange={(checked) => updateSettings({ sound_enabled: checked })} />
+    <Switch label="Play a sound when an agent finishes" checked={config.sound_enabled ?? true} onCheckedChange={(checked) => saveSettings({ sound_enabled: checked })} />
   </SettingRow>
 </SettingsSection>
 

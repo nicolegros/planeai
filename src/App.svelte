@@ -514,7 +514,7 @@
   async function openPreferences(location?: SettingsLocation) {
     const existing = await WebviewWindow.getByLabel("preferences");
     if (existing) {
-      if (location) await emitTo("preferences", "preferences-navigate", location);
+      if (location) await emitTo("preferences", "preferences-navigate", location).catch((error) => console.warn("Failed to navigate Preferences:", error));
       existing.setFocus();
       return;
     }

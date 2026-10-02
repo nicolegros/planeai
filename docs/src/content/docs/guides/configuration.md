@@ -138,7 +138,7 @@ Existing embedded buffers are not reconciled when the global setting changes; an
 
 ## Language Servers
 
-PlaneAI can start configured language servers for supported editor files. Built-in discovery covers TypeScript/JavaScript/JSON, Rust, Python, Go, and C/C++. Add custom trusted profiles in **Preferences → More → Language Servers** when a server lives outside the standard PATH or needs specific arguments.
+PlaneAI can start configured language servers for supported editor files. Built-in discovery covers TypeScript/JavaScript/JSON, Rust, Python, Go, and C/C++. Add custom trusted profiles in **Preferences → Editor → Language servers** when a server lives outside the standard PATH or needs specific arguments.
 
 ```jsonc
 {

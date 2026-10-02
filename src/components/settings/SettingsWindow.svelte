@@ -4,8 +4,8 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { Bot, Code, ListTodo, Palette, Puzzle, Search, Server, SlidersHorizontal, SquareTerminal, Wrench, X, ArrowRight } from "@lucide/svelte";
   import type { Component } from "svelte";
-  import { config as configApi, plugins, updater } from "../../lib/api";
-  import { loadSettings } from "../../lib/settings.svelte";
+  import { plugins, updater } from "../../lib/api";
+  import { getSettings, loadSettings } from "../../lib/settings.svelte";
   import { loadTheme } from "../../lib/theme-loader";
   import { initUpdateListener, resetManualUpdateState, setLaunchUpdateAvailable } from "../../lib/updater.svelte";
   import {
@@ -29,7 +29,7 @@
   import SessionsPage from "./SessionsPage.svelte";
   import TasksPage from "./TasksPage.svelte";
   import TerminalPage from "./TerminalPage.svelte";
-  import { navigateSettings, settingsWindow } from "./settings-window.svelte";
+  import { loadDefaults, navigateSettings, settingsWindow } from "./settings-window.svelte";
 
   /** Below this width the sidebar collapses to icons. */
   const NARROW_WIDTH = 820;
@@ -67,7 +67,7 @@
   const pluginPages = $derived<PluginSettingsPage[]>(
     pluginContributions.map(({ plugin, contribution, key }) => ({ key, label: contribution.label, pluginName: plugin.name })),
   );
-  const results = $derived(searchSettings(settingsWindow.query, pluginPages));
+  const results = $derived(searchSettings(settingsWindow.query, pluginPages, getSettings()));
   const location = $derived(settingsWindow.location);
   const activePlugin = $derived(location.kind === "plugin" ? pluginContributions.find((entry) => entry.key === location.key) : undefined);
   const activeCategory = $derived(location.kind === "category" ? categoryById(location.id) : undefined);
@@ -110,6 +110,8 @@
   onMount(async () => {
     window.addEventListener("keydown", handleKeydown, true);
     settingsWindow.location = parseSettingsLocation(window.location.search, window.location.hash);
+    // Listen first: the main window may send a location while this window is still loading.
+    unlistenNavigate = await listen<SettingsLocation>("preferences-navigate", (event) => navigateSettings(event.payload));
     await initUpdateListener();
     try {
       const update = await updater.getPending();
@@ -120,14 +122,12 @@
     await loadSettings();
     loadTheme();
     loaded = true;
-    configApi.defaults().then(
-      (defaults) => {
-        settingsWindow.defaults = defaults;
-      },
-      (error) => console.warn("Failed to load config defaults:", error),
-    );
-    plugins.list().then((list) => (inventory = list));
-    unlistenNavigate = await listen<SettingsLocation>("preferences-navigate", (event) => navigateSettings(event.payload));
+    void loadDefaults();
+    plugins
+      .list()
+      .then((list) => (inventory = list))
+      .catch((error) => console.warn("Failed to list plugins:", error));
+    // Reveal the target now that its page can render, whether it came from the URL or an early event.
     if (settingsWindow.location.kind === "category" && settingsWindow.location.settingId) navigateSettings(settingsWindow.location);
   });
 

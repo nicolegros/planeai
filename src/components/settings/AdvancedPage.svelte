@@ -7,17 +7,22 @@
   import { Button } from "../ui";
   import SettingRow from "./SettingRow.svelte";
   import SettingsSection from "./SettingsSection.svelte";
+  import { settingsWindow } from "./settings-window.svelte";
 
   let cliInstalled = $state(false);
   let cliError = $state("");
 
   $effect(() => {
-    preferences.checkCliInstalled().then((installed) => (cliInstalled = installed));
+    preferences
+      .checkCliInstalled()
+      .then((installed) => (cliInstalled = installed))
+      .catch((error) => console.warn("Failed to check the CLI install:", error));
   });
 
   async function reloadConfig() {
     try {
       await refreshSettings();
+      settingsWindow.editorDraft = null;
       showSnackbar("Config reloaded from disk", "success");
     } catch (error) {
       showSnackbar(`Failed to refresh config: ${error}`, "error");
@@ -35,7 +40,11 @@
   }
 
   async function openLogFolder() {
-    await revealItemInDir(await preferences.getLogDir());
+    try {
+      await revealItemInDir(await preferences.getLogDir());
+    } catch (error) {
+      showSnackbar(`Failed to open the logs folder: ${error}`, "error");
+    }
   }
 </script>
 

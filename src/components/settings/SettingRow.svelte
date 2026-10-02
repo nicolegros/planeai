@@ -1,9 +1,10 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import { RotateCcw } from "@lucide/svelte";
-  import { getSettings, updateSettings } from "../../lib/settings.svelte";
+  import { getSettings } from "../../lib/settings.svelte";
   import { isModified, resetPatch, settingById } from "../../lib/settings-registry";
-  import { settingsWindow } from "./settings-window.svelte";
+  import SettingAnchor from "./SettingAnchor.svelte";
+  import { saveSettings, settingsWindow } from "./settings-window.svelte";
 
   interface Props {
     /** Registry id; supplies the label, description and anchor. */
@@ -21,11 +22,10 @@
 
   const setting = $derived(settingById(id));
   const modified = $derived(setting ? isModified(setting, getSettings(), settingsWindow.defaults) : false);
-  const flashing = $derived(settingsWindow.flashId === id);
 
   function reset() {
     if (!setting || !settingsWindow.defaults) return;
-    void updateSettings(resetPatch(setting, getSettings(), settingsWindow.defaults));
+    void saveSettings(resetPatch(setting, getSettings(), settingsWindow.defaults));
   }
 </script>
 
@@ -41,11 +41,7 @@
   {/if}
 {/snippet}
 
-<div
-  id="setting-{id}"
-  data-setting-id={id}
-  class="px-4 py-3 transition-colors duration-700 {flashing ? 'bg-status-review/15' : ''} {stacked ? 'space-y-2.5' : 'flex items-center justify-between gap-6'}"
->
+<SettingAnchor {id} class="px-4 py-3 {stacked ? 'space-y-2.5' : 'flex items-center justify-between gap-6'}">
   <div class="min-w-0 {stacked ? 'flex items-start justify-between gap-4' : ''}">
     <div class="min-w-0" class:opacity-50={disabled}>
       <div class="flex items-center gap-2 text-[13px] text-t1">
@@ -65,4 +61,4 @@
       <div class:pointer-events-none={disabled} class:opacity-50={disabled}>{@render children()}</div>
     </div>
   {/if}
-</div>
+</SettingAnchor>
