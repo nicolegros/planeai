@@ -96,6 +96,7 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
         NotifyEvent::SessionChanged => {
             tracing::info!(session_id = %msg.session_id, "session changed via socket");
             let _ = app.emit("sessions-changed", ());
+            reconcile_provider_sessions(app);
         }
         NotifyEvent::Busy => {
             let mut s = state.lock().unwrap();
@@ -159,6 +160,8 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
             app.state::<crate::plugins::PluginRuntimeHandle>()
                 .0
                 .dispatch_task_lifecycle(batch);
+            // Completing a task archives its sessions from whichever process moved it.
+            reconcile_provider_sessions(app);
         }
         NotifyEvent::SendPrompt if is_provider_session(app, &msg.session_id) => {
             let Some(text) = msg.text.clone() else {
@@ -194,6 +197,14 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
     }
 }
 
+fn reconcile_provider_sessions(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let supervisor = app.state::<crate::plugins::PluginRuntimeHandle>().0.clone();
+        crate::plugin_providers::reconcile(&app, &supervisor).await;
+    });
+}
+
 /// Provider sessions get busy/idle/attention from their plugin only (ADR-0013);
 /// the user's own agent hooks still fire inside them and must not compete.
 fn ignores_socket_status(msg: &NotifyMessage, state: &SharedNotifyState) -> bool {
@@ -203,12 +214,17 @@ fn ignores_socket_status(msg: &NotifyMessage, state: &SharedNotifyState) -> bool
     ) && state.lock().unwrap().is_provider_owned(&msg.session_id)
 }
 
+/// Routes prompts by the session's stored backend, so delivery never depends on
+/// whether this run has registered the session yet.
 fn is_provider_session(app: &AppHandle, session_id: &str) -> bool {
-    app.state::<crate::state::NotifyHandle>()
-        .0
-        .lock()
-        .unwrap()
-        .is_provider_owned(session_id)
+    let db = app.state::<crate::state::DbState>().0.clone();
+    let Ok(conn) = db.lock() else {
+        return false;
+    };
+    crate::db::get_session(&conn, session_id)
+        .ok()
+        .flatten()
+        .is_some_and(|session| session.backend == crate::plugin_providers::PROVIDER_BACKEND)
 }
 
 /// Apply a status reported by a session's plugin provider.

@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 
-use crate::commands::sessions::helpers::provider_has_hook;
+use crate::commands::sessions::helpers::register_notify_session;
 use crate::commands::sessions::lifecycle::session_lifecycle_event;
 use crate::config;
 use crate::db;
@@ -347,20 +347,7 @@ pub fn register_active_sessions(
             .find(|p| p.id == session.project_id)
             .map(|p| p.name.as_str())
             .unwrap_or("unknown");
-        let display_name = if session.name.is_empty() {
-            &session.branch
-        } else {
-            &session.name
-        };
-        let hook_enabled = session
-            .provider
-            .as_deref()
-            .map(|pk| provider_has_hook(pk, cfg))
-            .unwrap_or(false);
-        ns.register_session(&session.id, display_name, project_name, hook_enabled);
-        if session.backend == crate::plugin_providers::PROVIDER_BACKEND {
-            ns.mark_provider_owned(&session.id);
-        }
+        register_notify_session(&mut ns, session, project_name, cfg);
     }
 }
 

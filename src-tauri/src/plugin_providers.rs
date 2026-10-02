@@ -58,6 +58,10 @@ impl ProviderSessions {
         self.bindings.lock().unwrap().get(session_id).cloned()
     }
 
+    fn session_ids(&self) -> Vec<String> {
+        self.bindings.lock().unwrap().keys().cloned().collect()
+    }
+
     fn is_owned_by(&self, session_id: &str, plugin_id: &str) -> bool {
         self.get(session_id)
             .is_some_and(|binding| binding.plugin_id == plugin_id)
@@ -403,11 +407,16 @@ pub async fn stop(supervisor: &PluginRuntimeSupervisor, session_id: &str, reason
         return;
     }
     let params = serde_json::json!({ "session_id": session_id, "reason": reason });
-    if let Err(error) = supervisor
+    match supervisor
         .provider_request(&binding.plugin_id, "provider.session.stop", params)
         .await
     {
-        tracing::warn!(session_id, plugin_id = %binding.plugin_id, provider_id = %binding.provider_id, %error, "provider session stop failed");
+        Ok(_) => {
+            tracing::info!(session_id, plugin_id = %binding.plugin_id, reason, "stopped provider session")
+        }
+        Err(error) => {
+            tracing::warn!(session_id, plugin_id = %binding.plugin_id, provider_id = %binding.provider_id, %error, "provider session stop failed")
+        }
     }
 }
 
@@ -418,6 +427,46 @@ pub fn stop_reason(status: &str) -> Option<&'static str> {
         "destroyed" => Some("destroy"),
         "exited" => Some("exit"),
         _ => None,
+    }
+}
+
+/// The stop reason for a bound provider session given its stored status, if it ended.
+fn ended_reason(status: Option<&str>) -> Option<&'static str> {
+    match status {
+        None => Some("destroy"),
+        Some(status) => stop_reason(status),
+    }
+}
+
+/// Stop provider sessions whose rows ended outside the GUI (CLI archive or delete,
+/// task completion). Those paths only notify that sessions changed.
+pub async fn reconcile(app: &AppHandle, supervisor: &PluginRuntimeSupervisor) {
+    let bound = supervisor.provider_sessions().session_ids();
+    if bound.is_empty() {
+        return;
+    }
+    let db = app.state::<crate::state::DbState>().0.clone();
+    let ended = crate::commands::blocking(move || {
+        let conn = db.lock().map_err(|error| error.to_string())?;
+        let mut ended = Vec::new();
+        for session_id in bound {
+            let status = db::get_session(&conn, &session_id)
+                .map_err(|error| error.to_string())?
+                .map(|session| session.status);
+            if let Some(reason) = ended_reason(status.as_deref()) {
+                ended.push((session_id, reason));
+            }
+        }
+        Ok(ended)
+    })
+    .await;
+    match ended {
+        Ok(ended) => {
+            for (session_id, reason) in ended {
+                stop(supervisor, &session_id, reason).await;
+            }
+        }
+        Err(error) => tracing::warn!(%error, "provider session reconciliation failed"),
     }
 }
 
@@ -511,6 +560,14 @@ mod tests {
         assert!(!sessions.is_owned_by("s2", "a"));
         assert!(sessions.unbind("s1").is_some());
         assert!(!sessions.is_owned_by("s1", "a"));
+    }
+
+    #[test]
+    fn reconciliation_stops_sessions_that_ended_or_vanished() {
+        assert_eq!(ended_reason(Some("active")), None);
+        assert_eq!(ended_reason(Some("archived")), Some("archive"));
+        assert_eq!(ended_reason(Some("destroyed")), Some("destroy"));
+        assert_eq!(ended_reason(None), Some("destroy"));
     }
 
     #[test]

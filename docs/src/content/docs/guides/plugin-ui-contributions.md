@@ -165,7 +165,7 @@ The provider UI receives the selected session in `context.session` and a session
 - `send(text)` and `interrupt()` route through PlaneAI to `provider.session.send` and `provider.session.interrupt`, so every input path behaves the same.
 - `onEvent(listener)` receives `{ seq, payload }` for this session only and returns an unsubscribe function.
 
-PlaneAI unmounts the UI when the user switches sessions, and resumes the session (if needed) before mounting it again, so the sidecar owns the transcript. To rebuild the view, subscribe first, fetch a snapshot through a plugin-defined `context.host.call(...)` method, then drop live events whose `seq` is at or below the snapshot's. The fixture's `ui/chat.js` and `fixture.providerSnapshot` show the pattern.
+PlaneAI unmounts the UI when the user switches sessions, and resumes the session (if needed) before mounting it again, so the sidecar owns the transcript. To rebuild the view, subscribe first, fetch a snapshot through a plugin-defined `context.host.call(...)` method, then drop live events whose `seq` is at or below the snapshot's. Every response is one frame, so a long transcript must come back in pages (for example, events after a given `seq` until the sidecar reports no more), or a single oversized response stops the runtime. The fixture's `ui/chat.js` and `fixture.providerSnapshot` show the pattern on a transcript small enough for one page.
 
 ## UI contributions
 

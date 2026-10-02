@@ -5,7 +5,7 @@ use crate::db;
 use crate::plugins::PluginRuntimeHandle;
 use crate::state::{ConfigState, DbState, NotifyHandle};
 
-use super::helpers::provider_has_hook;
+use super::helpers::register_notify_session;
 
 #[tauri::command]
 pub fn create_session(
@@ -28,14 +28,8 @@ pub fn create_session(
         .flatten()
         .map(|p| p.name)
         .unwrap_or_else(|| "unknown".to_string());
-    let display_name = if name.is_empty() { &branch } else { &name };
-    let hook_enabled = session
-        .provider
-        .as_deref()
-        .map(|pk| provider_has_hook(pk, &cfg))
-        .unwrap_or(false);
     let mut ns = notify.0.lock().unwrap();
-    ns.register_session(&session.id, display_name, &project_name, hook_enabled);
+    register_notify_session(&mut ns, &session, &project_name, &cfg);
 
     Ok(session)
 }
@@ -70,18 +64,8 @@ pub fn rename_session(
             .flatten()
             .map(|p| p.name)
             .unwrap_or_else(|| "unknown".to_string());
-        let display_name = if name.is_empty() {
-            &session.branch
-        } else {
-            &name
-        };
-        let hook_enabled = session
-            .provider
-            .as_deref()
-            .map(|pk| provider_has_hook(pk, &cfg))
-            .unwrap_or(false);
         let mut ns = notify.0.lock().unwrap();
-        ns.register_session(&id, display_name, &project_name, hook_enabled);
+        register_notify_session(&mut ns, &session, &project_name, &cfg);
     }
     Ok(())
 }
@@ -123,18 +107,8 @@ pub fn restore_session(
         .flatten()
         .map(|p| p.name)
         .unwrap_or_else(|| "unknown".to_string());
-    let display_name = if session.name.is_empty() {
-        &session.branch
-    } else {
-        &session.name
-    };
-    let hook_enabled = session
-        .provider
-        .as_deref()
-        .map(|pk| provider_has_hook(pk, &cfg))
-        .unwrap_or(false);
     let mut ns = notify.0.lock().unwrap();
-    ns.register_session(&id, display_name, &project_name, hook_enabled);
+    register_notify_session(&mut ns, &session, &project_name, &cfg);
 
     Ok(())
 }
