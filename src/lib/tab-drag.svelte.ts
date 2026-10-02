@@ -22,6 +22,8 @@ const EDGE_ZONE = 0.25;
 
 let dragged = $state<string | null>(null);
 let target = $state<TabDropTarget | null>(null);
+/** Ends the press in progress; a new press must never inherit a stale one. */
+let endActivePress: (() => void) | null = null;
 
 /** The tab being dragged and where it would land, for drop indicators. */
 export const tabDrag = {
@@ -76,8 +78,8 @@ export function hitTest(x: number, y: number): TabDropTarget | null {
 
 /**
  * Track a press on a tab. It turns into a drag once the pointer moves past a
- * small threshold, and `onDrop` runs if it is released over a target. Escape
- * cancels.
+ * small threshold, and `onDrop` runs if it is released over a target. Escape,
+ * the window losing focus, or a new press cancels it.
  */
 export function pressTab(
   ptyKey: string,
@@ -85,6 +87,7 @@ export function pressTab(
   onDrop: (ptyKey: string, target: TabDropTarget) => void,
 ): void {
   if (down.button !== 0) return;
+  endActivePress?.();
   const startX = down.clientX;
   const startY = down.clientY;
 
@@ -108,6 +111,7 @@ export function pressTab(
     finish();
   };
   const finish = () => {
+    endActivePress = null;
     dragged = null;
     target = null;
     document.body.classList.remove("tab-dragging");
@@ -115,11 +119,14 @@ export function pressTab(
     window.removeEventListener("pointerup", up, true);
     window.removeEventListener("pointercancel", finish, true);
     window.removeEventListener("keydown", key, true);
+    window.removeEventListener("blur", finish);
   };
+  endActivePress = finish;
 
   // Capture phase: a terminal under the pointer must not swallow the events.
   window.addEventListener("pointermove", move, true);
   window.addEventListener("pointerup", up, true);
   window.addEventListener("pointercancel", finish, true);
   window.addEventListener("keydown", key, true);
+  window.addEventListener("blur", finish);
 }

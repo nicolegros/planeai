@@ -40,7 +40,7 @@
   role="tablist"
   aria-label="Pane tabs"
   data-tab-strip={draggable ? paneId : undefined}
-  data-tab-count={tabs.length}
+  data-tab-count={draggable ? tabs.length : undefined}
 >
   {#each tabs as tab, i (tab.id)}
     {@const Icon = TAB_ICONS[tab.icon ?? 'terminal'] ?? Terminal}

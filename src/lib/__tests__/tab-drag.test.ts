@@ -91,6 +91,37 @@ describe("pressTab", () => {
     expect(drop).not.toHaveBeenCalled();
   });
 
+  it("cancels when the pointer is cancelled or the window loses focus", () => {
+    layoutDom();
+    const drop = vi.fn();
+    for (const end of [
+      () => pointer("pointercancel", 250, 200),
+      () => window.dispatchEvent(new Event("blur")),
+    ]) {
+      pressTab("a", new PointerEvent("pointerdown", { button: 0, clientX: 10, clientY: 5 }), drop);
+      pointer("pointermove", 250, 200);
+      end();
+      expect(tabDrag.dragged).toBeNull();
+      pointer("pointerup", 250, 200);
+    }
+    expect(drop).not.toHaveBeenCalled();
+  });
+
+  it("drops only the tab of the latest press when an earlier one never ended", () => {
+    layoutDom();
+    const drop = vi.fn();
+    pressTab(
+      "stale",
+      new PointerEvent("pointerdown", { button: 0, clientX: 10, clientY: 5 }),
+      drop,
+    );
+    pressTab("b", new PointerEvent("pointerdown", { button: 0, clientX: 10, clientY: 5 }), drop);
+    pointer("pointermove", 250, 200);
+    pointer("pointerup", 250, 200);
+    expect(drop).toHaveBeenCalledTimes(1);
+    expect(drop).toHaveBeenCalledWith("b", expect.anything());
+  });
+
   it("ignores presses with other buttons", () => {
     const drop = vi.fn();
     pressTab("a", new PointerEvent("pointerdown", { button: 2, clientX: 10, clientY: 5 }), drop);

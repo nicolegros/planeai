@@ -10,6 +10,9 @@ import {
 export const IS_MAC =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
+/** True on Windows, whose webview and shells differ from macOS/Linux ones */
+export const IS_WINDOWS = typeof navigator !== "undefined" && /Win/.test(navigator.platform);
+
 /** Returns the platform modifier label: ⌘ on macOS, Ctrl on Windows/Linux */
 export const MOD_LABEL = IS_MAC ? "⌘" : "Ctrl+";
 

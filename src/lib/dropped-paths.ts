@@ -1,19 +1,45 @@
-/** Characters a shell reads literally; everything else in a path is escaped. */
-const SAFE = /[\p{L}\p{N}_\-.,/:@%+=]/u;
-
+/** Characters a POSIX shell reads literally; everything else in a path is escaped. */
+const POSIX_SAFE = /[\p{L}\p{N}_\-.,/:@%+=]/u;
 /**
- * Paths dropped on a terminal, as typed text: shell-escaped, space-separated and
- * followed by a space, as Terminal.app and iTerm do. A path with a control
- * character is single-quoted instead, since a backslash before a newline would
- * be read as a line continuation.
+ * Typed bytes reach the terminal's line editor before any shell quoting is
+ * parsed, so a control character (Ctrl-U, a newline, ESC) in a file name could
+ * rewrite or submit the line. Such paths are never typed.
  */
-export function droppedPathsText(paths: string[]): string {
-  return paths.map(escapePath).join(" ") + " ";
+const CONTROL = /[\x00-\x1f\x7f-\x9f]/;
+/**
+ * Inside double quotes cmd still expands `%VAR%` and PowerShell `$var`, `$(...)`
+ * and backtick escapes, so a Windows path holding any of these is never typed.
+ */
+const WINDOWS_UNQUOTABLE = /["%$`]/;
+
+export interface DroppedPathsText {
+  /** Paths as typed: quoted, space-separated and followed by a space. Empty when none can be typed. */
+  text: string;
+  /** Paths that cannot be typed safely. */
+  skipped: string[];
 }
 
-function escapePath(path: string): string {
-  if (/[\x00-\x1f\x7f]/.test(path)) return `'${path.replaceAll("'", `'\\''`)}'`;
-  return Array.from(path, (char) => (SAFE.test(char) ? char : `\\${char}`)).join("");
+/**
+ * Paths dropped on a terminal, as typed text, the way Terminal.app and iTerm do.
+ * POSIX shells get backslash escapes; Windows shells (cmd, PowerShell) get
+ * double quotes.
+ */
+export function droppedPathsText(
+  paths: string[],
+  platform: { windows: boolean },
+): DroppedPathsText {
+  const typeable = (path: string) =>
+    !CONTROL.test(path) && !(platform.windows && WINDOWS_UNQUOTABLE.test(path));
+  const typed = paths.filter(typeable);
+  const quote = platform.windows ? (path: string) => `"${path}"` : escapePosix;
+  return {
+    text: typed.length > 0 ? typed.map(quote).join(" ") + " " : "",
+    skipped: paths.filter((path) => !typeable(path)),
+  };
+}
+
+function escapePosix(path: string): string {
+  return Array.from(path, (char) => (POSIX_SAFE.test(char) ? char : `\\${char}`)).join("");
 }
 
 /**

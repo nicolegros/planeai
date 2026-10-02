@@ -9,7 +9,7 @@
   import { isTerminalPaneFocused, releaseTerminalDomFocus } from "./lib/terminal-focus";
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
-  import { installKeyboardRouter, matchChord, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT } from "./lib/keyboard";
+  import { installKeyboardRouter, matchChord, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT, IS_WINDOWS } from "./lib/keyboard";
   import { findPluginShortcut } from "./lib/plugin-shortcuts";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
@@ -324,20 +324,36 @@
 
   /** The pane under a native drag-drop position. */
   function paneAt(position: { x: number; y: number }): string | null {
-    const point = dropPositionToViewport(position, { windows: /Win/.test(navigator.platform), pixelRatio: devicePixelRatio });
+    const point = dropPositionToViewport(position, { windows: IS_WINDOWS, pixelRatio: devicePixelRatio });
     const element = document.elementFromPoint(point.x, point.y);
     return element?.closest<HTMLElement>("[data-pane-drop]")?.dataset.paneDrop ?? null;
   }
 
   /** Type dropped file paths into the terminal in front of a pane, like a terminal app. */
-  function typeDroppedPaths(paneId: string, paths: string[]): void {
+  async function typeDroppedPaths(paneId: string, paths: string[]): Promise<void> {
     const leaf = workspaceLayout.layout ? findLeaf(workspaceLayout.layout, paneId) : null;
     const tab = activeTabOf(leaf);
-    if (!tab || !isTerminalTab(tab) || paths.length === 0) return;
-    orchestrator.recordUserInput(ptyKeySessionId(tab.ptyKey));
-    void pty.write(tab.ptyKey, Array.from(new TextEncoder().encode(droppedPathsText(paths))));
+    if (!tab || !isTerminalTab(tab)) return;
+    const { text, skipped } = droppedPathsText(paths, { windows: IS_WINDOWS });
+    if (skipped.length > 0) {
+      showSnackbar(
+        skipped.length === 1
+          ? "Skipped a dropped file whose name cannot be typed safely"
+          : `Skipped ${skipped.length} dropped files whose names cannot be typed safely`,
+        "error",
+      );
+    }
+    if (!text) return;
     workspaceLayout.focusTab(tab.ptyKey);
     selectTerminalTab(tab.ptyKey);
+    try {
+      if (!(await pty.write(tab.ptyKey, Array.from(new TextEncoder().encode(text))))) {
+        throw new Error("the terminal is not attached");
+      }
+      orchestrator.recordUserInput(ptyKeySessionId(tab.ptyKey));
+    } catch (error) {
+      showSnackbar(`Failed to type dropped path: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
   }
 
   function paneTabs(leaf: LeafNode): PaneTab[] {
@@ -913,7 +929,7 @@
       else if (payload.type === "drop") {
         const paneId = paneAt(payload.position);
         fileDropPane = null;
-        if (paneId) typeDroppedPaths(paneId, payload.paths);
+        if (paneId) void typeDroppedPaths(paneId, payload.paths);
       } else fileDropPane = paneAt(payload.position);
     });
     let pluginListenersDisposed = false;

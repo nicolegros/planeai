@@ -125,12 +125,6 @@ it("keeps keyboard focus on the clicked terminal tab, not its session's agent", 
   expect(appSource).toMatch(
     /function selectTerminalTab\(ptyKey: string\)[\s\S]*?selectWorkspaceSession\(ptyKeySessionId\(ptyKey\), \{ focusPtyKey: ptyKey \}\)/,
   );
-  expect(appSource).toMatch(
-    /if \(activeEntry && isTerminalTab\(activeEntry\)\) selectTerminalTab\(activeEntry\.ptyKey\);/,
-  );
-  expect(appSource).toMatch(
-    /workspaceLayout\.focusPane\(leaf\.id\);\s*selectTerminalTab\(tabEntry\.ptyKey\);/,
-  );
 });
 
 it("preserves editor focus when a split-pane click originates inside an editor", () => {
