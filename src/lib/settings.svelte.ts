@@ -91,6 +91,9 @@ export interface AppConfig {
   post_merge_action?: "archive" | "destroy" | "keep" | null;
   language_servers?: LanguageServerSettings | null;
   editor?: EditorSettings | null;
+  extra_path_dirs?: string[];
+  /** `false` until first-run setup is finished or skipped; existing configs load as `true`. */
+  onboarding_completed?: boolean | null;
 }
 
 let config = $state<AppConfig>({

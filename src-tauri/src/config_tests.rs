@@ -1,6 +1,15 @@
 use super::*;
 use std::fs;
 
+/// Serializes tests in this file that mutate or depend on `HOME`, which is process-global.
+static HOME_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn lock_home_env() -> std::sync::MutexGuard<'static, ()> {
+    HOME_ENV
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[test]
 fn load_creates_default_config_when_no_file_exists() {
     let dir = tempfile::tempdir().unwrap();
@@ -8,7 +17,13 @@ fn load_creates_default_config_when_no_file_exists() {
 
     let (config, warnings) = load(config_dir);
 
-    assert_eq!(config, Config::default());
+    assert_eq!(
+        config,
+        Config {
+            onboarding_completed: Some(false),
+            ..Config::default()
+        }
+    );
     assert!(warnings.is_empty());
     assert!(config_dir.join("config.json").exists());
 }
@@ -65,6 +80,7 @@ fn load_reads_existing_config_file() {
         integrations: None,
         language_servers: None,
         editor: None,
+        onboarding_completed: Some(true),
     };
 
     let json = serde_json::to_string_pretty(&custom).unwrap();
@@ -166,6 +182,7 @@ fn round_trip_save_then_load() {
         },
     );
     config.default_provider = "aider".to_string();
+    config.onboarding_completed = Some(true);
 
     save(config_dir, &config).unwrap();
     let (loaded, warnings) = load(config_dir);
@@ -206,7 +223,10 @@ fn migrate_from_db_does_nothing_when_config_exists() {
     let config_dir = dir.path();
 
     // Create an existing config
-    let existing = Config::default();
+    let existing = Config {
+        onboarding_completed: Some(true),
+        ..Config::default()
+    };
     save(config_dir, &existing).unwrap();
 
     // Try to migrate with different settings
@@ -300,17 +320,20 @@ fn executable_on_path_finds_a_file_in_a_path_directory() {
 
     // `rmux_available` caches per process, so the reusable lookup is what is
     // worth testing: the Preferences warning depends on it finding real files.
-    let previous = std::env::var_os("PATH");
-    std::env::set_var("PATH", dir.path());
-    let found = executable_on_path("planeai-fake-rmux-daemon");
-    let missing = executable_on_path("planeai-definitely-not-installed");
-    match previous {
-        Some(value) => std::env::set_var("PATH", value),
-        None => std::env::remove_var("PATH"),
-    }
+    // The PATH is passed explicitly: mutating the process PATH breaks concurrent tests that spawn `sh`.
+    let path = dir.path().to_string_lossy().into_owned();
+    let found = find_executable_in("planeai-fake-rmux-daemon", &path);
+    let missing = find_executable_in("planeai-definitely-not-installed", &path);
 
-    assert!(found, "a file present in a PATH directory must be found");
-    assert!(!missing, "an absent binary must not be reported as present");
+    assert_eq!(
+        found,
+        Some(binary),
+        "a file present in a PATH directory must be found"
+    );
+    assert!(
+        missing.is_none(),
+        "an absent binary must not be reported as present"
+    );
 }
 
 #[test]
@@ -323,6 +346,7 @@ fn executable_on_path_finds_a_binary_missing_from_the_processs_own_path() {
     // backend unavailable when a real launch — which goes through
     // `augmented_path` — would succeed. This reproduces that gap directly: the
     // binary sits somewhere `augmented_path` searches but the raw PATH does not.
+    let _home = lock_home_env();
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap();
@@ -331,17 +355,20 @@ fn executable_on_path_finds_a_binary_missing_from_the_processs_own_path() {
     let binary = cargo_bin.join("planeai-fake-conventional-dir-binary");
     fs::write(&binary, b"#!/bin/sh\n").unwrap();
 
-    let previous = std::env::var_os("PATH");
-    std::env::set_var("PATH", "/usr/bin:/bin:/usr/sbin:/sbin");
-    let found = executable_on_path("planeai-fake-conventional-dir-binary");
-    match previous {
-        Some(value) => std::env::set_var("PATH", value),
-        None => std::env::remove_var("PATH"),
-    }
+    let launchd_path = "/usr/bin:/bin:/usr/sbin:/sbin";
+    let raw = find_executable_in("planeai-fake-conventional-dir-binary", launchd_path);
+    let augmented = find_executable_in(
+        "planeai-fake-conventional-dir-binary",
+        &planeai_core::command::augmented_path(&[]),
+    );
     let _ = fs::remove_file(&binary);
 
     assert!(
-        found,
+        raw.is_none(),
+        "the narrow launchd PATH must not contain the binary"
+    );
+    assert!(
+        augmented.is_some(),
         "a binary in a conventional install directory must be found even when \
          the process's own PATH does not include it"
     );
@@ -502,6 +529,7 @@ fn load_backfills_resume_fields_for_known_providers() {
 
 #[test]
 fn home_dir_prefers_home_and_falls_back_to_userprofile() {
+    let _home = lock_home_env();
     let original_home = std::env::var("HOME").ok();
 
     // When HOME is set, it's returned
@@ -522,6 +550,7 @@ fn home_dir_prefers_home_and_falls_back_to_userprofile() {
 #[test]
 #[cfg(unix)]
 fn config_dir_uses_app_name_for_directory() {
+    let _home = lock_home_env();
     // Test the structure: config_dir returns <base>/<app_name>
     let path = config_dir("planeai");
     assert!(path.ends_with("planeai"));
@@ -531,6 +560,7 @@ fn config_dir_uses_app_name_for_directory() {
 #[test]
 #[cfg(unix)]
 fn config_dir_isolates_dev_bundle_by_name() {
+    let _home = lock_home_env();
     let original_home = std::env::var("HOME").ok();
     std::env::set_var("HOME", "/mock/home");
     std::env::remove_var("XDG_CONFIG_HOME");
@@ -546,6 +576,7 @@ fn config_dir_isolates_dev_bundle_by_name() {
 #[test]
 #[cfg(unix)]
 fn normalize_base_path_expands_tilde() {
+    let _home = lock_home_env();
     let original_home = std::env::var("HOME").ok();
     std::env::set_var("HOME", "/Users/testuser");
 
@@ -827,4 +858,155 @@ fn unknown_sidebar_group_by_is_reported_as_a_config_error() {
         "{}",
         warnings[0]
     );
+}
+
+#[test]
+fn first_launch_requires_onboarding_and_persists_the_flag() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (config, _) = load(dir.path());
+
+    assert_eq!(config.onboarding_completed, Some(false));
+    let raw = fs::read_to_string(dir.path().join("config.json")).unwrap();
+    assert!(raw.contains("\"onboarding_completed\": false"));
+    // A relaunch before finishing onboarding must still show it.
+    let (relaunched, _) = load(dir.path());
+    assert_eq!(relaunched.onboarding_completed, Some(false));
+}
+
+#[test]
+fn existing_config_without_flag_counts_as_onboarded() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"default_provider": "claude"}"#,
+    )
+    .unwrap();
+
+    let (config, warnings) = load(dir.path());
+
+    assert!(warnings.is_empty());
+    assert_eq!(config.onboarding_completed, Some(true));
+}
+
+#[test]
+fn completed_onboarding_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut config, _) = load(dir.path());
+    config.onboarding_completed = Some(true);
+    save(dir.path(), &config).unwrap();
+
+    let (reloaded, _) = load(dir.path());
+
+    assert_eq!(reloaded.onboarding_completed, Some(true));
+}
+
+#[test]
+fn unparseable_config_does_not_trigger_onboarding() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("config.json"), "{ not json").unwrap();
+
+    let (config, warnings) = load(dir.path());
+
+    assert!(!warnings.is_empty());
+    assert_eq!(config.onboarding_completed, Some(true));
+}
+
+#[test]
+fn first_launch_through_db_migration_still_requires_onboarding() {
+    // Startup runs `migrate_from_db` before `load`, and a fresh database always seeds a
+    // settings row, so this is the real first-launch path, not only a legacy one.
+    let dir = tempfile::tempdir().unwrap();
+    let settings = crate::db::Settings {
+        terminal_theme_dark: String::new(),
+        terminal_theme_light: String::new(),
+        font_size: 14,
+        font_family: "Menlo".to_string(),
+        appearance_mode: "system".to_string(),
+    };
+    migrate_from_db(dir.path(), &settings).unwrap();
+
+    let (config, _) = load(dir.path());
+
+    assert_eq!(config.onboarding_completed, Some(false));
+}
+
+#[test]
+fn defaults_leave_onboarding_unset() {
+    assert_eq!(Config::default().onboarding_completed, None);
+}
+
+#[test]
+fn provider_binary_takes_the_first_command_word() {
+    assert_eq!(
+        provider_binary("kiro-cli chat").as_deref(),
+        Some("kiro-cli")
+    );
+    assert_eq!(provider_binary("  claude  ").as_deref(), Some("claude"));
+    assert_eq!(
+        provider_binary("FOO=1 BAR=x codex --full-auto").as_deref(),
+        Some("codex")
+    );
+    assert_eq!(
+        provider_binary("/opt/tools/agent run").as_deref(),
+        Some("/opt/tools/agent")
+    );
+    assert_eq!(provider_binary("   "), None);
+    assert_eq!(provider_binary("A=1"), None);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn find_executable_in_searches_each_path_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("fake-agent");
+    fs::write(&bin, "#!/bin/sh\n").unwrap();
+    let path = format!("/nonexistent-planeai-dir:{}", dir.path().display());
+
+    assert_eq!(find_executable_in("fake-agent", &path), Some(bin));
+    assert_eq!(find_executable_in("missing-agent", &path), None);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn find_executable_in_accepts_explicit_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("agent");
+    fs::write(&bin, "").unwrap();
+    let explicit = bin.to_string_lossy().into_owned();
+
+    assert_eq!(find_executable_in(&explicit, ""), Some(bin.clone()));
+    assert_eq!(find_executable_in(&format!("{explicit}-nope"), ""), None);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn detect_provider_binaries_covers_configured_and_preset_agents() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("my-agent"), "").unwrap();
+    let mut config = Config::default();
+    config.providers.remove("kiro");
+    config.providers.insert(
+        "custom".to_string(),
+        Provider {
+            command: "my-agent --fast".to_string(),
+            yolo_flag: None,
+            resume_command: None,
+            prompt_command: None,
+            autonomous_prompt_template: None,
+        },
+    );
+    let path = dir.path().to_string_lossy().into_owned();
+
+    let found = detect_provider_binaries_in(&config, &path);
+
+    assert_eq!(
+        found.get("custom").cloned().flatten(),
+        Some(dir.path().join("my-agent").to_string_lossy().into_owned())
+    );
+    // Presets removed from config are still reported so they can be offered.
+    assert_eq!(found.get("kiro"), Some(&None));
+    assert!(found.contains_key("claude"));
+    assert!(found.contains_key("codex"));
+    assert!(found.contains_key("copilot"));
 }

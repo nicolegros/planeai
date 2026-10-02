@@ -513,7 +513,7 @@
   async function openPreferences() {
     const existing = await WebviewWindow.getByLabel("preferences");
     if (existing) { existing.setFocus(); return; }
-    new WebviewWindow("preferences", { url: "index.html?page=preferences", title: "Preferences", width: 720, height: 680, parent: getCurrentWindow(), resizable: true, minimizable: false, maximizable: false });
+    new WebviewWindow("preferences", { url: "index.html?page=preferences", title: "Preferences", width: 920, height: 680, minWidth: 760, minHeight: 520, parent: getCurrentWindow(), resizable: true, minimizable: false, maximizable: false });
   }
 
   async function doRename(id: string, name: string) {
