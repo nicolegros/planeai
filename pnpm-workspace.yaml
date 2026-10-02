@@ -1,5 +1,4 @@
-minimumReleaseAgeExclude:
-  - nanoid
+minimumReleaseAge: 10080
 
 onlyBuiltDependencies:
   - esbuild
