@@ -295,7 +295,7 @@ export function startEventListeners(): () => void {
         const session = sessions.find((s) => s.id === sid);
         if (session?.worktree_path && session.base_branch) {
           if (sid === activeSessionId) {
-            if (getSettings().auto_open_review !== false) {
+            if (getSettings().auto_open_review === true) {
               // Defer to next frame so state updates don't block the current tick
               requestAnimationFrame(() => taskWorkspaceLayout.openDiff(sid));
             }

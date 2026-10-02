@@ -1041,3 +1041,61 @@ fn unknown_post_merge_action_is_reported_as_a_config_error() {
 
     assert_eq!(warnings.len(), 1);
 }
+
+#[test]
+fn new_installs_start_with_review_auto_open_off_and_tasks_on() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (config, _) = load(dir.path());
+
+    assert_eq!(config.auto_open_review, Some(false));
+    assert_eq!(config.task_management, Some(TaskManager::recommended()));
+}
+
+#[test]
+fn existing_config_without_task_management_keeps_tasks_off() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"default_provider": "kiro"}"#,
+    )
+    .unwrap();
+
+    let (config, warnings) = load(dir.path());
+
+    assert!(warnings.is_empty());
+    assert_eq!(config.task_management, None);
+}
+
+#[test]
+fn turning_task_management_off_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut config, _) = load(dir.path());
+    config.task_management = None;
+    save(dir.path(), &config).unwrap();
+
+    let (reloaded, _) = load(dir.path());
+
+    assert_eq!(reloaded.task_management, None);
+}
+
+#[test]
+fn recommended_task_management_moves_tasks_through_the_standard_statuses() {
+    let tm = TaskManager::recommended();
+    fn hook(h: &Option<LifecycleHook>) -> Option<&str> {
+        h.as_ref().map(|h| h.move_to.as_str())
+    }
+
+    assert_eq!(hook(&tm.on_start), Some("in_progress"));
+    assert_eq!(hook(&tm.on_notify), Some("in_review"));
+    assert_eq!(hook(&tm.on_resume), Some("in_progress"));
+    assert_eq!(hook(&tm.on_restart), Some("in_progress"));
+    assert_eq!(hook(&tm.on_complete), Some("done"));
+    assert!(tm.auto_dispatch.is_none());
+    let templates = tm.templates.unwrap();
+    assert_eq!(
+        templates.branch.as_deref(),
+        Some("{key:lower}/{title:slug}")
+    );
+    assert_eq!(templates.name.as_deref(), Some("{key:upper}: {title}"));
+}

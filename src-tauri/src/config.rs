@@ -92,7 +92,8 @@ pub struct Config {
     pub session_backend: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vim_mode: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Written as `null` when off, so turning tasks off survives the default being on.
+    #[serde(default)]
     pub task_management: Option<TaskManager>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projects_base_path: Option<String>,
@@ -175,7 +176,7 @@ fn default_option_as_meta() -> bool {
 }
 
 fn default_auto_open_review() -> Option<bool> {
-    Some(true)
+    Some(false)
 }
 
 fn default_sound_enabled() -> Option<bool> {
@@ -243,6 +244,30 @@ pub struct TaskManager {
     pub on_complete: Option<LifecycleHook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_dispatch: Option<AutoDispatchConfig>,
+}
+
+impl TaskManager {
+    /// What new installs start with: the standard task statuses and no auto-dispatch.
+    pub fn recommended() -> Self {
+        let hook = |status: &str| {
+            Some(LifecycleHook {
+                move_to: status.to_string(),
+            })
+        };
+        TaskManager {
+            templates: Some(TaskManagerTemplates {
+                branch: Some("{key:lower}/{title:slug}".to_string()),
+                name: Some("{key:upper}: {title}".to_string()),
+                prompt: Some("Implement task {key}: {title}\n\n{description}".to_string()),
+            }),
+            on_start: hook("in_progress"),
+            on_notify: hook("in_review"),
+            on_restart: hook("in_progress"),
+            on_resume: hook("in_progress"),
+            on_complete: hook("done"),
+            auto_dispatch: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -364,7 +389,7 @@ impl Default for Config {
             default_provider: "kiro".to_string(),
             session_backend: None,
             vim_mode: None,
-            task_management: None,
+            task_management: Some(TaskManager::recommended()),
             projects_base_path: None,
             hide_done_tasks: None,
             hide_empty_projects: None,
@@ -377,7 +402,7 @@ impl Default for Config {
             web_links: None,
             session_log_dir: None,
             extra_path_dirs: Vec::new(),
-            auto_open_review: Some(true),
+            auto_open_review: Some(false),
             sound_enabled: Some(true),
             integrations: None,
             language_servers: None,
@@ -527,6 +552,11 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         };
         // Migrate legacy task_managers → task_management
         migrate_legacy_task_managers(&mut user_val);
+        // Configs written before tasks defaulted on omitted the key when off; keep them off.
+        if let Some(obj) = user_val.as_object_mut() {
+            obj.entry("task_management")
+                .or_insert(serde_json::Value::Null);
+        }
         let default_val = serde_json::to_value(Config::default()).unwrap();
         let merged = merge_top_level(default_val, user_val);
         let mut config: Config = match serde_json::from_value(merged) {
