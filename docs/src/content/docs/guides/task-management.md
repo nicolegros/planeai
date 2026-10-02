@@ -187,7 +187,7 @@ You don't have to enable auto-dispatch to use tasks. The manual workflow is:
 1. Create tasks on the board
 2. Click a task to start a session for it
 3. The agent receives the task description and works on it
-4. You review the diff (**⌘D** / **Ctrl+D**) and move the task to done
+4. You review the diff (**⌘\\** / **Ctrl+\\**) and move the task to done
 
 This gives you full control over when and how agents pick up work.
 

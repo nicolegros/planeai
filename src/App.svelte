@@ -188,6 +188,11 @@
   const layoutTree = $derived(workspaceLayout.layout?.tree ?? null);
   const focusedLeafId = $derived(workspaceLayout.layout?.focusedLeafId ?? null);
   const hasMultiplePanes = $derived(workspaceLayout.isSplit);
+  // Split shortcuts act on the visible layout only: never behind a loop
+  // dashboard, a plugin page or an empty TaskWorkspace.
+  const canSplit = $derived(
+    !!activeSessionId && !!layoutTree && !isEmptyTaskWorkspace && !activeLoopId && !activePluginId,
+  );
   // A single pane shows its tabs in the titlebar; split panes each get their own tab bar.
   const singlePane = $derived(layoutTree?.type === "leaf" ? layoutTree : null);
   const titlebarTabs = $derived(singlePane ? paneTabs(singlePane) : []);
@@ -383,6 +388,7 @@
   };
 
   function handleSplitAction(actionType: string): void {
+    if (!canSplit) return;
     if (actionType === "split_vertical") return splitPane("vertical");
     if (actionType === "split_horizontal") return splitPane("horizontal");
     if (actionType === "close_split") workspaceLayout.closePane();

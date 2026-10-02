@@ -127,6 +127,17 @@ it("keeps keyboard focus on the clicked terminal tab, not its session's agent", 
   );
 });
 
+it("ignores split shortcuts while the layout is hidden or empty", () => {
+  // A loop dashboard, plugin page or empty TaskWorkspace covers the layout;
+  // splitting it there would act on panes the user cannot see.
+  expect(appSource).toMatch(
+    /const canSplit = \$derived\([\s\S]*?!isEmptyTaskWorkspace && !activeLoopId && !activePluginId/,
+  );
+  expect(appSource).toMatch(
+    /function handleSplitAction\(actionType: string\): void \{\s*if \(!canSplit\) return;/,
+  );
+});
+
 it("preserves editor focus when a split-pane click originates inside an editor", () => {
   expect(appSource).toMatch(
     /event\.target instanceof Element && event\.target\.closest\("\[data-editor-tab\]"\)[\s\S]*?focusTerminal\(\);/,

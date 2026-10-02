@@ -76,6 +76,28 @@ describe("editor feedback shortcut hints", () => {
     expect(target.textContent).toContain("Unified/Split");
   });
 
+  it("always points to the full shortcut list, in every zone", async () => {
+    for (const zone of [focusTerminal, focusEditor]) {
+      zone();
+      const target = mountHelperBar();
+      await tick();
+      const allShortcuts = target.querySelector("[data-helper-all-shortcuts]");
+      expect(allShortcuts?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+        `${MOD_LABEL}/All shortcuts`,
+      );
+      // Outside the row that drops hints on a narrow window.
+      expect(target.querySelector("[data-helper-hints]")?.contains(allShortcuts!)).toBe(false);
+    }
+  });
+
+  it("hides hints that do not fit whole instead of clipping them", async () => {
+    focusTerminal();
+    const row = mountHelperBar().querySelector("[data-helper-hints]")!;
+    await tick();
+    expect(row.className).toContain("flex-wrap");
+    expect(row.className).toContain("overflow-hidden");
+  });
+
   it("lists the feedback send shortcut in the editor shortcut reference", async () => {
     focusEditor();
     mountShortcutDialog();
