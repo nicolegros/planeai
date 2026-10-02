@@ -531,6 +531,9 @@ fn daemon_send_frames(
     Ok(())
 }
 
+/// `sessions.backend` for sessions whose runtime is a plugin provider (ADR-0013).
+pub const PROVIDER_BACKEND: &str = "plugin";
+
 pub fn send_prompt(
     conn: &Connection,
     id_prefix: &str,
@@ -572,7 +575,7 @@ pub fn send_prompt(
             tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to local PTY");
         }
         // The GUI owns provider runtimes, so prompts take the same route as local PTYs.
-        "plugin" => {
+        PROVIDER_BACKEND => {
             ops.notify_socket_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to plugin provider");
         }

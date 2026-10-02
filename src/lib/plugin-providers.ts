@@ -46,6 +46,10 @@ export function supportsYolo(provider: PluginProvider): boolean {
   return provider.supports.includes("yolo");
 }
 
+export function supportsHandoff(provider: PluginProvider): boolean {
+  return provider.supports.includes("handoff");
+}
+
 /** The contribution shape PluginContributionHost mounts for a provider's session UI. */
 export function providerContribution(provider: PluginProvider): PluginUiContribution {
   return {

@@ -116,6 +116,11 @@
     "jira:jira-departed-interaction": async () => jiraDepartedInteractionEntrypoint,
   };
 
+  /** Placements whose frame takes the whole area the host gives it. */
+  function fillsContainer(placement: PluginUiContribution["placement"]): boolean {
+    return placement === "interaction" || placement === "main-pane" || placement === "session.main" || placement === "session.panel" || placement === "titlebar";
+  }
+
   function disposeCurrent(): void {
     const current = disposer;
     disposer = null;
@@ -181,8 +186,7 @@
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
-    frame.className =
-      contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.main" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
+    frame.className = fillsContainer(contribution.placement)
         ? "block h-full w-full border-0"
         : isSessionIndicator
           ? "block h-4 w-4 border-0"
@@ -195,7 +199,7 @@
       frame.style.height = "16px";
       frame.style.pointerEvents = "none";
       frame.tabIndex = -1;
-    } else if (contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.main" || contribution.placement === "titlebar") {
+    } else if (fillsContainer(contribution.placement) && contribution.placement !== "session.panel") {
       frame.style.height = "100%";
     } else if (contribution.placement === "session.panel") {
       frame.style.height = "360px";
@@ -785,7 +789,7 @@
       ? plugin.source_kind === "builtin"
         ? "pointer-events-none"
         : "h-full w-full pointer-events-auto"
-      : contribution.placement === "main-pane" || contribution.placement === "session.main" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
+      : fillsContainer(contribution.placement)
         ? "h-full w-full"
         : contribution.placement === "session.indicator"
           ? "h-4 w-4 shrink-0 pointer-events-none"

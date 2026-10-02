@@ -93,6 +93,11 @@ impl NotifyState {
         self.provider_owned.insert(session_id.to_string());
     }
 
+    /// A provider session failed to launch; its id will never report status.
+    pub fn release_provider_owned(&mut self, session_id: &str) {
+        self.provider_owned.remove(session_id);
+    }
+
     pub fn is_provider_owned(&self, session_id: &str) -> bool {
         self.provider_owned.contains(session_id)
     }

@@ -163,36 +163,15 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
             // Completing a task archives its sessions from whichever process moved it.
             reconcile_provider_sessions(app);
         }
-        NotifyEvent::SendPrompt if is_provider_session(app, &msg.session_id) => {
+        NotifyEvent::SendPrompt => {
             let Some(text) = msg.text.clone() else {
                 return;
             };
             let app = app.clone();
             let session_id = msg.session_id.clone();
-            tauri::async_runtime::spawn(async move {
-                let supervisor = app.state::<crate::plugins::PluginRuntimeHandle>().0.clone();
-                let result = match crate::plugin_providers::load_context(&app, &session_id).await {
-                    Ok(context) => {
-                        crate::plugin_providers::send(&supervisor, &context, &text).await
-                    }
-                    Err(error) => Err(error),
-                };
-                if let Err(error) = result {
-                    tracing::warn!(%session_id, %error, "send_prompt to provider session failed");
-                }
-            });
-        }
-        NotifyEvent::SendPrompt => {
-            if let Some(text) = &msg.text {
-                let pty_manager = app.state::<crate::state::PtyState>().0.clone();
-                let session_id = msg.session_id.clone();
-                let payload = format!("{}\n", text).into_bytes();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = pty_manager.write(&session_id, &payload).await {
-                        tracing::warn!(%session_id, error = %e, "send_prompt write failed");
-                    }
-                });
-            }
+            tauri::async_runtime::spawn(
+                async move { deliver_prompt(&app, &session_id, text).await },
+            );
         }
     }
 }
@@ -214,17 +193,34 @@ fn ignores_socket_status(msg: &NotifyMessage, state: &SharedNotifyState) -> bool
     ) && state.lock().unwrap().is_provider_owned(&msg.session_id)
 }
 
-/// Routes prompts by the session's stored backend, so delivery never depends on
+/// Delivers a prompt by the session's stored backend, so routing never depends on
 /// whether this run has registered the session yet.
-fn is_provider_session(app: &AppHandle, session_id: &str) -> bool {
+async fn deliver_prompt(app: &AppHandle, session_id: &str, text: String) {
     let db = app.state::<crate::state::DbState>().0.clone();
-    let Ok(conn) = db.lock() else {
-        return false;
+    let id = session_id.to_string();
+    let provider_backed = crate::commands::blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        Ok(crate::db::get_session(&conn, &id)
+            .map_err(|e| e.to_string())?
+            .is_some_and(|session| session.backend == crate::plugin_providers::PROVIDER_BACKEND))
+    })
+    .await;
+    let result = match provider_backed {
+        Ok(true) => {
+            let supervisor = app.state::<crate::plugins::PluginRuntimeHandle>().0.clone();
+            crate::plugin_providers::send_to_session(app, &supervisor, session_id, &text).await
+        }
+        Ok(false) => {
+            let pty_manager = app.state::<crate::state::PtyState>().0.clone();
+            pty_manager
+                .write(session_id, format!("{text}\n").as_bytes())
+                .await
+        }
+        Err(error) => Err(error),
     };
-    crate::db::get_session(&conn, session_id)
-        .ok()
-        .flatten()
-        .is_some_and(|session| session.backend == crate::plugin_providers::PROVIDER_BACKEND)
+    if let Err(error) = result {
+        tracing::warn!(%session_id, %error, "send_prompt delivery failed");
+    }
 }
 
 /// Apply a status reported by a session's plugin provider.

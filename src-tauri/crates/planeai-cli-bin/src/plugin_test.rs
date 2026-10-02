@@ -705,7 +705,7 @@ impl PluginProcess {
                 let object = params
                     .as_object()
                     .expect("session_id lookup implies object");
-                reject_unknown_fields(object, &["session_id", "status", "message"], method)?;
+                reject_unknown_fields(object, &["session_id", "status"], method)?;
                 let status = params
                     .get("status")
                     .and_then(Value::as_str)

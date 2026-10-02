@@ -100,11 +100,13 @@ export interface PluginUiContribution {
 }
 
 /** A session runtime declared by a plugin; its UI replaces the agent terminal (ADR-0013). */
+export type ProviderFeature = "yolo" | "handoff";
+
 export interface PluginProvider {
   id: string;
   label: string;
   entrypoint: string;
-  supports: string[];
+  supports: ProviderFeature[];
 }
 
 /** An opaque provider event forwarded from the sidecar to the session's UI. */

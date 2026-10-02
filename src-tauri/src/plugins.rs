@@ -179,16 +179,21 @@ pub struct PluginProvider {
     pub label: String,
     pub entrypoint: String,
     #[serde(default)]
-    pub supports: Vec<String>,
+    pub supports: Vec<ProviderFeature>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderFeature {
+    /// Honors PlaneAI's auto-approve.
+    Yolo,
+    /// Can continue a session in the agent's own terminal UI.
+    Handoff,
 }
 
 impl PluginProvider {
-    pub fn supports_yolo(&self) -> bool {
-        self.supports.iter().any(|feature| feature == "yolo")
-    }
-
-    pub fn supports_handoff(&self) -> bool {
-        self.supports.iter().any(|feature| feature == "handoff")
+    pub fn supports(&self, feature: ProviderFeature) -> bool {
+        self.supports.contains(&feature)
     }
 }
 
@@ -943,6 +948,29 @@ pub fn reconcile_interrupted_runs(conn: &Connection) -> rusqlite::Result<usize> 
     )
 }
 
+/// The manifest fields stored as JSON columns of `plugin_inventory`.
+struct ManifestColumns {
+    ui_contributions: String,
+    capabilities: String,
+    background_service: String,
+    providers: String,
+}
+
+impl ManifestColumns {
+    fn of(manifest: &PluginManifest) -> Result<Self, String> {
+        fn json<T: Serialize>(value: &T, what: &str) -> Result<String, String> {
+            serde_json::to_string(value)
+                .map_err(|error| format!("failed to serialize plugin {what}: {error}"))
+        }
+        Ok(Self {
+            ui_contributions: json(&manifest.effective_ui_contributions(), "UI contributions")?,
+            capabilities: json(&manifest.capabilities, "capabilities")?,
+            background_service: json(&manifest.background_service, "background service")?,
+            providers: json(&manifest.providers, "providers")?,
+        })
+    }
+}
+
 pub fn insert_local_inventory(
     conn: &Connection,
     manifest: &PluginManifest,
@@ -959,14 +987,12 @@ pub fn insert_local_inventory(
     }
     manifest.validate()?;
     validate_shortcut_collisions(conn, manifest)?;
-    let ui_contributions = serde_json::to_string(&manifest.effective_ui_contributions())
-        .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
-    let capabilities = serde_json::to_string(&manifest.capabilities)
-        .map_err(|error| format!("failed to serialize plugin capabilities: {error}"))?;
-    let background_service = serde_json::to_string(&manifest.background_service)
-        .map_err(|error| format!("failed to serialize plugin background service: {error}"))?;
-    let providers = serde_json::to_string(&manifest.providers)
-        .map_err(|error| format!("failed to serialize plugin providers: {error}"))?;
+    let ManifestColumns {
+        ui_contributions,
+        capabilities,
+        background_service,
+        providers,
+    } = ManifestColumns::of(manifest)?;
     conn.execute(
         "INSERT INTO plugin_inventory (
             id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions, capabilities, background_service,
@@ -1012,14 +1038,12 @@ pub fn replace_local_inventory(
     }
     manifest.validate()?;
     validate_shortcut_collisions(conn, manifest)?;
-    let ui_contributions = serde_json::to_string(&manifest.effective_ui_contributions())
-        .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
-    let capabilities = serde_json::to_string(&manifest.capabilities)
-        .map_err(|error| format!("failed to serialize plugin capabilities: {error}"))?;
-    let background_service = serde_json::to_string(&manifest.background_service)
-        .map_err(|error| format!("failed to serialize plugin background service: {error}"))?;
-    let providers = serde_json::to_string(&manifest.providers)
-        .map_err(|error| format!("failed to serialize plugin providers: {error}"))?;
+    let ManifestColumns {
+        ui_contributions,
+        capabilities,
+        background_service,
+        providers,
+    } = ManifestColumns::of(manifest)?;
     conn.execute(
         "UPDATE plugin_inventory SET
             name = ?2, version = ?3, host_api_version = ?4, backend_entrypoint = ?5,
@@ -2946,22 +2970,13 @@ impl PluginRuntimeSupervisor {
         plugin_id: &str,
         provider_id: &str,
     ) -> Result<String, String> {
-        let inventory = self
-            .inventory(plugin_id)
-            .await?
-            .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
-        let package = inventory
-            .installed_path
-            .ok_or_else(|| format!("local plugin {plugin_id} has no imported package path"))?;
-        let entrypoint = inventory
-            .providers
-            .iter()
-            .find(|provider| provider.id == provider_id)
-            .map(|provider| provider.entrypoint.clone())
-            .ok_or_else(|| format!("plugin {plugin_id} has no provider {provider_id}"))?;
-        commands::blocking(move || {
-            std::fs::read_to_string(Path::new(&package).join(entrypoint))
-                .map_err(|error| format!("failed to read imported plugin UI bundle: {error}"))
+        self.read_local_bundle(plugin_id, |inventory| {
+            inventory
+                .providers
+                .iter()
+                .find(|provider| provider.id == provider_id)
+                .map(|provider| provider.entrypoint.clone())
+                .ok_or_else(|| format!("plugin {plugin_id} has no provider {provider_id}"))
         })
         .await
     }
@@ -2971,6 +2986,25 @@ impl PluginRuntimeSupervisor {
         plugin_id: &str,
         contribution_id: &str,
     ) -> Result<String, String> {
+        self.read_local_bundle(plugin_id, |inventory| {
+            inventory
+                .ui_contributions
+                .iter()
+                .find(|contribution| contribution.id == contribution_id)
+                .map(|contribution| contribution.entrypoint.clone())
+                .ok_or_else(|| {
+                    format!("plugin {plugin_id} has no UI contribution {contribution_id}")
+                })
+        })
+        .await
+    }
+
+    /// Read a UI bundle from a local plugin's imported package.
+    async fn read_local_bundle(
+        &self,
+        plugin_id: &str,
+        entrypoint: impl FnOnce(&PluginInventory) -> Result<String, String>,
+    ) -> Result<String, String> {
         let inventory = self
             .inventory(plugin_id)
             .await?
@@ -2978,17 +3012,10 @@ impl PluginRuntimeSupervisor {
         if inventory.source_kind != PluginSourceKind::Local {
             return Err("builtin plugins use their bundled UI entrypoints".to_string());
         }
+        let entrypoint = entrypoint(&inventory)?;
         let package = inventory
             .installed_path
             .ok_or_else(|| format!("local plugin {plugin_id} has no imported package path"))?;
-        let entrypoint = inventory
-            .ui_contributions
-            .iter()
-            .find(|contribution| contribution.id == contribution_id)
-            .map(|contribution| contribution.entrypoint.clone())
-            .ok_or_else(|| {
-                format!("plugin {plugin_id} has no UI contribution {contribution_id}")
-            })?;
         commands::blocking(move || {
             std::fs::read_to_string(Path::new(&package).join(entrypoint))
                 .map_err(|error| format!("failed to read imported plugin UI bundle: {error}"))

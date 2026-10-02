@@ -39,9 +39,14 @@ vi.mock("@tauri-apps/api/event", () => ({
 import PluginContributionHost from "../PluginContributionHost.svelte";
 import { providerContribution } from "../../lib/plugin-providers";
 import type { PluginSessionContext } from "../../lib/plugin-sdk";
-import type { PluginInventory, PluginUiContribution } from "../../lib/types";
+import type { PluginInventory, PluginProvider, PluginUiContribution } from "../../lib/types";
 
-const provider = { id: "echo", label: "Echo", entrypoint: "ui/chat.js", supports: ["yolo"] };
+const provider: PluginProvider = {
+  id: "echo",
+  label: "Echo",
+  entrypoint: "ui/chat.js",
+  supports: ["yolo"],
+};
 const plugin: PluginInventory = {
   id: "local-fixture",
   name: "Local Fixture",

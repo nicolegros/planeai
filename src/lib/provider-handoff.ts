@@ -15,6 +15,8 @@ export function shellCommand(argv: string[], windows = IS_WINDOWS): string {
 
 /** Terminal tabs continuing a provider session, keyed by pty key. One per session. */
 const handoffTabs = new Map<string, string>();
+/** Handoffs still asking the provider for its command, so a repeat request joins them. */
+const starting = new Map<string, Promise<string>>();
 
 export function handoffTabFor(sessionId: string): string | undefined {
   for (const [ptyKey, owner] of handoffTabs) if (owner === sessionId) return ptyKey;
@@ -25,12 +27,24 @@ export function handoffTabFor(sessionId: string): string | undefined {
  * Continue a provider session in its agent's TUI. The provider detaches first, so
  * only one side ever drives the conversation; closing the tab hands it back.
  */
-export async function startHandoff(
+export function startHandoff(
   sessionId: string,
   openCommand: (command: string, label: string) => string | null,
 ): Promise<string> {
   const existing = handoffTabFor(sessionId);
-  if (existing) return existing;
+  if (existing) return Promise.resolve(existing);
+  let pending = starting.get(sessionId);
+  if (!pending) {
+    pending = openHandoffTab(sessionId, openCommand).finally(() => starting.delete(sessionId));
+    starting.set(sessionId, pending);
+  }
+  return pending;
+}
+
+async function openHandoffTab(
+  sessionId: string,
+  openCommand: (command: string, label: string) => string | null,
+): Promise<string> {
   const argv = await providerSessions.handoff(sessionId);
   const ptyKey = openCommand(shellCommand(argv), "Terminal");
   if (!ptyKey) {

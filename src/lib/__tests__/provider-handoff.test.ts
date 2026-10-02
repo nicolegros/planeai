@@ -41,6 +41,14 @@ describe("provider handoff", () => {
     expect(handoffTabFor("s1")).toBeUndefined();
   });
 
+  it("opens a single tab when the handoff is requested twice before it lands", async () => {
+    const open = vi.fn(() => "s4:1");
+    const [first, second] = await Promise.all([startHandoff("s4", open), startHandoff("s4", open)]);
+    expect([first, second]).toEqual(["s4:1", "s4:1"]);
+    expect(open).toHaveBeenCalledOnce();
+    expect(handoff).toHaveBeenCalledOnce();
+  });
+
   it("returns the session to the chat when no pane can hold the terminal", async () => {
     await expect(startHandoff("s3", () => null)).rejects.toThrow("no pane");
     expect(handback).toHaveBeenCalledWith("s3");

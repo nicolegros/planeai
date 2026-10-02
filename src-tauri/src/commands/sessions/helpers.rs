@@ -137,7 +137,7 @@ mod tests {
         let cfg = config::Config::default();
         let mut ns = planeai_core::notify::NotifyState::new();
         let mut provider = test_session(None);
-        provider.backend = "plugin".into();
+        provider.backend = crate::plugin_providers::PROVIDER_BACKEND.into();
         provider.provider = Some("claude-headless:claude".into());
         register_notify_session(&mut ns, &provider, "proj", &cfg);
         assert!(ns.is_provider_owned("test-id"));

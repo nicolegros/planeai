@@ -12,10 +12,9 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db;
-use crate::plugins::{PluginProvider, PluginRuntimeSupervisor};
+use crate::plugins::{PluginProvider, PluginRuntimeSupervisor, ProviderFeature};
 
-/// `sessions.backend` value for sessions whose runtime is a plugin provider.
-pub const PROVIDER_BACKEND: &str = "plugin";
+pub use crate::session_ops::PROVIDER_BACKEND;
 /// Frontend event carrying opaque provider session events to the mounted UI.
 pub const SESSION_EVENT: &str = "plugin-provider-session-event";
 
@@ -40,9 +39,20 @@ struct Binding {
 #[derive(Default)]
 pub struct ProviderSessions {
     bindings: Mutex<HashMap<String, Binding>>,
+    /// Serializes `ensure` per session so concurrent first uses resume it once.
+    ensuring: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl ProviderSessions {
+    fn ensure_lock(&self, session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.ensuring
+            .lock()
+            .unwrap()
+            .entry(session_id.to_string())
+            .or_default()
+            .clone()
+    }
+
     fn bind(&self, session_id: &str, binding: Binding) {
         self.bindings
             .lock()
@@ -51,6 +61,7 @@ impl ProviderSessions {
     }
 
     fn unbind(&self, session_id: &str) -> Option<Binding> {
+        self.ensuring.lock().unwrap().remove(session_id);
         self.bindings.lock().unwrap().remove(session_id)
     }
 
@@ -90,9 +101,15 @@ struct SessionEventParams {
 struct SessionStatusParams {
     session_id: String,
     status: ProviderSessionStatus,
-    #[serde(default)]
-    #[allow(dead_code)]
-    message: Option<String>,
+}
+
+/// Why a provider session ended; sent to the plugin with `provider.session.stop`.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StopReason {
+    Archive,
+    Destroy,
+    Exit,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -275,7 +292,7 @@ pub async fn start(
     initial_prompt: Option<&str>,
 ) -> Result<(), String> {
     let resolved = resolve(supervisor, &context.provider_key).await?;
-    if context.yolo && !resolved.provider.supports_yolo() {
+    if context.yolo && !resolved.provider.supports(ProviderFeature::Yolo) {
         return Err(format!(
             "{} does not support auto-approve",
             resolved.provider.label
@@ -301,6 +318,10 @@ pub async fn ensure(
     supervisor: &PluginRuntimeSupervisor,
     context: &SessionRuntimeContext,
 ) -> Result<(), String> {
+    let lock = supervisor
+        .provider_sessions()
+        .ensure_lock(&context.session_id);
+    let _ensuring = lock.lock().await;
     let resolved = resolve(supervisor, &context.provider_key).await?;
     let instance = supervisor.running_instance(&resolved.plugin_id).await;
     if let Some(binding) = supervisor.provider_sessions().get(&context.session_id) {
@@ -349,7 +370,7 @@ async fn bind_and_request(
 }
 
 /// Deliver user or automation input to a provider session.
-pub async fn send(
+async fn send(
     supervisor: &PluginRuntimeSupervisor,
     context: &SessionRuntimeContext,
     text: &str,
@@ -367,7 +388,7 @@ pub async fn send(
     .await
 }
 
-pub async fn interrupt(
+async fn interrupt(
     supervisor: &PluginRuntimeSupervisor,
     context: &SessionRuntimeContext,
 ) -> Result<(), String> {
@@ -404,12 +425,12 @@ struct HandoffResponse {
 
 /// Hand a session's conversation to its agent's own TUI. The provider detaches
 /// and returns the command that continues the conversation in a terminal.
-pub async fn handoff(
+async fn handoff(
     supervisor: &PluginRuntimeSupervisor,
     context: &SessionRuntimeContext,
 ) -> Result<Vec<String>, String> {
     let resolved = resolve(supervisor, &context.provider_key).await?;
-    if !resolved.provider.supports_handoff() {
+    if !resolved.provider.supports(ProviderFeature::Handoff) {
         return Err(format!(
             "{} cannot continue in a terminal",
             resolved.provider.label
@@ -446,7 +467,10 @@ pub async fn handback(
     session_id: &str,
 ) -> Result<(), String> {
     // A sidecar restarted during the handoff has no detached state to restore.
-    if supervisor.provider_sessions().get(session_id).is_none() {
+    let Some(binding) = supervisor.provider_sessions().get(session_id) else {
+        return Ok(());
+    };
+    if supervisor.running_instance(&binding.plugin_id).await != Some(binding.instance) {
         return Ok(());
     }
     request_bound(
@@ -460,7 +484,7 @@ pub async fn handback(
 
 /// Stop a provider session that left the active state. Sessions the current
 /// sidecar never resumed have nothing running and need no request.
-pub async fn stop(supervisor: &PluginRuntimeSupervisor, session_id: &str, reason: &str) {
+pub async fn stop(supervisor: &PluginRuntimeSupervisor, session_id: &str, reason: StopReason) {
     let Some(binding) = supervisor.provider_sessions().unbind(session_id) else {
         return;
     };
@@ -473,7 +497,7 @@ pub async fn stop(supervisor: &PluginRuntimeSupervisor, session_id: &str, reason
         .await
     {
         Ok(_) => {
-            tracing::info!(session_id, plugin_id = %binding.plugin_id, reason, "stopped provider session")
+            tracing::info!(session_id, plugin_id = %binding.plugin_id, ?reason, "stopped provider session")
         }
         Err(error) => {
             tracing::warn!(session_id, plugin_id = %binding.plugin_id, provider_id = %binding.provider_id, %error, "provider session stop failed")
@@ -482,19 +506,19 @@ pub async fn stop(supervisor: &PluginRuntimeSupervisor, session_id: &str, reason
 }
 
 /// Lifecycle statuses that end a provider session, mapped to the stop reason.
-pub fn stop_reason(status: &str) -> Option<&'static str> {
+pub fn stop_reason(status: &str) -> Option<StopReason> {
     match status {
-        "archived" => Some("archive"),
-        "destroyed" => Some("destroy"),
-        "exited" => Some("exit"),
+        "archived" => Some(StopReason::Archive),
+        "destroyed" => Some(StopReason::Destroy),
+        "exited" => Some(StopReason::Exit),
         _ => None,
     }
 }
 
 /// The stop reason for a bound provider session given its stored status, if it ended.
-fn ended_reason(status: Option<&str>) -> Option<&'static str> {
+fn ended_reason(status: Option<&str>) -> Option<StopReason> {
     match status {
-        None => Some("destroy"),
+        None => Some(StopReason::Destroy),
         Some(status) => stop_reason(status),
     }
 }
@@ -529,6 +553,40 @@ pub async fn reconcile(app: &AppHandle, supervisor: &PluginRuntimeSupervisor) {
         }
         Err(error) => tracing::warn!(%error, "provider session reconciliation failed"),
     }
+}
+
+/// Resume a stored session if needed; called when its UI mounts.
+pub async fn ensure_session(
+    app: &AppHandle,
+    supervisor: &PluginRuntimeSupervisor,
+    session_id: &str,
+) -> Result<(), String> {
+    ensure(supervisor, &load_context(app, session_id).await?).await
+}
+
+pub async fn send_to_session(
+    app: &AppHandle,
+    supervisor: &PluginRuntimeSupervisor,
+    session_id: &str,
+    text: &str,
+) -> Result<(), String> {
+    send(supervisor, &load_context(app, session_id).await?, text).await
+}
+
+pub async fn interrupt_session(
+    app: &AppHandle,
+    supervisor: &PluginRuntimeSupervisor,
+    session_id: &str,
+) -> Result<(), String> {
+    interrupt(supervisor, &load_context(app, session_id).await?).await
+}
+
+pub async fn handoff_session(
+    app: &AppHandle,
+    supervisor: &PluginRuntimeSupervisor,
+    session_id: &str,
+) -> Result<Vec<String>, String> {
+    handoff(supervisor, &load_context(app, session_id).await?).await
 }
 
 /// Look up a session and its runtime context in one blocking DB read.
@@ -626,9 +684,13 @@ mod tests {
     #[test]
     fn reconciliation_stops_sessions_that_ended_or_vanished() {
         assert_eq!(ended_reason(Some("active")), None);
-        assert_eq!(ended_reason(Some("archived")), Some("archive"));
-        assert_eq!(ended_reason(Some("destroyed")), Some("destroy"));
-        assert_eq!(ended_reason(None), Some("destroy"));
+        assert_eq!(ended_reason(Some("archived")), Some(StopReason::Archive));
+        assert_eq!(ended_reason(Some("destroyed")), Some(StopReason::Destroy));
+        assert_eq!(ended_reason(None), Some(StopReason::Destroy));
+        assert_eq!(
+            serde_json::to_value(StopReason::Archive).unwrap(),
+            "archive"
+        );
     }
 
     #[test]
@@ -652,9 +714,9 @@ mod tests {
 
     #[test]
     fn terminal_lifecycle_statuses_stop_provider_sessions() {
-        assert_eq!(stop_reason("archived"), Some("archive"));
-        assert_eq!(stop_reason("destroyed"), Some("destroy"));
-        assert_eq!(stop_reason("exited"), Some("exit"));
+        assert_eq!(stop_reason("archived"), Some(StopReason::Archive));
+        assert_eq!(stop_reason("destroyed"), Some(StopReason::Destroy));
+        assert_eq!(stop_reason("exited"), Some(StopReason::Exit));
         assert_eq!(stop_reason("active"), None);
     }
 }

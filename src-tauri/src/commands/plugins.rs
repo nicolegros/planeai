@@ -239,8 +239,7 @@ pub async fn provider_session_ensure(
     app: AppHandle,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
-    let context = crate::plugin_providers::load_context(&app, &session_id).await?;
-    crate::plugin_providers::ensure(&runtime.0, &context).await
+    crate::plugin_providers::ensure_session(&app, &runtime.0, &session_id).await
 }
 
 #[tauri::command]
@@ -250,8 +249,7 @@ pub async fn provider_session_send(
     app: AppHandle,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
-    let context = crate::plugin_providers::load_context(&app, &session_id).await?;
-    crate::plugin_providers::send(&runtime.0, &context, &text).await
+    crate::plugin_providers::send_to_session(&app, &runtime.0, &session_id, &text).await
 }
 
 #[tauri::command]
@@ -260,8 +258,7 @@ pub async fn provider_session_interrupt(
     app: AppHandle,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
-    let context = crate::plugin_providers::load_context(&app, &session_id).await?;
-    crate::plugin_providers::interrupt(&runtime.0, &context).await
+    crate::plugin_providers::interrupt_session(&app, &runtime.0, &session_id).await
 }
 
 /// Detach a provider session so its agent's TUI can continue it; returns that command.
@@ -271,8 +268,7 @@ pub async fn provider_session_handoff(
     app: AppHandle,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<Vec<String>, String> {
-    let context = crate::plugin_providers::load_context(&app, &session_id).await?;
-    crate::plugin_providers::handoff(&runtime.0, &context).await
+    crate::plugin_providers::handoff_session(&app, &runtime.0, &session_id).await
 }
 
 #[tauri::command]

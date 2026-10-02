@@ -252,6 +252,9 @@ pub async fn launch_session(
         };
 
         if let Err(e) = spawn_result {
+            if backend == PROVIDER_BACKEND {
+                notify.0.lock().unwrap().release_provider_owned(&session_id);
+            }
             {
                 let rp = repo_path.clone();
                 let br = branch.clone();
@@ -299,6 +302,8 @@ pub async fn launch_session(
         e.to_string()
     })?;
 
+    let launched_id = session_id.clone();
+    let backend_is_provider = backend == PROVIDER_BACKEND;
     let session = db::create_session_with_params(
         &conn,
         &planeai_core::services::CreateSessionParams {
@@ -330,6 +335,24 @@ pub async fn launch_session(
         tokio::task::spawn_blocking(move || {
             rollback_branch_creation(&rp, &br, wtp.as_deref(), created_branch);
         });
+        // The provider already runs this session; without a row nothing else would stop it.
+        if backend_is_provider {
+            notify
+                .0
+                .lock()
+                .unwrap()
+                .release_provider_owned(&launched_id);
+            let supervisor = runtime.0.clone();
+            let session_id = launched_id.clone();
+            tauri::async_runtime::spawn(async move {
+                plugin_providers::stop(
+                    &supervisor,
+                    &session_id,
+                    plugin_providers::StopReason::Destroy,
+                )
+                .await;
+            });
+        }
         e.to_string()
     })?;
 

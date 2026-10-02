@@ -1,7 +1,7 @@
 <script lang="ts">
   import PluginContributionHost from "./PluginContributionHost.svelte";
   import { Button } from "./ui";
-  import { findRuntimeProvider, providerContribution } from "../lib/plugin-providers";
+  import { findRuntimeProvider, providerContribution, supportsHandoff } from "../lib/plugin-providers";
   import type { PluginSessionContext } from "../lib/plugin-sdk";
   import type { PluginInventory, Session } from "../lib/types";
 
@@ -18,7 +18,7 @@
   let { session, inventory, autofocus = false, onNavigate, onOpenPreferences, onHandoff, onHandback }: Props = $props();
 
   const resolved = $derived(findRuntimeProvider(inventory, session.provider));
-  const supportsHandoff = $derived(resolved?.provider.supports.includes("handoff") ?? false);
+  const canHandoff = $derived(resolved ? supportsHandoff(resolved.provider) : false);
   const contribution = $derived(resolved ? providerContribution(resolved.provider) : null);
   const sessionContext = $derived<PluginSessionContext>({
     id: session.id,
@@ -41,8 +41,8 @@
       {onNavigate}
       onClose={() => {}}
       {onOpenPreferences}
-      onSessionHandoff={supportsHandoff ? () => onHandoff(session.id) : undefined}
-      onSessionHandback={supportsHandoff ? () => onHandback(session.id) : undefined}
+      onSessionHandoff={canHandoff ? () => onHandoff(session.id) : undefined}
+      onSessionHandback={canHandoff ? () => onHandback(session.id) : undefined}
     />
   {:else}
     <div class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center" role="status">
