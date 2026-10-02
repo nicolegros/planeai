@@ -9,7 +9,7 @@ rmux-sdk = "=0.10.0"
 # Needed to match the daemon's typed protocol errors; rmux-sdk does not re-export them.
 rmux-proto = "=0.10.0"
 planeai-paths = { path = "../planeai-paths" }
-thiserror = "=2.0.19"
+thiserror = "=2.0.21"
 tracing = { workspace = true }
 tokio = { workspace = true }
 
