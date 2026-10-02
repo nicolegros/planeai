@@ -25,7 +25,6 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     created_at: "",
     worktree_path: null,
     provider: null,
-    tab_count: 1,
     base_branch: null,
     task_key: null,
     ...overrides,

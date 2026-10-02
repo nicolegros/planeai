@@ -1,5 +1,6 @@
 import { Channel } from "@tauri-apps/api/core";
 import { pty } from "./api";
+import { parsePtyKey } from "./pty-key";
 import { isDark } from "./settings.svelte";
 import type { TerminalPty } from "./terminal-view";
 
@@ -12,11 +13,9 @@ export const tauriTerminalPty: TerminalPty = {
       await pty.attach(ptyKey, isDark(), channel);
       return;
     }
-    // Shell pty keys are `<sessionId>:<tabIndex>`.
-    const separator = ptyKey.lastIndexOf(":");
-    const sessionId = ptyKey.slice(0, separator);
-    const tabIndex = Number.parseInt(ptyKey.slice(separator + 1), 10);
-    await pty.spawnTab(sessionId, tabIndex, isDark(), channel, initialCommand);
+    const parts = parsePtyKey(ptyKey);
+    if (parts?.kind !== "shell") throw new Error(`Not a shell tab: ${ptyKey}`);
+    await pty.spawnTab(parts.sessionId, parts.index, isDark(), channel, initialCommand);
   },
   write: (ptyKey, bytes) => {
     void pty.write(ptyKey, bytes);

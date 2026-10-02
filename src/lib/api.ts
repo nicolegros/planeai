@@ -94,7 +94,6 @@ export const pty = {
   pause: (sessionId: string) => invoke("pause_pty", { sessionId }),
   resume: (sessionId: string) => invoke("resume_pty", { sessionId }),
   closeTab: (sessionId: string, tabIndex: number) => invoke("close_tab", { sessionId, tabIndex }),
-  incrementTabCount: (sessionId: string) => invoke("increment_tab_count", { sessionId }),
 };
 
 export interface LspConnection {

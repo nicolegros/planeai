@@ -16,7 +16,6 @@ pub struct Session {
     pub provider: Option<String>,
     pub backend: String,
     pub provider_session_id: Option<String>,
-    pub tab_count: i64,
     pub auto_approve: bool,
     pub task_key: Option<String>,
     pub base_branch: Option<String>,
@@ -37,7 +36,7 @@ impl Session {
 
 /// Column list for SELECT statements returning a Session.
 /// Keep in sync with `row_to_session`.
-pub const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, attached_once, parent_session_id, task_project_id";
+pub const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, auto_approve, task_key, base_branch, pr_url, pr_state, attached_once, parent_session_id, task_project_id";
 
 /// Map a row (selected with SESSION_COLUMNS) to a Session struct.
 pub fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
@@ -53,15 +52,14 @@ pub fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
         provider: row.get(8)?,
         backend: row.get(9)?,
         provider_session_id: row.get(10)?,
-        tab_count: row.get(11)?,
-        auto_approve: row.get(12)?,
-        task_key: row.get(13)?,
-        base_branch: row.get(14)?,
-        pr_url: row.get(15)?,
-        pr_state: row.get(16)?,
-        attached_once: row.get(17)?,
-        parent_session_id: row.get(18)?,
-        task_project_id: row.get(19)?,
+        auto_approve: row.get(11)?,
+        task_key: row.get(12)?,
+        base_branch: row.get(13)?,
+        pr_url: row.get(14)?,
+        pr_state: row.get(15)?,
+        attached_once: row.get(16)?,
+        parent_session_id: row.get(17)?,
+        task_project_id: row.get(18)?,
     })
 }
 
@@ -171,7 +169,6 @@ fn record_to_session(r: planeai_core::services::SessionRecord) -> Session {
         provider: r.provider,
         backend: r.backend,
         provider_session_id: r.provider_session_id,
-        tab_count: r.tab_count,
         auto_approve: r.auto_approve,
         task_key: r.task_key,
         base_branch: r.base_branch,
@@ -369,10 +366,6 @@ pub fn set_provider_session_id(
     provider_session_id: &str,
 ) -> Result<()> {
     planeai_core::services::SessionService::set_provider_session_id(conn, id, provider_session_id)
-}
-
-pub fn update_tab_count(conn: &Connection, id: &str, tab_count: i64) -> Result<()> {
-    planeai_core::services::SessionService::update_tab_count(conn, id, tab_count)
 }
 
 pub fn save_mru_order(conn: &Connection, session_ids: &[&str]) -> Result<()> {

@@ -21,7 +21,10 @@ vi.mock("../settings.svelte", () => ({
 vi.mock("../tab-switcher.svelte", () => ({
   getCycleState: vi.fn(() => ({ isCycling: false, cycleList: [], index: 0, isVisible: false })),
 }));
-vi.mock("../terminal-views", () => ({ disposeSessionTerminalViews: vi.fn() }));
+vi.mock("../terminal-views", () => ({
+  disposeSessionTerminalViews: vi.fn(),
+  disposeTerminalView: vi.fn(),
+}));
 vi.mock("../mru.svelte", () => ({
   removeMru: vi.fn(),
   touchMru: vi.fn(),
@@ -40,6 +43,8 @@ vi.mock("../api", () => ({
     markExited: vi.fn(),
     acknowledge: vi.fn(() => Promise.resolve()),
     saveMruOrder: vi.fn(() => Promise.resolve()),
+    getLayout: vi.fn(() => Promise.resolve(null)),
+    saveLayout: vi.fn(() => Promise.resolve()),
   },
   pty: { closeTab: vi.fn(() => Promise.resolve()) },
   symphony: { getStatus: vi.fn(() => Promise.resolve("null")) },
@@ -51,7 +56,7 @@ vi.mock("../api", () => ({
 }));
 
 import { sessions as sessionsApi, symphony } from "../api";
-import * as splitTree from "../split-tree.svelte";
+import { taskWorkspaceLayout } from "../task-workspace-layout.svelte";
 import { getSettings } from "../settings.svelte";
 import type { Session } from "../types";
 import {
@@ -72,14 +77,6 @@ import {
   restartSession,
   jumpToSession,
   isSelectionExplicit,
-  getUnifiedTabs,
-  getUnifiedActiveIndex,
-  selectUnifiedTab,
-  handleNextTab,
-  handlePrevTab,
-  toggleEditor,
-  getEditorTabOpen,
-  getEditorTabActive,
   getAgentStates,
   clearAgentState,
   recordUserInput,
@@ -105,7 +102,6 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     worktree_path: null,
     provider: "kiro",
     backend: "tmux",
-    tab_count: 1,
     base_branch: null,
     task_key: null,
     task_project_id: null,
@@ -354,49 +350,6 @@ describe("session-orchestrator", () => {
     });
   });
 
-  describe("unified tab cycling", () => {
-    it("getUnifiedTabs returns shell tabs", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1", tab_count: 2 })]);
-      await loadSessions();
-      expect(getUnifiedTabs().length).toBe(2);
-    });
-
-    it("selectUnifiedTab changes active", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1", tab_count: 3 })]);
-      await loadSessions();
-      selectUnifiedTab(2);
-      expect(getUnifiedActiveIndex()).toBe(2);
-    });
-
-    it("handleNextTab cycles forward", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1", tab_count: 3 })]);
-      await loadSessions();
-      handleNextTab();
-      expect(getUnifiedActiveIndex()).toBe(1);
-      handleNextTab();
-      expect(getUnifiedActiveIndex()).toBe(2);
-      handleNextTab();
-      expect(getUnifiedActiveIndex()).toBe(0);
-    });
-
-    it("handlePrevTab cycles backward", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1", tab_count: 3 })]);
-      await loadSessions();
-      handlePrevTab();
-      expect(getUnifiedActiveIndex()).toBe(2);
-      handlePrevTab();
-      expect(getUnifiedActiveIndex()).toBe(1);
-    });
-
-    it("toggleEditor opens and activates", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
-      await loadSessions();
-      toggleEditor();
-      expect(getEditorTabOpen()["s1"]).toBe(true);
-      expect(getEditorTabActive()["s1"]).toBe(true);
-    });
-  });
-
   describe("event management", () => {
     it("startEventListeners returns cleanup", () => {
       const cleanup = startEventListeners();
@@ -557,8 +510,15 @@ describe("session-orchestrator", () => {
       await loadSessions();
       selectSession("s1");
 
-      splitTree.resetTree();
-      splitTree.initTree([{ ptyKey: "s1", label: "Agent", icon: "bot", type: "agent" }], "s1");
+      taskWorkspaceLayout.clear();
+      await taskWorkspaceLayout.show(
+        { kind: "session", key: "session:s1", sessionId: "s1" },
+        {
+          agents: [{ sessionId: "s1", label: "Agent", icon: "bot" }],
+          selectedSessionId: "s1",
+          selectionIsExplicit: true,
+        },
+      );
 
       const cleanup = startEventListeners();
       const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
@@ -569,7 +529,7 @@ describe("session-orchestrator", () => {
       handler({ payload: { session_id: "s1", state: "Idle" } });
       await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
 
-      const leaf = splitTree.getFocusedLeaf();
+      const leaf = taskWorkspaceLayout.focusedLeaf();
       expect(leaf?.tabs.map((tab) => tab.ptyKey)).toEqual(["s1", "s1:diff"]);
       expect(leaf?.activeTab).toBe("s1:diff");
 
@@ -596,8 +556,15 @@ describe("session-orchestrator", () => {
       await loadSessions();
       selectSession("s1");
 
-      splitTree.resetTree();
-      splitTree.initTree([{ ptyKey: "s1", label: "Agent", icon: "bot", type: "agent" }], "s1");
+      taskWorkspaceLayout.clear();
+      await taskWorkspaceLayout.show(
+        { kind: "session", key: "session:s1", sessionId: "s1" },
+        {
+          agents: [{ sessionId: "s1", label: "Agent", icon: "bot" }],
+          selectedSessionId: "s1",
+          selectionIsExplicit: true,
+        },
+      );
 
       const cleanup = startEventListeners();
       const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
@@ -610,7 +577,10 @@ describe("session-orchestrator", () => {
       handler({ payload: { session_id: "s1", state: "Idle" } });
       await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
 
-      expect(splitTree.getFocusedLeaf()?.tabs.map((tab) => tab.ptyKey)).toEqual(["s1", "s1:diff"]);
+      expect(taskWorkspaceLayout.focusedLeaf()?.tabs.map((tab) => tab.ptyKey)).toEqual([
+        "s1",
+        "s1:diff",
+      ]);
 
       cleanup();
     });

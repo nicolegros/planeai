@@ -28,7 +28,9 @@ vi.mock("../../lib/terminal-pty", () => ({
     resume: vi.fn(),
   },
 }));
-vi.mock("../../lib/split-tree.svelte", () => ({ updateTabLabel: vi.fn() }));
+vi.mock("../../lib/task-workspace-layout.svelte", () => ({
+  taskWorkspaceLayout: { setTabTitle: vi.fn() },
+}));
 vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
 
 import Terminal from "../Terminal.svelte";

@@ -20,7 +20,6 @@ function makeSession(id: string, projectId: string, taskKey: string | null = nul
     worktree_path: null,
     provider: null,
     backend: "direct",
-    tab_count: 1,
     base_branch: null,
     task_key: taskKey,
     task_project_id: null,

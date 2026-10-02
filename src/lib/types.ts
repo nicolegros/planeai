@@ -9,7 +9,6 @@ export interface Session {
   worktree_path: string | null;
   provider: string | null;
   backend: string;
-  tab_count: number;
   base_branch: string | null;
   task_key: string | null;
   /** Project owning the linked task; null means the session's own project. */

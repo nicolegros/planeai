@@ -79,7 +79,7 @@ Claude reads your codebase and responds. You can continue the conversation, ask 
 
 When the agent makes changes:
 
-1. Open the diff viewer with **⌘D** (macOS) or **Ctrl+D** — this shows all file changes the agent made
+1. Open the diff viewer with **⌘\\** (macOS) or **Ctrl+\\** — this shows all file changes the agent made
 2. Review the diff and send feedback directly to the agent if needed
 3. When you're satisfied, archive the session from the context menu (right-click the session in the sidebar)
 

@@ -3,7 +3,7 @@
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { getTerminalSettings, isDark } from "../lib/settings.svelte";
   import { extractCommandName } from "../lib/shell-title";
-  import { updateTabLabel } from "../lib/split-tree.svelte";
+  import { taskWorkspaceLayout } from "../lib/task-workspace-layout.svelte";
   import type { TerminalView } from "../lib/terminal-view";
   import { acquireTerminalView } from "../lib/terminal-views";
 
@@ -43,7 +43,7 @@
       onTitle: kind === "shell"
         ? (title) => {
             const name = extractCommandName(title);
-            if (name) updateTabLabel(sessionId, name);
+            if (name) taskWorkspaceLayout.setTabTitle(sessionId, name);
           }
         : undefined,
     });

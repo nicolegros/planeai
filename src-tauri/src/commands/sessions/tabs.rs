@@ -277,8 +277,7 @@ pub async fn close_tab(
     }
 
     // The database lock was released by prepare_tab_close before this bounded
-    // daemon IPC. Do not lower the persisted count unless the daemon confirms
-    // that this exact shell tab is gone (or was already gone).
+    // daemon IPC.
     if plan.daemon_backed {
         if let Err(error) =
             crate::daemon_client::kill_shell_tab(&planeai_ipc::daemon_socket_path(), &plan.pty_key)
@@ -301,30 +300,10 @@ pub async fn close_tab(
         }
     }
 
-    let connection = db_state.0.clone();
-    let session_id_for_update = session_id.clone();
-    if let Err(error) = crate::commands::blocking(move || {
-        let conn = connection.lock().map_err(|e| e.to_string())?;
-        let session = db::get_session(&conn, &session_id_for_update)
-            .map_err(|e| e.to_string())?
-            .ok_or("session not found")?;
-        db::update_tab_count(
-            &conn,
-            &session_id_for_update,
-            (session.tab_count - 1).max(1),
-        )
-        .map_err(|e| e.to_string())
-    })
-    .await
-    {
-        state.0.cancel_tab_close(&plan.pty_key);
-        return Err(error);
-    }
-
-    // Detach only after the daemon shell has been confirmed dead and the
-    // persisted count has been updated, so a failed kill leaves the tab live
-    // rather than silently orphaning its shell. The close claim remains until
-    // this PTY key is attached again, making duplicate pty-exited events safe.
+    // Detach only after the daemon shell has been confirmed dead, so a failed
+    // kill leaves the tab live rather than silently orphaning its shell. The close
+    // claim remains until this PTY key is attached again, making duplicate
+    // pty-exited events safe.
     state.0.detach(&plan.pty_key);
     Ok(())
 }
@@ -344,16 +323,6 @@ fn prepare_tab_close(
         daemon_backed: session.backend == "daemon",
         rmux_backed: session.backend == planeai_rmux::BACKEND,
     })
-}
-
-#[tauri::command]
-pub fn increment_tab_count(session_id: String, db_state: State<DbState>) -> Result<(), String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    let session = db::get_session(&conn, &session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("session not found")?;
-    db::update_tab_count(&conn, &session_id, session.tab_count + 1).map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 #[tauri::command]

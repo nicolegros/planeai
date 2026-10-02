@@ -362,5 +362,37 @@
   overflow: hidden;
 }
 
+/* Where a dragged tab or file would land in a pane, above its terminal. */
+.pane-drop-preview {
+  position: absolute;
+  inset: 0;
+  background: var(--color-accent-bg);
+  border: 2px solid var(--color-accent);
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: 20;
+  transition: inset 80ms ease-out;
+}
+
+/* While a tab is dragged, nothing under the pointer reacts or gets selected. */
+body.tab-dragging,
+body.tab-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.pane-drop-preview[data-zone="left"] {
+  right: 50%;
+}
+.pane-drop-preview[data-zone="right"] {
+  left: 50%;
+}
+.pane-drop-preview[data-zone="up"] {
+  bottom: 50%;
+}
+.pane-drop-preview[data-zone="down"] {
+  top: 50%;
+}
+
 /* Terminal internal padding — gives text breathing room from edges.
    Applied to xterm's element so FitAddon accounts for it correctly. */

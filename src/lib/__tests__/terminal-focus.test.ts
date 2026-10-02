@@ -46,7 +46,7 @@ describe("isTerminalPaneFocused", () => {
   });
 
   it("does not let a pane from the previous layout reclaim focus mid-transition", () => {
-    // Deliberate guard: during a workspace swap the split tree still holds the
+    // Deliberate guard: during a workspace swap the layout still holds the
     // outgoing workspace's tabs while the selected session has already moved.
     expect(isTerminalPaneFocused({ ...base, belongsToActiveSession: false })).toBe(false);
   });

@@ -10,8 +10,14 @@ import {
 export const IS_MAC =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
+/** True on Windows, whose webview and shells differ from macOS/Linux ones */
+export const IS_WINDOWS = typeof navigator !== "undefined" && /Win/.test(navigator.platform);
+
 /** Returns the platform modifier label: ⌘ on macOS, Ctrl on Windows/Linux */
 export const MOD_LABEL = IS_MAC ? "⌘" : "Ctrl+";
+
+/** The Option/Alt modifier label: ⌥ on macOS, Alt on Windows/Linux */
+export const ALT_LABEL = IS_MAC ? "⌥" : "Alt+";
 
 /** Hint text for Mod+Enter submit shortcut */
 export const MOD_ENTER_HINT = IS_MAC ? "⌘↵" : "Ctrl+↵";
@@ -65,6 +71,8 @@ export type KeyboardAction =
  */
 export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   const mod = isPlatformMod(e);
+  // The modifier that is not Mod on this platform (Ctrl on macOS, Cmd/Win elsewhere).
+  const otherMod = IS_MAC ? e.ctrlKey : e.metaKey;
   const key = e.key.toLowerCase();
 
   // Escape — always return to terminal
@@ -188,7 +196,7 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   }
 
   // Mod+Shift+Arrow — focus split in direction
-  if (mod && e.shiftKey && !e.altKey && !e.ctrlKey) {
+  if (mod && e.shiftKey && !e.altKey && !otherMod) {
     if (e.key === "ArrowLeft") return { type: "focus_split_left" };
     if (e.key === "ArrowRight") return { type: "focus_split_right" };
     if (e.key === "ArrowUp") return { type: "focus_split_up" };
@@ -196,7 +204,7 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   }
 
   // Mod+Option+Arrow — move tab to split in direction
-  if (mod && e.altKey && !e.shiftKey && !e.ctrlKey) {
+  if (mod && e.altKey && !e.shiftKey && !otherMod) {
     if (e.key === "ArrowLeft") return { type: "move_tab_left" };
     if (e.key === "ArrowRight") return { type: "move_tab_right" };
     if (e.key === "ArrowUp") return { type: "move_tab_up" };
@@ -268,6 +276,10 @@ export function installKeyboardRouter(
     "focus_split_right",
     "focus_split_up",
     "focus_split_down",
+    "move_tab_left",
+    "move_tab_right",
+    "move_tab_up",
+    "move_tab_down",
   ]);
 
   function routeAction(e: KeyboardEvent, action: KeyboardAction): void {

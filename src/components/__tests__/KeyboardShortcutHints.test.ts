@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 
-vi.mock("../../lib/session-orchestrator.svelte", () => ({
-  getActiveSessionId: () => null,
-}));
-vi.mock("../../lib/tab-layout.svelte", () => ({
-  getDiffTabActive: () => ({}),
+const layout = vi.hoisted(() => ({ focusedTabType: null as string | null }));
+vi.mock("../../lib/task-workspace-layout.svelte", () => ({
+  taskWorkspaceLayout: {
+    focusedTab: () => (layout.focusedTabType ? { type: layout.focusedTabType } : null),
+  },
 }));
 
 import KeyboardHelperBar from "../KeyboardHelperBar.svelte";
@@ -50,6 +50,7 @@ describe("editor feedback shortcut hints", () => {
     for (const target of targets) target.remove();
     components = [];
     targets = [];
+    layout.focusedTabType = null;
     focusTerminal();
     vi.useRealTimers();
   });
@@ -63,6 +64,38 @@ describe("editor feedback shortcut hints", () => {
     expect(target.textContent).toContain("Comment");
     expect(target.textContent).toContain(MOD_ENTER_HINT);
     expect(target.textContent).toContain("Send feedback");
+  });
+
+  it("shows diff navigation hints while the focused pane shows a diff", async () => {
+    layout.focusedTabType = "diff";
+    focusTerminal();
+    const target = mountHelperBar();
+    await tick();
+
+    expect(target.textContent).toContain("Hunk");
+    expect(target.textContent).toContain("Unified/Split");
+  });
+
+  it("always points to the full shortcut list, in every zone", async () => {
+    for (const zone of [focusTerminal, focusEditor]) {
+      zone();
+      const target = mountHelperBar();
+      await tick();
+      const allShortcuts = target.querySelector("[data-helper-all-shortcuts]");
+      expect(allShortcuts?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+        `${MOD_LABEL}/All shortcuts`,
+      );
+      // Outside the row that drops hints on a narrow window.
+      expect(target.querySelector("[data-helper-hints]")?.contains(allShortcuts!)).toBe(false);
+    }
+  });
+
+  it("hides hints that do not fit whole instead of clipping them", async () => {
+    focusTerminal();
+    const row = mountHelperBar().querySelector("[data-helper-hints]")!;
+    await tick();
+    expect(row.className).toContain("flex-wrap");
+    expect(row.className).toContain("overflow-hidden");
   });
 
   it("lists the feedback send shortcut in the editor shortcut reference", async () => {

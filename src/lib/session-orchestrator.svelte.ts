@@ -1,12 +1,10 @@
 /**
  * Session Orchestrator — manages session lifecycle, agent states, event listeners, and symphony polling.
- * Tab layout state is delegated to tab-layout.svelte.ts.
  */
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sessions as sessionsApi, symphony, tasks } from "./api";
 import { sessionTaskProjectId, type Session } from "./types";
-import { initSession, getTabCount, destroySession as destroyTabState } from "./session-tabs.svelte";
 import { touchMru, removeMru, getMruList, flushMru, seedMru } from "./mru.svelte";
 import { disposeSessionTerminalViews } from "./terminal-views";
 import { clearComments } from "./review-comments.svelte";
@@ -17,35 +15,7 @@ import { dismissForSession } from "./post-merge-prompt.svelte";
 import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
 import { getCycleState } from "./tab-switcher.svelte";
-import { cleanup as tabLayoutCleanup, resetAll as tabLayoutReset } from "./tab-layout.svelte";
-import { openDiffResource } from "./workspace-resources";
-
-// Re-export tab layout functions for consumers still importing from orchestrator
-export {
-  getDiffTabOpen,
-  getDiffTabActive,
-  getEditorTabOpen,
-  getEditorTabActive,
-  getDiffFileName,
-  getEditorFileName,
-  getEditorModified,
-  isEditorModified,
-  getUnifiedTabs,
-  getUnifiedActiveIndex,
-  selectUnifiedTab,
-  handleNewTab,
-  handleCloseTab,
-  handleNextTab,
-  handlePrevTab,
-  toggleEditor,
-  setDiffFileName,
-  setEditorFileName,
-  setEditorModified,
-  closeDiffTab,
-  closeEditorTab,
-  closeShellTab,
-  focusEditorTab,
-} from "./tab-layout.svelte";
+import { taskWorkspaceLayout } from "./task-workspace-layout.svelte";
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -61,13 +31,11 @@ let reviewReady = $state<Record<string, boolean>>({});
 // ─── Testing helper ──────────────────────────────────────────────────────────
 
 export function _resetForTests(): void {
-  for (const s of sessions) destroyTabState(s.id);
   sessions = [];
   setActiveSession(null);
   agentStates = {};
   symphonyStatus = null;
   reviewReady = {};
-  tabLayoutReset();
 }
 
 export function _setReviewReadyForTests(sessionId: string): void {
@@ -116,9 +84,6 @@ export async function loadSessions(): Promise<void> {
   const loadedIds = new Set(loadedSessions.map((s) => s.id));
   for (const s of sessions) if (!loadedIds.has(s.id)) removeSessionViews(s.id);
   sessions = loadedSessions;
-  for (const s of sessions) {
-    if (getTabCount(s.id) === 0) initSession(s.id, s.tab_count);
-  }
   if (sessions.length > 0 && !activeSessionId) {
     seedMru(sessions.map((s) => s.id));
     selectSession(sessions[0].id);
@@ -193,7 +158,6 @@ export function createSession(session: Session): void {
     existing === -1
       ? [...sessions, session]
       : sessions.map((candidate) => (candidate.id === session.id ? session : candidate));
-  initSession(session.id, 1);
   selectSession(session.id, { explicit: true });
 }
 
@@ -206,12 +170,10 @@ function removeSessionViews(sessionId: string): void {
 export async function deleteSession(s: Session): Promise<void> {
   await sessionsApi.destroy(s.id);
   dismissForSession(s.id);
-  destroyTabState(s.id);
   clearComments(s.id);
   clearEditorFeedback(s.id);
   destroyViewedState(s.id);
   removeSessionViews(s.id);
-  tabLayoutCleanup(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
     setActiveSession(sessions[0]?.id ?? null);
@@ -285,7 +247,6 @@ export function removeProjectSessions(projectId: string): string[] {
   const ids = sessions.filter((s) => s.project_id === projectId).map((s) => s.id);
   for (const id of ids) {
     removeSessionViews(id);
-    destroyTabState(id);
     clearEditorFeedback(id);
   }
   sessions = sessions.filter((s) => s.project_id !== projectId);
@@ -336,7 +297,7 @@ export function startEventListeners(): () => void {
           if (sid === activeSessionId) {
             if (getSettings().auto_open_review !== false) {
               // Defer to next frame so state updates don't block the current tick
-              requestAnimationFrame(() => openDiffResource(sid));
+              requestAnimationFrame(() => taskWorkspaceLayout.openDiff(sid));
             }
           } else {
             reviewReady = { ...reviewReady, [sid]: true };

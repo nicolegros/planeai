@@ -55,7 +55,6 @@ vi.mock("../../lib/session-orchestrator.svelte", () => ({
       created_at: "",
       worktree_path: null,
       provider: null,
-      tab_count: 1,
       base_branch: null,
     },
   ],

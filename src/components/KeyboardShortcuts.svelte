@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Dialog } from "./ui";
-  import { IS_MAC, MOD_LABEL, MOD_ENTER_HINT } from "../lib/keyboard";
+  import { ALT_LABEL, IS_MAC, MOD_LABEL, MOD_ENTER_HINT } from "../lib/keyboard";
   import { getActiveZone } from "../lib/focus.svelte";
   import { filterShortcuts } from "../lib/shortcut-filter";
 
@@ -49,7 +49,7 @@
       { keys: `${MOD_LABEL}⇧D`, description: "Split horizontal" },
       { keys: `${MOD_LABEL}⇧W`, description: "Close split" },
       { keys: `${MOD_LABEL}⇧←→↑↓`, description: "Focus split in direction" },
-      { keys: `${MOD_LABEL}⌥←→↑↓`, description: "Move pane to split in direction" },
+      { keys: `${MOD_LABEL}${ALT_LABEL}←→↑↓`, description: "Move pane to split in direction" },
     ]},
     { section: "Terminal", items: [
       { keys: IS_MAC ? `${MOD_LABEL}C` : `Ctrl+Shift+C`, description: "Copy selection" },

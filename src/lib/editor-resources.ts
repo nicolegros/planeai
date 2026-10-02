@@ -2,11 +2,11 @@
  * Editor resources — connects the embedded editor tabs in the TaskWorkspace
  * layout to the app-level commands that act on them.
  *
- * The split tree knows which editor tab is in front of the user; only the mounted
+ * The TaskWorkspace layout knows which editor tab is in front of the user; only the mounted
  * EditorTab knows how to save its buffer. Each tab registers itself under its pty
  * key so commands like Cmd+S can reach the right one.
  */
-import * as splitTree from "./split-tree.svelte";
+import { taskWorkspaceLayout } from "./task-workspace-layout.svelte";
 
 export interface EditorResourceHandle {
   save: () => void | Promise<void>;
@@ -26,9 +26,7 @@ export function unregisterEditorResource(ptyKey: string): void {
 
 /** Pty key of the editor tab the user is looking at, if the front tab is an editor. */
 export function activeEditorResourceKey(): string | null {
-  const leaf = splitTree.getFocusedLeaf();
-  if (!leaf) return null;
-  const active = splitTree.getActiveTabEntry(leaf);
+  const active = taskWorkspaceLayout.focusedTab();
   return active?.type === "editor" ? active.ptyKey : null;
 }
 

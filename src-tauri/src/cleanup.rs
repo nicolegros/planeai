@@ -3,6 +3,7 @@
 type OpResult = Result<(), String>;
 type Op1 = Box<dyn Fn(&str) -> OpResult>;
 type Op2 = Box<dyn Fn(&str, &str) -> OpResult>;
+type ListOp = Box<dyn Fn() -> Result<Vec<String>, String>>;
 
 /// Data needed by background cleanup (gathered while locks are held).
 pub struct CleanupContext {
@@ -13,12 +14,13 @@ pub struct CleanupContext {
     pub project_path: Option<String>,
     pub branch: Option<String>,
     pub session_id: Option<String>,
-    pub tab_count: i64,
 }
 
 /// Operations to kill a backend session (injectable for testing).
 pub struct KillOps {
     pub kill_tmux: Op1,
+    /// Ids of the sessions the daemon currently hosts, agent and shell tabs alike.
+    pub list_daemon_sessions: ListOp,
     pub kill_daemon_session: Op1,
     pub kill_rmux_session: Op1,
 }
@@ -36,7 +38,6 @@ pub fn kill_backend(
     backend: &str,
     tmux_name: Option<&str>,
     session_id: Option<&str>,
-    tab_count: i64,
     ops: &KillOps,
 ) -> Vec<String> {
     let mut errors = vec![];
@@ -53,11 +54,19 @@ pub fn kill_backend(
                 if let Err(e) = (ops.kill_daemon_session)(id) {
                     errors.push(format!("daemon kill: {e}"));
                 }
-                // Kill shell tabs (tab indices 1..tab_count)
-                for i in 1..tab_count {
-                    let tab_id = format!("{id}:{i}");
+                // Shell tabs are `{id}:{index}` with sparse indices, so ask the
+                // daemon which ones are alive rather than guessing a range.
+                let shell_prefix = format!("{id}:");
+                let live = (ops.list_daemon_sessions)().unwrap_or_else(|e| {
+                    errors.push(format!("daemon list: {e}"));
+                    Vec::new()
+                });
+                for tab_id in live {
+                    if !tab_id.starts_with(&shell_prefix) {
+                        continue;
+                    }
                     if let Err(e) = (ops.kill_daemon_session)(&tab_id) {
-                        errors.push(format!("daemon kill tab {i}: {e}"));
+                        errors.push(format!("daemon kill tab {tab_id}: {e}"));
                     }
                 }
             }
@@ -83,7 +92,6 @@ pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
         &ctx.backend,
         ctx.tmux_name.as_deref(),
         ctx.session_id.as_deref(),
-        ctx.tab_count,
         &ops.kill,
     );
 
@@ -130,6 +138,10 @@ pub fn real_kill_ops() -> KillOps {
             {
                 Ok(())
             }
+        }),
+        list_daemon_sessions: Box::new(|| {
+            crate::daemon::list_session_ids()
+                .map(|ids| ids.unwrap_or_default().into_iter().collect())
         }),
         kill_daemon_session: Box::new(|session_id| {
             use std::io::{Read, Write};
@@ -195,10 +207,11 @@ mod tests {
                 KILLED.with(|k| k.borrow_mut().push(name.to_string()));
                 Ok(())
             }),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| Ok(())),
             kill_rmux_session: Box::new(|_| Ok(())),
         };
-        let errors = kill_backend("tmux", Some("planeai-abc"), None, 1, &ops);
+        let errors = kill_backend("tmux", Some("planeai-abc"), None, &ops);
         assert!(errors.is_empty());
         KILLED.with(|k| {
             assert_eq!(k.borrow().as_slice(), &["planeai-abc"]);
@@ -212,6 +225,7 @@ mod tests {
         }
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| {
                 panic!("an rmux session must not be killed through the daemon")
             }),
@@ -221,9 +235,8 @@ mod tests {
             }),
         };
 
-        // tab_count > 1 must not fan out: shell tabs are not mapped in this slice,
-        // and one rmux session owns the whole PlaneAI session.
-        let errors = kill_backend(planeai_rmux::BACKEND, None, Some("sess-abc"), 3, &ops);
+        // One rmux session owns the whole PlaneAI session, shell tabs included.
+        let errors = kill_backend(planeai_rmux::BACKEND, None, Some("sess-abc"), &ops);
 
         assert!(errors.is_empty());
         KILLED.with(|killed| assert_eq!(killed.borrow().as_slice(), &["sess-abc"]));
@@ -233,11 +246,12 @@ mod tests {
     fn kill_backend_rmux_reports_failures() {
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| Ok(())),
             kill_rmux_session: Box::new(|_| Err("daemon refused".to_string())),
         };
 
-        let errors = kill_backend(planeai_rmux::BACKEND, None, Some("sess-abc"), 1, &ops);
+        let errors = kill_backend(planeai_rmux::BACKEND, None, Some("sess-abc"), &ops);
 
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("rmux close"));
@@ -247,51 +261,76 @@ mod tests {
     fn kill_backend_local_is_noop() {
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| Ok(())),
             kill_rmux_session: Box::new(|_| Ok(())),
         };
-        let errors = kill_backend("local", None, None, 1, &ops);
+        let errors = kill_backend("local", None, None, &ops);
         assert!(errors.is_empty());
     }
 
     #[test]
-    fn kill_backend_kills_shell_tabs_for_daemon_backend() {
+    fn kill_backend_kills_every_live_shell_tab_for_daemon_backend() {
         thread_local! {
             static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
         }
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
             kill_rmux_session: Box::new(|_| Ok(())),
+            // Shell 1 was closed earlier, so the live indices are sparse.
+            list_daemon_sessions: Box::new(|| {
+                Ok([
+                    "sess-abc",
+                    "sess-abc:2",
+                    "sess-abc:5",
+                    "sess-other:2",
+                    "sess-abcd:1",
+                ]
+                .map(String::from)
+                .to_vec())
+            }),
             kill_daemon_session: Box::new(|id| {
                 KILLED.with(|k| k.borrow_mut().push(id.to_string()));
                 Ok(())
             }),
         };
-        let errors = kill_backend("daemon", None, Some("sess-abc"), 3, &ops);
+        let errors = kill_backend("daemon", None, Some("sess-abc"), &ops);
         assert!(errors.is_empty());
         KILLED.with(|k| {
-            let killed = k.borrow();
-            assert_eq!(killed.len(), 3);
-            assert!(killed.contains(&"sess-abc".to_string()));
-            assert!(killed.contains(&"sess-abc:1".to_string()));
-            assert!(killed.contains(&"sess-abc:2".to_string()));
+            assert_eq!(
+                k.borrow().as_slice(),
+                &["sess-abc", "sess-abc:2", "sess-abc:5"]
+            );
         });
     }
 
     #[test]
-    fn kill_backend_with_single_tab_only_kills_agent() {
+    fn kill_backend_reports_shell_tabs_it_could_not_list() {
+        let ops = KillOps {
+            kill_tmux: Box::new(|_| Ok(())),
+            kill_rmux_session: Box::new(|_| Ok(())),
+            list_daemon_sessions: Box::new(|| Err("timed out".to_string())),
+            kill_daemon_session: Box::new(|_| Ok(())),
+        };
+        let errors = kill_backend("daemon", None, Some("sess-abc"), &ops);
+        assert_eq!(errors, vec!["daemon list: timed out".to_string()]);
+    }
+
+    #[test]
+    fn kill_backend_without_shell_tabs_only_kills_agent() {
         thread_local! {
             static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
         }
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
             kill_rmux_session: Box::new(|_| Ok(())),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|id| {
                 KILLED.with(|k| k.borrow_mut().push(id.to_string()));
                 Ok(())
             }),
         };
-        let errors = kill_backend("daemon", None, Some("sess-abc"), 1, &ops);
+        let errors = kill_backend("daemon", None, Some("sess-abc"), &ops);
         assert!(errors.is_empty());
         KILLED.with(|k| {
             let killed = k.borrow();
@@ -309,6 +348,7 @@ mod tests {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Ok(())),
                 kill_rmux_session: Box::new(|_| Ok(())),
+                list_daemon_sessions: Box::new(|| Ok(Vec::new())),
                 kill_daemon_session: Box::new(|id| {
                     KILLED.with(|k| k.borrow_mut().push(id.to_string()));
                     Ok(())
@@ -326,7 +366,6 @@ mod tests {
             project_path: None,
             branch: None,
             session_id: Some("sess-123".to_string()),
-            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -346,6 +385,7 @@ mod tests {
                     KILLED.with(|k| k.borrow_mut().push(name.to_string()));
                     Ok(())
                 }),
+                list_daemon_sessions: Box::new(|| Ok(Vec::new())),
                 kill_daemon_session: Box::new(|_| Ok(())),
                 kill_rmux_session: Box::new(|_| Ok(())),
             },
@@ -361,7 +401,6 @@ mod tests {
             project_path: None,
             branch: None,
             session_id: None,
-            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -380,6 +419,7 @@ mod tests {
         let ops = CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Ok(())),
+                list_daemon_sessions: Box::new(|| Ok(Vec::new())),
                 kill_daemon_session: Box::new(|_| Ok(())),
                 kill_rmux_session: Box::new(|_| Ok(())),
             },
@@ -404,7 +444,6 @@ mod tests {
             project_path: Some("/tmp/myapp".to_string()),
             branch: Some("loop/abcd1234/test-iv".to_string()),
             session_id: None,
-            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -433,6 +472,7 @@ mod tests {
         let ops = CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Ok(())),
+                list_daemon_sessions: Box::new(|| Ok(Vec::new())),
                 kill_daemon_session: Box::new(|_| Ok(())),
                 kill_rmux_session: Box::new(|_| Ok(())),
             },
@@ -448,7 +488,6 @@ mod tests {
             project_path: Some("/tmp/project".to_string()),
             branch: Some("loop/shared".to_string()),
             session_id: None,
-            tab_count: 1,
         };
 
         assert!(run_cleanup(&ctx, &ops).is_empty());
@@ -459,6 +498,7 @@ mod tests {
         let ops = CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
+                list_daemon_sessions: Box::new(|| Ok(Vec::new())),
                 kill_daemon_session: Box::new(|_| Ok(())),
                 kill_rmux_session: Box::new(|_| Ok(())),
             },
@@ -474,7 +514,6 @@ mod tests {
             project_path: Some("/tmp/myapp".to_string()),
             branch: Some("loop/abcd1234/feat-x".to_string()),
             session_id: None,
-            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert_eq!(errors.len(), 4);

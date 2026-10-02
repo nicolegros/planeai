@@ -221,7 +221,6 @@ pub async fn delete_project(
                 &session.backend,
                 session.tmux_name.as_deref(),
                 Some(&session.id),
-                session.tab_count,
                 &cleanup::real_kill_ops(),
             );
             if !kill_errors.is_empty() {

@@ -68,8 +68,6 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
     let _ =
         conn.execute_batch("ALTER TABLE sessions ADD COLUMN backend TEXT NOT NULL DEFAULT 'tmux'");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider_session_id TEXT");
-    let _ =
-        conn.execute_batch("ALTER TABLE sessions ADD COLUMN tab_count INTEGER NOT NULL DEFAULT 1");
     let _ = conn
         .execute_batch("ALTER TABLE sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 1");
     let _ =
@@ -154,7 +152,6 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
                  provider TEXT,
                  backend TEXT NOT NULL DEFAULT 'tmux',
                  provider_session_id TEXT,
-                 tab_count INTEGER NOT NULL DEFAULT 1,
                  auto_approve INTEGER NOT NULL DEFAULT 1,
                  task_key TEXT,
                  base_branch TEXT,
@@ -164,8 +161,8 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
                  auto_dispatched INTEGER NOT NULL DEFAULT 0,
                  updated_at TEXT
              );
-             INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, updated_at)
-                 SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, created_at FROM sessions_old;
+             INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, provider_session_id, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, updated_at)
+                 SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, provider_session_id, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, created_at FROM sessions_old;
              DROP TABLE sessions_old;"
         )?;
     }
@@ -218,6 +215,9 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
          )",
     )?;
 
+    // Shell tabs are tracked by the persisted TaskWorkspace layout, not a per-session count.
+    let _ = conn.execute_batch("ALTER TABLE sessions DROP COLUMN tab_count");
+
     Ok(())
 }
 
@@ -248,7 +248,6 @@ pub struct SessionRecord {
     pub provider: Option<String>,
     pub backend: String,
     pub provider_session_id: Option<String>,
-    pub tab_count: i64,
     pub auto_approve: bool,
     pub task_key: Option<String>,
     pub base_branch: Option<String>,
@@ -269,7 +268,7 @@ impl SessionRecord {
 }
 
 /// Column list matching production SESSION_COLUMNS + mru_position + auto_dispatched.
-const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, mru_position, auto_dispatched, attached_once, parent_session_id, task_project_id";
+const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, auto_approve, task_key, base_branch, pr_url, pr_state, mru_position, auto_dispatched, attached_once, parent_session_id, task_project_id";
 
 fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SessionRecord> {
     Ok(SessionRecord {
@@ -284,17 +283,16 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SessionRecord> {
         provider: row.get(8)?,
         backend: row.get(9)?,
         provider_session_id: row.get(10)?,
-        tab_count: row.get(11)?,
-        auto_approve: row.get(12)?,
-        task_key: row.get(13)?,
-        base_branch: row.get(14)?,
-        pr_url: row.get(15)?,
-        pr_state: row.get(16)?,
-        mru_position: row.get(17)?,
-        auto_dispatched: row.get::<_, bool>(18).unwrap_or(false),
-        attached_once: row.get::<_, bool>(19).unwrap_or(false),
-        parent_session_id: row.get(20)?,
-        task_project_id: row.get(21)?,
+        auto_approve: row.get(11)?,
+        task_key: row.get(12)?,
+        base_branch: row.get(13)?,
+        pr_url: row.get(14)?,
+        pr_state: row.get(15)?,
+        mru_position: row.get(16)?,
+        auto_dispatched: row.get::<_, bool>(17).unwrap_or(false),
+        attached_once: row.get::<_, bool>(18).unwrap_or(false),
+        parent_session_id: row.get(19)?,
+        task_project_id: row.get(20)?,
     })
 }
 
@@ -582,7 +580,6 @@ impl SessionService {
             provider: params.provider.clone(),
             backend: params.backend.clone(),
             provider_session_id: None,
-            tab_count: 1,
             auto_approve: params.auto_approve,
             task_key: params.task_key.clone(),
             base_branch: params.base_branch.clone(),
@@ -776,15 +773,6 @@ impl SessionService {
         conn.execute(
             "UPDATE sessions SET provider_session_id = ?2 WHERE id = ?1",
             params![session_id, provider_session_id],
-        )?;
-        Ok(())
-    }
-
-    /// Update tab count.
-    pub fn update_tab_count(conn: &Connection, session_id: &str, tab_count: i64) -> SqlResult<()> {
-        conn.execute(
-            "UPDATE sessions SET tab_count = ?2 WHERE id = ?1",
-            params![session_id, tab_count],
         )?;
         Ok(())
     }

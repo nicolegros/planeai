@@ -23,7 +23,6 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     worktree_path: null,
     provider: null,
     backend: "direct",
-    tab_count: 1,
     base_branch: null,
     task_key: null,
     task_project_id: null,

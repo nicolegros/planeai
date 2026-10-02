@@ -29,7 +29,7 @@ export function terminalMayOwnKeyboard(ownership: TerminalKeyboardOwnership): bo
 export interface TerminalPaneFocusInput extends TerminalKeyboardOwnership {
   /** This tab is the active tab of its leaf. */
   isActiveTabInLeaf: boolean;
-  /** This tab's leaf is the focused leaf of the split tree. */
+  /** This tab's pane is the focused pane of the layout. */
   isFocusedLeaf: boolean;
   /** This tab's session is the selected session (guards layout transitions). */
   belongsToActiveSession: boolean;

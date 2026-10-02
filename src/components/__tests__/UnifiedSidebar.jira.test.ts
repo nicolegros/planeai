@@ -356,7 +356,6 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
         worktree_path: null,
         provider: "kiro",
         backend: "tmux",
-        tab_count: 1,
         base_branch: null,
         task_key: null,
       },
