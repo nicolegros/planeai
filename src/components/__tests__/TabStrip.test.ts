@@ -70,49 +70,31 @@ describe("TabStrip", () => {
     unmount(component);
   });
 
-  function mountDraggable(onTabDrop: (e: DragEvent, index: number) => void) {
+  it("hands a tab press to the drag handler only in a pane", async () => {
+    const press = vi.fn();
     const target = document.body.appendChild(document.createElement("div"));
-    return mount(TabStrip, {
+    const tabs = [{ id: "a", label: "A", icon: "bot" }];
+    const draggable = mount(TabStrip, {
       target,
-      props: {
-        tabs: [
-          { id: "a", label: "A", icon: "bot" },
-          { id: "a:1", label: "Shell", icon: "terminal" },
-        ],
-        activeTabId: "a",
-        draggable: true,
-        onSelectTab: vi.fn(),
-        onTabDrop,
-      },
+      props: { tabs, activeTabId: "a", paneId: "pane-1", onSelectTab: vi.fn(), onTabPress: press },
     });
-  }
-
-  function dragTo(element: Element, clientX: number) {
-    element.dispatchEvent(new MouseEvent("dragover", { bubbles: true, cancelable: true, clientX }));
-    element.dispatchEvent(new MouseEvent("drop", { bubbles: true, cancelable: true, clientX }));
-  }
-
-  it("drops at the end anywhere past the last tab", async () => {
-    const drop = vi.fn();
-    const component = mountDraggable(drop);
     await tick();
 
-    dragTo(document.querySelector('[role="tablist"]')!, 500);
-    expect(drop).toHaveBeenCalledWith(expect.anything(), 2);
-    unmount(component);
-  });
+    document
+      .querySelector('[role="tab"]')!
+      .dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    expect(press).toHaveBeenCalledWith(expect.anything(), "a");
+    expect(
+      document.querySelector('[data-tab-strip="pane-1"]')?.getAttribute("data-tab-count"),
+    ).toBe("1");
+    unmount(draggable);
 
-  it("drops before or after a tab by which half of it is under the pointer", async () => {
-    const drop = vi.fn();
-    const component = mountDraggable(drop);
+    const fixed = mount(TabStrip, {
+      target,
+      props: { tabs, activeTabId: "a", onSelectTab: vi.fn(), onTabPress: press },
+    });
     await tick();
-    const first = document.querySelectorAll('[role="tab"]')[0].parentElement!;
-    first.getBoundingClientRect = () => ({ left: 0, width: 100 }) as DOMRect;
-
-    dragTo(first, 20);
-    expect(drop).toHaveBeenLastCalledWith(expect.anything(), 0);
-    dragTo(first, 80);
-    expect(drop).toHaveBeenLastCalledWith(expect.anything(), 1);
-    unmount(component);
+    expect(document.querySelector("[data-tab-strip]")).toBeNull();
+    unmount(fixed);
   });
 });

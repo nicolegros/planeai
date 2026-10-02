@@ -43,8 +43,7 @@
         "minHeight": 480,
         "devtools": true,
         "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
-        "dragDropEnabled": false
+        "hiddenTitle": true
       }
     ]
   }

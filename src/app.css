@@ -362,13 +362,7 @@
   overflow: hidden;
 }
 
-/* Catches a dragged tab over a pane, above the terminal that would swallow the events. */
-.pane-drop-target {
-  position: absolute;
-  inset: 0;
-  z-index: 20;
-}
-
+/* Where a dragged tab or file would land in a pane, above its terminal. */
 .pane-drop-preview {
   position: absolute;
   inset: 0;
@@ -376,7 +370,15 @@
   border: 2px solid var(--color-accent);
   border-radius: 6px;
   pointer-events: none;
+  z-index: 20;
   transition: inset 80ms ease-out;
+}
+
+/* While a tab is dragged, nothing under the pointer reacts or gets selected. */
+body.tab-dragging,
+body.tab-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
 }
 
 .pane-drop-preview[data-zone="left"] {

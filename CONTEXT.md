@@ -237,7 +237,8 @@ It owns the layout, which workspace it belongs to, loading and saving it, shell 
 - **Pty key uniqueness**: tabs render keyed by pty key, so a duplicate crashes the whole workspace (`each_key_duplicate`). The layout tree enforces at most one tab per pty key at every entry point: adding an existing key updates it in place, and creating or restoring a layout drops repeats.
 - **Reconciliation**: when the workspace's sessions change, each new agent gets a tab in the focused pane and every tab of a session that left is dropped. The front tab only moves for the session the workspace was shown for.
 - **Single pane vs split**: a single pane shows its tabs in the titlebar; once split, each pane has its own tab bar. Both render the same pane tabs and call the same operations.
-- **Dragging tabs**: a tab dropped on a tab bar is inserted at that position; dropped on a pane, it moves into that pane, or splits it when dropped within a quarter of an edge.
+- **Dragging tabs**: a tab dropped on a tab bar is inserted at that position; dropped on a pane, it moves into that pane, or splits it when dropped within a quarter of an edge. Tab dragging uses pointer events (`src/lib/tab-drag.svelte.ts`), because Tauri's native drag-drop handler swallows HTML5 drag events.
+- **Dropping files**: a file dragged from the OS onto a pane types its shell-escaped path into the terminal in front of that pane, as terminal apps do. The paths come from Tauri's native drag-drop event.
 
 ### Shell tabs
 

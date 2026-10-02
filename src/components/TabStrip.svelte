@@ -5,6 +5,7 @@
    */
   import { Bot, Terminal, GitCompare, FileCode, X } from "@lucide/svelte";
   import type { PaneTab } from "../lib/task-workspace-layout.svelte";
+  import { tabDrag } from "../lib/tab-drag.svelte";
 
   interface Props {
     tabs: PaneTab[];
@@ -12,71 +13,42 @@
     focused?: boolean;
     showAddButton?: boolean;
     showCloseButton?: boolean;
-    draggable?: boolean;
+    /** The pane these tabs belong to; set it with `onTabPress` to make tabs draggable. */
+    paneId?: string;
     onSelectTab: (tabId: string) => void;
     onAddTab?: () => void;
     onClose?: () => void;
-    onTabDragStart?: (e: DragEvent, tabId: string) => void;
-    onTabDrop?: (e: DragEvent, insertIndex: number) => void;
-    onTabDragEnd?: () => void;
+    onTabPress?: (e: PointerEvent, tabId: string) => void;
     onTabDoubleClick?: (tabId: string) => void;
   }
 
-  let { tabs, activeTabId, focused = true, showAddButton = true, showCloseButton = false, draggable = false, onSelectTab, onAddTab, onClose, onTabDragStart, onTabDrop, onTabDragEnd, onTabDoubleClick }: Props = $props();
+  let { tabs, activeTabId, focused = true, showAddButton = true, showCloseButton = false, paneId, onSelectTab, onAddTab, onClose, onTabPress, onTabDoubleClick }: Props = $props();
 
   const TAB_ICONS: Record<string, typeof Bot> = { bot: Bot, "git-compare": GitCompare, file: FileCode, terminal: Terminal };
 
-  /** Insert position a drag currently targets: before tab `i`, or `tabs.length` for the end. */
-  let dropTargetIndex = $state<number | null>(null);
-
-  /** Before or after a tab, by which half of it the pointer is over. */
-  function indexAtTab(e: DragEvent, i: number): number {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    return e.clientX > rect.left + rect.width / 2 ? i + 1 : i;
-  }
-
-  function handleDragOver(e: DragEvent, index: number) {
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    dropTargetIndex = index;
-  }
-
-  function handleDragLeave(e: DragEvent) {
-    // Moving between the strip's own children is not leaving it.
-    if (e.relatedTarget instanceof Node && (e.currentTarget as HTMLElement).contains(e.relatedTarget)) return;
-    dropTargetIndex = null;
-  }
-
-  function handleDrop(e: DragEvent) {
-    e.preventDefault();
-    const index = dropTargetIndex ?? tabs.length;
-    dropTargetIndex = null;
-    onTabDrop?.(e, index);
-  }
+  const draggable = $derived(!!paneId && !!onTabPress);
+  /** Insert position a dragged tab targets in this strip: before tab `i`, or `tabs.length` for the end. */
+  const dropIndex = $derived.by(() => {
+    const target = tabDrag.target;
+    return draggable && target?.kind === "strip" && target.paneId === paneId ? target.index : null;
+  });
 </script>
 
-<!-- The whole strip accepts drops; anywhere past the tabs means the end. A drop
-     target needs no focus, so the tablist stays out of the focus order. -->
-<!-- svelte-ignore a11y_interactive_supports_focus -->
+<!-- Anywhere on the strip past the tabs drops a dragged tab at the end. -->
 <div
   class="flex items-stretch h-[38px] flex-1"
   role="tablist"
   aria-label="Pane tabs"
-  ondragover={draggable ? (e) => handleDragOver(e, tabs.length) : undefined}
-  ondragleave={draggable ? handleDragLeave : undefined}
-  ondrop={draggable ? handleDrop : undefined}
+  data-tab-strip={draggable ? paneId : undefined}
+  data-tab-count={tabs.length}
 >
   {#each tabs as tab, i (tab.id)}
     {@const Icon = TAB_ICONS[tab.icon ?? 'terminal'] ?? Terminal}
     {@const isActive = tab.id === activeTabId}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="relative flex items-stretch"
-      ondragover={draggable ? (e) => { e.stopPropagation(); handleDragOver(e, indexAtTab(e, i)); } : undefined}
-    >
-      {#if dropTargetIndex === i}
+    <div class="relative flex items-stretch" data-tab-index={i}>
+      {#if dropIndex === i}
         <div class="absolute left-0 top-[8px] bottom-[8px] w-[2px] bg-accent rounded-full"></div>
-      {:else if dropTargetIndex === tabs.length && i === tabs.length - 1}
+      {:else if dropIndex === tabs.length && i === tabs.length - 1}
         <div class="absolute right-0 top-[8px] bottom-[8px] w-[2px] bg-accent rounded-full"></div>
       {/if}
       <button
@@ -84,9 +56,7 @@
         aria-selected={isActive}
         class="flex items-center gap-[7px] px-[13px] text-[12.5px] font-medium select-none border-b-2 transition-colors
           {isActive && focused ? 'border-accent text-t1' : isActive ? 'border-transparent text-t1' : 'border-transparent text-t2 hover:text-t1'}"
-        draggable={draggable ? "true" : undefined}
-        ondragstart={draggable ? (e) => onTabDragStart?.(e, tab.id) : undefined}
-        ondragend={draggable ? () => { dropTargetIndex = null; onTabDragEnd?.(); } : undefined}
+        onpointerdown={draggable ? (e) => onTabPress?.(e, tab.id) : undefined}
         onclick={() => onSelectTab(tab.id)}
         ondblclick={onTabDoubleClick ? () => onTabDoubleClick(tab.id) : undefined}
       >

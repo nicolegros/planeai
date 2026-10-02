@@ -46,7 +46,10 @@
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { taskWorkspaceLayout as workspaceLayout, toPaneTabs, workspaceOf, type PaneTab, type WorkspaceAgent, type WorkspaceIdentity } from "./lib/task-workspace-layout.svelte";
-  import { activeTabOf, tabsOf, type LeafNode, type NavDirection, type SplitDirection, type TabEntry } from "./lib/layout-tree";
+  import { activeTabOf, findLeaf, tabsOf, type LeafNode, type NavDirection, type SplitDirection, type TabEntry } from "./lib/layout-tree";
+  import { pressTab as pressTabForDrag, tabDrag, type TabDropTarget } from "./lib/tab-drag.svelte";
+  import { dropPositionToViewport, droppedPathsText } from "./lib/dropped-paths";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { ptyKeySessionId } from "./lib/pty-key";
   import { saveActiveEditorResource } from "./lib/editor-resources";
   import { getMruList } from "./lib/mru.svelte";
@@ -303,58 +306,38 @@
     if (shown.restored) requestFocusedTerminalFocus();
   }
 
-  // Drag-and-drop state
-  let draggedPtyKey = $state<string | null>(null);
-
-  function handleTabDragStart(e: DragEvent, ptyKey: string) {
-    draggedPtyKey = ptyKey;
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", ptyKey);
-    }
+  /** Press on a tab: dragging it drops into a tab bar, into a pane, or splits a pane. */
+  function pressTab(e: PointerEvent, ptyKey: string): void {
+    pressTabForDrag(ptyKey, e, dropTab);
   }
 
-  function handleTabDrop(targetLeafId: string, insertIndex: number) {
-    if (!draggedPtyKey) return;
-    workspaceLayout.moveTab(draggedPtyKey, targetLeafId, insertIndex);
-    endTabDrag();
-    syncFocusedTabToSelection();
-  }
-
-  /** Where over a pane a dragged tab would land: an edge splits, the center moves it in. */
-  type PaneDropZone = NavDirection | "center";
-  let paneDrop = $state<{ leafId: string; zone: PaneDropZone } | null>(null);
-
-  function paneDropZone(e: DragEvent): PaneDropZone {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-    const edges: [NavDirection, number][] = [["left", x], ["right", 1 - x], ["up", y], ["down", 1 - y]];
-    const [side, distance] = edges.reduce((closest, edge) => (edge[1] < closest[1] ? edge : closest));
-    return distance < 0.25 ? side : "center";
-  }
-
-  function handlePaneDragOver(e: DragEvent, leafId: string) {
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    paneDrop = { leafId, zone: paneDropZone(e) };
-  }
-
-  function handlePaneDrop(e: DragEvent, leafId: string) {
-    e.preventDefault();
-    const ptyKey = draggedPtyKey;
-    const zone = paneDropZone(e);
-    endTabDrag();
-    if (!ptyKey) return;
-    if (zone !== "center") workspaceLayout.splitWithTab(ptyKey, leafId, zone);
-    else if (workspaceLayout.findTab(ptyKey)?.leaf.id !== leafId) workspaceLayout.moveTab(ptyKey, leafId);
+  function dropTab(ptyKey: string, target: TabDropTarget): void {
+    if (target.kind === "strip") workspaceLayout.moveTab(ptyKey, target.paneId, target.index);
+    else if (target.zone !== "center") workspaceLayout.splitWithTab(ptyKey, target.paneId, target.zone);
+    else if (workspaceLayout.findTab(ptyKey)?.leaf.id !== target.paneId) workspaceLayout.moveTab(ptyKey, target.paneId);
     else return;
     syncFocusedTabToSelection();
   }
 
-  function endTabDrag() {
-    draggedPtyKey = null;
-    paneDrop = null;
+  /** Pane a file dragged from the OS is over, highlighted as the drop target. */
+  let fileDropPane = $state<string | null>(null);
+
+  /** The pane under a native drag-drop position. */
+  function paneAt(position: { x: number; y: number }): string | null {
+    const point = dropPositionToViewport(position, { windows: /Win/.test(navigator.platform), pixelRatio: devicePixelRatio });
+    const element = document.elementFromPoint(point.x, point.y);
+    return element?.closest<HTMLElement>("[data-pane-drop]")?.dataset.paneDrop ?? null;
+  }
+
+  /** Type dropped file paths into the terminal in front of a pane, like a terminal app. */
+  function typeDroppedPaths(paneId: string, paths: string[]): void {
+    const leaf = workspaceLayout.layout ? findLeaf(workspaceLayout.layout, paneId) : null;
+    const tab = activeTabOf(leaf);
+    if (!tab || !isTerminalTab(tab) || paths.length === 0) return;
+    orchestrator.recordUserInput(ptyKeySessionId(tab.ptyKey));
+    void pty.write(tab.ptyKey, Array.from(new TextEncoder().encode(droppedPathsText(paths))));
+    workspaceLayout.focusTab(tab.ptyKey);
+    selectTerminalTab(tab.ptyKey);
   }
 
   function paneTabs(leaf: LeafNode): PaneTab[] {
@@ -925,16 +908,14 @@
       });
     };
     window.addEventListener("keydown", onPluginShortcut, true);
-    // With native drag-drop off (it swallows tab drags), a file dropped anywhere
-    // else would make the webview navigate to it and replace the app.
-    const onStrayDragOver = (event: DragEvent) => {
-      if (draggedPtyKey || event.defaultPrevented) return;
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
-    };
-    const onStrayDrop = (event: DragEvent) => event.preventDefault();
-    window.addEventListener("dragover", onStrayDragOver);
-    window.addEventListener("drop", onStrayDrop);
+    const unlistenFileDrop = getCurrentWebview().onDragDropEvent(({ payload }) => {
+      if (payload.type === "leave") fileDropPane = null;
+      else if (payload.type === "drop") {
+        const paneId = paneAt(payload.position);
+        fileDropPane = null;
+        if (paneId) typeDroppedPaths(paneId, payload.paths);
+      } else fileDropPane = paneAt(payload.position);
+    });
     let pluginListenersDisposed = false;
     const pluginListenerReady = Promise.all([
       unlistenPluginRuntime,
@@ -1093,7 +1074,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); window.removeEventListener("dragover", onStrayDragOver); window.removeEventListener("drop", onStrayDrop); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); cleanupTaskListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenShellPtyExit.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); unlistenFileDrop.then((fn) => fn()); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); cleanupTaskListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenShellPtyExit.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -1113,9 +1094,8 @@
     }}
     onAddTab={() => openShellTab(singlePane?.id)}
     onTabDoubleClick={renameFromTab}
-    onTabDragStart={handleTabDragStart}
-    onTabDrop={(_, insertIndex) => { if (singlePane) handleTabDrop(singlePane.id, insertIndex); }}
-    onTabDragEnd={endTabDrag}
+    paneId={singlePane?.id}
+    onTabPress={pressTab}
     {titlebarContributions}
     titlebarSession={activePluginSessionContext}
     onOpenTitlebarContribution={openTitlebarPluginContribution}
@@ -1290,30 +1270,20 @@
             focused={isFocusedLeaf}
             showAddButton={true}
             showCloseButton={true}
-            draggable={true}
+            paneId={leaf.id}
             onSelectTab={selectPaneTab}
             onAddTab={() => openShellTab(leaf.id)}
             onClose={() => { workspaceLayout.closePane(leaf.id); syncFocusedTabToSelection(); }}
             onTabDoubleClick={renameFromTab}
-            onTabDragStart={handleTabDragStart}
-            onTabDrop={(_, insertIndex) => handleTabDrop(leaf.id, insertIndex)}
-            onTabDragEnd={endTabDrag}
+            onTabPress={pressTab}
           />
         </div>
         {/if}
-        <div class="split-leaf-content">
-          {#if draggedPtyKey}
-            <div
-              class="pane-drop-target"
-              role="presentation"
-              ondragover={(e) => handlePaneDragOver(e, leaf.id)}
-              ondragleave={(e) => { if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) && paneDrop?.leafId === leaf.id) paneDrop = null; }}
-              ondrop={(e) => handlePaneDrop(e, leaf.id)}
-            >
-              {#if paneDrop?.leafId === leaf.id}
-                <div class="pane-drop-preview" data-zone={paneDrop.zone}></div>
-              {/if}
-            </div>
+        <div class="split-leaf-content" data-pane-drop={leaf.id}>
+          {#if tabDrag.target?.kind === "pane" && tabDrag.target.paneId === leaf.id}
+            <div class="pane-drop-preview" data-zone={tabDrag.target.zone}></div>
+          {:else if fileDropPane === leaf.id && activeEntry && isTerminalTab(activeEntry)}
+            <div class="pane-drop-preview" data-zone="center"></div>
           {/if}
           {#each leaf.tabs as tabEntry (tabEntry.ptyKey)}
             {@const sessionId = ptyKeySessionId(tabEntry.ptyKey)}
