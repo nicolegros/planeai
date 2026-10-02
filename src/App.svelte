@@ -371,7 +371,7 @@
   /** Bring a tab forward from a tab strip; a terminal tab also selects its session. */
   function selectPaneTab(ptyKey: string): void {
     const tab = workspaceLayout.focusTab(ptyKey);
-    if (tab && isTerminalTab(tab)) selectWorkspaceSession(ptyKeySessionId(ptyKey));
+    if (tab && isTerminalTab(tab)) selectTerminalTab(ptyKey);
   }
 
   function isTerminalTab(tab: TabEntry): boolean {
@@ -442,8 +442,7 @@
 
   function preserveKeyboardSelectedTerminal(entry: TabEntry): void {
     if (!isTerminalTab(entry)) return;
-    const sessionId = ptyKeySessionId(entry.ptyKey);
-    if (sessionId !== activeSessionId) selectWorkspaceSession(sessionId);
+    if (ptyKeySessionId(entry.ptyKey) !== activeSessionId) selectTerminalTab(entry.ptyKey);
     // Session synchronization can focus the agent tab. Restore the specific
     // keyboard-selected PTY after that reactive update settles.
     tick().then(() => requestAnimationFrame(() => {
@@ -508,8 +507,7 @@
   function syncFocusedTabToSelection(): void {
     const tab = workspaceLayout.focusedTab();
     if (!tab || !isTerminalTab(tab)) return;
-    const sessionId = ptyKeySessionId(tab.ptyKey);
-    if (sessionId !== activeSessionId) selectWorkspaceSession(sessionId);
+    if (ptyKeySessionId(tab.ptyKey) !== activeSessionId) selectTerminalTab(tab.ptyKey);
   }
 
   // ─── Project management ─────────────────────────────────────────────────────
@@ -702,7 +700,11 @@
     activeContributionId = contributionId;
   }
 
-  function selectWorkspaceSession(sessionId: string, opts: { explicit?: boolean } = {}): void {
+  /**
+   * `focusPtyKey` is the terminal that takes keyboard focus, when it is not the
+   * agent's own tab (a shell of that session, clicked or selected).
+   */
+  function selectWorkspaceSession(sessionId: string, opts: { explicit?: boolean; focusPtyKey?: string } = {}): void {
     const session = sessions.find((candidate) => candidate.id === sessionId);
     if (session?.task_key) {
       const project = projects.find((candidate) => candidate.id === sessionTaskProjectId(session));
@@ -725,7 +727,12 @@
     // `selectWorkspaceTask` passes explicit: false — its first-linked session is an
     // arbitrary entry point and must not override a remembered tab.
     orchestrator.selectSession(sessionId, { explicit: opts.explicit ?? true });
-    requestTerminalFocus(sessionId);
+    requestTerminalFocus(opts.focusPtyKey ?? sessionId);
+  }
+
+  /** Select the session of a terminal tab, keeping keyboard focus on that tab. */
+  function selectTerminalTab(ptyKey: string): void {
+    selectWorkspaceSession(ptyKeySessionId(ptyKey), { focusPtyKey: ptyKey });
   }
 
   function openSessionForTask(task: TaskItem, project: Project): void {
@@ -1269,9 +1276,7 @@
         aria-label="Split pane"
         onclick={(event) => {
           workspaceLayout.focusPane(leaf.id);
-          if (activeEntry && isTerminalTab(activeEntry)) {
-            selectWorkspaceSession(ptyKeySessionId(activeEntry.ptyKey));
-          }
+          if (activeEntry && isTerminalTab(activeEntry)) selectTerminalTab(activeEntry.ptyKey);
           if (!(event.target instanceof Element && event.target.closest("[data-editor-tab]"))) {
             focusTerminal();
           }
@@ -1344,7 +1349,7 @@
                   onFocused={(event) => {
                     if (event.type === "focusin" && !isActiveInLeaf) return;
                     workspaceLayout.focusPane(leaf.id);
-                    selectWorkspaceSession(sessionId);
+                    selectTerminalTab(tabEntry.ptyKey);
                     focusTerminal();
                   }}
                   onUserInput={() => orchestrator.recordUserInput(sessionId)}

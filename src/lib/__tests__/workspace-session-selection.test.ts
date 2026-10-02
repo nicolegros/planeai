@@ -111,10 +111,25 @@ it("ignores a hidden terminal's focus event after a session switch", () => {
 
 it("preserves the keyboard-selected terminal PTY after session synchronization", () => {
   expect(appSource).toMatch(
-    /function preserveKeyboardSelectedTerminal[\s\S]*?selectWorkspaceSession\(sessionId\)[\s\S]*?workspaceLayout\.focusTab\(entry\.ptyKey\)[\s\S]*?requestTerminalFocus\(entry\.ptyKey\)/,
+    /function preserveKeyboardSelectedTerminal[\s\S]*?selectTerminalTab\(entry\.ptyKey\)[\s\S]*?workspaceLayout\.focusTab\(entry\.ptyKey\)[\s\S]*?requestTerminalFocus\(entry\.ptyKey\)/,
   );
   expect(appSource).toMatch(
     /function cycleTab\(delta: number\)[\s\S]*?preserveKeyboardSelectedTerminal\(tab\)/,
+  );
+});
+
+it("keeps keyboard focus on the clicked terminal tab, not its session's agent", () => {
+  // Selecting the session of a clicked shell used to focus the agent's terminal,
+  // so a (agent | shell) split could never focus the shell.
+  expect(appSource).toMatch(/requestTerminalFocus\(opts\.focusPtyKey \?\? sessionId\)/);
+  expect(appSource).toMatch(
+    /function selectTerminalTab\(ptyKey: string\)[\s\S]*?selectWorkspaceSession\(ptyKeySessionId\(ptyKey\), \{ focusPtyKey: ptyKey \}\)/,
+  );
+  expect(appSource).toMatch(
+    /if \(activeEntry && isTerminalTab\(activeEntry\)\) selectTerminalTab\(activeEntry\.ptyKey\);/,
+  );
+  expect(appSource).toMatch(
+    /workspaceLayout\.focusPane\(leaf\.id\);\s*selectTerminalTab\(tabEntry\.ptyKey\);/,
   );
 });
 

@@ -94,6 +94,16 @@ describe("showing a workspace", () => {
     expect(deps.store.load).toHaveBeenCalledOnce();
   });
 
+  it("keeps focus on a clicked shell when selecting its session", async () => {
+    // (a, b | b's shell): clicking the shell selects b, which must not pull
+    // focus back to b's agent tab in the other pane.
+    const { workspace, show } = setup();
+    await show(TASK, ["a", "b"], "a");
+    const shell = workspace.openShell("b", { split: "vertical" })!;
+    await show(TASK, ["a", "b"], "b");
+    expect(workspace.focusedTab()?.ptyKey).toBe(shell);
+  });
+
   it("leaves the layout alone when the selection did not change", async () => {
     const { workspace, show } = setup();
     await show(TASK, ["a", "b"], "a");

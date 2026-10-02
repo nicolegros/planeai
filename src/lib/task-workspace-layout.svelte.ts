@@ -256,8 +256,12 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
         agents = options.agents;
         if (options.selectedSessionId !== focusedSessionId) {
           focusedSessionId = options.selectedSessionId;
+          // Selecting a session from one of its shells keeps that shell focused.
+          const front = tree.focusedTabOf(layout);
+          const frontIsSelected =
+            !!front && ptyKeySessionId(front.ptyKey) === options.selectedSessionId;
           const existing = tree.findTab(layout, selectedTab);
-          if (layout && existing && existing.leaf.activeTab !== selectedTab) {
+          if (layout && existing && !frontIsSelected && existing.leaf.activeTab !== selectedTab) {
             commit(tree.focusTab(layout, selectedTab));
           }
         }
