@@ -21,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::commands;
 use crate::task_lifecycle::TaskLifecycleBatch;
+pub use planeai_plugin_contract::ProviderFeature;
 
 const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
 const RECIPIENT_HOST_API_VERSION: &str = "planeai.plugin-host.v2";
@@ -181,8 +182,6 @@ pub struct PluginProvider {
     #[serde(default)]
     pub supports: Vec<ProviderFeature>,
 }
-
-pub use planeai_plugin_contract::ProviderFeature;
 
 impl PluginProvider {
     pub fn supports(&self, feature: ProviderFeature) -> bool {

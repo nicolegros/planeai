@@ -5,6 +5,8 @@ const { handoff, handback } = vi.hoisted(() => ({
   handback: vi.fn(async () => {}),
 }));
 vi.mock("../api", () => ({ providerSessions: { handoff, handback } }));
+const { showSnackbar } = vi.hoisted(() => ({ showSnackbar: vi.fn() }));
+vi.mock("../snackbar.svelte", () => ({ showSnackbar }));
 
 import {
   handoffTabFor,
@@ -47,6 +49,14 @@ describe("provider handoff", () => {
     expect([first, second]).toEqual(["s4:1", "s4:1"]);
     expect(open).toHaveBeenCalledOnce();
     expect(handoff).toHaveBeenCalledOnce();
+  });
+
+  it("closes the tab even when the session cannot return to the chat", async () => {
+    await startHandoff("s5", () => "s5:1");
+    handback.mockRejectedValueOnce(new Error("plugin is not running"));
+    await expect(shellTabClosed("s5:1")).resolves.toBeUndefined();
+    expect(showSnackbar).toHaveBeenCalledWith(expect.stringContaining("Return to chat"));
+    expect(handoffTabFor("s5")).toBeUndefined();
   });
 
   it("returns the session to the chat when no pane can hold the terminal", async () => {

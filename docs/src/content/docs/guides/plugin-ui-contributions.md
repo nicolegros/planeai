@@ -161,6 +161,9 @@ PlaneAI calls these sidecar methods; each must return promptly and do its work a
 | `provider.session.handoff`   | `session_id`                                                                 | With `handoff` only. Stop driving the session and return `{ "argv": [...] }`, the command that continues it in a terminal.                 |
 | `provider.session.handback`  | `session_id`                                                                 | With `handoff` only. The terminal tab closed; drive the session again.                                                                     |
 
+PlaneAI rejects a `send` text or `initial_prompt` over 48 KiB, measured as JSON-escaped text, so every request fits one 64 KiB frame.
+Provider UIs should apply the same limit before calling `send`.
+
 `provider.*` methods are reserved for PlaneAI: plugin UI cannot call them, and `planeai-cli plugin test` scenarios cannot send them.
 
 The sidecar reports back with JSON-RPC **notifications** (frames without an `id`), which PlaneAI reads at any time, not only during a request:

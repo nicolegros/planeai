@@ -49,6 +49,7 @@ A trusted local plugin can provide **session runtimes**, which PlaneAI offers as
   The plugin rebuilds its view after a remount by subscribing first, then fetching its own snapshot in frame-sized pages and dropping events at or below the snapshot's `seq`.
 - **Prompt routing.** Every host path that prompts a session (CLI, recipes and loops, `sessions.prompt`, the chat UI) reaches `provider.session.send`.
   Routing follows the session's stored backend.
+  A prompt is limited to 48 KiB as JSON-escaped text, so its request always fits one frame.
 - **Terminal handoff.** A provider that supports `handoff` can hand a session to its agent's own TUI.
   `provider.session.handoff` detaches the provider and returns the `argv` that continues the conversation, which the host runs in a shell tab of the same session.
   Closing that tab calls `provider.session.handback`, so only one side ever drives the conversation.

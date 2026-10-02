@@ -13,15 +13,16 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db;
 use crate::plugins::{PluginProvider, PluginRuntimeSupervisor, ProviderFeature};
-
 use crate::session_ops::PROVIDER_BACKEND;
+
 /// Frontend event carrying opaque provider session events to the mounted UI.
 pub const SESSION_EVENT: &str = "plugin-provider-session-event";
 
 const EVENT_NOTIFICATION: &str = "host.session.event";
-/// Prompts must fit one JSON-RPC frame with room for the envelope.
-const MAX_PROMPT_BYTES: usize = 48 * 1024;
 const STATUS_NOTIFICATION: &str = "host.session.status";
+
+/// Prompts must fit one JSON-RPC frame, as JSON-escaped text, with room for the envelope.
+const MAX_PROMPT_BYTES: usize = 48 * 1024;
 
 /// Provider keys are `<plugin id>:<provider id>`; plugin and provider ids never contain `:`.
 pub fn parse_provider_key(key: &str) -> Option<(&str, &str)> {
@@ -326,10 +327,11 @@ pub async fn start(
 }
 
 fn check_prompt_size(text: &str) -> Result<(), String> {
-    if text.len() > MAX_PROMPT_BYTES {
+    let encoded = serde_json::to_string(text).map_or(usize::MAX, |json| json.len());
+    if encoded > MAX_PROMPT_BYTES {
         return Err(format!(
             "The message is too long ({} KB); the limit is {} KB.",
-            text.len() / 1024,
+            encoded / 1024,
             MAX_PROMPT_BYTES / 1024
         ));
     }
@@ -739,10 +741,12 @@ mod tests {
 
     #[test]
     fn prompts_must_fit_one_frame() {
-        assert!(check_prompt_size(&"x".repeat(MAX_PROMPT_BYTES)).is_ok());
-        assert!(check_prompt_size(&"x".repeat(MAX_PROMPT_BYTES + 1))
+        assert!(check_prompt_size(&"x".repeat(MAX_PROMPT_BYTES - 2)).is_ok());
+        assert!(check_prompt_size(&"x".repeat(MAX_PROMPT_BYTES))
             .unwrap_err()
             .contains("too long"));
+        // Escaping doubles newlines, so the encoded size decides.
+        assert!(check_prompt_size(&"\n".repeat(MAX_PROMPT_BYTES / 2)).is_err());
     }
 
     #[test]

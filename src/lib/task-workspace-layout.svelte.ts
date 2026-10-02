@@ -597,8 +597,9 @@ export const taskWorkspaceLayout = createTaskWorkspaceLayout({
         ? sessionsApi.saveTaskWorkspaceLayout(workspace.projectId, workspace.taskKey, layoutJson)
         : sessionsApi.saveLayout(workspace.sessionId, layoutJson),
   },
+  // Hand back only once the shell is gone, so the terminal and the chat never both drive it.
   closeShell: (sessionId, index) =>
-    pty.closeTab(sessionId, index).finally(() => shellTabClosed(shellPtyKey(sessionId, index))),
+    pty.closeTab(sessionId, index).then(() => shellTabClosed(shellPtyKey(sessionId, index))),
   getTerminalCommand: (sessionId, filePath) => editorApi.getTerminalCommand(sessionId, filePath),
   disposeView: disposeTerminalView,
   onSaveError: (workspace, error) =>

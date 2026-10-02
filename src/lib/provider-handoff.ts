@@ -1,5 +1,6 @@
 import { providerSessions } from "./api";
 import { IS_WINDOWS } from "./keyboard";
+import { showSnackbar } from "./snackbar.svelte";
 
 const POSIX_SAFE = /^[A-Za-z0-9_/.:=@%+,-]+$/;
 
@@ -55,10 +56,19 @@ async function openHandoffTab(
   return ptyKey;
 }
 
-/** Every shell tab close passes through here; a handoff tab returns its session to the chat. */
+/**
+ * Every successful shell tab close passes through here; a handoff tab returns its
+ * session to the chat. A failed handback never fails the close: the tab is gone.
+ */
 export async function shellTabClosed(ptyKey: string): Promise<void> {
   const sessionId = handoffTabs.get(ptyKey);
   if (!sessionId) return;
   handoffTabs.delete(ptyKey);
-  await providerSessions.handback(sessionId);
+  try {
+    await providerSessions.handback(sessionId);
+  } catch (error) {
+    showSnackbar(
+      `The session could not return to the chat: ${String(error)}. Use Return to chat to retry.`,
+    );
+  }
 }
