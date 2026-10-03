@@ -336,9 +336,10 @@ Choosing one creates a session with the `plugin` backend; there is no PTY or com
 - Before the UI mounts, `provider_session_ensure` resumes the session if the current sidecar instance does not drive it yet (after an app restart or plugin reload).
 - `send_prompt` routes `plugin` sessions through the GUI notify socket like `local` ones; the GUI delivers them with `provider.session.send`.
 - `host.session.status` maps onto the notify state machine (`busy`, `idle`, `needs_attention` as an attention notification, `exited`), and notify-socket status for provider sessions is ignored.
-- Archive, destroy and exit stop the provider session from the session lifecycle dispatch, so every path that ends a session reaches it.
+- Archive, destroy and exit stop the provider session on two paths: the session lifecycle dispatch for sessions the GUI ends, and `plugin_providers::reconcile` for sessions the CLI or task completion ends.
+- A launch that fails before its session row exists stops the provider it started.
 - Restarting an exited provider session only restores the row; the provider resumes it on next use.
-- Providers that support `handoff` can continue a session in a shell tab running their agent's TUI (`provider.session.handoff` returns the command); every shell tab that leaves the layout, closed or exited by itself, goes through `shellTabClosed`, which hands a handoff tab's session back to the provider.
+- Providers that support `handoff` can continue a session in a shell tab running their agent's TUI (`provider.session.handoff` returns the command); every shell tab that leaves the layout, closed or exited by itself, goes through `providerHandoff.shellClosed`, which hands a handoff tab's session back to the provider.
 
 ### rmux (experimental)
 

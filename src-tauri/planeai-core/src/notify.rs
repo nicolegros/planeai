@@ -220,6 +220,7 @@ impl NotifyState {
         if self.get_state(session_id) != Some(AgentState::Busy) {
             return false;
         }
+        // Providers report their own status, even before their session registers.
         if self.is_provider_owned(session_id) {
             return false;
         }

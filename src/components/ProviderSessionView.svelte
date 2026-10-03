@@ -52,7 +52,7 @@
   });
 </script>
 
-<div class="h-full w-full bg-main" data-provider-session={session.id}>
+<div class="h-full w-full bg-main">
   {#if session.status === "exited"}
     <div class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center" role="status">
       <p class="text-sm text-t1">This session has exited.</p>

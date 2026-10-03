@@ -692,6 +692,11 @@ fn request_queue_timeout_error(method: &str) -> String {
 /// Prefix for requests refused before any byte reached the sidecar.
 const REQUEST_NOT_SENT: &str = "plugin RPC request not sent: ";
 
+/// A request too large or malformed to send fails before reaching the sidecar.
+fn encode_request(id: u64, method: &str, params: Value) -> Result<String, String> {
+    encode_json_rpc_line(id, method, params).map_err(|error| format!("{REQUEST_NOT_SENT}{error}"))
+}
+
 fn is_fatal_plugin_runtime_error(error: &str) -> bool {
     // A valid JSON-RPC error is an application-level response and leaves the
     // connection usable. A request that never acquired the local queue also
@@ -1443,8 +1448,7 @@ impl RuntimeProcess {
             .await
             .map_err(|_| request_queue_timeout_error(method))?;
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let frame = encode_json_rpc_line(request_id, method, params)
-            .map_err(|error| format!("{REQUEST_NOT_SENT}{error}"))?;
+        let frame = encode_request(request_id, method, params)?;
         self.write_request_frame(&frame, deadline).await?;
 
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -4819,13 +4823,11 @@ mod tests {
 
     #[test]
     fn oversized_requests_leave_the_runtime_running() {
-        let error = encode_json_rpc_line(
+        let error = encode_request(
             1,
             "provider.session.send",
             serde_json::json!({ "text": "x".repeat(70_000) }),
         )
-        .map(|_| ())
-        .map_err(|error| format!("{REQUEST_NOT_SENT}{error}"))
         .unwrap_err();
         assert!(!is_fatal_plugin_runtime_error(&error));
         assert!(is_fatal_plugin_runtime_error(

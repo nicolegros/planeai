@@ -596,24 +596,28 @@ impl PluginProcess {
                     bail!("plugin closed stdout before responding")
                 }
             };
-            match parse_frame(&line)? {
-                Frame::Response {
-                    id: response_id,
-                    result,
-                } => {
-                    if response_id != json!(expected_id) {
-                        bail!("mismatched JSON-RPC response id: expected {expected_id}, got {response_id}");
-                    }
-                    return Ok(Some(result));
+            if let Some((response_id, result)) = self.dispatch(&line)? {
+                if response_id != json!(expected_id) {
+                    bail!("mismatched JSON-RPC response id: expected {expected_id}, got {response_id}");
                 }
-                Frame::Request { id, method, params } => {
-                    self.handle_host_request(id, &method, params)?
-                }
-                Frame::Notification { method, params } => {
-                    self.handle_notification(&method, params)?
-                }
+                return Ok(Some(result));
             }
         }
+    }
+
+    /// Serve a plugin's request or notification; a response is returned to the caller.
+    fn dispatch(
+        &mut self,
+        line: &str,
+    ) -> Result<Option<(Value, std::result::Result<Value, RpcError>)>> {
+        match parse_frame(line)? {
+            Frame::Response { id, result } => return Ok(Some((id, result))),
+            Frame::Request { id, method, params } => {
+                self.handle_host_request(id, &method, params)?
+            }
+            Frame::Notification { method, params } => self.handle_notification(&method, params)?,
+        }
+        Ok(None)
     }
 
     /// Pump plugin output until a turn completes: `busy` then `idle`, both after `after`.
@@ -640,16 +644,8 @@ impl PluginProcess {
                     bail!("plugin closed stdout during a provider turn")
                 }
             };
-            match parse_frame(&line)? {
-                Frame::Response { id, .. } => {
-                    bail!("unexpected JSON-RPC response {id} during a provider turn")
-                }
-                Frame::Request { id, method, params } => {
-                    self.handle_host_request(id, &method, params)?
-                }
-                Frame::Notification { method, params } => {
-                    self.handle_notification(&method, params)?
-                }
+            if let Some((id, _)) = self.dispatch(&line)? {
+                bail!("unexpected JSON-RPC response {id} during a provider turn");
             }
         }
     }

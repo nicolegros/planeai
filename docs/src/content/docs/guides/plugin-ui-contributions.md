@@ -142,7 +142,7 @@ See ADR-0013.
 ]
 ```
 
-`id` follows the plugin id rules and must be unique; the provider key users see in sessions and configs is `<plugin id>:<provider id>`.
+`id` follows the plugin id rules and must be unique; the provider key stored on sessions is `<plugin id>:<provider id>`.
 `entrypoint` is a package-relative UI bundle with the same rules as UI contributions.
 `supports` may list `yolo` when the provider honors auto-approve; otherwise PlaneAI disables auto-approve for it.
 It may also list `handoff` when the session can continue in the agent's own terminal UI.

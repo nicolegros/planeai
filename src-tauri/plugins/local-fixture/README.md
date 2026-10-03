@@ -2,7 +2,7 @@
 
 This is the reference package for PlaneAI's **trusted local plugin** contract. It deliberately demonstrates the whole v1 surface:
 
-- `planeai-plugin.json` requests the local-only `settings`, `tasks.read`, and `task-events` capabilities.
+- `planeai-plugin.json` requests the local-only `settings`, `projects.read`, `sessions.read`, `tasks.read`, `tasks.create`, `task-events`, `session-events`, and `providers` capabilities.
 - `bin/<platform>/planeai-plugin-fixture[.exe]` is a JSON-RPC/JSONL sidecar after `make local-plugin-fixture` builds it for the current platform.
 - `ui/entry.js` is a self-contained browser ESM module. It uses `context.host.call("fixture.status")` and the public `context.host.settings.get()` / `.replace()` bridge, then returns a disposer that removes its click handler and Shadow DOM content.
 - `providers` declares the **Echo (fixture)** provider (host API `planeai.plugin-host.v3`).
@@ -29,5 +29,6 @@ The manifest lists every supported platform, but the Make target materializes on
 4. Create a session with the **Echo (fixture)** provider, send a message, and check the `echo:` reply and the busy/idle sidebar status.
    Switch sessions and back; the transcript is rebuilt from the snapshot.
 5. Run `planeai-cli plugin test --package src-tauri/plugins/local-fixture --scenario src-tauri/plugins/local-fixture/scenarios/state-environment.jsonl` to verify `PLANEAI_PLUGIN_DATA_DIR` and `PLANEAI_PLUGIN_SECRETS_DIR`, and run the corresponding `cancellation.jsonl` scenario to verify cooperative cancellation. The checked-in `persist-settings.jsonl` scenario exercises nested settings callbacks.
+6. Run `planeai-cli plugin test --package src-tauri/plugins/local-fixture --provider-turn "hello from plugin test"` to start an Echo session, send one prompt, and check it reports `busy` then `idle`.
 
 See the [Plugin author guide](../../../docs/src/content/docs/guides/plugin-ui-contributions.md) for the full package and protocol contract.

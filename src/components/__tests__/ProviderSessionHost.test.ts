@@ -81,6 +81,15 @@ const session: PluginSessionContext = {
   taskKey: "PLA-1",
 };
 
+const panelContribution: PluginUiContribution = {
+  id: "panel",
+  label: "Panel",
+  placement: "session.panel",
+  entrypoint: "ui/panel.js",
+  order: null,
+  shortcut: null,
+};
+
 /** The bridge ProviderSessionView builds, over the mocked API. */
 const bridge = (handoff?: () => Promise<void>): ProviderSessionBridge =>
   createProviderSessionBridge({
@@ -119,10 +128,18 @@ describe("PluginContributionHost provider sessions", () => {
         onClose: () => {},
       },
     });
+    return findFrame();
+  }
+
+  function frameNow(): HTMLIFrameElement | null | undefined {
+    return target
+      .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+      ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+  }
+
+  function findFrame(): Promise<HTMLIFrameElement> {
     return vi.waitFor(() => {
-      const frame = target
-        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
-        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      const frame = frameNow();
       expect(frame).toBeTruthy();
       return frame!;
     });
@@ -306,13 +323,7 @@ describe("PluginContributionHost provider sessions", () => {
       },
     });
     component = harness;
-    const frame = await vi.waitFor(() => {
-      const found = target
-        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
-        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
-      expect(found).toBeTruthy();
-      return found!;
-    });
+    const frame = await findFrame();
     expect(frame.hasAttribute(PROVIDER_FRAME_ATTRIBUTE)).toBe(true);
 
     frame.dispatchEvent(new FocusEvent("focus"));
@@ -322,34 +333,16 @@ describe("PluginContributionHost provider sessions", () => {
     harness.setFocused(true);
     await vi.waitFor(() => expect(focus).toHaveBeenCalled());
     // The same frame, not a rebuilt one: rebuilding reloads the chat and loses what it holds.
-    expect(
-      target
-        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
-        ?.shadowRoot?.querySelector("iframe"),
-    ).toBe(frame);
+    expect(frameNow()).toBe(frame);
   });
 
   it("leaves frames of other placements unmarked", async () => {
-    const frame = await mountHost({
-      id: "panel",
-      label: "Panel",
-      placement: "session.panel",
-      entrypoint: "ui/panel.js",
-      order: null,
-      shortcut: null,
-    });
+    const frame = await mountHost(panelContribution);
     expect(frame.hasAttribute(PROVIDER_FRAME_ATTRIBUTE)).toBe(false);
   });
 
   it("rejects session controls from contributions that are not provider UIs", async () => {
-    const frame = await mountHost({
-      id: "panel",
-      label: "Panel",
-      placement: "session.panel",
-      entrypoint: "ui/panel.js",
-      order: null,
-      shortcut: null,
-    });
+    const frame = await mountHost(panelContribution);
     const postMessage = stubFrameWindow(frame);
 
     window.dispatchEvent(

@@ -22,7 +22,7 @@ use planeai_plugin_contract::provider::{
 pub use planeai_plugin_contract::provider::{check_prompt_size, ProviderSessionStatus, StopReason};
 
 /// Frontend event carrying opaque provider session events to the mounted UI.
-pub const SESSION_EVENT: &str = "plugin-provider-session-event";
+const SESSION_EVENT: &str = "plugin-provider-session-event";
 
 /// Provider keys are `<plugin id>:<provider id>`; plugin and provider ids never contain `:`.
 pub fn parse_provider_key(key: &str) -> Option<(&str, &str)> {

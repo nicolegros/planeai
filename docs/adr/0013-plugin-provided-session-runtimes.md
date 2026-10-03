@@ -44,7 +44,7 @@ A trusted local plugin can provide **session runtimes**, which PlaneAI offers as
   Hook and PTY status signals for those sessions are ignored, although the user's own agent hooks still run inside them.
   `needs_attention` shows as idle with an attention notification, as hook-driven terminal sessions do.
 - **UI.** The provider's entrypoint replaces the terminal in the session's agent tab.
-  Its bridge adds `host.session.send`, `host.session.interrupt` and `host.session.onEvent`.
+  Its bridge adds `context.host.session` with `send`, `interrupt` and `onEvent`, plus `handoff` and `handback` for providers that can continue a session in a terminal.
   The host makes sure the current sidecar drives the session (resuming it if needed) before mounting the UI.
   The plugin rebuilds its view after a remount by subscribing first, then fetching its own snapshot in frame-sized pages and dropping events at or below the snapshot's `seq`.
 - **Prompt routing.** Every host path that prompts a session (CLI, recipes and loops, `sessions.prompt`, the chat UI) reaches `provider.session.send`.
