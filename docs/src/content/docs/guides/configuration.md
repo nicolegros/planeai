@@ -67,6 +67,11 @@ planeai offers to install missing hooks in a banner at startup and keeps install
 Codex runs a hook only after you trust it, so the first Codex launch after installation asks you to review planeai's hooks.
 Until you trust them, Codex sessions keep showing as busy.
 
+planeai launches Codex with `--no-daemon`, even though your configured `command` and `resume_command` do not include it.
+Codex otherwise runs every session's hooks in one shared background server that keeps the environment of the session that started it, so all Codex sessions would report the same session and change status together.
+The flag is only added when your installed Codex supports it, and never when your command already sets `--no-daemon` or `--remote`.
+As a result, planeai's Codex sessions do not appear in `codex agents`.
+
 ## Session Backend
 
 Controls how planeai manages terminal sessions.
