@@ -97,6 +97,18 @@ describe("ProviderSessionView", () => {
     expect(frame()).toBe(mounted);
   });
 
+  it("keeps the chat mounted when the session list reloads with an equal session", async () => {
+    const { harness } = render([plugin("chatter")]);
+    const mounted = await vi.waitFor(() => {
+      expect(frame()).toBeTruthy();
+      return frame();
+    });
+    harness.setSession({ ...session });
+    flushSync();
+    await Promise.resolve();
+    expect(frame()).toBe(mounted);
+  });
+
   it("shows that an exited session has ended instead of loading a chat that cannot start", () => {
     render([plugin("chatter")], { ...session, status: "exited" } as Session);
     expect(frame()).toBeNull();

@@ -30,14 +30,16 @@
   const resolved = $derived(JSON.parse(resolvedJson) as ReturnType<typeof findRuntimeProvider>);
   const canHandoff = $derived(resolved ? supportsHandoff(resolved.provider) : false);
   const contribution = $derived(resolved ? providerContribution(resolved.provider) : null);
+  // The session list reloads with fresh objects; an equal id keeps the bridge, and so the chat, as is.
+  const sessionId = $derived(session.id);
   const bridge = $derived(
     resolved
       ? createProviderSessionBridge({
           pluginId: resolved.plugin.id,
           providerId: resolved.provider.id,
-          sessionId: session.id,
-          handoff: canHandoff ? () => onHandoff(session.id) : undefined,
-          handback: canHandoff ? () => onHandback(session.id) : undefined,
+          sessionId,
+          handoff: canHandoff ? () => onHandoff(sessionId) : undefined,
+          handback: canHandoff ? () => onHandback(sessionId) : undefined,
         })
       : undefined,
   );
