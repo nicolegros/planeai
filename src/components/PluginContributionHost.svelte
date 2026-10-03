@@ -12,10 +12,10 @@
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import { focusSidebar } from "../lib/focus.svelte";
   import { PROVIDER_FRAME_ATTRIBUTE } from "../lib/terminal-focus";
-  import { isTextEditingChord } from "../lib/plugin-shortcuts";
+  import { hostKeyReplay, isTextEditingChord } from "../lib/plugin-shortcuts";
   import { isDark } from "../lib/settings.svelte";
   import type { PluginInventory, PluginUiContribution } from "../lib/types";
-  import type { ProviderSessionBridge } from "../lib/provider-session-bridge";
+  import { serveSessionRequest, type ProviderSessionBridge } from "../lib/provider-session-bridge";
 
   interface Props {
     plugin: PluginInventory;
@@ -76,13 +76,6 @@
    * mount effect, and tracking it would rebuild the frame, and lose its state, on every focus change.
    */
   const initialFocus = (): boolean => untrack(() => autofocus);
-  /** Session controls a frame may request, with why one is refused when unavailable. */
-  const SESSION_ACTION_ERRORS: Record<string, string> = {
-    "session-send": "session controls are available only to provider session UIs",
-    "session-interrupt": "session controls are available only to provider session UIs",
-    "session-handoff": "terminal handoff is not available here",
-    "session-handback": "terminal handoff is not available here",
-  };
   /** Focuses the mounted provider session frame, if any. */
   let focusProviderFrame: (() => void) | null = null;
 
@@ -500,6 +493,7 @@
         if (autofocus) focusFrame();
         return;
       }
+      const sessionRequest = serveSessionRequest(bridge, message);
       if (message.type === "focused-agent-session") {
         respond(message.requestId, true, getFocusedAgentSession() ?? null);
       } else if (message.type === "call" && typeof message.method === "string") {
@@ -534,40 +528,10 @@
           .then((value) => respond(message.requestId, true, value))
           .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "host-key") {
-        // The frame's own script can post anything, so the host enforces what it replays: only
-        // chords and their modifier release, and only from the frame that has the keyboard.
-        const key = typeof message.key === "string" ? message.key : "";
-        const phase = message.phase === "keydown" || message.phase === "keyup" ? message.phase : null;
-        const replayable = phase === "keydown"
-          ? message.ctrlKey === true || message.metaKey === true
-          : phase === "keyup" && (key === "Control" || key === "Meta");
-        if (!phase || !replayable || root.activeElement !== frame) return;
-        window.dispatchEvent(
-          new KeyboardEvent(phase, {
-            key,
-            code: typeof message.code === "string" ? message.code : "",
-            altKey: message.altKey === true,
-            ctrlKey: message.ctrlKey === true,
-            metaKey: message.metaKey === true,
-            shiftKey: message.shiftKey === true,
-            repeat: message.repeat === true,
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
-      } else if (message.type in SESSION_ACTION_ERRORS) {
-        const actions: Record<string, (() => Promise<void>) | undefined> = {
-          "session-send": () => (typeof message.text === "string" ? bridge!.send(message.text) : Promise.reject("session.send requires text")),
-          "session-interrupt": () => bridge!.interrupt(),
-          "session-handoff": bridge?.handoff,
-          "session-handback": bridge?.handback,
-        };
-        const action = bridge ? actions[message.type] : undefined;
-        if (!action) {
-          respond(message.requestId, false, SESSION_ACTION_ERRORS[message.type]);
-          return;
-        }
-        void action()
+        const replay = hostKeyReplay(message);
+        if (replay && root.activeElement === frame) window.dispatchEvent(replay);
+      } else if (sessionRequest) {
+        void sessionRequest
           .then(() => respond(message.requestId, true, null))
           .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "data-changed") {

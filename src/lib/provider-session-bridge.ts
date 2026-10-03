@@ -1,19 +1,13 @@
 import { listen } from "@tauri-apps/api/event";
 import { plugins, providerSessions } from "./api";
+import type { PluginSessionEvent } from "./plugin-sdk";
 import type { ProviderSessionEvent } from "./types";
-
-/** One opaque event from a provider to its session's UI, in the provider's own order. */
-export interface ProviderSessionEventPayload {
-  seq: number;
-  payload: unknown;
-}
 
 /**
  * What PlaneAI offers a provider session's UI: its session's controls and events.
  * Plugin frames receive these only through the host, which owns this object.
  */
 export interface ProviderSessionBridge {
-  readonly sessionId: string;
   /** The UI bundle, once the current sidecar drives the session. */
   loadSource(): Promise<string>;
   send(text: string): Promise<void>;
@@ -22,7 +16,7 @@ export interface ProviderSessionBridge {
   handoff?: () => Promise<void>;
   handback?: () => Promise<void>;
   /** Resolves to an unsubscribe once listening. */
-  subscribe(listener: (event: ProviderSessionEventPayload) => void): Promise<() => void>;
+  subscribe(listener: (event: PluginSessionEvent) => void): Promise<() => void>;
 }
 
 export function createProviderSessionBridge(options: {
@@ -34,7 +28,6 @@ export function createProviderSessionBridge(options: {
 }): ProviderSessionBridge {
   const { pluginId, providerId, sessionId } = options;
   return {
-    sessionId,
     loadSource: () =>
       providerSessions
         .ensure(sessionId)
@@ -50,4 +43,40 @@ export function createProviderSessionBridge(options: {
         listener({ seq: payload.seq, payload: payload.payload });
       }),
   };
+}
+
+const CONTROLS_REFUSED = "session controls are available only to provider session UIs";
+const HANDOFF_REFUSED = "terminal handoff is not available here";
+
+/** Session requests a frame may post, each with why it is refused when unavailable. */
+const SESSION_REQUESTS: Record<
+  string,
+  {
+    refusal: string;
+    run: (bridge: ProviderSessionBridge, message: { text?: unknown }) => Promise<void> | undefined;
+  }
+> = {
+  "session-send": {
+    refusal: CONTROLS_REFUSED,
+    run: (bridge, { text }) =>
+      typeof text === "string" ? bridge.send(text) : Promise.reject("session.send requires text"),
+  },
+  "session-interrupt": { refusal: CONTROLS_REFUSED, run: (bridge) => bridge.interrupt() },
+  "session-handoff": { refusal: HANDOFF_REFUSED, run: (bridge) => bridge.handoff?.() },
+  "session-handback": { refusal: HANDOFF_REFUSED, run: (bridge) => bridge.handback?.() },
+};
+
+/**
+ * Serve a frame's session request from its bridge, if it has one; `null` when the message is
+ * not a session request. Frames can post anything, so only the table's own keys match.
+ */
+export function serveSessionRequest(
+  bridge: ProviderSessionBridge | undefined,
+  message: { type?: unknown; text?: unknown },
+): Promise<void> | null {
+  if (typeof message.type !== "string" || !Object.hasOwn(SESSION_REQUESTS, message.type)) {
+    return null;
+  }
+  const request = SESSION_REQUESTS[message.type];
+  return (bridge && request.run(bridge, message)) ?? Promise.reject(request.refusal);
 }

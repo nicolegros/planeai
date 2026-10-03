@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { IS_MAC } from "../keyboard";
 import {
   findPluginShortcut,
+  hostKeyReplay,
   isTextEditingChord,
   type PluginShortcutTarget,
 } from "../plugin-shortcuts";
@@ -142,5 +143,22 @@ describe("isTextEditingChord", () => {
       `return (${isTextEditingChord.toString()})`,
     )() as typeof isTextEditingChord;
     expect(inlined(chord("ArrowUp"))).toBe(true);
+  });
+});
+
+describe("hostKeyReplay", () => {
+  it("replays chords and their modifier release", () => {
+    const chord = hostKeyReplay({ phase: "keydown", key: "n", code: "KeyN", metaKey: true });
+    expect(chord).toMatchObject({ type: "keydown", key: "n", code: "KeyN", metaKey: true });
+    expect(chord?.cancelable).toBe(true);
+    expect(hostKeyReplay({ phase: "keyup", key: "Meta" })?.type).toBe("keyup");
+  });
+
+  it("refuses plain typing, other releases and unknown phases", () => {
+    expect(hostKeyReplay({ phase: "keydown", key: "a" })).toBeNull();
+    expect(hostKeyReplay({ phase: "keydown", key: "a", shiftKey: true })).toBeNull();
+    expect(hostKeyReplay({ phase: "keyup", key: "a", metaKey: true })).toBeNull();
+    expect(hostKeyReplay({ phase: "keypress", key: "n", metaKey: true })).toBeNull();
+    expect(hostKeyReplay({ phase: "keydown", key: "n", metaKey: "yes" })).toBeNull();
   });
 });
