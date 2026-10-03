@@ -1239,6 +1239,7 @@
         mode={taskWorkspaceToEdit ? "edit" : "create"}
         {projects}
         {sessions}
+        runtimeProviders={runtimeProviders(pluginInventory)}
         tasks={taskStore.getAllTasks()}
         initial={taskWorkspaceToEdit ? {
           key: taskWorkspaceToEdit.task.key,

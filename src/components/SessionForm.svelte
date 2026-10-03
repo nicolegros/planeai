@@ -8,7 +8,8 @@
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { renderTemplate } from "../lib/render-template";
   import { LoaderCircle } from "@lucide/svelte";
-  import { supportsYolo, type RuntimeProvider } from "../lib/plugin-providers";
+  import type { RuntimeProvider } from "../lib/plugin-providers";
+  import { ProviderChoice } from "../lib/provider-choice.svelte";
 
   interface TaskPrefill { key: string; title: string; description: string; branch: string; name: string; prompt: string; baseBranch?: string; projectId?: string | null; }
   interface Props {
@@ -26,7 +27,7 @@
   let { projects, sessions, onCreated, onCancel, onCreateTask, taskPrefill = null, currentProjectId = null, runtimeProviders = [] }: Props = $props();
 
   const config = $derived(getSettings());
-  const providerKeys = $derived([...Object.keys(config.providers), ...runtimeProviders.map((provider) => provider.key)]);
+  const providers = new ProviderChoice(() => runtimeProviders);
 
   let mode = $state<"task">("task");
   // svelte-ignore state_referenced_locally
@@ -39,10 +40,6 @@
   let taskPrompt = $state(taskPrefill?.prompt ?? "");
   let useWorktree = $state(false);
   let autoApprove = $state(true);
-  let selectedProvider = $state("");
-  const providerKey = $derived(selectedProvider || config.default_provider);
-  const selectedRuntimeProvider = $derived(runtimeProviders.find((provider) => provider.key === providerKey) ?? null);
-  const autoApproveSupported = $derived(!selectedRuntimeProvider || supportsYolo(selectedRuntimeProvider.provider));
   let newBranchName = $state("");
 
   // svelte-ignore state_referenced_locally
@@ -210,8 +207,8 @@
       { key: "m", toggle: onCreateTask },
       { key: "s", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='name'] input") ?? null },
       { key: "w", toggle: () => { useWorktree = !useWorktree; } },
-      { key: "a", toggle: () => { if (autoApproveSupported) autoApprove = !autoApprove; } },
-      { key: "p", toggle: () => { selectedProvider = providerKeys[(providerKeys.indexOf(providerKey) + 1) % providerKeys.length]; }, shiftToggle: () => { selectedProvider = providerKeys[(providerKeys.indexOf(providerKey) - 1 + providerKeys.length) % providerKeys.length]; } },
+      { key: "a", toggle: () => { if (providers.autoApproveSupported) autoApprove = !autoApprove; } },
+      { key: "p", toggle: () => providers.cycle(1), shiftToggle: () => providers.cycle(-1) },
       { key: "b", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
       { key: "n", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='branch'] input") ?? null },
     ],
@@ -244,8 +241,8 @@
         const { session, warning } = await sessionsApi.launch({
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch: worktreeBranch, isNewBranch: true,
-          name: sessionName, useWorktree: true, baseBranch, autoApprove: autoApprove && autoApproveSupported,
-          provider: providerKey,
+          name: sessionName, useWorktree: true, baseBranch, autoApprove: autoApprove && providers.autoApproveSupported,
+          provider: providers.key,
           taskKey: taskKeyParam, taskProjectId: taskProjectIdParam, taskPrompt: taskPromptParam,
         });
         if (warning) showSnackbar(warning, "success");
@@ -257,8 +254,8 @@
         const { session, warning } = await sessionsApi.launch({
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch, isNewBranch, name: sessionName,
-          useWorktree: false, baseBranch: isNewBranch ? baseBranch : null, autoApprove: autoApprove && autoApproveSupported,
-          provider: providerKey,
+          useWorktree: false, baseBranch: isNewBranch ? baseBranch : null, autoApprove: autoApprove && providers.autoApproveSupported,
+          provider: providers.key,
           taskKey: taskKeyParam, taskProjectId: taskProjectIdParam, taskPrompt: taskPromptParam,
         });
         if (warning) showSnackbar(warning, "success");
@@ -327,13 +324,13 @@
     <div class="flex items-center gap-4">
       <Checkbox id="use-worktree" label="Worktree" bind:checked={useWorktree} tabindex={-1} />
       <span class="font-mono text-[10px] px-1 rounded {badge}">W</span>
-      <Checkbox id="auto-approve" label="Auto-approve" bind:checked={() => autoApprove && autoApproveSupported, (value) => (autoApprove = value)} disabled={!autoApproveSupported} title={autoApproveSupported ? undefined : `${selectedRuntimeProvider?.provider.label} does not support auto-approve`} tabindex={-1} />
+      <Checkbox id="auto-approve" label="Auto-approve" bind:checked={() => autoApprove && providers.autoApproveSupported, (value) => (autoApprove = value)} disabled={!providers.autoApproveSupported} title={providers.autoApproveSupported ? undefined : `${providers.label(providers.key)} does not support auto-approve`} tabindex={-1} />
       <span class="font-mono text-[10px] px-1 rounded {badge}">A</span>
     </div>
-    {#if providerKeys.length > 1}
+    {#if providers.keys.length > 1}
       <div class="flex items-center gap-2">
         <span class="text-[11px] text-t3">Provider</span>
-        <span class="text-[12px] text-t1 font-medium">{selectedRuntimeProvider?.provider.label ?? providerKey}</span>
+        <span class="text-[12px] text-t1 font-medium">{providers.label(providers.key)}</span>
         <span class="font-mono text-[10px] px-1 rounded {badge}">P</span>
       </div>
     {/if}
