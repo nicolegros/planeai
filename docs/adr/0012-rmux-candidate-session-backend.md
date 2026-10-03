@@ -61,16 +61,16 @@ through 'rmux', not directly` — reporting success while doing nothing. A calle
   that needs `cmd()` would have to bundle the 15 MB helper as `rmux`, not the
   dispatcher, which cannot find its own helper from a flat sidecar directory.
 - Tauri places `externalBin` beside the executable — `Contents/MacOS/` in a macOS
-  bundle, not `Contents/Resources/` — and strips the target-triple suffix, so
-  `paths.rs::resolve_rmux_daemon_binary` would resolve a bundled binary through its
-  exe-sibling branch, confirmed against a real built `.app`.
+  bundle, not `Contents/Resources/` — and strips the target-triple suffix, so a
+  bundled daemon must be resolved as a sibling of the executable, confirmed against
+  a real built `.app`.
 - The bundled daemon version and the `rmux-sdk` pin must match: rmux is not
   wire-compatible across minor versions, so a drift there is a protocol break that
   should fail the build, not degrade at runtime.
 
 ### Runtime and process model
 
-- rmux is resolved from `PATH`, matching the existing tmux backend's requirement — the user installs rmux themselves. Bundling it as a Tauri sidecar (embedded upstream prebuilt release binaries, pinned to an exact version, SHA256-verified) is deferred until the backend is at parity with the others; see "Sidecar (deferred)" above for the plan.
+- rmux is resolved from `PATH`, matching the existing tmux backend's requirement — the user installs rmux themselves. The lookup uses PlaneAI's augmented PATH (Homebrew, `~/.cargo/bin`, …) and hands the SDK the absolute path through `RMUX_SDK_DAEMON_BINARY`, because an app launched by launchd only has the system PATH and the SDK searches that alone. Bundling it as a Tauri sidecar (embedded upstream prebuilt release binaries, pinned to an exact version, SHA256-verified) is deferred until the backend is at parity with the others; see "Sidecar (deferred)" above for the plan.
 - The daemon is **app-private**: its own endpoint, config, and session namespace, started via `connect_or_start`. PlaneAI never attaches to a user's own rmux server or inherits their `rmux.conf`/`tmux.conf`.
 - TaskWorkspace sessions use `CleanupPolicy::Preserve` (or `detach_owned`). `KillOnOwnerExit` is reserved for genuinely ephemeral panes such as verifier commands, because a lease-based policy on workspace sessions would kill every agent when the app quits — destroying the property that motivates the backend. Probe 1 confirmed `Preserve` sessions and their panes survive the owner exiting, with no lease reaping and no idle auto-shutdown over 35s.
 - Killing a session's **last** remaining session terminates the daemon and removes its socket (observed in probe work, and matching tmux and `planeai-daemon`). Every path must therefore use `connect_or_start` and treat a closed transport as "restart and retry" rather than a fatal error — deleting the final TaskWorkspace will stop the daemon.

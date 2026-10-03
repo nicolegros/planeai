@@ -610,38 +610,46 @@ pub fn tmux_available() -> bool {
 }
 
 /// Check whether an rmux daemon binary can be found (cached per process).
+pub fn rmux_available() -> bool {
+    *RMUX_AVAILABLE.get_or_init(|| rmux_daemon_binary().is_some())
+}
+
+/// Locate the rmux daemon binary through [`planeai_core::command::augmented_path`].
 ///
 /// Mirrors the SDK's own resolution order: the daemon executable `rmux-daemon`
-/// is what actually gets spawned, with the `rmux` CLI as a fallback. Scans PATH
-/// directly rather than shelling out to `which`, so it works on every platform
-/// and costs only a few stats.
-pub fn rmux_available() -> bool {
-    *RMUX_AVAILABLE.get_or_init(|| {
-        ["rmux-daemon", "rmux"]
-            .iter()
-            .any(|name| executable_on_path(name))
-    })
+/// is what actually gets spawned, with the `rmux` CLI as a fallback. The SDK only
+/// searches the process's raw PATH, which for an app launched by launchd lacks
+/// Homebrew and friends, so the client passes it this absolute path instead.
+pub fn rmux_daemon_binary() -> Option<PathBuf> {
+    ["rmux-daemon", "rmux"]
+        .iter()
+        .find_map(|name| find_executable(name))
 }
 
 fn executable_on_path(name: &str) -> bool {
+    find_executable(name).is_some()
+}
+
+/// Scans PATH directly rather than shelling out to `which`, so it works on every
+/// platform and costs only a few stats.
+fn find_executable(name: &str) -> Option<PathBuf> {
     let path = planeai_core::command::augmented_path(&[]);
-    std::env::split_paths(&path).any(|directory| {
+    std::env::split_paths(&path).find_map(|directory| {
         if directory.as_os_str().is_empty() {
-            return false;
+            return None;
         }
-        if directory.join(name).is_file() {
-            return true;
+        let candidate = directory.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
         }
         // Windows executables carry an extension.
-        std::env::var_os("PATHEXT")
-            .map(|extensions| {
-                std::env::split_paths(&extensions).any(|extension| {
-                    let suffix = extension.to_string_lossy();
-                    let suffix = suffix.trim_start_matches('.');
-                    !suffix.is_empty() && directory.join(format!("{name}.{suffix}")).is_file()
-                })
-            })
-            .unwrap_or(false)
+        let extensions = std::env::var_os("PATHEXT")?;
+        std::env::split_paths(&extensions).find_map(|extension| {
+            let suffix = extension.to_string_lossy();
+            let suffix = suffix.trim_start_matches('.');
+            let candidate = directory.join(format!("{name}.{suffix}"));
+            (!suffix.is_empty() && candidate.is_file()).then_some(candidate)
+        })
     })
 }
 
