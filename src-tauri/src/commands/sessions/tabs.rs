@@ -517,15 +517,11 @@ pub fn check_tmux_available() -> bool {
 }
 
 /// Whether an rmux daemon binary is reachable, for the Preferences warning.
-///
-/// A bundled sidecar wins over PATH, matching how the backend resolves it.
 #[tauri::command]
-pub async fn check_rmux_available(app: tauri::AppHandle) -> bool {
-    crate::commands::blocking(move || {
-        Ok(crate::paths::resolve_rmux_daemon_binary(&app).is_file() || config::rmux_available())
-    })
-    .await
-    .unwrap_or(false)
+pub async fn check_rmux_available() -> bool {
+    crate::commands::blocking(|| Ok(config::rmux_available()))
+        .await
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

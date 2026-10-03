@@ -673,17 +673,20 @@ pub fn tmux_available() -> bool {
 }
 
 /// Check whether an rmux daemon binary can be found (cached per process).
+pub fn rmux_available() -> bool {
+    *RMUX_AVAILABLE.get_or_init(|| rmux_daemon_binary().is_some())
+}
+
+/// Locate the rmux daemon binary through [`planeai_core::command::augmented_path`].
 ///
 /// Mirrors the SDK's own resolution order: the daemon executable `rmux-daemon`
-/// is what actually gets spawned, with the `rmux` CLI as a fallback. Scans PATH
-/// directly rather than shelling out to `which`, so it works on every platform
-/// and costs only a few stats.
-pub fn rmux_available() -> bool {
-    *RMUX_AVAILABLE.get_or_init(|| {
-        ["rmux-daemon", "rmux"]
-            .iter()
-            .any(|name| executable_on_path(name))
-    })
+/// is what actually gets spawned, with the `rmux` CLI as a fallback. The SDK only
+/// searches the process's raw PATH, which for an app launched by launchd lacks
+/// Homebrew and friends, so the client passes it this absolute path instead.
+pub fn rmux_daemon_binary() -> Option<PathBuf> {
+    ["rmux-daemon", "rmux"]
+        .iter()
+        .find_map(|name| find_executable_in(name, &planeai_core::command::augmented_path(&[])))
 }
 
 fn executable_on_path(name: &str) -> bool {

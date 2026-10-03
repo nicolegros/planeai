@@ -376,6 +376,32 @@ fn executable_on_path_finds_a_binary_missing_from_the_processs_own_path() {
 }
 
 #[test]
+fn rmux_daemon_binary_resolves_outside_the_processs_own_path() {
+    // After a reboot the app is launched by launchd with only the system PATH.
+    // The rmux SDK searches that raw PATH when starting its daemon, so the
+    // client must hand it an absolute path found through `augmented_path`.
+    let dir = tempfile::tempdir().unwrap();
+    let binary = dir.path().join("rmux-daemon");
+    fs::write(&binary, b"#!/bin/sh\n").unwrap();
+
+    let previous_path = std::env::var_os("PATH");
+    let previous_extra = std::env::var_os("PLANEAI_EXTRA_PATH");
+    std::env::set_var("PATH", "/usr/bin:/bin:/usr/sbin:/sbin");
+    std::env::set_var("PLANEAI_EXTRA_PATH", dir.path());
+    let found = rmux_daemon_binary();
+    match previous_path {
+        Some(value) => std::env::set_var("PATH", value),
+        None => std::env::remove_var("PATH"),
+    }
+    match previous_extra {
+        Some(value) => std::env::set_var("PLANEAI_EXTRA_PATH", value),
+        None => std::env::remove_var("PLANEAI_EXTRA_PATH"),
+    }
+
+    assert_eq!(found, Some(binary));
+}
+
+#[test]
 fn session_backend_round_trips_through_config_file() {
     let dir = tempfile::tempdir().unwrap();
     let config_dir = dir.path();
