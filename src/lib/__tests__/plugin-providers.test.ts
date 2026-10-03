@@ -9,8 +9,8 @@ import type { PluginInventory } from "../types";
 
 function plugin(overrides: Partial<PluginInventory>): PluginInventory {
   return {
-    id: "claude-headless",
-    name: "Claude Headless",
+    id: "claude-chat",
+    name: "Claude Chat",
     version: "0.1.0",
     host_api_version: "planeai.plugin-host.v3",
     source_kind: "local",
@@ -38,13 +38,13 @@ describe("plugin providers", () => {
       plugin({ id: "stopped", state: "disabled" }),
       plugin({ id: "ungranted", capabilities: [] }),
     ]);
-    expect(offered.map((provider) => provider.key)).toEqual(["claude-headless:claude"]);
+    expect(offered.map((provider) => provider.key)).toEqual(["claude-chat:claude"]);
   });
 
   it("resolves a session's provider even when its plugin is not running", () => {
     const stopped = plugin({ state: "error", last_error: "crashed" });
-    expect(findRuntimeProvider([stopped], "claude-headless:claude")?.plugin).toBe(stopped);
-    expect(findRuntimeProvider([stopped], "claude-headless:other")).toBeNull();
+    expect(findRuntimeProvider([stopped], "claude-chat:claude")?.plugin).toBe(stopped);
+    expect(findRuntimeProvider([stopped], "claude-chat:other")).toBeNull();
     expect(findRuntimeProvider([stopped], "claude")).toBeNull();
     expect(findRuntimeProvider([stopped], null)).toBeNull();
   });

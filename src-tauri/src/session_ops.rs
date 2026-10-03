@@ -1588,7 +1588,7 @@ mod tests {
             None,
             "main",
             None,
-            Some("claude-headless:claude"),
+            Some("claude-chat:claude"),
             "plugin",
             false,
             None,

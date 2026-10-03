@@ -647,8 +647,8 @@ mod tests {
     #[test]
     fn provider_keys_split_plugin_and_provider() {
         assert_eq!(
-            parse_provider_key("claude-headless:claude"),
-            Some(("claude-headless", "claude"))
+            parse_provider_key("claude-chat:claude"),
+            Some(("claude-chat", "claude"))
         );
         assert_eq!(parse_provider_key("claude"), None);
         assert_eq!(parse_provider_key(":claude"), None);
