@@ -32,10 +32,10 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
       "yolo_flag": "--dangerously-skip-permissions",
     },
     "codex": {
-      "command": "codex",
+      "command": "codex --no-daemon",
       "prompt_command": "{prompt}",
       "yolo_flag": "--dangerously-bypass-approvals-and-sandbox",
-      "resume_command": "codex resume --last",
+      "resume_command": "codex --no-daemon resume --last",
     },
   },
 }
@@ -66,6 +66,10 @@ planeai offers to install missing hooks in a banner at startup and keeps install
 
 Codex runs a hook only after you trust it, so the first Codex launch after installation asks you to review planeai's hooks.
 Until you trust them, Codex sessions keep showing as busy.
+
+Add `--no-daemon` to your Codex `command` and `resume_command` (for example `codex --no-daemon` and `codex --no-daemon resume --last`).
+Without it, Codex runs every session's hooks in one shared background server that keeps the environment of the session that started it, so all Codex sessions report as the same session and change status together.
+`--no-daemon` requires a Codex release that lists it in `codex --help`, and planeai's Codex sessions then no longer appear in `codex agents`.
 
 ## Session Backend
 
