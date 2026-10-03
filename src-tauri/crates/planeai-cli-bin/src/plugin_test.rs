@@ -13,8 +13,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use planeai_plugin_contract::provider::{
-    is_host_controlled_method, validate_handoff_argv, HandoffResponse, ProviderSessionStatus,
-    SessionEventParams, SessionStatusParams, EVENT_NOTIFICATION, STATUS_NOTIFICATION,
+    self as protocol, is_host_controlled_method, validate_handoff_argv, HandoffResponse,
+    ProviderSessionStatus, SessionEventParams, SessionStatusParams, StopReason, EVENT_NOTIFICATION,
+    STATUS_NOTIFICATION,
 };
 use planeai_plugin_contract::ProviderFeature;
 use serde_json::{json, Map, Value};
@@ -133,14 +134,14 @@ fn check_provider(
     handoff: bool,
     provider_turn: Option<&str>,
 ) -> Result<u64> {
-    let cwd = process._state.data_dir.display().to_string();
+    let cwd = process.state.data_dir.display().to_string();
     process
         .provider_sessions
         .insert(PROVIDER_TEST_SESSION.to_owned(), 0);
     process
         .call(
             request_id,
-            "provider.session.start",
+            protocol::START,
             json!({
                 "session_id": PROVIDER_TEST_SESSION,
                 "provider_id": provider_id,
@@ -149,17 +150,17 @@ fn check_provider(
                 "yolo": false,
             }),
         )
-        .context("provider.session.start failed")?;
+        .with_context(|| format!("{} failed", protocol::START))?;
     request_id += 1;
     if let Some(text) = provider_turn {
         let statuses_before = process.provider_statuses.len();
         process
             .call(
                 request_id,
-                "provider.session.send",
+                protocol::SEND,
                 json!({ "session_id": PROVIDER_TEST_SESSION, "text": text }),
             )
-            .context("provider.session.send failed")?;
+            .with_context(|| format!("{} failed", protocol::SEND))?;
         request_id += 1;
         process.await_provider_turn(statuses_before, RPC_TIMEOUT)?;
         if process.provider_events_received == 0 {
@@ -170,30 +171,30 @@ fn check_provider(
         let result = process
             .call(
                 request_id,
-                "provider.session.handoff",
+                protocol::HANDOFF,
                 json!({ "session_id": PROVIDER_TEST_SESSION }),
             )
-            .context("provider.session.handoff failed")?;
+            .with_context(|| format!("{} failed", protocol::HANDOFF))?;
         request_id += 1;
         let response: HandoffResponse = serde_json::from_value(result)
-            .context("provider.session.handoff must return { argv }")?;
+            .with_context(|| format!("{} must return {{ argv }}", protocol::HANDOFF))?;
         validate_handoff_argv(response.argv).map_err(|error| anyhow!(error))?;
         process
             .call(
                 request_id,
-                "provider.session.handback",
+                protocol::HANDBACK,
                 json!({ "session_id": PROVIDER_TEST_SESSION }),
             )
-            .context("provider.session.handback failed")?;
+            .with_context(|| format!("{} failed", protocol::HANDBACK))?;
         request_id += 1;
     }
     process
         .call(
             request_id,
-            "provider.session.stop",
-            json!({ "session_id": PROVIDER_TEST_SESSION, "reason": "destroy" }),
+            protocol::STOP,
+            json!({ "session_id": PROVIDER_TEST_SESSION, "reason": StopReason::Destroy }),
         )
-        .context("provider.session.stop failed")?;
+        .with_context(|| format!("{} failed", protocol::STOP))?;
     Ok(request_id + 1)
 }
 
@@ -452,7 +453,7 @@ struct PluginProcess {
     provider_sessions: HashMap<String, u64>,
     provider_statuses: Vec<ProviderSessionStatus>,
     provider_events_received: usize,
-    _state: TemporaryPluginState,
+    state: TemporaryPluginState,
 }
 
 struct WriteFrame {
@@ -490,7 +491,7 @@ impl PluginProcess {
             provider_sessions: HashMap::new(),
             provider_statuses: Vec::new(),
             provider_events_received: 0,
-            _state: state,
+            state,
         })
     }
 

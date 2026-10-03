@@ -116,8 +116,6 @@ export function createProviderHandoff({ api, notify }: ProviderHandoffDeps) {
   };
 }
 
-export type ProviderHandoff = ReturnType<typeof createProviderHandoff>;
-
 // Looked up per call, so importing this module never touches the API.
 export const providerHandoff = createProviderHandoff({
   api: {

@@ -47,6 +47,7 @@ A trusted local plugin can provide **session runtimes**, which PlaneAI offers as
   Its bridge adds `context.host.session` with `send`, `interrupt` and `onEvent`, plus `handoff` and `handback` for providers that can continue a session in a terminal.
   The host makes sure the current sidecar drives the session (resuming it if needed) before mounting the UI.
   The plugin rebuilds its view after a remount by subscribing first, then fetching its own snapshot in frame-sized pages and dropping events at or below the snapshot's `seq`.
+  A provider UI that takes focus, from a click or from its own script, takes its pane's keyboard: plugins are trusted local packages, and the host cannot tell the two apart across the frame boundary.
 - **Prompt routing.** Every host path that prompts a session (CLI, recipes and loops, `sessions.prompt`, the chat UI) reaches `provider.session.send`.
   Routing follows the session's stored backend.
   A prompt is limited to 48 KiB as JSON-escaped text, so its request always fits one frame.
