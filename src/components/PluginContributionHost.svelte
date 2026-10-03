@@ -50,6 +50,9 @@
     shiftKey?: boolean;
     kind?: "success" | "error";
     message?: string;
+    phase?: unknown;
+    code?: unknown;
+    repeat?: unknown;
     height?: number;
     width?: number;
     text?: unknown;
@@ -289,6 +292,34 @@
           event.stopPropagation();
         };
         addEventListener("keydown", forwardSidebarKeydown);
+        // App chords never reach the host window from this frame, so it replays them there.
+        // A plugin claims a chord with preventDefault, except the host-reserved Ctrl+Tab and Mod+N.
+        const isReservedChord = (event) =>
+          (event.ctrlKey && event.key === "Tab") || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n");
+        const sendHostKey = (event) => {
+          send({
+            type: "host-key",
+            phase: event.type,
+            key: event.key,
+            code: event.code,
+            altKey: event.altKey,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            shiftKey: event.shiftKey,
+            repeat: event.repeat,
+          });
+        };
+        const forwardHostChord = (event) => {
+          if (event.isComposing || !(event.metaKey || event.ctrlKey)) return;
+          if (event.defaultPrevented && !isReservedChord(event)) return;
+          sendHostKey(event);
+        };
+        // The tab switcher commits when its modifier is released.
+        const forwardModifierRelease = (event) => {
+          if (event.key === "Control" || event.key === "Meta") sendHostKey(event);
+        };
+        addEventListener("keydown", forwardHostChord);
+        addEventListener("keyup", forwardModifierRelease);
         const host = {
           call: (method, params = null) => request("call", { method, params }),
           recipient: {
@@ -476,6 +507,20 @@
           .updateSettings(plugin.id, message.params as Record<string, unknown>)
           .then((value) => respond(message.requestId, true, value))
           .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "host-key" && typeof message.key === "string" && (message.phase === "keydown" || message.phase === "keyup")) {
+        window.dispatchEvent(
+          new KeyboardEvent(message.phase, {
+            key: message.key,
+            code: typeof message.code === "string" ? message.code : "",
+            altKey: message.altKey === true,
+            ctrlKey: message.ctrlKey === true,
+            metaKey: message.metaKey === true,
+            shiftKey: message.shiftKey === true,
+            repeat: message.repeat === true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
       } else if (message.type === "session-handoff" || message.type === "session-handback") {
         const action = message.type === "session-handoff" ? onSessionHandoff : onSessionHandback;
         if (!providerSession || !action) {

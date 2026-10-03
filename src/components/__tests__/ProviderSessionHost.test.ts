@@ -241,6 +241,41 @@ describe("PluginContributionHost provider sessions", () => {
     );
   });
 
+  it("replays app chords from the frame on the host window, where the shortcut router listens", async () => {
+    const frame = await mountHost(providerContribution(provider));
+    expect(frame.srcdoc).toContain("forwardHostChord");
+    const seen: KeyboardEvent[] = [];
+    const record = (event: KeyboardEvent) => seen.push(event);
+    window.addEventListener("keydown", record);
+    window.addEventListener("keyup", record);
+    try {
+      const fromFrame = (data: Record<string, unknown>) =>
+        window.dispatchEvent(
+          new MessageEvent("message", {
+            source: frame.contentWindow,
+            data: { type: "host-key", ...data },
+          }),
+        );
+      fromFrame({ phase: "keydown", key: "{", code: "BracketLeft", metaKey: true, shiftKey: true });
+      fromFrame({ phase: "keyup", key: "Control" });
+      fromFrame({ phase: "keypress", key: "x", metaKey: true });
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: window,
+          data: { type: "host-key", phase: "keydown", key: "w", metaKey: true },
+        }),
+      );
+    } finally {
+      window.removeEventListener("keydown", record);
+      window.removeEventListener("keyup", record);
+    }
+    expect(seen.map((event) => [event.type, event.key, event.metaKey, event.shiftKey])).toEqual([
+      ["keydown", "{", true, true],
+      ["keyup", "Control", false, false],
+    ]);
+    expect(seen[0].cancelable).toBe(true);
+  });
+
   it("rejects session controls from contributions that are not provider UIs", async () => {
     const frame = await mountHost({
       id: "panel",
