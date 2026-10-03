@@ -66,6 +66,7 @@ import {
 } from "../editor-feedback.svelte";
 import {
   countSessionsLostOnQuit,
+  runningTurns,
   getSessions,
   getActiveSessionId,
   loadSessions,
@@ -769,12 +770,38 @@ describe("countSessionsLostOnQuit", () => {
       { id: "chat-busy", status: "active", backend: "plugin" },
       { id: "chat-idle", status: "active", backend: "plugin" },
     ] as const;
-    expect(
-      countSessionsLostOnQuit([...sessions], {
-        "chat-busy": "Busy",
-        "chat-idle": "Idle",
-        daemon: "Busy",
-      }),
-    ).toBe(2);
+    expect(countSessionsLostOnQuit([...sessions], new Set(["chat-busy", "daemon"]))).toBe(2);
+  });
+
+  it("keeps counting a running chat turn after its session is selected, until it ends or its plugin goes away", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    const listenMock = vi.mocked(listen);
+    listenMock.mockClear();
+    const { tasks } = await import("../api");
+    vi.mocked(tasks.fireNotifyHook)
+      .mockReset()
+      .mockResolvedValue(undefined as never);
+    const cleanup = startEventListeners();
+    const handlerFor = (name: string) =>
+      listenMock.mock.calls.find((c) => c[0] === name)![1] as (event: {
+        payload: { session_id: string; state?: string };
+      }) => void;
+
+    handlerFor("agent-state-change")({ payload: { session_id: "chat", state: "Busy" } });
+    expect(runningTurns().has("chat")).toBe(true);
+    // Selecting a session acknowledges it, which must not hide a turn still running.
+    clearAgentState("chat");
+    expect(runningTurns().has("chat")).toBe(true);
+
+    // A sidecar that went away ends the turn without it having finished.
+    handlerFor("agent-released")({ payload: { session_id: "chat" } });
+    expect(runningTurns().has("chat")).toBe(false);
+    await Promise.resolve();
+    expect(tasks.fireNotifyHook).not.toHaveBeenCalled();
+
+    handlerFor("agent-state-change")({ payload: { session_id: "chat", state: "Busy" } });
+    handlerFor("agent-state-change")({ payload: { session_id: "chat", state: "Idle" } });
+    expect(runningTurns().has("chat")).toBe(false);
+    cleanup();
   });
 });

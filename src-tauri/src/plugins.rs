@@ -1272,6 +1272,8 @@ struct RuntimeProcess {
     capabilities: HashSet<PluginHostCapability>,
     lifecycle_event_subscriptions: AsyncMutex<HashSet<String>>,
     session_actions: AsyncMutex<Vec<PluginSessionAction>>,
+    /// Set for provider plugins: the sessions this instance may drive.
+    provider_sessions: Option<Arc<crate::plugin_providers::ProviderSessions>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1747,7 +1749,20 @@ impl RuntimeProcess {
         decode_json_rpc_frame(&frame, request_id)
     }
 
+    /// This instance no longer drives sessions; see `plugin_providers::runtime_stopped`.
+    fn release_provider_sessions(&self) {
+        if let Some(sessions) = &self.provider_sessions {
+            crate::plugin_providers::runtime_stopped(
+                &self.app,
+                sessions,
+                &self.plugin_id,
+                self.instance,
+            );
+        }
+    }
+
     async fn stop(&self) -> Result<(), String> {
+        self.release_provider_sessions();
         let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
         let _ = self.request_shutdown(deadline).await;
         let mut child = self.child.lock().await;
@@ -3531,6 +3546,7 @@ impl PluginRuntimeSupervisor {
                     worker.cancel.cancel();
                     worker.task.abort();
                 }
+                process.release_provider_sessions();
                 if stop_process_after_removal {
                     if let Err(stop_error) = stop_process(process.clone()).await {
                         tracing::warn!(plugin_id, %stop_error, "failed to stop unhealthy plugin runtime");
@@ -3723,15 +3739,13 @@ async fn spawn_runtime(
         .take()
         .ok_or_else(|| "plugin runtime did not provide stdout".to_string())?;
     let (frame_sender, frames) = mpsc::channel(FRAME_QUEUE_CAPACITY);
-    let notification_sink = capabilities
+    let instance = NEXT_RUNTIME_INSTANCE.fetch_add(1, Ordering::Relaxed);
+    let provider_sessions = capabilities
         .contains(&PluginHostCapability::Providers)
-        .then(|| {
-            crate::plugin_providers::NotificationSink::new(
-                app.clone(),
-                plugin_id,
-                provider_sessions,
-            )
-        });
+        .then_some(provider_sessions);
+    let notification_sink = provider_sessions.clone().map(|sessions| {
+        crate::plugin_providers::NotificationSink::new(app.clone(), plugin_id, instance, sessions)
+    });
     tokio::spawn(read_stdout_frames(
         BufReader::new(stdout),
         frame_sender,
@@ -3745,7 +3759,7 @@ async fn spawn_runtime(
         .ok_or("plugin runtime state root was not provided")?;
     Ok(RuntimeProcess {
         app,
-        instance: NEXT_RUNTIME_INSTANCE.fetch_add(1, Ordering::Relaxed),
+        instance,
         child: AsyncMutex::new(child),
         stdin: AsyncMutex::new(stdin),
         frames: AsyncMutex::new(frames),
@@ -3756,6 +3770,7 @@ async fn spawn_runtime(
         capabilities,
         lifecycle_event_subscriptions: AsyncMutex::new(HashSet::new()),
         session_actions: AsyncMutex::new(Vec::new()),
+        provider_sessions,
     })
 }
 

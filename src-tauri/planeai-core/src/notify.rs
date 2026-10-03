@@ -102,6 +102,36 @@ impl NotifyState {
         self.provider_owned.contains(session_id)
     }
 
+    /// A provider reported a running turn. Returns whether the session resumed.
+    pub fn provider_busy(&mut self, session_id: &str) -> bool {
+        self.mark_provider_owned(session_id);
+        self.notify_busy(session_id)
+    }
+
+    /// A provider reported its session idle or waiting on the user. Returns whether that
+    /// ends a turn worth notifying: providers also report idle when they start or resume a
+    /// session, which is not a finished turn.
+    pub fn provider_settled(&mut self, session_id: &str) -> bool {
+        self.mark_provider_owned(session_id);
+        if self.get_state(session_id) != Some(AgentState::Busy) {
+            self.states.insert(session_id.to_string(), AgentState::Idle);
+            self.idle_since.remove(session_id);
+            return false;
+        }
+        self.notify_stop_immediate(session_id)
+    }
+
+    /// The provider driving a session went away, so a running turn will never report its
+    /// end. Returns whether the session was busy; it is idle afterwards, without notifying.
+    pub fn provider_released(&mut self, session_id: &str) -> bool {
+        if self.get_state(session_id) != Some(AgentState::Busy) {
+            return false;
+        }
+        self.states.insert(session_id.to_string(), AgentState::Idle);
+        self.idle_since.remove(session_id);
+        true
+    }
+
     pub fn get_meta(&self, session_id: &str) -> Option<&SessionMeta> {
         self.meta.get(session_id)
     }
@@ -333,6 +363,33 @@ mod tests {
         assert!(!state.notify_stop("s1"));
         state.notify_output("s1");
         assert!(state.notify_stop("s1"));
+    }
+
+    #[test]
+    fn a_provider_settling_notifies_only_when_a_turn_ran() {
+        let mut state = NotifyState::new();
+        // Providers report idle when they start or resume a session: not a finished turn.
+        assert!(!state.provider_settled("s1"));
+        assert_eq!(state.get_state("s1"), Some(AgentState::Idle));
+        assert!(state.is_provider_owned("s1"));
+        assert!(!state.provider_settled("s1"));
+
+        assert!(state.provider_busy("s1"));
+        assert!(!state.provider_busy("s1"));
+        assert!(state.provider_settled("s1"));
+        assert!(!state.provider_settled("s1"));
+    }
+
+    #[test]
+    fn a_released_provider_session_stops_being_busy_without_a_notification() {
+        let mut state = NotifyState::new();
+        assert!(!state.provider_released("s1"));
+        state.provider_busy("s1");
+        assert!(state.provider_released("s1"));
+        assert_eq!(state.get_state("s1"), Some(AgentState::Idle));
+        // The turn did not finish, so its next real end still notifies.
+        state.provider_busy("s1");
+        assert!(state.provider_settled("s1"));
     }
 
     #[test]

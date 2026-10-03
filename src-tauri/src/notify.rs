@@ -233,11 +233,7 @@ pub fn apply_provider_status(
     let state = app.state::<crate::state::NotifyHandle>().0.clone();
     match status {
         ProviderSessionStatus::Busy => {
-            let resumed = {
-                let mut s = state.lock().unwrap();
-                s.mark_provider_owned(session_id);
-                s.notify_busy(session_id)
-            };
+            let resumed = state.lock().unwrap().provider_busy(session_id);
             emit_state_change(app, session_id, AgentState::Busy);
             if resumed {
                 let _ = app.emit(
@@ -247,17 +243,27 @@ pub fn apply_provider_status(
             }
         }
         ProviderSessionStatus::Idle | ProviderSessionStatus::NeedsAttention => {
-            let fired = {
-                let mut s = state.lock().unwrap();
-                s.mark_provider_owned(session_id);
-                s.notify_stop_immediate(session_id)
-            };
+            let fired = state.lock().unwrap().provider_settled(session_id);
             if fired {
                 emit_state_change(app, session_id, AgentState::Idle);
                 fire_notification(app, session_id, &state);
             }
         }
         ProviderSessionStatus::Exited => mark_provider_session_exited(app, session_id),
+    }
+}
+
+/// The sidecar driving a provider session stopped or died: a turn it was running will never
+/// report its end, so the session stops showing as busy, without a completion notification.
+pub fn release_provider_status(app: &AppHandle, session_id: &str) {
+    let state = app.state::<crate::state::NotifyHandle>().0.clone();
+    let released = state.lock().unwrap().provider_released(session_id);
+    // Not `agent-state-change` Idle: the frontend treats that as a finished turn.
+    if released {
+        let _ = app.emit(
+            "agent-released",
+            serde_json::json!({ "session_id": session_id }),
+        );
     }
 }
 

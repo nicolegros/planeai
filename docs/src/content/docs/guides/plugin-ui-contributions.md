@@ -172,6 +172,8 @@ The sidecar reports back with JSON-RPC **notifications** (frames without an `id`
   It drives the sidebar, attention notifications and the quit confirmation.
   It is the only status source for the session: PlaneAI ignores hook and PTY signals for provider sessions, even though the user's agent hooks still run inside them.
   `exited` marks the session exited.
+  Only an `idle` or `needs_attention` that ends a `busy` turn notifies the user, so reporting `idle` when a session starts or resumes is fine.
+  Once PlaneAI begins stopping the plugin, or the sidecar dies, statuses from it are ignored and its sessions stop showing as busy; they resume on next use.
 - `host.session.event` with `{ "session_id", "seq", "payload" }`.
   PlaneAI forwards `payload` unchanged to the session's mounted UI.
   `seq` must increase per session.

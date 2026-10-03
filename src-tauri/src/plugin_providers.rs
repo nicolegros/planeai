@@ -76,9 +76,40 @@ impl ProviderSessions {
         self.bindings.lock().unwrap().keys().cloned().collect()
     }
 
-    fn is_owned_by(&self, session_id: &str, plugin_id: &str) -> bool {
+    /// Whether this sidecar instance of the plugin currently drives the session.
+    fn is_driven_by(&self, session_id: &str, plugin_id: &str, instance: u64) -> bool {
         self.get(session_id)
-            .is_some_and(|binding| binding.plugin_id == plugin_id)
+            .is_some_and(|binding| binding.plugin_id == plugin_id && binding.instance == instance)
+    }
+
+    /// Unbinds the sessions a sidecar instance drove, returning their ids.
+    fn unbind_instance(&self, plugin_id: &str, instance: u64) -> Vec<String> {
+        let mut bindings = self.bindings.lock().unwrap();
+        let ended: Vec<String> = bindings
+            .iter()
+            .filter(|(_, binding)| binding.plugin_id == plugin_id && binding.instance == instance)
+            .map(|(session_id, _)| session_id.clone())
+            .collect();
+        let mut ensuring = self.ensuring.lock().unwrap();
+        for session_id in &ended {
+            bindings.remove(session_id);
+            ensuring.remove(session_id);
+        }
+        ended
+    }
+}
+
+/// A plugin's sidecar instance is stopping or died. Its sessions are unbound first, so any
+/// status it still sends, such as `exited` from its own shutdown, is dropped; a turn it was
+/// running stops showing as busy. The next use resumes each session on a new instance.
+pub fn runtime_stopped(
+    app: &AppHandle,
+    sessions: &ProviderSessions,
+    plugin_id: &str,
+    instance: u64,
+) {
+    for session_id in sessions.unbind_instance(plugin_id, instance) {
+        crate::notify::release_provider_status(app, &session_id);
     }
 }
 
@@ -127,14 +158,22 @@ pub struct ProviderSessionEvent {
 pub struct NotificationSink {
     app: AppHandle,
     plugin_id: String,
+    /// The sidecar instance whose stdout this reads; a previous instance's sessions are not its own.
+    instance: u64,
     sessions: Arc<ProviderSessions>,
 }
 
 impl NotificationSink {
-    pub fn new(app: AppHandle, plugin_id: &str, sessions: Arc<ProviderSessions>) -> Self {
+    pub fn new(
+        app: AppHandle,
+        plugin_id: &str,
+        instance: u64,
+        sessions: Arc<ProviderSessions>,
+    ) -> Self {
         Self {
             app,
             plugin_id: plugin_id.to_string(),
+            instance,
             sessions,
         }
     }
@@ -184,7 +223,10 @@ impl NotificationSink {
     }
 
     fn require_owner(&self, session_id: &str) -> Result<(), String> {
-        if self.sessions.is_owned_by(session_id, &self.plugin_id) {
+        if self
+            .sessions
+            .is_driven_by(session_id, &self.plugin_id, self.instance)
+        {
             Ok(())
         } else {
             Err(format!("session {session_id} is not driven by this plugin"))
@@ -701,11 +743,33 @@ mod tests {
                 instance: 1,
             },
         );
-        assert!(sessions.is_owned_by("s1", "a"));
-        assert!(!sessions.is_owned_by("s1", "b"));
-        assert!(!sessions.is_owned_by("s2", "a"));
+        assert!(sessions.is_driven_by("s1", "a", 1));
+        assert!(!sessions.is_driven_by("s1", "b", 1));
+        assert!(!sessions.is_driven_by("s2", "a", 1));
+        // A restarted sidecar is a new instance: the previous one no longer drives the session.
+        assert!(!sessions.is_driven_by("s1", "a", 2));
         assert!(sessions.unbind("s1").is_some());
-        assert!(!sessions.is_owned_by("s1", "a"));
+        assert!(!sessions.is_driven_by("s1", "a", 1));
+    }
+
+    #[test]
+    fn a_stopped_instance_releases_only_its_own_sessions() {
+        let sessions = ProviderSessions::default();
+        let binding = |plugin_id: &str, instance| Binding {
+            plugin_id: plugin_id.into(),
+            provider_id: "chat".into(),
+            instance,
+        };
+        sessions.bind("s1", binding("a", 1));
+        sessions.bind("s2", binding("a", 1));
+        sessions.bind("s3", binding("a", 2));
+        sessions.bind("s4", binding("b", 1));
+        let mut released = sessions.unbind_instance("a", 1);
+        released.sort();
+        assert_eq!(released, ["s1", "s2"]);
+        assert!(sessions.get("s1").is_none());
+        assert!(sessions.is_driven_by("s3", "a", 2));
+        assert!(sessions.is_driven_by("s4", "b", 1));
     }
 
     #[test]
