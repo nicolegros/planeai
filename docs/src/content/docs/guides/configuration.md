@@ -6,6 +6,8 @@ draft: false
 
 planeai is configured via a single JSON file at `~/.config/planeai/config.json` (or `%APPDATA%\planeai\config.json` on Windows). The file supports JSONC (comments allowed).
 
+On first launch a short setup picks your agents (the ones found on your PATH are pre-selected), your projects folder and a look; run it again from **Preferences → General → Setup**.
+
 Most settings are also available in **Preferences** (⌘, / Ctrl+,). Pick a category in the sidebar, or press ⌘F / Ctrl+F to search every setting by name or keyword. A setting changed from its default shows a reset button next to it.
 
 ## Providers

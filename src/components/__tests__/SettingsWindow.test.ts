@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => ({
   install: vi.fn(),
   listen: vi.fn(),
   pluginsList: vi.fn(),
+  closeWindow: vi.fn(),
+  focusMain: vi.fn(),
 }));
 
 vi.mock("../../lib/api", async (importOriginal) => {
@@ -69,7 +71,16 @@ vi.mock("../../lib/settings.svelte", () => ({
 }));
 vi.mock("../../lib/theme-loader", () => ({ loadTheme: vi.fn() }));
 vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: mocks.showSnackbar }));
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: vi.fn() }) }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ close: mocks.closeWindow }),
+}));
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  WebviewWindow: {
+    getByLabel: vi.fn(async (label: string) =>
+      label === "main" ? { setFocus: mocks.focusMain } : null,
+    ),
+  },
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: vi.fn(), openUrl: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen, emit: vi.fn() }));
@@ -605,6 +616,30 @@ describe("editor", () => {
     await render("/?page=preferences&section=editor");
     expect(document.body.textContent).toContain("local-rust-analyzer");
     expect(document.body.textContent).toContain(".rs");
+  });
+});
+
+describe("setup assistant", () => {
+  it("restarts onboarding in the main window and closes Preferences", async () => {
+    await render();
+    await click("Run setup again");
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ onboarding_completed: false });
+    expect(mocks.focusMain).toHaveBeenCalledOnce();
+    expect(mocks.closeWindow).toHaveBeenCalledOnce();
+  });
+
+  it("still closes Preferences when the main window cannot be focused", async () => {
+    mocks.focusMain.mockRejectedValueOnce("not allowed");
+    await render();
+    await click("Run setup again");
+    expect(mocks.closeWindow).toHaveBeenCalledOnce();
+  });
+
+  it("stays open when the flag could not be saved", async () => {
+    mocks.updateSettings.mockRejectedValueOnce("disk full");
+    await render();
+    await click("Run setup again");
+    expect(mocks.closeWindow).not.toHaveBeenCalled();
   });
 });
 

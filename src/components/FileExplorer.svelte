@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { isInDialog } from "../lib/dialog-focus";
   import { FileTree, prepareFileTreeInput, type FileTreeDropResult, type FileTreeRenameEvent, type GitStatusEntry } from "@pierre/trees";
   import { fileExplorer } from "../lib/api";
   import type { FsChangeEvent } from "../lib/types";
@@ -202,6 +203,8 @@
 
   function handleWindowKeydown(e: KeyboardEvent) {
     if (getActiveZone() !== "explorer") return;
+    // A dialog over the tree (including first-run setup) owns its keys.
+    if (isInDialog(e.target)) return;
     if (e.key === "Escape" && fileTree?.isSearchOpen()) {
       const tree = fileTree;
       tree.closeSearch();

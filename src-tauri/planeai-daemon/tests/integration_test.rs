@@ -261,10 +261,16 @@ fn spawn_diagnostics_available() {
     )
     .unwrap();
 
-    std::thread::sleep(Duration::from_millis(500));
+    // Poll instead of a fixed sleep: under parallel test load the echo can take longer to arrive.
     let diag = session.diagnostics();
-    let snap = diag.snapshot();
-    assert!(snap.reader_bytes > 0);
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while diag.snapshot().reader_bytes == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "reader saw no bytes within 3s"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]

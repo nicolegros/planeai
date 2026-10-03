@@ -1,6 +1,5 @@
 import { config as configApi } from "../../lib/api";
-import { updateSettings, type AppConfig, type EditorSettings } from "../../lib/settings.svelte";
-import { showSnackbar } from "../../lib/snackbar.svelte";
+import type { AppConfig, EditorSettings } from "../../lib/settings.svelte";
 import type { SettingsLocation } from "../../lib/settings-registry";
 
 const FLASH_MS = 1400;
@@ -36,17 +35,6 @@ function revealSetting(id: string) {
   flashTimer = setTimeout(() => {
     settingsWindow.flashId = null;
   }, FLASH_MS);
-}
-
-/** Saves a change from a settings page; on failure the store has rolled back and the user is told. */
-export async function saveSettings(patch: Partial<AppConfig>): Promise<boolean> {
-  try {
-    await updateSettings(patch);
-    return true;
-  } catch (error) {
-    showSnackbar(`Failed to save settings: ${error}`, "error");
-    return false;
-  }
 }
 
 /** Backend defaults, fetched on first use and retried on later calls if that fetch failed. */

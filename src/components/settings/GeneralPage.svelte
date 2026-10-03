@@ -1,5 +1,7 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
+  import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { updater } from "../../lib/api";
   import { getSettings, type AppConfig } from "../../lib/settings.svelte";
   import { showSnackbar } from "../../lib/snackbar.svelte";
@@ -8,7 +10,7 @@
   import TextField from "./TextField.svelte";
   import SettingRow from "./SettingRow.svelte";
   import SettingsSection from "./SettingsSection.svelte";
-  import { saveSettings } from "./settings-window.svelte";
+  import { saveSettings } from "../../lib/save-settings";
 
   const config = $derived(getSettings());
   const appUpdateState = $derived(getSettingsUpdateState());
@@ -30,6 +32,17 @@
     } catch (error) {
       showSnackbar(`Failed to set the projects folder: ${error}`, "error");
     }
+  }
+
+  /** Setup runs in the main window, so hand focus there and close Preferences. */
+  async function runSetupAgain() {
+    if (!(await saveSettings({ onboarding_completed: false }))) return;
+    try {
+      await (await WebviewWindow.getByLabel("main"))?.setFocus();
+    } catch (error) {
+      console.warn("Failed to focus the main window:", error);
+    }
+    await getCurrentWindow().close();
   }
 
   async function checkForAppUpdates() {
@@ -129,5 +142,11 @@
     {:else}
       <Button type="button" onclick={checkForAppUpdates}>Check for updates</Button>
     {/if}
+  </SettingRow>
+</SettingsSection>
+
+<SettingsSection title="Setup">
+  <SettingRow id="setup-assistant">
+    <Button type="button" onclick={runSetupAgain}>Run setup again</Button>
   </SettingRow>
 </SettingsSection>

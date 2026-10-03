@@ -151,6 +151,14 @@ export const SETTINGS: readonly SettingDefinition[] = [
     label: "PlaneAI version",
     keywords: ["update", "upgrade", "release", "install"],
   },
+  {
+    id: "setup-assistant",
+    category: "general",
+    section: "Setup",
+    label: "Setup assistant",
+    description: "Choose agents, the projects folder and a look again, in the main window.",
+    keywords: ["onboarding", "welcome", "first run", "wizard", "setup"],
+  },
   // Appearance
   {
     id: "appearance-mode",

@@ -4,7 +4,8 @@
   import { getSettings } from "../../lib/settings.svelte";
   import { isModified, resetPatch, settingById } from "../../lib/settings-registry";
   import SettingAnchor from "./SettingAnchor.svelte";
-  import { saveSettings, settingsWindow } from "./settings-window.svelte";
+  import { settingsWindow } from "./settings-window.svelte";
+  import { saveSettings } from "../../lib/save-settings";
 
   interface Props {
     /** Registry id; supplies the label, description and anchor. */
