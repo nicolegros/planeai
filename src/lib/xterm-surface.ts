@@ -8,9 +8,9 @@ import "@xterm/xterm/css/xterm.css";
 import { getSettings, getTerminalSettings, isDark } from "./settings.svelte";
 import { extractTerminalTheme } from "./theme-loader";
 import { matchTerminalKey } from "./terminal-keys";
+import { DEFAULT_SCROLLBACK_LINES } from "./terminal-scrollback";
 import type { TerminalGeometry, TerminalSurface, TerminalSurfaceHandlers } from "./terminal-view";
 
-const SCROLLBACK_LINES = 20_000;
 const FONT_TIMEOUT_MS = 3000;
 const encoder = new TextEncoder();
 // Contour's color scheme protocol: apps subscribe to dark/light change reports.
@@ -54,7 +54,7 @@ export function createXtermSurface(handlers: TerminalSurfaceHandlers): TerminalS
     fontSize: settings.terminal.font_size,
     fontFamily: fontStack(settings.terminal.font_family),
     theme: extractTerminalTheme(),
-    scrollback: settings.scrollback_lines ?? SCROLLBACK_LINES,
+    scrollback: settings.scrollback_lines ?? DEFAULT_SCROLLBACK_LINES,
     scrollOnUserInput: false,
     allowProposedApi: true,
     macOptionIsMeta: settings.terminal.option_as_meta,

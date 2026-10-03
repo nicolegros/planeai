@@ -502,6 +502,7 @@ describe("session-orchestrator", () => {
         default_provider: "kiro",
         task_management: null,
         sound_enabled: false,
+        auto_open_review: true,
       });
 
       api.list.mockResolvedValue([
@@ -536,6 +537,51 @@ describe("session-orchestrator", () => {
       cleanup();
     });
 
+    it("leaves the review tab closed when auto-open review is unset", async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const listenMock = vi.mocked(listen);
+      listenMock.mockClear();
+
+      vi.mocked(getSettings).mockReturnValue({
+        appearance: { mode: "system", theme: "default" },
+        terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
+        providers: {},
+        default_provider: "kiro",
+        task_management: null,
+        sound_enabled: false,
+      });
+
+      api.list.mockResolvedValue([
+        makeSession({ id: "s1", worktree_path: "/tmp/wt", base_branch: "main" }),
+      ]);
+      await loadSessions();
+      selectSession("s1");
+
+      taskWorkspaceLayout.clear();
+      await taskWorkspaceLayout.show(
+        { kind: "session", key: "session:s1", sessionId: "s1" },
+        {
+          agents: [{ sessionId: "s1", label: "Agent", icon: "bot" }],
+          selectedSessionId: "s1",
+          selectionIsExplicit: true,
+        },
+      );
+
+      const cleanup = startEventListeners();
+      const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
+      const handler = agentCall![1] as (event: {
+        payload: { session_id: string; state: string };
+      }) => void;
+
+      handler({ payload: { session_id: "s1", state: "Idle" } });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+      const leaf = taskWorkspaceLayout.focusedLeaf();
+      expect(leaf?.tabs.map((tab) => tab.ptyKey)).toEqual(["s1"]);
+
+      cleanup();
+    });
+
     it("does not close an already-open review tab when the agent finishes again", async () => {
       const { listen } = await import("@tauri-apps/api/event");
       const listenMock = vi.mocked(listen);
@@ -548,6 +594,7 @@ describe("session-orchestrator", () => {
         default_provider: "kiro",
         task_management: null,
         sound_enabled: false,
+        auto_open_review: true,
       });
 
       api.list.mockResolvedValue([

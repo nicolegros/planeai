@@ -9,26 +9,27 @@
 
 These are normal options users should configure.
 
-| Field                     | Type     | Default                      | Description                                                                                                          |
-| ------------------------- | -------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `providers`               | map      | kiro, claude, copilot, codex | Provider name → {command, yolo_flag, ...}                                                                            |
-| `default_provider`        | string   | `"kiro"`                     | Which provider to use when launching sessions                                                                        |
-| `session_backend`         | string   | `"local"`                    | Where sessions run: `local`, `tmux`, `daemon`                                                                        |
-| `session_log_dir`         | string   | unset                        | Directory for durable `.ansi` session logs                                                                           |
-| `extra_path_dirs`         | string[] | `[]`                         | Extra dirs prepended to PATH for sessions and agent detection                                                        |
-| `appearance`              | object   | —                            | Theme, dark/light mode, terminal themes                                                                              |
-| `terminal`                | object   | —                            | font_family, font_size, option_as_meta                                                                               |
-| `projects_base_path`      | string   | unset                        | Base directory for project worktrees                                                                                 |
-| `task_management`         | object   | unset                        | Task lifecycle hooks and dispatch config                                                                             |
-| `daemon_scrollback_bytes` | number   | 1MB                          | Daemon ring buffer size                                                                                              |
-| `integrations`            | object   | unset                        | Reserved legacy integration config; Jira is configured in plugin settings                                            |
-| `scrollback_lines`        | number   | —                            | Terminal scrollback line limit                                                                                       |
-| `sound_enabled`           | bool     | `true`                       | Play a chime when an agent finishes a task                                                                           |
-| `post_merge_action`       | string   | `"archive"`                  | Default action after PR merge timeout: `archive`, `destroy`, `keep`                                                  |
-| `sidebar_group_by`        | string   | `"project"`                  | Sidebar top-level grouping: `project` or `status`                                                                    |
-| `hide_task_keys`          | bool     | `false`                      | Hide task keys on sidebar task rows                                                                                  |
-| `hide_project_labels`     | bool     | `false`                      | Hide project names on sidebar rows when grouped by status                                                            |
-| `onboarding_completed`    | bool     | see description              | `false` on first launch until setup is finished or skipped; configs written before this field existed load as `true` |
+| Field                     | Type     | Default                           | Description                                                                                                                                                      |
+| ------------------------- | -------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `providers`               | map      | kiro, claude, copilot, codex      | Provider name → {command, yolo_flag, ...}                                                                                                                        |
+| `default_provider`        | string   | `"kiro"`                          | Which provider to use when launching sessions                                                                                                                    |
+| `session_backend`         | string   | `"local"`                         | Where sessions run: `local`, `tmux`, `daemon`                                                                                                                    |
+| `session_log_dir`         | string   | unset                             | Directory for durable `.ansi` session logs                                                                                                                       |
+| `extra_path_dirs`         | string[] | `[]`                              | Extra dirs prepended to PATH for sessions and agent detection                                                                                                    |
+| `appearance`              | object   | —                                 | Theme, dark/light mode, terminal themes                                                                                                                          |
+| `terminal`                | object   | —                                 | font_family, font_size, option_as_meta                                                                                                                           |
+| `projects_base_path`      | string   | unset                             | Base directory for project worktrees                                                                                                                             |
+| `task_management`         | object   | recommended hooks on new installs | Task lifecycle hooks and dispatch config. `null` turns task management off; configs written before it defaulted on and lacking the key stay off                  |
+| `daemon_scrollback_bytes` | number   | 1MB                               | Daemon ring buffer size                                                                                                                                          |
+| `integrations`            | object   | unset                             | Reserved legacy integration config; Jira is configured in plugin settings                                                                                        |
+| `scrollback_lines`        | number   | —                                 | Terminal scrollback line limit                                                                                                                                   |
+| `sound_enabled`           | bool     | `true`                            | Play a chime when an agent finishes a task                                                                                                                       |
+| `auto_open_review`        | bool     | `false` on new installs           | Open the Review tab when the active session's agent stops with changes. Configs written before this default changed that lack the key (or set `null`) keep it on |
+| `post_merge_action`       | string   | `"archive"`                       | Default action after PR merge timeout: `archive`, `destroy`, `keep`                                                                                              |
+| `sidebar_group_by`        | string   | `"project"`                       | Sidebar top-level grouping: `project` or `status`                                                                                                                |
+| `hide_task_keys`          | bool     | `false`                           | Hide task keys on sidebar task rows                                                                                                                              |
+| `hide_project_labels`     | bool     | `false`                           | Hide project names on sidebar rows when grouped by status                                                                                                        |
+| `onboarding_completed`    | bool     | see description                   | `false` on first launch until setup is finished or skipped; configs written before this field existed load as `true`                                             |
 
 ### 2. Advanced compatibility config
 

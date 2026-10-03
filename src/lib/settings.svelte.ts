@@ -96,10 +96,12 @@ export interface AppConfig {
   onboarding_completed?: boolean | null;
 }
 
+const INITIAL_THEME = "default";
+
 let config = $state<AppConfig>({
   appearance: {
     mode: "system",
-    theme: "default",
+    theme: INITIAL_THEME,
   },
   terminal: {
     font_family: "Menlo",
@@ -155,27 +157,53 @@ export function getTerminalSettings() {
   return config.terminal;
 }
 
+/** Theme of the config the backend last confirmed; theme CSS reloads only when it changes. */
+let confirmedTheme = INITIAL_THEME;
+
+function confirmTheme() {
+  if (config.appearance.theme === confirmedTheme) return;
+  confirmedTheme = config.appearance.theme;
+  loadTheme();
+}
+
 export async function loadSettings(): Promise<void> {
   config = await configApi.get();
+  confirmedTheme = config.appearance.theme;
   applyDarkClass();
 }
 
 export async function refreshSettings(): Promise<void> {
   config = await configApi.refresh();
+  confirmedTheme = config.appearance.theme;
   applyDarkClass();
   loadTheme();
   emit("settings-changed");
 }
 
+let latestUpdate = 0;
+
+/** Applies `patch` optimistically; if the backend rejects it, shows what the backend holds and rethrows. */
 export async function updateSettings(patch: Partial<AppConfig>): Promise<void> {
-  const prevTheme = config.appearance.theme;
+  const update = ++latestUpdate;
+  const previous = config;
   config = { ...config, ...patch };
   if (patch.appearance) config.appearance = { ...config.appearance, ...patch.appearance };
   if (patch.terminal) config.terminal = { ...config.terminal, ...patch.terminal };
   applyDarkClass();
-  await configApi.update(config);
-  if (config.appearance.theme !== prevTheme) {
-    loadTheme();
+  try {
+    await configApi.update(config);
+  } catch (error) {
+    // A newer update sends the whole config, this change included, and settles the state itself.
+    if (update === latestUpdate) {
+      const saved = await configApi.get().catch(() => previous);
+      if (update === latestUpdate) {
+        config = saved;
+        applyDarkClass();
+        confirmTheme();
+      }
+    }
+    throw error;
   }
+  confirmTheme();
   emit("settings-changed");
 }

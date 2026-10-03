@@ -7,7 +7,7 @@ description: Command reference for planeai-cli — manage sessions, projects, ta
 
 ## Install
 
-The CLI is installed from within the app via **Preferences → CLI** or with the system installer bundled with each release.
+The CLI is installed from within the app via **Preferences → Advanced → Command line** or with the system installer bundled with each release.
 
 Once installed, it's available as `planeai-cli` on your PATH.
 

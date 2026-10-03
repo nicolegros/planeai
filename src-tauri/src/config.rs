@@ -73,6 +73,15 @@ pub enum SidebarGroupBy {
     Status,
 }
 
+/// What happens to a task's session when the post-merge prompt times out.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PostMergeAction {
+    Archive,
+    Destroy,
+    Keep,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub appearance: Appearance,
@@ -83,7 +92,8 @@ pub struct Config {
     pub session_backend: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vim_mode: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Written as `null` when off, so turning tasks off survives the default being on.
+    #[serde(default)]
     pub task_management: Option<TaskManager>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projects_base_path: Option<String>,
@@ -99,6 +109,9 @@ pub struct Config {
     /// Only affects the status grouping, where rows from several projects are mixed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_project_labels: Option<bool>,
+    /// `None` archives, matching the frontend default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_merge_action: Option<PostMergeAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_scrollback_bytes: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -163,7 +176,7 @@ fn default_option_as_meta() -> bool {
 }
 
 fn default_auto_open_review() -> Option<bool> {
-    Some(true)
+    Some(false)
 }
 
 fn default_sound_enabled() -> Option<bool> {
@@ -231,6 +244,30 @@ pub struct TaskManager {
     pub on_complete: Option<LifecycleHook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_dispatch: Option<AutoDispatchConfig>,
+}
+
+impl TaskManager {
+    /// What new installs start with: the standard task statuses and no auto-dispatch.
+    pub fn recommended() -> Self {
+        let hook = |status: &str| {
+            Some(LifecycleHook {
+                move_to: status.to_string(),
+            })
+        };
+        TaskManager {
+            templates: Some(TaskManagerTemplates {
+                branch: Some("{key:lower}/{title:slug}".to_string()),
+                name: Some("{key:upper}: {title}".to_string()),
+                prompt: Some("Implement task {key}: {title}\n\n{description}".to_string()),
+            }),
+            on_start: hook("in_progress"),
+            on_notify: hook("in_review"),
+            on_restart: hook("in_progress"),
+            on_resume: hook("in_progress"),
+            on_complete: hook("done"),
+            auto_dispatch: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -352,19 +389,20 @@ impl Default for Config {
             default_provider: "kiro".to_string(),
             session_backend: None,
             vim_mode: None,
-            task_management: None,
+            task_management: Some(TaskManager::recommended()),
             projects_base_path: None,
             hide_done_tasks: None,
             hide_empty_projects: None,
             sidebar_group_by: None,
             hide_task_keys: None,
             hide_project_labels: None,
+            post_merge_action: None,
             daemon_scrollback_bytes: None,
             scrollback_lines: None,
             web_links: None,
             session_log_dir: None,
             extra_path_dirs: Vec::new(),
-            auto_open_review: Some(true),
+            auto_open_review: Some(false),
             sound_enabled: Some(true),
             integrations: None,
             language_servers: None,
@@ -495,6 +533,37 @@ fn migrate_autonomous_prompt_template(config: &mut Config) -> bool {
     true
 }
 
+/// Existing config files keep the defaults they were written under: tasks off when the key
+/// is absent, and review auto-open on when absent or null (the frontend once read null as on).
+fn keep_pre_existing_defaults(user_val: &mut serde_json::Value) {
+    let Some(obj) = user_val.as_object_mut() else {
+        return;
+    };
+    obj.entry("task_management")
+        .or_insert(serde_json::Value::Null);
+    if obj
+        .get("auto_open_review")
+        .is_none_or(serde_json::Value::is_null)
+    {
+        obj.insert(
+            "auto_open_review".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+}
+
+/// Used when an existing config.json cannot be read: behave like an existing user, never a
+/// new install, so a typo does not switch on new-install defaults such as task management.
+fn invalid_config_fallback() -> Config {
+    Config {
+        editor: Some(invalid_editor_config()),
+        onboarding_completed: Some(true),
+        task_management: None,
+        auto_open_review: Some(true),
+        ..Config::default()
+    }
+}
+
 pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
     let config_path = config_dir.join("config.json");
     if config_path.exists() {
@@ -504,26 +573,19 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         let mut user_val: serde_json::Value = match serde_json::from_reader(stripped) {
             Ok(v) => v,
             Err(e) => {
-                let config = Config {
-                    editor: Some(invalid_editor_config()),
-                    onboarding_completed: Some(true),
-                    ..Config::default()
-                };
+                let config = invalid_config_fallback();
                 return (config, vec![format!("Failed to parse config.json: {e}")]);
             }
         };
         // Migrate legacy task_managers → task_management
         migrate_legacy_task_managers(&mut user_val);
+        keep_pre_existing_defaults(&mut user_val);
         let default_val = serde_json::to_value(Config::default()).unwrap();
         let merged = merge_top_level(default_val, user_val);
         let mut config: Config = match serde_json::from_value(merged) {
             Ok(config) => config,
             Err(error) => {
-                let config = Config {
-                    editor: Some(invalid_editor_config()),
-                    onboarding_completed: Some(true),
-                    ..Config::default()
-                };
+                let config = invalid_config_fallback();
                 return (
                     config,
                     vec![format!("Failed to deserialize config.json: {error}")],

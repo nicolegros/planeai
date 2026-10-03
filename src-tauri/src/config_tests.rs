@@ -70,6 +70,7 @@ fn load_reads_existing_config_file() {
         sidebar_group_by: None,
         hide_task_keys: None,
         hide_project_labels: None,
+        post_merge_action: None,
         daemon_scrollback_bytes: None,
         scrollback_lines: None,
         web_links: None,
@@ -1009,4 +1010,135 @@ fn detect_provider_binaries_covers_configured_and_preset_agents() {
     assert!(found.contains_key("claude"));
     assert!(found.contains_key("codex"));
     assert!(found.contains_key("copilot"));
+}
+
+#[test]
+fn post_merge_action_survives_a_settings_update_round_trip() {
+    // `update_config` deserializes the frontend payload into `Config`; an unknown field is
+    // silently dropped, which used to discard the user's post-merge choice.
+    let mut payload = serde_json::to_value(Config::default()).unwrap();
+    payload["post_merge_action"] = serde_json::json!("destroy");
+    let config: Config = serde_json::from_value(payload).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    save(dir.path(), &config).unwrap();
+
+    let (reloaded, warnings) = load(dir.path());
+
+    assert!(warnings.is_empty());
+    assert_eq!(reloaded.post_merge_action, Some(PostMergeAction::Destroy));
+}
+
+#[test]
+fn unknown_post_merge_action_is_reported_as_a_config_error() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"post_merge_action": "explode"}"#,
+    )
+    .unwrap();
+
+    let (_, warnings) = load(dir.path());
+
+    assert_eq!(warnings.len(), 1);
+}
+
+#[test]
+fn new_installs_start_with_review_auto_open_off_and_tasks_on() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (config, _) = load(dir.path());
+
+    assert_eq!(config.auto_open_review, Some(false));
+    assert_eq!(config.task_management, Some(TaskManager::recommended()));
+}
+
+#[test]
+fn existing_config_without_task_management_keeps_tasks_off() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"default_provider": "kiro"}"#,
+    )
+    .unwrap();
+
+    let (config, warnings) = load(dir.path());
+
+    assert!(warnings.is_empty());
+    assert_eq!(config.task_management, None);
+}
+
+#[test]
+fn turning_task_management_off_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut config, _) = load(dir.path());
+    config.task_management = None;
+    save(dir.path(), &config).unwrap();
+
+    let (reloaded, _) = load(dir.path());
+
+    assert_eq!(reloaded.task_management, None);
+}
+
+#[test]
+fn recommended_task_management_moves_tasks_through_the_standard_statuses() {
+    let tm = TaskManager::recommended();
+    fn hook(h: &Option<LifecycleHook>) -> Option<&str> {
+        h.as_ref().map(|h| h.move_to.as_str())
+    }
+
+    assert_eq!(hook(&tm.on_start), Some("in_progress"));
+    assert_eq!(hook(&tm.on_notify), Some("in_review"));
+    assert_eq!(hook(&tm.on_resume), Some("in_progress"));
+    assert_eq!(hook(&tm.on_restart), Some("in_progress"));
+    assert_eq!(hook(&tm.on_complete), Some("done"));
+    assert!(tm.auto_dispatch.is_none());
+    let templates = tm.templates.unwrap();
+    assert_eq!(
+        templates.branch.as_deref(),
+        Some("{key:lower}/{title:slug}")
+    );
+    assert_eq!(templates.name.as_deref(), Some("{key:upper}: {title}"));
+}
+
+#[test]
+fn existing_config_without_auto_open_review_keeps_it_on() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"default_provider": "kiro"}"#,
+    )
+    .unwrap();
+
+    let (config, _) = load(dir.path());
+
+    assert_eq!(config.auto_open_review, Some(true));
+}
+
+#[test]
+fn existing_config_with_null_auto_open_review_keeps_it_on() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"auto_open_review": null}"#,
+    )
+    .unwrap();
+
+    let (config, _) = load(dir.path());
+
+    assert_eq!(config.auto_open_review, Some(true));
+}
+
+#[test]
+fn broken_config_falls_back_to_existing_user_behavior() {
+    for content in ["{ not json", r#"{"post_merge_action": "explode"}"#] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("config.json"), content).unwrap();
+
+        let (config, warnings) = load(dir.path());
+
+        assert_eq!(warnings.len(), 1, "{content}");
+        assert_eq!(config.task_management, None, "{content}");
+        assert_eq!(config.auto_open_review, Some(true), "{content}");
+        assert_eq!(config.onboarding_completed, Some(true), "{content}");
+    }
 }
