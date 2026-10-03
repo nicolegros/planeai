@@ -1,25 +1,26 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-const { handoff, handback } = vi.hoisted(() => ({
-  handoff: vi.fn(async () => ["/opt/claude", "--resume", "s1", "--permission-mode", "plan"]),
-  handback: vi.fn(async () => {}),
-}));
-vi.mock("../api", () => ({ providerSessions: { handoff, handback } }));
-const { showSnackbar } = vi.hoisted(() => ({ showSnackbar: vi.fn() }));
-vi.mock("../snackbar.svelte", () => ({ showSnackbar }));
+vi.mock("../api", () => ({ providerSessions: {} }));
+vi.mock("../snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
 
-import {
-  forgetHandoff,
-  handoffTabFor,
-  quoteArgument,
-  shellCommand,
-  shellTabClosed,
-  startHandoff,
-} from "../provider-handoff";
+import { createProviderHandoff, quoteArgument, shellCommand } from "../provider-handoff";
+
+function setup() {
+  const api = {
+    handoff: vi.fn(async (_sessionId: string) => [
+      "/opt/claude",
+      "--resume",
+      "s1",
+      "--permission-mode",
+      "plan",
+    ]),
+    handback: vi.fn(async (_sessionId: string) => {}),
+  };
+  const notify = vi.fn();
+  return { api, notify, handoff: createProviderHandoff({ api, notify }) };
+}
 
 describe("provider handoff", () => {
-  beforeEach(() => vi.clearAllMocks());
-
   it("quotes arguments for POSIX shells and cmd.exe", () => {
     expect(shellCommand(["/opt/claude", "--resume", "s1"], false)).toBe("/opt/claude --resume s1");
     expect(quoteArgument("it's here", false)).toBe(`'it'\\''s here'`);
@@ -30,48 +31,80 @@ describe("provider handoff", () => {
   });
 
   it("opens one terminal tab per session and hands back when it closes", async () => {
+    const { api, handoff } = setup();
     const open = vi.fn(() => "s1:4");
-    await expect(startHandoff("s1", open)).resolves.toBe("s1:4");
+    await expect(handoff.start("s1", open)).resolves.toBe("s1:4");
     expect(open).toHaveBeenCalledWith("/opt/claude --resume s1 --permission-mode plan", "Terminal");
-    await expect(startHandoff("s1", open)).resolves.toBe("s1:4");
-    expect(handoff).toHaveBeenCalledOnce();
-    expect(handoffTabFor("s1")).toBe("s1:4");
+    await expect(handoff.start("s1", open)).resolves.toBe("s1:4");
+    expect(api.handoff).toHaveBeenCalledOnce();
+    expect(handoff.tabFor("s1")).toBe("s1:4");
 
-    await shellTabClosed("s2:1");
-    expect(handback).not.toHaveBeenCalled();
-    await shellTabClosed("s1:4");
-    expect(handback).toHaveBeenCalledWith("s1");
-    expect(handoffTabFor("s1")).toBeUndefined();
+    await handoff.shellClosed("s2:1");
+    expect(api.handback).not.toHaveBeenCalled();
+    await handoff.shellClosed("s1:4");
+    expect(api.handback).toHaveBeenCalledWith("s1");
+    expect(handoff.tabFor("s1")).toBeUndefined();
   });
 
   it("opens a single tab when the handoff is requested twice before it lands", async () => {
-    const open = vi.fn(() => "s4:1");
-    const [first, second] = await Promise.all([startHandoff("s4", open), startHandoff("s4", open)]);
-    expect([first, second]).toEqual(["s4:1", "s4:1"]);
+    const { api, handoff } = setup();
+    const open = vi.fn(() => "s1:1");
+    const results = await Promise.all([handoff.start("s1", open), handoff.start("s1", open)]);
+    expect(results).toEqual(["s1:1", "s1:1"]);
     expect(open).toHaveBeenCalledOnce();
-    expect(handoff).toHaveBeenCalledOnce();
+    expect(api.handoff).toHaveBeenCalledOnce();
   });
 
   it("closes the tab even when the session cannot return to the chat", async () => {
-    await startHandoff("s5", () => "s5:1");
-    handback.mockRejectedValueOnce(new Error("plugin is not running"));
-    await expect(shellTabClosed("s5:1")).resolves.toBeUndefined();
-    expect(showSnackbar).toHaveBeenCalledWith(
-      expect.stringContaining("could not return to the chat"),
-    );
-    expect(handoffTabFor("s5")).toBeUndefined();
-  });
-
-  it("opens a fresh tab after forgetting a handoff whose tab vanished", async () => {
-    await startHandoff("s6", () => "s6:1");
-    forgetHandoff("s6");
-    expect(handoffTabFor("s6")).toBeUndefined();
-    await expect(startHandoff("s6", () => "s6:2")).resolves.toBe("s6:2");
+    const { api, notify, handoff } = setup();
+    await handoff.start("s1", () => "s1:1");
+    api.handback.mockRejectedValueOnce(new Error("plugin is not running"));
+    await expect(handoff.shellClosed("s1:1")).resolves.toBeUndefined();
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("could not return to the chat"));
+    expect(handoff.tabFor("s1")).toBeUndefined();
   });
 
   it("returns the session to the chat when no pane can hold the terminal", async () => {
-    await expect(startHandoff("s3", () => null)).rejects.toThrow("no pane");
-    expect(handback).toHaveBeenCalledWith("s3");
-    expect(handoffTabFor("s3")).toBeUndefined();
+    const { api, handoff } = setup();
+    await expect(handoff.start("s1", () => null)).rejects.toThrow("no pane");
+    expect(api.handback).toHaveBeenCalledWith("s1");
+    expect(handoff.tabFor("s1")).toBeUndefined();
+  });
+
+  it("ends a handoff by closing its tab, which hands the session back", async () => {
+    const { api, handoff } = setup();
+    await handoff.start("s1", () => "s1:1");
+    const closeTab = vi.fn(async (ptyKey: string) => {
+      await handoff.shellClosed(ptyKey);
+      return "closed" as const;
+    });
+    await handoff.end("s1", closeTab);
+    expect(closeTab).toHaveBeenCalledWith("s1:1");
+    expect(api.handback).toHaveBeenCalledOnce();
+  });
+
+  it("hands back directly, and forgets the tab, when the tab is already gone", async () => {
+    const { api, handoff } = setup();
+    await handoff.start("s1", () => "s1:1");
+    await handoff.end("s1", async () => "missing");
+    expect(api.handback).toHaveBeenCalledWith("s1");
+    expect(handoff.tabFor("s1")).toBeUndefined();
+    await expect(handoff.start("s1", () => "s1:2")).resolves.toBe("s1:2");
+  });
+
+  it("hands back a session without a tab", async () => {
+    const { api, handoff } = setup();
+    const closeTab = vi.fn();
+    await handoff.end("s1", closeTab);
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(api.handback).toHaveBeenCalledWith("s1");
+  });
+
+  it("keeps the handoff while its terminal is still starting", async () => {
+    const { api, handoff } = setup();
+    await handoff.start("s1", () => "s1:1");
+    await expect(handoff.end("s1", async () => "starting")).rejects.toThrow("still starting");
+    expect(api.handback).not.toHaveBeenCalled();
+    expect(handoff.tabFor("s1")).toBe("s1:1");
   });
 });

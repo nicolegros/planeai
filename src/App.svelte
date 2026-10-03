@@ -48,10 +48,10 @@
   import PluginContributionHost from "./components/PluginContributionHost.svelte";
   import ProviderSessionView from "./components/ProviderSessionView.svelte";
   import { isPluginSession, runtimeProviders } from "./lib/plugin-providers";
-  import { forgetHandoff, handoffTabFor, startHandoff } from "./lib/provider-handoff";
+  import { providerHandoff } from "./lib/provider-handoff";
   import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
-  import { loops as loopsApi, plugins as pluginsApi, providerSessions } from "./lib/api";
+  import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { taskWorkspaceLayout as workspaceLayout, toPaneTabs, workspaceOf, type PaneTab, type WorkspaceAgent, type WorkspaceIdentity } from "./lib/task-workspace-layout.svelte";
   import { activeTabOf, findLeaf, tabsOf, type LeafNode, type NavDirection, type SplitDirection, type TabEntry } from "./lib/layout-tree";
@@ -541,18 +541,11 @@
   // ─── Provider session terminal handoff ─────────────────────────────────────
 
   async function handoffProviderSession(sessionId: string): Promise<void> {
-    await startHandoff(sessionId, (command, label) => workspaceLayout.openCommand(sessionId, command, label));
+    await providerHandoff.start(sessionId, (command, label) => workspaceLayout.openCommand(sessionId, command, label));
   }
 
-  async function handbackProviderSession(sessionId: string): Promise<void> {
-    const ptyKey = handoffTabFor(sessionId);
-    const closed = ptyKey ? await workspaceLayout.closeTab(ptyKey) : "missing";
-    if (closed === "starting") throw new Error("The terminal is still starting.");
-    // Closing the tab hands the session back; without one there is nothing left to close.
-    if (closed === "missing") {
-      forgetHandoff(sessionId);
-      await providerSessions.handback(sessionId);
-    }
+  function handbackProviderSession(sessionId: string): Promise<void> {
+    return providerHandoff.end(sessionId, (ptyKey) => workspaceLayout.closeTab(ptyKey));
   }
 
   // ─── Project management ─────────────────────────────────────────────────────

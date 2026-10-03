@@ -23,7 +23,7 @@ import { editor as editorApi, pty, sessions as sessionsApi } from "./api";
 import { toTaskWorkspaceId } from "./sidebar-session-order";
 import { sessionTaskProjectId, type Session } from "./types";
 import { disposeTerminalView } from "./terminal-views";
-import { shellTabClosed } from "./provider-handoff";
+import { providerHandoff } from "./provider-handoff";
 
 export type WorkspaceIdentity =
   | { kind: "task"; key: string; projectId: string; taskKey: string }
@@ -603,7 +603,7 @@ export const taskWorkspaceLayout = createTaskWorkspaceLayout({
         : sessionsApi.saveLayout(workspace.sessionId, layoutJson),
   },
   closeShell: (sessionId, index) => pty.closeTab(sessionId, index),
-  shellClosed: shellTabClosed,
+  shellClosed: (ptyKey) => providerHandoff.shellClosed(ptyKey),
   getTerminalCommand: (sessionId, filePath) => editorApi.getTerminalCommand(sessionId, filePath),
   disposeView: disposeTerminalView,
   onSaveError: (workspace, error) =>
