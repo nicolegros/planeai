@@ -1,11 +1,6 @@
 //! Notification hooks installed into each supported agent CLI's own config.
 
-use std::collections::HashMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 /// A CLI coding agent planeai knows how to install notification hooks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -39,7 +34,20 @@ impl AgentKind {
     /// Matches a command word whose file name is the agent name or starts with
     /// `<name>-`, so wrappers like `my-claude-wrapper` are not misdetected.
     pub fn from_command(command: &str) -> Option<Self> {
-        agent_word(command).map(|(kind, _)| kind)
+        command.split_whitespace().find_map(|word| {
+            let file_name = word
+                .trim_matches(|c| c == '"' || c == '\'')
+                .rsplit(['/', '\\'])
+                .next()?;
+            let name = file_name.strip_suffix(".exe").unwrap_or(file_name);
+            Self::ALL.into_iter().find(|kind| {
+                let bin = kind.binary_name();
+                name == bin
+                    || name
+                        .strip_prefix(bin)
+                        .is_some_and(|rest| rest.starts_with('-'))
+            })
+        })
     }
 
     pub fn is_hook_installed(self, home: &str) -> bool {
@@ -65,100 +73,6 @@ impl AgentKind {
             AgentKind::Codex => install_codex_hook(home),
         }
     }
-}
-
-/// The agent a command launches, with the byte offset where its executable word ends.
-fn agent_word(command: &str) -> Option<(AgentKind, usize)> {
-    command.split_whitespace().find_map(|word| {
-        let file_name = word
-            .trim_matches(|c| c == '"' || c == '\'')
-            .rsplit(['/', '\\'])
-            .next()?;
-        let name = file_name.strip_suffix(".exe").unwrap_or(file_name);
-        let kind = AgentKind::ALL.into_iter().find(|kind| {
-            let bin = kind.binary_name();
-            name == bin
-                || name
-                    .strip_prefix(bin)
-                    .is_some_and(|rest| rest.starts_with('-'))
-        })?;
-        let start = word.as_ptr() as usize - command.as_ptr() as usize;
-        Some((kind, start + word.len()))
-    })
-}
-
-/// Adapt a provider command so the agent's hook events are attributed to its own session.
-///
-/// Codex runs hooks in a shared app-server daemon that keeps the environment of whichever
-/// session started it, so every session would report that one's `PLANEAI_SESSION_ID`.
-pub fn session_scoped_command(command: &str) -> String {
-    codex_without_daemon(command, codex_supports_no_daemon)
-}
-
-fn codex_without_daemon(command: &str, supports_no_daemon: impl FnOnce(&str) -> bool) -> String {
-    let Some((AgentKind::Codex, end)) = agent_word(command) else {
-        return command.to_string();
-    };
-    let daemon_chosen = command
-        .split_whitespace()
-        .any(|w| w == "--no-daemon" || w == "--remote" || w.starts_with("--remote="));
-    if daemon_chosen || !supports_no_daemon(&command[..end]) {
-        return command.to_string();
-    }
-    format!("{} --no-daemon{}", &command[..end], &command[end..])
-}
-
-/// Older Codex releases reject unknown flags, so check `--help` once per launcher.
-fn codex_supports_no_daemon(launcher: &str) -> bool {
-    static SUPPORT: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
-    if let Some(&known) = SUPPORT
-        .lock()
-        .unwrap()
-        .get_or_insert_with(HashMap::new)
-        .get(launcher)
-    {
-        return known;
-    }
-    let supported = help_mentions(launcher, "--no-daemon");
-    SUPPORT
-        .lock()
-        .unwrap()
-        .get_or_insert_with(HashMap::new)
-        .insert(launcher.to_string(), supported);
-    supported
-}
-
-fn help_mentions(launcher: &str, flag: &str) -> bool {
-    let (program, args) = crate::command::shell_args(&format!("{launcher} --help"));
-    let mut cmd = std::process::Command::new(program);
-    cmd.args(args)
-        .env("PATH", crate::command::augmented_path(&[]))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    crate::command::no_window(&mut cmd);
-    let Ok(mut child) = cmd.spawn() else {
-        return false;
-    };
-    // Help text fits in the pipe buffer, so waiting before reading cannot deadlock.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-        }
-    }
-    let mut help = String::new();
-    child
-        .stdout
-        .take()
-        .is_some_and(|mut out| out.read_to_string(&mut help).is_ok())
-        && help.contains(flag)
 }
 
 /// Rewrite already-installed hooks so their scripts match the bundled version.
@@ -704,58 +618,6 @@ mod tests {
 
     fn read_json(path: &Path) -> serde_json::Value {
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
-    }
-
-    #[test]
-    fn codex_commands_opt_out_of_the_shared_daemon() {
-        for (command, expected) in [
-            ("codex", "codex --no-daemon"),
-            ("codex --yolo", "codex --no-daemon --yolo"),
-            ("codex resume --last", "codex --no-daemon resume --last"),
-            (
-                "/opt/homebrew/bin/codex --model o3",
-                "/opt/homebrew/bin/codex --no-daemon --model o3",
-            ),
-            ("npx codex", "npx codex --no-daemon"),
-        ] {
-            assert_eq!(codex_without_daemon(command, |_| true), expected);
-        }
-    }
-
-    #[test]
-    fn codex_daemon_probe_runs_the_launcher_words() {
-        let mut probed = None;
-        codex_without_daemon("npx codex --yolo", |launcher| {
-            probed = Some(launcher.to_string());
-            true
-        });
-        assert_eq!(probed.as_deref(), Some("npx codex"));
-    }
-
-    #[test]
-    fn codex_daemon_flag_is_skipped_when_unsupported_or_already_chosen() {
-        assert_eq!(
-            codex_without_daemon("codex --yolo", |_| false),
-            "codex --yolo"
-        );
-        for command in [
-            "codex --no-daemon",
-            "codex --remote ws://host:1234",
-            "codex --remote=ws://host:1234",
-            "claude --resume",
-            "my-codex-wrapper",
-        ] {
-            let result = codex_without_daemon(command, |_| panic!("probed {command}"));
-            assert_eq!(result, command);
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn help_mentions_reads_the_launcher_help_output() {
-        assert!(help_mentions("echo usage: --no-daemon", "--no-daemon"));
-        assert!(!help_mentions("echo usage:", "--no-daemon"));
-        assert!(!help_mentions("planeai-missing-binary", "--no-daemon"));
     }
 
     #[test]

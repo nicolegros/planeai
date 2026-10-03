@@ -282,23 +282,6 @@ fn main() {
             // scripts for hooks that are already installed on the user's system).
             planeai_core::agent_hooks::refresh_hook_scripts(&config::home_dir());
 
-            // Probe agent CLI flag support off the main thread so launches never wait on it.
-            let provider_commands: Vec<String> = {
-                let cfg_state = app.state::<ConfigState>();
-                let cfg = cfg_state.0.lock().unwrap();
-                cfg.providers
-                    .values()
-                    .flat_map(|p| {
-                        std::iter::once(p.command.clone()).chain(p.resume_command.clone())
-                    })
-                    .collect()
-            };
-            std::thread::spawn(move || {
-                for command in provider_commands {
-                    planeai_core::agent_hooks::session_scoped_command(&command);
-                }
-            });
-
             // PTY manager with notify wired in
             let pty_mgr = pty::PtyManager::new();
             pty_mgr.set_observer(Arc::new(notify::NotifyObserver::new(

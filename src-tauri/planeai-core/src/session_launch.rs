@@ -195,7 +195,7 @@ pub fn build_provider_launch_command(
     autonomous: bool,
     autonomous_prompt_template: Option<&str>,
 ) -> ProviderLaunchCommand {
-    let mut cmd = crate::agent_hooks::session_scoped_command(&provider.command);
+    let mut cmd = provider.command.clone();
     let mut auto_approve_was_applied = false;
 
     // Append yolo flag if auto-approve is requested
