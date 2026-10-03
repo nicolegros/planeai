@@ -30,7 +30,6 @@
   import { classHighlighter } from "@lezer/highlight";
   import { getSettings } from "../lib/settings.svelte";
   import { isPlatformMod, MOD_ENTER_HINT, MOD_LABEL } from "../lib/keyboard";
-  import { pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { recordUserInput } from "../lib/session-orchestrator.svelte";
   import {
@@ -77,9 +76,11 @@
     onFocusEditor: () => void;
     onFileChange?: (fileName: string) => void;
     onModifiedChange?: (modified: boolean) => void;
+    /** Submit a message to the session's agent. */
+    onSend: (text: string) => Promise<void>;
   }
 
-  let { repoPath, sessionId, ptyKey, sessionExited = false, visible, focused = false, theme = "vs-dark", initialFile, onClose, onFocusEditor, onFileChange, onModifiedChange }: Props = $props();
+  let { repoPath, sessionId, ptyKey, sessionExited = false, visible, focused = false, theme = "vs-dark", initialFile, onClose, onFocusEditor, onFileChange, onModifiedChange, onSend }: Props = $props();
 
   let buffers = $state<Buffer[]>([]);
   let activeIndex = $state(-1);
@@ -393,10 +394,7 @@
     if (pendingFeedback.length === 0 || sessionExited || sendingFeedback || showFeedbackComposer) return;
     if (!beginEditorFeedbackSend(sessionId)) return;
     try {
-      const bytes = Array.from(new TextEncoder().encode(serializeEditorFeedback(pendingFeedback)));
-      bytes.push(0x0d);
-      const delivered = await pty.write(sessionId, bytes);
-      if (!delivered) throw new Error("PTY session is not attached. Try again once it is ready.");
+      await onSend(serializeEditorFeedback(pendingFeedback));
       recordUserInput(sessionId);
       const count = pendingFeedback.length;
       clearEditorFeedback(sessionId);

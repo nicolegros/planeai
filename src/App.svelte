@@ -49,6 +49,7 @@
   import ProviderSessionView from "./components/ProviderSessionView.svelte";
   import { isPluginSession, runtimeProviders } from "./lib/plugin-providers";
   import { providerHandoff } from "./lib/provider-handoff";
+  import { sendToAgent } from "./lib/agent-input";
   import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
@@ -341,6 +342,11 @@
     const leaf = workspaceLayout.layout ? findLeaf(workspaceLayout.layout, paneId) : null;
     const tab = activeTabOf(leaf);
     if (!tab || !isTerminalTab(tab)) return;
+    const session = sessions.find((candidate) => candidate.id === ptyKeySessionId(tab.ptyKey));
+    if (tab.type === "agent" && session && isPluginSession(session)) {
+      showSnackbar("Chats do not take dropped files yet. Drop them on a terminal tab instead.", "error");
+      return;
+    }
     const { text, skipped } = droppedPathsText(paths, { windows: IS_WINDOWS });
     if (skipped.length > 0) {
       showSnackbar(
@@ -1415,6 +1421,7 @@
                     sessionId={sessionId}
                     onEditFile={(filePath) => openFile(sessionId, filePath)}
                     onFileChange={(name) => workspaceLayout.setTabTitle(tabEntry.ptyKey, name)}
+                    onSend={(text) => sendToAgent(session, text)}
                   />
                 {:else}
                   <div class="flex items-center justify-center h-full text-t3 text-sm" role="status">No project associated with this session</div>
@@ -1437,6 +1444,7 @@
                   onFocusEditor={() => { workspaceLayout.focusTab(tabEntry.ptyKey); focusEditor(); }}
                   onFileChange={(name) => workspaceLayout.setTabTitle(tabEntry.ptyKey, name)}
                   onModifiedChange={(modified) => setEditorTabModified(tabEntry.ptyKey, modified)}
+                  onSend={(text) => sendToAgent(session, text)}
                 />
               {:else if isActiveInLeaf}
                 <div class="flex items-center justify-center h-full text-t3 text-sm" role="status">No project associated with this session</div>

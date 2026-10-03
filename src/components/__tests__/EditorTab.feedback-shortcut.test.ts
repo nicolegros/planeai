@@ -1,16 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 
-const { mockGit, mockPty, mockRecordUserInput, mockShowSnackbar } = vi.hoisted(() => ({
+const { mockGit, mockSend, mockRecordUserInput, mockShowSnackbar } = vi.hoisted(() => ({
   mockGit: { readFile: vi.fn() },
-  mockPty: { write: vi.fn() },
+  mockSend: vi.fn(async (_text: string) => {}),
   mockRecordUserInput: vi.fn(),
   mockShowSnackbar: vi.fn(),
 }));
 
 vi.mock("../../lib/api", () => ({
   git: mockGit,
-  pty: mockPty,
 }));
 vi.mock("../../lib/settings.svelte", () => ({
   getSettings: () => ({
@@ -41,7 +40,6 @@ describe("EditorTab feedback send shortcut", () => {
   beforeEach(() => {
     resetEditorFeedback();
     mockGit.readFile.mockResolvedValue("const answer = 42;\n");
-    mockPty.write.mockResolvedValue(true);
     target = document.createElement("div");
     document.body.append(target);
     component = mount(EditorTab, {
@@ -55,6 +53,7 @@ describe("EditorTab feedback send shortcut", () => {
         initialFile: "src/example.ts",
         onClose: vi.fn(),
         onFocusEditor: vi.fn(),
+        onSend: mockSend,
       },
     });
   });
@@ -116,10 +115,8 @@ describe("EditorTab feedback send shortcut", () => {
       }),
     );
 
-    await vi.waitFor(() => expect(mockPty.write).toHaveBeenCalledOnce());
-    expect(mockPty.write).toHaveBeenCalledWith("session-1", expect.any(Array));
-    const sentBytes = mockPty.write.mock.calls[0][1] as number[];
-    expect(sentBytes.at(-1)).toBe(0x0d);
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledOnce());
+    expect(mockSend).toHaveBeenCalledWith(expect.stringContaining("src/example.ts"));
   });
 
   it("does not intercept the shortcut from a form control", async () => {
@@ -147,7 +144,7 @@ describe("EditorTab feedback send shortcut", () => {
     );
     await tick();
 
-    expect(mockPty.write).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
     formControl.remove();
   });
 
@@ -164,6 +161,7 @@ describe("EditorTab feedback send shortcut", () => {
         focused: false,
         onClose: vi.fn(),
         onFocusEditor: vi.fn(),
+        onSend: mockSend,
       },
     });
     addEditorFeedback("session-2", {
@@ -188,7 +186,7 @@ describe("EditorTab feedback send shortcut", () => {
     );
     await tick();
 
-    expect(mockPty.write).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
     unmount(inactiveEditor);
     inactiveTarget.remove();
   });
@@ -205,7 +203,7 @@ describe("EditorTab feedback send shortcut", () => {
       isUnsaved: false,
       text: "Retry this feedback.",
     });
-    mockPty.write.mockRejectedValueOnce(new Error("PTY unavailable"));
+    mockSend.mockRejectedValueOnce(new Error("PTY unavailable"));
 
     document.body.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -215,11 +213,10 @@ describe("EditorTab feedback send shortcut", () => {
         cancelable: true,
       }),
     );
-    await vi.waitFor(() => expect(mockPty.write).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledOnce());
     await tick();
 
     expect(getEditorFeedbackCount("session-1")).toBe(1);
-    mockPty.write.mockResolvedValueOnce(true);
     document.body.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Enter",
@@ -228,13 +225,12 @@ describe("EditorTab feedback send shortcut", () => {
         cancelable: true,
       }),
     );
-    await vi.waitFor(() => expect(mockPty.write).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
 
     await vi.waitFor(() => expect(getEditorFeedbackCount("session-1")).toBe(0));
-    expect((mockPty.write.mock.calls[1][1] as number[]).at(-1)).toBe(0x0d);
   });
 
-  it("retains feedback when the PTY transport does not acknowledge delivery", async () => {
+  it("retains feedback and shows why when the agent cannot receive it", async () => {
     addEditorFeedback("session-1", {
       filePath: "src/example.ts",
       startLine: 1,
@@ -246,7 +242,7 @@ describe("EditorTab feedback send shortcut", () => {
       isUnsaved: false,
       text: "Do not lose this feedback.",
     });
-    mockPty.write.mockResolvedValueOnce(false);
+    mockSend.mockRejectedValueOnce(new Error("The agent's terminal is not attached."));
 
     document.body.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -256,14 +252,11 @@ describe("EditorTab feedback send shortcut", () => {
         cancelable: true,
       }),
     );
-    await vi.waitFor(() => expect(mockPty.write).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledOnce());
 
     await vi.waitFor(() => expect(mockShowSnackbar).toHaveBeenCalled());
     expect(getEditorFeedbackCount("session-1")).toBe(1);
-    expect(mockShowSnackbar).toHaveBeenCalledWith(
-      "PTY session is not attached. Try again once it is ready.",
-      "error",
-    );
+    expect(mockShowSnackbar).toHaveBeenCalledWith("The agent's terminal is not attached.", "error");
   });
 
   it("preserves a modified editor-feedback draft when switching notes is cancelled", async () => {
