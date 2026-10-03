@@ -40,6 +40,10 @@ import PluginContributionHost from "../PluginContributionHost.svelte";
 import ProviderSessionFocusHarness from "./ProviderSessionFocusHarness.svelte";
 import { PROVIDER_FRAME_ATTRIBUTE } from "../../lib/terminal-focus";
 import { providerContribution } from "../../lib/plugin-providers";
+import {
+  createProviderSessionBridge,
+  type ProviderSessionBridge,
+} from "../../lib/provider-session-bridge";
 import type { PluginSessionContext } from "../../lib/plugin-sdk";
 import type { PluginInventory, PluginProvider, PluginUiContribution } from "../../lib/types";
 
@@ -77,6 +81,15 @@ const session: PluginSessionContext = {
   taskKey: "PLA-1",
 };
 
+/** The bridge ProviderSessionView builds, over the mocked API. */
+const bridge = (handoff?: () => Promise<void>): ProviderSessionBridge =>
+  createProviderSessionBridge({
+    pluginId: plugin.id,
+    providerId: provider.id,
+    sessionId: session.id,
+    handoff,
+  });
+
 describe("PluginContributionHost provider sessions", () => {
   let target: HTMLElement;
   let component: ReturnType<typeof mount> | undefined;
@@ -89,12 +102,22 @@ describe("PluginContributionHost provider sessions", () => {
     eventListeners.clear();
   });
 
-  async function mountHost(contribution: PluginUiContribution): Promise<HTMLIFrameElement> {
+  async function mountHost(
+    contribution: PluginUiContribution,
+    providerSession?: ProviderSessionBridge,
+  ): Promise<HTMLIFrameElement> {
     target = document.createElement("div");
     document.body.append(target);
     component = mount(PluginContributionHost, {
       target,
-      props: { plugin, contribution, session, onNavigate: () => {}, onClose: () => {} },
+      props: {
+        plugin,
+        contribution,
+        session,
+        providerSession,
+        onNavigate: () => {},
+        onClose: () => {},
+      },
     });
     return vi.waitFor(() => {
       const frame = target
@@ -112,7 +135,7 @@ describe("PluginContributionHost provider sessions", () => {
   }
 
   it("resumes the session before loading the provider UI bundle", async () => {
-    const frame = await mountHost(providerContribution(provider));
+    const frame = await mountHost(providerContribution(provider), bridge());
     stubFrameWindow(frame);
     frame.dispatchEvent(new Event("load"));
 
@@ -128,7 +151,7 @@ describe("PluginContributionHost provider sessions", () => {
   });
 
   it("routes session input and interrupts through the host for the mounted session", async () => {
-    const frame = await mountHost(providerContribution(provider));
+    const frame = await mountHost(providerContribution(provider), bridge());
     const postMessage = stubFrameWindow(frame);
 
     window.dispatchEvent(
@@ -155,7 +178,7 @@ describe("PluginContributionHost provider sessions", () => {
   });
 
   it("forwards only this session's provider events to the frame", async () => {
-    const frame = await mountHost(providerContribution(provider));
+    const frame = await mountHost(providerContribution(provider), bridge());
     const postMessage = stubFrameWindow(frame);
     const forward = await vi.waitFor(() => {
       const listener = eventListeners.get("plugin-provider-session-event");
@@ -192,26 +215,7 @@ describe("PluginContributionHost provider sessions", () => {
 
   it("routes terminal handoff to the app only when the provider offers it", async () => {
     const onSessionHandoff = vi.fn(async () => {});
-    target = document.createElement("div");
-    document.body.append(target);
-    component = mount(PluginContributionHost, {
-      target,
-      props: {
-        plugin,
-        contribution: providerContribution(provider),
-        session,
-        onNavigate: () => {},
-        onClose: () => {},
-        onSessionHandoff,
-      },
-    });
-    const frame = await vi.waitFor(() => {
-      const next = target
-        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
-        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
-      expect(next).toBeTruthy();
-      return next!;
-    });
+    const frame = await mountHost(providerContribution(provider), bridge(onSessionHandoff));
     const postMessage = stubFrameWindow(frame);
     window.dispatchEvent(
       new MessageEvent("message", {
@@ -244,7 +248,7 @@ describe("PluginContributionHost provider sessions", () => {
   });
 
   it("replays app chords from the frame on the host window, where the shortcut router listens", async () => {
-    const frame = await mountHost(providerContribution(provider));
+    const frame = await mountHost(providerContribution(provider), bridge());
     expect(frame.srcdoc).toContain("forwardHostChord");
     expect(frame.srcdoc).toContain("isTextEditingChord(event)");
     const seen: KeyboardEvent[] = [];
@@ -293,7 +297,13 @@ describe("PluginContributionHost provider sessions", () => {
     const onFocused = vi.fn();
     const harness = mount(ProviderSessionFocusHarness, {
       target,
-      props: { plugin, contribution: providerContribution(provider), session, onFocused },
+      props: {
+        plugin,
+        contribution: providerContribution(provider),
+        session,
+        providerSession: bridge(),
+        onFocused,
+      },
     });
     component = harness;
     const frame = await vi.waitFor(() => {
@@ -365,7 +375,7 @@ describe("PluginContributionHost provider sessions", () => {
   });
 
   it("stops forwarding events once unmounted", async () => {
-    await mountHost(providerContribution(provider));
+    await mountHost(providerContribution(provider), bridge());
     await vi.waitFor(() => expect(eventListeners.has("plugin-provider-session-event")).toBe(true));
     unmount(component!);
     component = undefined;

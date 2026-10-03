@@ -1,9 +1,10 @@
 <script lang="ts">
   import PluginContributionHost from "../PluginContributionHost.svelte";
   import type { PluginSessionContext } from "../../lib/plugin-sdk";
+  import type { ProviderSessionBridge } from "../../lib/provider-session-bridge";
   import type { PluginInventory, PluginUiContribution } from "../../lib/types";
 
-  let { plugin, contribution, session, onFocused }: { plugin: PluginInventory; contribution: PluginUiContribution; session: PluginSessionContext; onFocused: () => void } = $props();
+  let { plugin, contribution, session, providerSession, onFocused }: { plugin: PluginInventory; contribution: PluginUiContribution; session: PluginSessionContext; providerSession: ProviderSessionBridge; onFocused: () => void } = $props();
 
   let focused = $state(false);
 
@@ -12,4 +13,4 @@
   }
 </script>
 
-<PluginContributionHost {plugin} {contribution} {session} autofocus={focused} {onFocused} onNavigate={() => {}} onClose={() => {}} />
+<PluginContributionHost {plugin} {contribution} {session} {providerSession} autofocus={focused} {onFocused} onNavigate={() => {}} onClose={() => {}} />

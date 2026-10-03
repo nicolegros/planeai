@@ -3,7 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { jiraDepartedInteractionEntrypoint, jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
-  import { plugins, projects as projectsApi, providerSessions, tasks as tasksApi } from "../lib/api";
+  import { plugins, projects as projectsApi, tasks as tasksApi } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import { getAllTasks } from "../lib/task-store.svelte";
@@ -14,7 +14,8 @@
   import { PROVIDER_FRAME_ATTRIBUTE } from "../lib/terminal-focus";
   import { isTextEditingChord } from "../lib/plugin-shortcuts";
   import { isDark } from "../lib/settings.svelte";
-  import type { PluginInventory, PluginUiContribution, ProviderSessionEvent } from "../lib/types";
+  import type { PluginInventory, PluginUiContribution } from "../lib/types";
+  import type { ProviderSessionBridge } from "../lib/provider-session-bridge";
 
   interface Props {
     plugin: PluginInventory;
@@ -26,9 +27,8 @@
     autofocus?: boolean;
     closeOnEscape?: boolean;
     session?: PluginSessionContext;
-    /** Provider session UIs only: continue the session in a terminal tab, and come back. */
-    onSessionHandoff?: () => Promise<void>;
-    onSessionHandback?: () => Promise<void>;
+    /** Present for a provider session's UI: its session's controls and events. */
+    providerSession?: ProviderSessionBridge;
     /** Provider session UIs only: their frame received focus, as when the user clicks into it. */
     onFocused?: () => void;
     /** Resolves the focused session at action time for local plugin recipients. */
@@ -62,7 +62,7 @@
     text?: unknown;
   };
 
-  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, onSessionHandoff, onSessionHandback, onFocused, getFocusedAgentSession = () => undefined }: Props = $props();
+  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, providerSession, onFocused, getFocusedAgentSession = () => undefined }: Props = $props();
   const serializedSession = $derived(session ? JSON.stringify(session) : "");
   let container = $state<HTMLElement>();
   let disposer: PluginUiDisposer | null = null;
@@ -76,6 +76,13 @@
    * mount effect, and tracking it would rebuild the frame, and lose its state, on every focus change.
    */
   const initialFocus = (): boolean => untrack(() => autofocus);
+  /** Session controls a frame may request, with why one is refused when unavailable. */
+  const SESSION_ACTION_ERRORS: Record<string, string> = {
+    "session-send": "session controls are available only to provider session UIs",
+    "session-interrupt": "session controls are available only to provider session UIs",
+    "session-handoff": "terminal handoff is not available here",
+    "session-handback": "terminal handoff is not available here",
+  };
   /** Focuses the mounted provider session frame, if any. */
   let focusProviderFrame: (() => void) | null = null;
 
@@ -195,7 +202,7 @@
 
   function createLocalPluginFrame(root: ShadowRoot, sessionContext?: PluginSessionContext): PluginUiDisposer {
     const isTitlebar = contribution.placement === "titlebar";
-    const providerSession = contribution.placement === "session.main" ? sessionContext : undefined;
+    const bridge = providerSession;
     const isSessionIndicator = contribution.placement === "session.indicator";
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
@@ -209,7 +216,7 @@
     frame.style.width = isTitlebar ? "88px" : isSessionIndicator ? "16px" : "100%";
     frame.style.border = "0";
     if (isTitlebar || isSessionIndicator) frame.style.backgroundColor = "transparent";
-    if (providerSession) {
+    if (bridge) {
       // App releases this frame's keyboard like a terminal's, and a click into it claims the keyboard back.
       frame.setAttribute(PROVIDER_FRAME_ATTRIBUTE, "");
       frame.addEventListener("focus", () => onFocused?.());
@@ -548,27 +555,19 @@
             cancelable: true,
           }),
         );
-      } else if (message.type === "session-handoff" || message.type === "session-handback") {
-        const action = message.type === "session-handoff" ? onSessionHandoff : onSessionHandback;
-        if (!providerSession || !action) {
-          respond(message.requestId, false, "terminal handoff is not available here");
+      } else if (message.type in SESSION_ACTION_ERRORS) {
+        const actions: Record<string, (() => Promise<void>) | undefined> = {
+          "session-send": () => (typeof message.text === "string" ? bridge!.send(message.text) : Promise.reject("session.send requires text")),
+          "session-interrupt": () => bridge!.interrupt(),
+          "session-handoff": bridge?.handoff,
+          "session-handback": bridge?.handback,
+        };
+        const action = bridge ? actions[message.type] : undefined;
+        if (!action) {
+          respond(message.requestId, false, SESSION_ACTION_ERRORS[message.type]);
           return;
         }
         void action()
-          .then(() => respond(message.requestId, true, null))
-          .catch((error) => respond(message.requestId, false, error));
-      } else if (message.type === "session-send" || message.type === "session-interrupt") {
-        if (!providerSession) {
-          respond(message.requestId, false, "session controls are available only to provider session UIs");
-          return;
-        }
-        if (message.type === "session-send" && typeof message.text !== "string") {
-          respond(message.requestId, false, "session.send requires text");
-          return;
-        }
-        void (message.type === "session-send"
-          ? providerSessions.send(providerSession.id, message.text as string)
-          : providerSessions.interrupt(providerSession.id))
           .then(() => respond(message.requestId, true, null))
           .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "data-changed") {
@@ -630,12 +629,7 @@
       }
     };
     // A provider UI mounts only once its session is driven by the current sidecar.
-    const loadSource = (): Promise<string> =>
-      providerSession
-        ? providerSessions
-            .ensure(providerSession.id)
-            .then(() => plugins.localProviderUiSource(plugin.id, contribution.id))
-        : plugins.localUiSource(plugin.id, contribution.id);
+    const loadSource = (): Promise<string> => (bridge ? bridge.loadSource() : plugins.localUiSource(plugin.id, contribution.id));
     const initialise = (): void => {
       void loadSource()
         .then((source) => {
@@ -653,11 +647,8 @@
     if (isSessionIndicator) refreshLocalPluginData = refreshData;
     let framed = true;
     let unlistenSessionEvents: (() => void) | undefined;
-    if (providerSession) {
-      void listen<ProviderSessionEvent>("plugin-provider-session-event", ({ payload }) => {
-        if (payload.plugin_id !== plugin.id || payload.session_id !== providerSession.id) return;
-        frame.contentWindow?.postMessage({ type: "session-event", event: { seq: payload.seq, payload: payload.payload } }, "*");
-      }).then((unlisten) => {
+    if (bridge) {
+      void bridge.subscribe((event) => frame.contentWindow?.postMessage({ type: "session-event", event }, "*")).then((unlisten) => {
         if (framed) unlistenSessionEvents = unlisten;
         else unlisten();
       });
@@ -666,7 +657,7 @@
     frame.addEventListener("load", initialise, { once: true });
     root.replaceChildren(frame);
     if (initialFocus()) focusFrame();
-    if (providerSession) focusProviderFrame = focusFrame;
+    if (bridge) focusProviderFrame = focusFrame;
     return () => {
       framed = false;
       if (focusProviderFrame === focusFrame) focusProviderFrame = null;

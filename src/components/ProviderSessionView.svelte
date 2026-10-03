@@ -3,6 +3,7 @@
   import { Button } from "./ui";
   import { findRuntimeProvider, providerContribution, supportsHandoff } from "../lib/plugin-providers";
   import type { PluginSessionContext } from "../lib/plugin-sdk";
+  import { createProviderSessionBridge } from "../lib/provider-session-bridge";
   import { pluginPreferencesLocation, type SettingsLocation } from "../lib/settings-registry";
   import type { PluginInventory, Session } from "../lib/types";
 
@@ -29,6 +30,17 @@
   const resolved = $derived(JSON.parse(resolvedJson) as ReturnType<typeof findRuntimeProvider>);
   const canHandoff = $derived(resolved ? supportsHandoff(resolved.provider) : false);
   const contribution = $derived(resolved ? providerContribution(resolved.provider) : null);
+  const bridge = $derived(
+    resolved
+      ? createProviderSessionBridge({
+          pluginId: resolved.plugin.id,
+          providerId: resolved.provider.id,
+          sessionId: session.id,
+          handoff: canHandoff ? () => onHandoff(session.id) : undefined,
+          handback: canHandoff ? () => onHandback(session.id) : undefined,
+        })
+      : undefined,
+  );
   const sessionContext = $derived<PluginSessionContext>({
     id: session.id,
     projectId: session.project_id,
@@ -56,8 +68,7 @@
       {onNavigate}
       onClose={() => {}}
       onOpenPreferences={() => onOpenPreferences(pluginPreferencesLocation(resolved.plugin) ?? PLUGINS_PAGE)}
-      onSessionHandoff={canHandoff ? () => onHandoff(session.id) : undefined}
-      onSessionHandback={canHandoff ? () => onHandback(session.id) : undefined}
+      providerSession={bridge}
     />
   {:else}
     <div class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center" role="status">

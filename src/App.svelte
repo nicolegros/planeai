@@ -531,6 +531,13 @@
     });
   });
 
+  /** The user focused a terminal or chat pane: its pane, tab and the keyboard zone follow. */
+  function claimAgentPane(leafId: string, ptyKey: string): void {
+    workspaceLayout.focusPane(leafId);
+    selectTerminalTab(ptyKey);
+    focusTerminal();
+  }
+
   // ─── Provider session terminal handoff ─────────────────────────────────────
 
   async function handoffProviderSession(sessionId: string): Promise<void> {
@@ -1353,22 +1360,20 @@
             {@const isActiveInLeaf = tabEntry.ptyKey === activeEntry?.ptyKey}
             {@const project = session ? projects.find((p) => p.id === session.project_id) : null}
             {#if isTerminalTab(tabEntry)}
+              {@const paneFocused = isTerminalPaneFocused({
+                ...terminalKeyboardOwnership,
+                isActiveTabInLeaf: isActiveInLeaf,
+                isFocusedLeaf,
+                belongsToActiveSession: sessionId === activeSessionId,
+              })}
               {#if session && tabEntry.type === "agent" && isPluginSession(session)}
               <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
                 <ProviderSessionView
                   {session}
                   inventory={pluginInventory}
-                  focused={isTerminalPaneFocused({
-                    ...terminalKeyboardOwnership,
-                    isActiveTabInLeaf: isActiveInLeaf,
-                    isFocusedLeaf,
-                    belongsToActiveSession: sessionId === activeSessionId,
-                  })}
+                  focused={paneFocused}
                   onFocused={() => {
-                    if (!isActiveInLeaf) return;
-                    workspaceLayout.focusPane(leaf.id);
-                    selectTerminalTab(tabEntry.ptyKey);
-                    focusTerminal();
+                    if (isActiveInLeaf) claimAgentPane(leaf.id, tabEntry.ptyKey);
                   }}
                   onNavigate={openPluginContribution}
                   onOpenPreferences={openPreferences}
@@ -1383,12 +1388,7 @@
                   focusRequest={terminalFocusRequest}
                   sessionId={tabEntry.ptyKey}
                   visible={isActiveInLeaf && !activeLoopId && !activePluginId}
-                  focused={isTerminalPaneFocused({
-                    ...terminalKeyboardOwnership,
-                    isActiveTabInLeaf: isActiveInLeaf,
-                    isFocusedLeaf,
-                    belongsToActiveSession: sessionId === activeSessionId,
-                  })}
+                  focused={paneFocused}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
                   initialCommand={tabEntry.type === "shell" ? workspaceLayout.pendingCommand(tabEntry.ptyKey) : undefined}
@@ -1402,10 +1402,7 @@
                     else showSnackbar(String(error));
                   }}
                   onFocused={(event) => {
-                    if (event.type === "focusin" && !isActiveInLeaf) return;
-                    workspaceLayout.focusPane(leaf.id);
-                    selectTerminalTab(tabEntry.ptyKey);
-                    focusTerminal();
+                    if (event.type !== "focusin" || isActiveInLeaf) claimAgentPane(leaf.id, tabEntry.ptyKey);
                   }}
                   onUserInput={() => orchestrator.recordUserInput(sessionId)}
                 />
