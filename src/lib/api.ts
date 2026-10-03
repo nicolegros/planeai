@@ -113,6 +113,9 @@ export const config = {
   get: () => invoke<AppConfig>("get_config"),
   update: (newConfig: AppConfig) => invoke("update_config", { newConfig }),
   refresh: () => invoke<AppConfig>("refresh_config"),
+  defaults: () => invoke<AppConfig>("get_config_defaults"),
+  /** Resolved binary path per agent key (configured providers plus presets), null when not found. */
+  detectProviders: () => invoke<Record<string, string | null>>("detect_providers"),
 };
 
 export const editor = {

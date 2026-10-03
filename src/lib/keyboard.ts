@@ -251,6 +251,8 @@ export function installKeyboardRouter(
   shouldPassEscape?: () => boolean,
   isEditorFocused?: () => boolean,
   shouldYieldEscape?: () => boolean,
+  /** True while a full-window takeover such as onboarding owns the keyboard. */
+  isSuspended?: () => boolean,
 ): () => void {
   const editorAllowedActions = new Set<KeyboardAction["type"]>([
     "open_file",
@@ -283,6 +285,7 @@ export function installKeyboardRouter(
   ]);
 
   function routeAction(e: KeyboardEvent, action: KeyboardAction): void {
+    if (isSuspended?.()) return;
     // Only filter editor shortcuts while CodeMirror actually owns focus.
     // An editor tab can remain active underneath another focused pane such as Explorer.
     if (

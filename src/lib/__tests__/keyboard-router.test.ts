@@ -75,4 +75,20 @@ describe("installKeyboardRouter shortcut ownership", () => {
     expect(onAction).toHaveBeenCalledWith({ type: "new_session" });
     expect(event.defaultPrevented).toBe(true);
   });
+
+  it("leaves every shortcut alone while suspended", () => {
+    cleanup();
+    cleanup = installKeyboardRouter(onAction, undefined, undefined, undefined, () => true);
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      key: "Tab",
+    });
+
+    document.body.dispatchEvent(event);
+
+    expect(onAction).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
 });

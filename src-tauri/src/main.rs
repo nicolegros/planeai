@@ -68,6 +68,13 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // Only the Preferences window remembers its size; the main window manages its own layout.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(tauri_plugin_window_state::StateFlags::SIZE)
+                .with_filter(|label| label == "preferences")
+                .build(),
+        )
         .setup(|app| {
             let menu = Menu::with_items(
                 app,
@@ -351,6 +358,8 @@ fn main() {
             get_log_dir,
             update_config,
             refresh_config,
+            get_config_defaults,
+            detect_providers,
             get_theme_css,
             list_themes,
             launch_session,

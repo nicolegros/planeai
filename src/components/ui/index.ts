@@ -8,3 +8,5 @@ export { default as PillCombobox } from "./PillCombobox.svelte";
 export { default as Dialog } from "./Dialog.svelte";
 export { default as ContextMenu } from "./ContextMenu.svelte";
 export { default as ResizeHandle } from "./ResizeHandle.svelte";
+export { default as Switch } from "./Switch.svelte";
+export { default as SegmentedControl } from "./SegmentedControl.svelte";

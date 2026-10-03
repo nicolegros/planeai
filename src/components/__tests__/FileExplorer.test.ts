@@ -137,6 +137,33 @@ describe("FileExplorer focus", () => {
     });
   });
 
+  it("ignores keys typed inside a dialog covering the explorer", async () => {
+    component = mount(FileExplorer, {
+      target,
+      props: {
+        rootPath: "/tmp/project",
+        sessionId: "session-1",
+        visible: true,
+        onFocus: vi.fn(),
+        onOpenFile: vi.fn(),
+        onPinFile: vi.fn(),
+      },
+    });
+    await vi.waitFor(() => expect(mockFocusFirstItem).toHaveBeenCalled());
+    const dialog = document.body.appendChild(document.createElement("div"));
+    dialog.setAttribute("role", "dialog");
+    const button = dialog.appendChild(document.createElement("button"));
+    button.focus();
+
+    const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "/" });
+    button.dispatchEvent(event);
+
+    const host = target.querySelector<HTMLElement>(".file-tree-host");
+    expect(host?.shadowRoot?.querySelector("[data-file-tree-search-input]")).toBeNull();
+    expect(event.defaultPrevented).toBe(false);
+    dialog.remove();
+  });
+
   it("does not let delayed initial tree focus override active search", async () => {
     const animationFrames: FrameRequestCallback[] = [];
     vi.stubGlobal(

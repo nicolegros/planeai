@@ -2,6 +2,7 @@
   import type { LoopRunDetail } from "../lib/types";
   import { loops as loopsApi, git } from "../lib/api";
   import { Button } from "./ui";
+  import { isInDialog } from "../lib/dialog-focus";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { RefreshCw, Play, Square, ExternalLink, Copy, CheckCircle2, XCircle, Clock, ChevronRight, ChevronDown } from "@lucide/svelte";
   import LoopTimeline from "./LoopTimeline.svelte";
@@ -114,6 +115,7 @@
     // Don't intercept when focus is in an input or when modifier keys are held
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const el = document.activeElement;
+    if (isInDialog(e.target) || isInDialog(el)) return;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
 
     if (e.key === "r") {

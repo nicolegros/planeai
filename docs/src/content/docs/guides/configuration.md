@@ -6,6 +6,10 @@ draft: false
 
 planeai is configured via a single JSON file at `~/.config/planeai/config.json` (or `%APPDATA%\planeai\config.json` on Windows). The file supports JSONC (comments allowed).
 
+On first launch a short setup picks your agents (the ones found on your PATH are pre-selected), your projects folder and a look; run it again from **Preferences → General → Setup**.
+
+Most settings are also available in **Preferences** (⌘, / Ctrl+,). Pick a category in the sidebar, or press ⌘F / Ctrl+F to search every setting by name or keyword. A setting changed from its default shows a reset button next to it.
+
 ## Providers
 
 Each provider defines how planeai launches and communicates with an AI agent CLI.
@@ -49,7 +53,7 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
 | `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations            |
 | `resume_command`             | Command to resume interactively when restarting an exited session |
 
-Existing configs can add Kiro, Claude Code, Copilot or Codex in one click from the presets under **Preferences → Models**.
+Kiro, Claude Code, Copilot and Codex are always listed under **Preferences → Agents**. Turn one on to add its preset entry, or off to remove it. The default agent cannot be turned off. Each agent shows whether its binary was found on the session PATH, and **Search paths** adds folders to `extra_path_dirs`.
 
 ### Notification hooks
 
@@ -140,7 +144,7 @@ Existing embedded buffers are not reconciled when the global setting changes; an
 
 ## Language Servers
 
-PlaneAI can start configured language servers for supported editor files. Built-in discovery covers TypeScript/JavaScript/JSON, Rust, Python, Go, and C/C++. Add custom trusted profiles in **Preferences → More → Language Servers** when a server lives outside the standard PATH or needs specific arguments.
+PlaneAI can start configured language servers for supported editor files. Built-in discovery covers TypeScript/JavaScript/JSON, Rust, Python, Go, and C/C++. Add custom trusted profiles in **Preferences → Editor → Language servers** when a server lives outside the standard PATH or needs specific arguments.
 
 ```jsonc
 {
@@ -177,7 +181,7 @@ Controls whether planeai plays audio notifications.
 | `true`  | Play a chime when an agent finishes a task (default) |
 | `false` | Disable all sound notifications                      |
 
-This setting is also available in **Preferences → Sound**.
+This setting is also available in **Preferences → General → Notifications**.
 
 ## Task Manager Integration
 

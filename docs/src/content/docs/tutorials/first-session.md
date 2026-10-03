@@ -33,7 +33,7 @@ Open (or create) your config file at `~/.config/planeai/config.json`:
 }
 ```
 
-Alternatively, configure this in **Preferences** (⌘, / Ctrl+,) under the **Models** tab.
+Alternatively, configure this in **Preferences** (⌘, / Ctrl+,) on the **Agents** page.
 
 This tells planeai:
 

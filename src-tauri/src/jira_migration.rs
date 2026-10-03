@@ -959,6 +959,7 @@ mod tests {
             sidebar_group_by: None,
             hide_task_keys: None,
             hide_project_labels: None,
+            post_merge_action: None,
             daemon_scrollback_bytes: None,
             scrollback_lines: None,
             web_links: None,
@@ -981,6 +982,7 @@ mod tests {
             }),
             language_servers: None,
             editor: None,
+            onboarding_completed: None,
         }
     }
 

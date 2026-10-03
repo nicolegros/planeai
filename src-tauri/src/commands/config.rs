@@ -26,6 +26,21 @@ pub fn get_config(state: State<ConfigState>) -> Result<config::Config, String> {
     Ok(cfg.clone())
 }
 
+/// Built-in defaults, so the UI can offer "reset to default" without duplicating them.
+#[tauri::command]
+pub async fn get_config_defaults() -> config::Config {
+    config::Config::default()
+}
+
+/// Resolved binary per agent (configured providers plus presets), `None` when not found.
+#[tauri::command]
+pub async fn detect_providers(
+    state: State<'_, ConfigState>,
+) -> Result<std::collections::HashMap<String, Option<String>>, String> {
+    let cfg = state.0.lock().map_err(|e| e.to_string())?.clone();
+    crate::commands::blocking(move || Ok(config::detect_provider_binaries(&cfg))).await
+}
+
 #[tauri::command]
 pub fn update_config(
     state: State<ConfigState>,

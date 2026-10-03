@@ -73,6 +73,15 @@ pub enum SidebarGroupBy {
     Status,
 }
 
+/// What happens to a task's session when the post-merge prompt times out.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PostMergeAction {
+    Archive,
+    Destroy,
+    Keep,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub appearance: Appearance,
@@ -83,7 +92,8 @@ pub struct Config {
     pub session_backend: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vim_mode: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Written as `null` when off, so turning tasks off survives the default being on.
+    #[serde(default)]
     pub task_management: Option<TaskManager>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projects_base_path: Option<String>,
@@ -99,6 +109,9 @@ pub struct Config {
     /// Only affects the status grouping, where rows from several projects are mixed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_project_labels: Option<bool>,
+    /// `None` archives, matching the frontend default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_merge_action: Option<PostMergeAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_scrollback_bytes: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -129,6 +142,10 @@ pub struct Config {
     pub language_servers: Option<LanguageServerSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor: Option<EditorConfig>,
+    /// Resolved by `load`: `Some(false)` until first-run setup is finished or skipped.
+    /// Configs written before this field existed count as completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub onboarding_completed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -159,7 +176,7 @@ fn default_option_as_meta() -> bool {
 }
 
 fn default_auto_open_review() -> Option<bool> {
-    Some(true)
+    Some(false)
 }
 
 fn default_sound_enabled() -> Option<bool> {
@@ -227,6 +244,30 @@ pub struct TaskManager {
     pub on_complete: Option<LifecycleHook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_dispatch: Option<AutoDispatchConfig>,
+}
+
+impl TaskManager {
+    /// What new installs start with: the standard task statuses and no auto-dispatch.
+    pub fn recommended() -> Self {
+        let hook = |status: &str| {
+            Some(LifecycleHook {
+                move_to: status.to_string(),
+            })
+        };
+        TaskManager {
+            templates: Some(TaskManagerTemplates {
+                branch: Some("{key:lower}/{title:slug}".to_string()),
+                name: Some("{key:upper}: {title}".to_string()),
+                prompt: Some("Implement task {key}: {title}\n\n{description}".to_string()),
+            }),
+            on_start: hook("in_progress"),
+            on_notify: hook("in_review"),
+            on_restart: hook("in_progress"),
+            on_resume: hook("in_progress"),
+            on_complete: hook("done"),
+            auto_dispatch: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -348,23 +389,25 @@ impl Default for Config {
             default_provider: "kiro".to_string(),
             session_backend: None,
             vim_mode: None,
-            task_management: None,
+            task_management: Some(TaskManager::recommended()),
             projects_base_path: None,
             hide_done_tasks: None,
             hide_empty_projects: None,
             sidebar_group_by: None,
             hide_task_keys: None,
             hide_project_labels: None,
+            post_merge_action: None,
             daemon_scrollback_bytes: None,
             scrollback_lines: None,
             web_links: None,
             session_log_dir: None,
             extra_path_dirs: Vec::new(),
-            auto_open_review: Some(true),
+            auto_open_review: Some(false),
             sound_enabled: Some(true),
             integrations: None,
             language_servers: None,
             editor: None,
+            onboarding_completed: None,
         }
     }
 }
@@ -490,6 +533,37 @@ fn migrate_autonomous_prompt_template(config: &mut Config) -> bool {
     true
 }
 
+/// Existing config files keep the defaults they were written under: tasks off when the key
+/// is absent, and review auto-open on when absent or null (the frontend once read null as on).
+fn keep_pre_existing_defaults(user_val: &mut serde_json::Value) {
+    let Some(obj) = user_val.as_object_mut() else {
+        return;
+    };
+    obj.entry("task_management")
+        .or_insert(serde_json::Value::Null);
+    if obj
+        .get("auto_open_review")
+        .is_none_or(serde_json::Value::is_null)
+    {
+        obj.insert(
+            "auto_open_review".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+}
+
+/// Used when an existing config.json cannot be read: behave like an existing user, never a
+/// new install, so a typo does not switch on new-install defaults such as task management.
+fn invalid_config_fallback() -> Config {
+    Config {
+        editor: Some(invalid_editor_config()),
+        onboarding_completed: Some(true),
+        task_management: None,
+        auto_open_review: Some(true),
+        ..Config::default()
+    }
+}
+
 pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
     let config_path = config_dir.join("config.json");
     if config_path.exists() {
@@ -499,24 +573,19 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         let mut user_val: serde_json::Value = match serde_json::from_reader(stripped) {
             Ok(v) => v,
             Err(e) => {
-                let config = Config {
-                    editor: Some(invalid_editor_config()),
-                    ..Config::default()
-                };
+                let config = invalid_config_fallback();
                 return (config, vec![format!("Failed to parse config.json: {e}")]);
             }
         };
         // Migrate legacy task_managers → task_management
         migrate_legacy_task_managers(&mut user_val);
+        keep_pre_existing_defaults(&mut user_val);
         let default_val = serde_json::to_value(Config::default()).unwrap();
         let merged = merge_top_level(default_val, user_val);
         let mut config: Config = match serde_json::from_value(merged) {
             Ok(config) => config,
             Err(error) => {
-                let config = Config {
-                    editor: Some(invalid_editor_config()),
-                    ..Config::default()
-                };
+                let config = invalid_config_fallback();
                 return (
                     config,
                     vec![format!("Failed to deserialize config.json: {error}")],
@@ -524,6 +593,7 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
             }
         };
         backfill_provider_defaults(&mut config);
+        config.onboarding_completed.get_or_insert(true);
         let migrated = migrate_autonomous_prompt_template(&mut config);
         if let Err(error) = validate(&config) {
             config.editor = Some(invalid_editor_config());
@@ -535,7 +605,10 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         }
         return (config, vec![]);
     }
-    let config = Config::default();
+    let config = Config {
+        onboarding_completed: Some(false),
+        ..Config::default()
+    };
     std::fs::create_dir_all(config_dir).ok();
     let json = serde_json::to_string_pretty(&config).unwrap();
     std::fs::write(&config_path, &json).ok();
@@ -553,7 +626,12 @@ pub fn migrate_from_db(config_dir: &Path, settings: &crate::db::Settings) -> Res
     if config_dir.join("config.json").exists() {
         return Ok(());
     }
-    let mut config = Config::default();
+    // Runs on every first launch (a fresh database seeds a settings row), so it must not
+    // mark onboarding done.
+    let mut config = Config {
+        onboarding_completed: Some(false),
+        ..Config::default()
+    };
     config.appearance.mode = settings.appearance_mode.clone();
     config.appearance.terminal_theme_dark = settings.terminal_theme_dark.clone();
     config.appearance.terminal_theme_light = settings.terminal_theme_light.clone();
@@ -624,25 +702,68 @@ pub fn rmux_available() -> bool {
 }
 
 fn executable_on_path(name: &str) -> bool {
-    let path = planeai_core::command::augmented_path(&[]);
-    std::env::split_paths(&path).any(|directory| {
+    find_executable_in(name, &planeai_core::command::augmented_path(&[])).is_some()
+}
+
+/// Resolve `name` against a PATH-style list, or directly when it is already a path.
+pub fn find_executable_in(name: &str, path: &str) -> Option<PathBuf> {
+    if name.contains('/') || name.contains(std::path::MAIN_SEPARATOR) {
+        let candidate = PathBuf::from(planeai_core::session_launch::expand_tilde(name));
+        return candidate.is_file().then_some(candidate);
+    }
+    std::env::split_paths(path).find_map(|directory| {
         if directory.as_os_str().is_empty() {
-            return false;
+            return None;
         }
-        if directory.join(name).is_file() {
-            return true;
+        let plain = directory.join(name);
+        if plain.is_file() {
+            return Some(plain);
         }
         // Windows executables carry an extension.
-        std::env::var_os("PATHEXT")
-            .map(|extensions| {
-                std::env::split_paths(&extensions).any(|extension| {
-                    let suffix = extension.to_string_lossy();
-                    let suffix = suffix.trim_start_matches('.');
-                    !suffix.is_empty() && directory.join(format!("{name}.{suffix}")).is_file()
-                })
-            })
-            .unwrap_or(false)
+        let extensions = std::env::var_os("PATHEXT")?;
+        std::env::split_paths(&extensions).find_map(|extension| {
+            let suffix = extension.to_string_lossy();
+            let suffix = suffix.trim_start_matches('.');
+            let candidate = directory.join(format!("{name}.{suffix}"));
+            (!suffix.is_empty() && candidate.is_file()).then_some(candidate)
+        })
     })
+}
+
+/// The executable a provider command launches, skipping leading `VAR=value` assignments.
+pub fn provider_binary(command: &str) -> Option<String> {
+    command
+        .split_whitespace()
+        .find(|word| !is_env_assignment(word))
+        .map(str::to_string)
+}
+
+fn is_env_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// Resolved binary path per agent, for every configured provider plus the built-in presets
+/// (so presets missing from the config can still be offered). Uses the PATH sessions get.
+pub fn detect_provider_binaries(config: &Config) -> HashMap<String, Option<String>> {
+    let path = planeai_core::command::augmented_path(&config.resolved_extra_path_dirs());
+    detect_provider_binaries_in(config, &path)
+}
+
+fn detect_provider_binaries_in(config: &Config, path: &str) -> HashMap<String, Option<String>> {
+    let presets = Config::default().providers;
+    presets
+        .iter()
+        .filter(|(key, _)| !config.providers.contains_key(*key))
+        .chain(config.providers.iter())
+        .map(|(key, provider)| {
+            let resolved = provider_binary(&provider.command)
+                .and_then(|binary| find_executable_in(&binary, path))
+                .map(|found| found.to_string_lossy().into_owned());
+            (key.clone(), resolved)
+        })
+        .collect()
 }
 
 /// Re-read config from disk. On success returns the new config; on any warning/error returns Err
