@@ -6,7 +6,7 @@
   import SettingRow from "./SettingRow.svelte";
   import SettingsSection from "./SettingsSection.svelte";
   import TextField from "./TextField.svelte";
-  import { saveSettings } from "./settings-window.svelte";
+  import { saveSettings } from "../../lib/save-settings";
   import { DEFAULT_SCROLLBACK_LINES, parseScrollbackLines } from "../../lib/terminal-scrollback";
 
   const MIN_FONT_SIZE = 8;

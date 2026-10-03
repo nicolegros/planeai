@@ -5,7 +5,7 @@
   import { SegmentedControl, Switch } from "../ui";
   import SettingRow from "./SettingRow.svelte";
   import SettingsSection from "./SettingsSection.svelte";
-  import { saveSettings } from "./settings-window.svelte";
+  import { saveSettings } from "../../lib/save-settings";
 
   const config = $derived(getSettings());
   const groupBy = $derived(resolveSidebarGroupBy(config));

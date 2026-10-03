@@ -13,7 +13,8 @@
   import SettingAnchor from "./SettingAnchor.svelte";
   import SettingsSection from "./SettingsSection.svelte";
   import TextField from "./TextField.svelte";
-  import { saveSettings, settingsWindow } from "./settings-window.svelte";
+  import { settingsWindow } from "./settings-window.svelte";
+  import { saveSettings } from "../../lib/save-settings";
 
   const config = $derived(getSettings());
   const lspEnabled = $derived(config.language_servers?.enabled ?? true);

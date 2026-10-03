@@ -246,6 +246,17 @@ function isExplorerSearchEvent(e: KeyboardEvent): boolean {
  * Install the top-level keyboard router on the window.
  * Returns a cleanup function to remove the listener.
  */
+let suspended = false;
+
+/** While a full-window takeover such as onboarding is open, app shortcuts stay inert. */
+export function setKeyboardSuspended(value: boolean): void {
+  suspended = value;
+}
+
+export function isKeyboardSuspended(): boolean {
+  return suspended;
+}
+
 export function installKeyboardRouter(
   onAction: ActionHandler,
   shouldPassEscape?: () => boolean,
@@ -283,6 +294,7 @@ export function installKeyboardRouter(
   ]);
 
   function routeAction(e: KeyboardEvent, action: KeyboardAction): void {
+    if (suspended) return;
     // Only filter editor shortcuts while CodeMirror actually owns focus.
     // An editor tab can remain active underneath another focused pane such as Explorer.
     if (

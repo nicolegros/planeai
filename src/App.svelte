@@ -9,7 +9,7 @@
   import { isTerminalPaneFocused, releaseTerminalDomFocus } from "./lib/terminal-focus";
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
-  import { installKeyboardRouter, matchChord, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT, IS_WINDOWS } from "./lib/keyboard";
+  import { installKeyboardRouter, isKeyboardSuspended, matchChord, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT, IS_WINDOWS } from "./lib/keyboard";
   import { findPluginShortcut } from "./lib/plugin-shortcuts";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
@@ -19,6 +19,8 @@
   import { isTerminal, isActive as isLoopActive } from "./lib/loop-status";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { pluginPreferencesLocation, settingsLocationQuery, type SettingsLocation } from "./lib/settings-registry";
+  import { shouldShowOnboarding } from "./lib/onboarding";
+  import Onboarding from "./components/Onboarding.svelte";
   import { openFileWithConfiguredEditor } from "./lib/file-editor";
   import { loadTheme } from "./lib/theme-loader";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
@@ -510,6 +512,8 @@
     if (ptyKeySessionId(tab.ptyKey) !== activeSessionId) selectTerminalTab(tab.ptyKey);
   }
 
+  const showOnboarding = $derived(shouldShowOnboarding(getSettings()));
+
   // ─── Project management ─────────────────────────────────────────────────────
   async function openPreferences(location?: SettingsLocation) {
     const existing = await WebviewWindow.getByLabel("preferences");
@@ -914,7 +918,7 @@
       // This capture listener runs before the host router. Defer plugin routing
       // until propagation completes so a built-in shortcut always wins.
       queueMicrotask(() => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || isKeyboardSuspended()) return;
       const target = findPluginShortcut(event, sessionPanelCommands, mainPaneCommands);
       if (!target) return;
       event.preventDefault();
@@ -1670,3 +1674,7 @@
 {/each}
 <PostMergePrompt />
 <UpdateToast />
+
+{#if showOnboarding}
+  <Onboarding />
+{/if}

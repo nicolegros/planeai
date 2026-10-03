@@ -1,7 +1,8 @@
 <script lang="ts">
   import { getSettings, type AutoDispatchConfig, type TaskManager } from "../../lib/settings.svelte";
   import { showSnackbar } from "../../lib/snackbar.svelte";
-  import { loadDefaults, saveSettings } from "./settings-window.svelte";
+  import { loadDefaults } from "./settings-window.svelte";
+  import { saveSettings } from "../../lib/save-settings";
   import { Switch } from "../ui";
   import SettingRow from "./SettingRow.svelte";
   import SettingAnchor from "./SettingAnchor.svelte";
