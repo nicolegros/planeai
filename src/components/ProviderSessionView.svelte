@@ -8,14 +8,17 @@
   interface Props {
     session: Session;
     inventory: PluginInventory[];
-    autofocus?: boolean;
+    /** The chat owns the keyboard, as a terminal pane's `focused`; it takes focus whenever this turns true. */
+    focused?: boolean;
+    /** The user focused the chat, e.g. by clicking into it. */
+    onFocused?: () => void;
     onNavigate: (pluginId: string, contributionId: string) => void;
     onOpenPreferences: () => void;
     onHandoff: (sessionId: string) => Promise<void>;
     onHandback: (sessionId: string) => Promise<void>;
   }
 
-  let { session, inventory, autofocus = false, onNavigate, onOpenPreferences, onHandoff, onHandback }: Props = $props();
+  let { session, inventory, focused = false, onFocused, onNavigate, onOpenPreferences, onHandoff, onHandback }: Props = $props();
 
   const resolved = $derived(findRuntimeProvider(inventory, session.provider));
   const canHandoff = $derived(resolved ? supportsHandoff(resolved.provider) : false);
@@ -37,7 +40,8 @@
       plugin={resolved.plugin}
       {contribution}
       session={sessionContext}
-      {autofocus}
+      autofocus={focused}
+      {onFocused}
       {onNavigate}
       onClose={() => {}}
       {onOpenPreferences}

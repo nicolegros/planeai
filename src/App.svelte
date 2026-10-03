@@ -1358,7 +1358,18 @@
                 <ProviderSessionView
                   {session}
                   inventory={pluginInventory}
-                  autofocus={isActiveInLeaf && sessionId === activeSessionId}
+                  focused={isTerminalPaneFocused({
+                    ...terminalKeyboardOwnership,
+                    isActiveTabInLeaf: isActiveInLeaf,
+                    isFocusedLeaf,
+                    belongsToActiveSession: sessionId === activeSessionId,
+                  })}
+                  onFocused={() => {
+                    if (!isActiveInLeaf) return;
+                    workspaceLayout.focusPane(leaf.id);
+                    selectTerminalTab(tabEntry.ptyKey);
+                    focusTerminal();
+                  }}
                   onNavigate={openPluginContribution}
                   onOpenPreferences={openPreferences}
                   onHandoff={handoffProviderSession}

@@ -37,6 +37,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import PluginContributionHost from "../PluginContributionHost.svelte";
+import ProviderSessionFocusHarness from "./ProviderSessionFocusHarness.svelte";
+import { PROVIDER_FRAME_ATTRIBUTE } from "../../lib/terminal-focus";
 import { providerContribution } from "../../lib/plugin-providers";
 import type { PluginSessionContext } from "../../lib/plugin-sdk";
 import type { PluginInventory, PluginProvider, PluginUiContribution } from "../../lib/types";
@@ -274,6 +276,50 @@ describe("PluginContributionHost provider sessions", () => {
       ["keyup", "Control", false, false],
     ]);
     expect(seen[0].cancelable).toBe(true);
+  });
+
+  it("marks the chat frame, reports its focus, and takes focus back when its pane owns the keyboard again", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    const onFocused = vi.fn();
+    const harness = mount(ProviderSessionFocusHarness, {
+      target,
+      props: { plugin, contribution: providerContribution(provider), session, onFocused },
+    });
+    component = harness;
+    const frame = await vi.waitFor(() => {
+      const found = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    expect(frame.hasAttribute(PROVIDER_FRAME_ATTRIBUTE)).toBe(true);
+
+    frame.dispatchEvent(new FocusEvent("focus"));
+    expect(onFocused).toHaveBeenCalledOnce();
+
+    const focus = vi.spyOn(frame, "focus");
+    harness.setFocused(true);
+    await vi.waitFor(() => expect(focus).toHaveBeenCalled());
+    // The same frame, not a rebuilt one: rebuilding reloads the chat and loses what it holds.
+    expect(
+      target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector("iframe"),
+    ).toBe(frame);
+  });
+
+  it("leaves frames of other placements unmarked", async () => {
+    const frame = await mountHost({
+      id: "panel",
+      label: "Panel",
+      placement: "session.panel",
+      entrypoint: "ui/panel.js",
+      order: null,
+      shortcut: null,
+    });
+    expect(frame.hasAttribute(PROVIDER_FRAME_ATTRIBUTE)).toBe(false);
   });
 
   it("rejects session controls from contributions that are not provider UIs", async () => {

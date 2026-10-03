@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { jiraDepartedInteractionEntrypoint, jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
@@ -11,6 +11,7 @@
   import type { PluginUiDisposer, PluginUiEntrypoint, PluginUiHost, PluginSessionContext } from "../lib/plugin-sdk";
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import { focusSidebar } from "../lib/focus.svelte";
+  import { PROVIDER_FRAME_ATTRIBUTE } from "../lib/terminal-focus";
   import { isDark } from "../lib/settings.svelte";
   import type { PluginInventory, PluginUiContribution, ProviderSessionEvent } from "../lib/types";
 
@@ -27,6 +28,8 @@
     /** Provider session UIs only: continue the session in a terminal tab, and come back. */
     onSessionHandoff?: () => Promise<void>;
     onSessionHandback?: () => Promise<void>;
+    /** Provider session UIs only: their frame received focus, as when the user clicks into it. */
+    onFocused?: () => void;
     /** Resolves the focused session at action time for local plugin recipients. */
     getFocusedAgentSession?: () => PluginSessionContext | undefined;
   }
@@ -58,7 +61,7 @@
     text?: unknown;
   };
 
-  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, onSessionHandoff, onSessionHandback, getFocusedAgentSession = () => undefined }: Props = $props();
+  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, onSessionHandoff, onSessionHandback, onFocused, getFocusedAgentSession = () => undefined }: Props = $props();
   const serializedSession = $derived(session ? JSON.stringify(session) : "");
   let container = $state<HTMLElement>();
   let disposer: PluginUiDisposer | null = null;
@@ -67,6 +70,13 @@
   const taskDataChangeListeners = new Set<() => void>();
   let refreshLocalPluginTheme: (() => void) | null = null;
   let refreshLocalPluginData: (() => void) | null = null;
+  /**
+   * Whether a newly mounted UI takes focus. Read untracked: mounting runs inside the
+   * mount effect, and tracking it would rebuild the frame, and lose its state, on every focus change.
+   */
+  const initialFocus = (): boolean => untrack(() => autofocus);
+  /** Focuses the mounted provider session frame, if any. */
+  let focusProviderFrame: (() => void) | null = null;
 
   function subscribe(listeners: Set<() => void>, listener: () => void): () => void {
     listeners.add(listener);
@@ -198,6 +208,11 @@
     frame.style.width = isTitlebar ? "88px" : isSessionIndicator ? "16px" : "100%";
     frame.style.border = "0";
     if (isTitlebar || isSessionIndicator) frame.style.backgroundColor = "transparent";
+    if (providerSession) {
+      // App releases this frame's keyboard like a terminal's, and a click into it claims the keyboard back.
+      frame.setAttribute(PROVIDER_FRAME_ATTRIBUTE, "");
+      frame.addEventListener("focus", () => onFocused?.());
+    }
     if (isSessionIndicator) {
       frame.style.height = "16px";
       frame.style.pointerEvents = "none";
@@ -638,9 +653,11 @@
     window.addEventListener("message", onMessage);
     frame.addEventListener("load", initialise, { once: true });
     root.replaceChildren(frame);
-    if (autofocus) focusFrame();
+    if (initialFocus()) focusFrame();
+    if (providerSession) focusProviderFrame = focusFrame;
     return () => {
       framed = false;
+      if (focusProviderFrame === focusFrame) focusProviderFrame = null;
       unlistenSessionEvents?.();
       if (refreshLocalPluginTheme === refreshTheme) refreshLocalPluginTheme = null;
       if (refreshLocalPluginData === refreshData) refreshLocalPluginData = null;
@@ -667,7 +684,7 @@
           return;
         }
         disposer = cleanup;
-        if (autofocus) target.focus();
+        if (initialFocus()) target.focus();
         return;
       }
       const entrypoint = await loadBundledEntrypoint();
@@ -783,6 +800,11 @@
       if (generation === version) generation += 1;
       disposeCurrent();
     };
+  });
+
+  // A provider session's frame takes the keyboard back whenever its pane owns it again, as a terminal does.
+  $effect(() => {
+    if (autofocus) untrack(() => focusProviderFrame?.());
   });
 
   $effect(() => {
