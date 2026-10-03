@@ -3,6 +3,7 @@
   import { Button } from "./ui";
   import { findRuntimeProvider, providerContribution, supportsHandoff } from "../lib/plugin-providers";
   import type { PluginSessionContext } from "../lib/plugin-sdk";
+  import { pluginPreferencesLocation, type SettingsLocation } from "../lib/settings-registry";
   import type { PluginInventory, Session } from "../lib/types";
 
   interface Props {
@@ -13,14 +14,19 @@
     /** The user focused the chat, e.g. by clicking into it. */
     onFocused?: () => void;
     onNavigate: (pluginId: string, contributionId: string) => void;
-    onOpenPreferences: () => void;
+    onOpenPreferences: (location: SettingsLocation) => void;
     onHandoff: (sessionId: string) => Promise<void>;
     onHandback: (sessionId: string) => Promise<void>;
   }
 
   let { session, inventory, focused = false, onFocused, onNavigate, onOpenPreferences, onHandoff, onHandback }: Props = $props();
 
-  const resolved = $derived(findRuntimeProvider(inventory, session.provider));
+  const PLUGINS_PAGE: SettingsLocation = { kind: "category", id: "plugins" };
+
+  // Any plugin's change replaces the whole inventory. Comparing this provider's entry by value
+  // keeps the chat mounted unless its own plugin changed; remounting reloads it and loses its state.
+  const resolvedJson = $derived(JSON.stringify(findRuntimeProvider(inventory, session.provider)));
+  const resolved = $derived(JSON.parse(resolvedJson) as ReturnType<typeof findRuntimeProvider>);
   const canHandoff = $derived(resolved ? supportsHandoff(resolved.provider) : false);
   const contribution = $derived(resolved ? providerContribution(resolved.provider) : null);
   const sessionContext = $derived<PluginSessionContext>({
@@ -35,7 +41,12 @@
 </script>
 
 <div class="h-full w-full bg-main" data-provider-session={session.id}>
-  {#if resolved && contribution && resolved.plugin.state === "running"}
+  {#if session.status === "exited"}
+    <div class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center" role="status">
+      <p class="text-sm text-t1">This session has exited.</p>
+      <p class="max-w-lg text-xs text-t3">Restart it to continue the conversation.</p>
+    </div>
+  {:else if resolved && contribution && resolved.plugin.state === "running"}
     <PluginContributionHost
       plugin={resolved.plugin}
       {contribution}
@@ -44,7 +55,7 @@
       {onFocused}
       {onNavigate}
       onClose={() => {}}
-      {onOpenPreferences}
+      onOpenPreferences={() => onOpenPreferences(pluginPreferencesLocation(resolved.plugin) ?? PLUGINS_PAGE)}
       onSessionHandoff={canHandoff ? () => onHandoff(session.id) : undefined}
       onSessionHandback={canHandoff ? () => onHandback(session.id) : undefined}
     />
@@ -60,7 +71,7 @@
       {#if resolved?.plugin.last_error}
         <p class="max-w-lg text-xs text-t3">{resolved.plugin.last_error}</p>
       {/if}
-      <Button onclick={onOpenPreferences}>Open Plugins</Button>
+      <Button onclick={() => onOpenPreferences(PLUGINS_PAGE)}>Open Plugins</Button>
     </div>
   {/if}
 </div>
