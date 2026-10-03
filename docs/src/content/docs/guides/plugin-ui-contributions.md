@@ -162,6 +162,8 @@ PlaneAI calls these sidecar methods; each must return promptly and do its work a
 | `provider.session.handback`  | `session_id`                                                                 | With `handoff` only. The terminal tab closed; drive the session again.                                                                     |
 
 PlaneAI rejects a `send` text or `initial_prompt` over 48 KiB, measured as JSON-escaped text, so every request fits one 64 KiB frame.
+Prompts from the CLI, loops and recipes are checked against the same limit before they are queued, and a prompt PlaneAI cannot deliver to the plugin is reported in the app.
+A handoff `argv` must have 1 to 64 nonempty arguments without NUL; PlaneAI runs it as is.
 Provider UIs should apply the same limit before calling `send`.
 
 `provider.*` methods are reserved for PlaneAI: plugin UI cannot call them, and `planeai-cli plugin test` scenarios cannot send them.

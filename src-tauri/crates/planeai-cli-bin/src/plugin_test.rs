@@ -12,6 +12,10 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
+use planeai_plugin_contract::provider::{
+    is_host_controlled_method, validate_handoff_argv, HandoffResponse, ProviderSessionStatus,
+    SessionEventParams, SessionStatusParams, EVENT_NOTIFICATION, STATUS_NOTIFICATION,
+};
 use planeai_plugin_contract::ProviderFeature;
 use serde_json::{json, Map, Value};
 
@@ -22,7 +26,6 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const CANCELLATION_ACK_TIMEOUT: Duration = Duration::from_secs(3);
 const PROVIDER_TEST_SESSION: &str = "planeai-cli-plugin-test";
-const PROVIDER_STATUSES: &[&str] = &["busy", "idle", "needs_attention", "exited"];
 
 pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>) -> Result<()> {
     let scenario = scenario.map(read_scenario).transpose()?;
@@ -172,18 +175,9 @@ fn check_provider(
             )
             .context("provider.session.handoff failed")?;
         request_id += 1;
-        result
-            .get("argv")
-            .and_then(Value::as_array)
-            .filter(|argv| {
-                !argv.is_empty()
-                    && argv
-                        .iter()
-                        .all(|arg| arg.as_str().is_some_and(|arg| !arg.is_empty()))
-            })
-            .ok_or_else(|| {
-                anyhow!("provider.session.handoff must return a nonempty argv of strings")
-            })?;
+        let response: HandoffResponse = serde_json::from_value(result)
+            .context("provider.session.handoff must return { argv }")?;
+        validate_handoff_argv(response.argv).map_err(|error| anyhow!(error))?;
         process
             .call(
                 request_id,
@@ -263,18 +257,6 @@ fn parse_scenario_line(line: &str) -> Result<ScenarioRequest> {
         params: object.get("params").cloned().unwrap_or(Value::Null),
         timeout,
     })
-}
-
-fn is_host_controlled_method(method: &str) -> bool {
-    method.starts_with("provider.")
-        || matches!(
-            method,
-            "plugin.handshake"
-                | "plugin.shutdown"
-                | "plugin.taskLifecycle"
-                | "plugin.sessionLifecycle"
-                | "$/cancelRequest"
-        )
 }
 
 fn manifest_capabilities(manifest: &Value) -> Vec<String> {
@@ -468,7 +450,7 @@ struct PluginProcess {
     capabilities: HashSet<String>,
     /// Last event sequence number seen per started provider session.
     provider_sessions: HashMap<String, u64>,
-    provider_statuses: Vec<String>,
+    provider_statuses: Vec<ProviderSessionStatus>,
     provider_events_received: usize,
     _state: TemporaryPluginState,
 }
@@ -640,8 +622,11 @@ impl PluginProcess {
         let deadline = Instant::now() + timeout;
         loop {
             let statuses = &self.provider_statuses[after..];
-            if let Some(busy) = statuses.iter().position(|status| status == "busy") {
-                if statuses[busy..].iter().any(|status| status == "idle") {
+            if let Some(busy) = statuses
+                .iter()
+                .position(|status| *status == ProviderSessionStatus::Busy)
+            {
+                if statuses[busy..].contains(&ProviderSessionStatus::Idle) {
                     return Ok(());
                 }
             }
@@ -674,49 +659,36 @@ impl PluginProcess {
             bail!("plugin sent notification {method} without the providers capability");
         }
         let params = params.unwrap_or(Value::Null);
-        let session_id = params
-            .get("session_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("{method} requires a session_id"))?;
-        let Some(last_seq) = self.provider_sessions.get_mut(session_id) else {
-            bail!("{method} referenced unknown session {session_id}");
-        };
+        // The host's own parameter types, so this check cannot accept what the host rejects.
+        let invalid = |error: serde_json::Error| anyhow!("invalid {method}: {error}");
         match method {
-            "host.session.event" => {
-                let object = params
-                    .as_object()
-                    .expect("session_id lookup implies object");
-                reject_unknown_fields(object, &["session_id", "seq", "payload"], method)?;
-                let seq = params
-                    .get("seq")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| anyhow!("host.session.event requires an integer seq"))?;
-                if seq <= *last_seq {
+            EVENT_NOTIFICATION => {
+                let event: SessionEventParams = serde_json::from_value(params).map_err(invalid)?;
+                let last_seq = self.provider_session_seq(method, &event.session_id)?;
+                if event.seq <= *last_seq {
                     bail!(
-                        "host.session.event seq must increase per session: {seq} after {last_seq}"
+                        "{method} seq must increase per session: {} after {last_seq}",
+                        event.seq
                     );
                 }
-                if !object.contains_key("payload") {
-                    bail!("host.session.event requires a payload");
-                }
-                *last_seq = seq;
+                *last_seq = event.seq;
                 self.provider_events_received += 1;
             }
-            "host.session.status" => {
-                let object = params
-                    .as_object()
-                    .expect("session_id lookup implies object");
-                reject_unknown_fields(object, &["session_id", "status"], method)?;
-                let status = params
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .filter(|status| PROVIDER_STATUSES.contains(status))
-                    .ok_or_else(|| anyhow!("host.session.status has an undocumented status"))?;
-                self.provider_statuses.push(status.to_owned());
+            STATUS_NOTIFICATION => {
+                let status: SessionStatusParams =
+                    serde_json::from_value(params).map_err(invalid)?;
+                self.provider_session_seq(method, &status.session_id)?;
+                self.provider_statuses.push(status.status);
             }
             _ => bail!("plugin sent undocumented notification {method}"),
         }
         Ok(())
+    }
+
+    fn provider_session_seq(&mut self, method: &str, session_id: &str) -> Result<&mut u64> {
+        self.provider_sessions
+            .get_mut(session_id)
+            .ok_or_else(|| anyhow!("{method} referenced unknown session {session_id}"))
     }
 
     fn send(&self, frame: Value) -> Result<()> {

@@ -576,6 +576,8 @@ pub fn send_prompt(
         }
         // The GUI owns provider runtimes, so prompts take the same route as local PTYs.
         PROVIDER_BACKEND => {
+            // The GUI delivers it later, so refuse what the provider would reject while the caller can still hear it.
+            planeai_plugin_contract::provider::check_prompt_size(text)?;
             ops.notify_socket_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to plugin provider");
         }
@@ -1598,6 +1600,13 @@ mod tests {
         .unwrap();
 
         let ops = MockPromptOps::new(true);
+        // Too large for the provider: refused here, since the GUI delivers it later.
+        let oversized = "x".repeat(64 * 1024);
+        assert!(send_prompt(&conn, "cccc", &oversized, &ops)
+            .unwrap_err()
+            .contains("too long"));
+        assert!(ops.sent_socket.borrow().is_empty());
+
         let result = send_prompt(&conn, "cccc", "hello provider", &ops).unwrap();
         assert_eq!(result.backend, "plugin");
         assert_eq!(ops.sent_keys.borrow().len(), 0);

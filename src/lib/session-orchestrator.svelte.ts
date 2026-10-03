@@ -285,6 +285,16 @@ export function startEventListeners(): () => void {
     }),
   );
 
+  // Its sender, a CLI command, loop or recipe, was already told the prompt was sent.
+  unlisteners.push(
+    listen<{ session_id: string; error: string }>("prompt-delivery-failed", (event) => {
+      const session = sessions.find((s) => s.id === event.payload.session_id);
+      showSnackbar(
+        `A prompt for ${session?.name ?? "a session"} was not delivered: ${event.payload.error}`,
+      );
+    }),
+  );
+
   // A provider's sidecar went away mid-turn: the turn ended without finishing.
   unlisteners.push(
     listen<{ session_id: string }>("agent-released", (event) => {

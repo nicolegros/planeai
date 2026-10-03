@@ -356,6 +356,9 @@ pub async fn launch_session(
         }
         e.to_string()
     })?;
+    if backend_is_provider {
+        plugin_providers::launched(&runtime.0, &launched_id);
+    }
 
     {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;

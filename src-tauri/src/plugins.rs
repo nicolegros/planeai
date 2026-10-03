@@ -21,18 +21,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::commands;
 use crate::task_lifecycle::TaskLifecycleBatch;
+use planeai_plugin_contract::provider::is_host_controlled_method as is_host_controlled_plugin_method;
+use planeai_plugin_contract::supports_host_api_version;
 pub use planeai_plugin_contract::ProviderFeature;
-
-const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
-const RECIPIENT_HOST_API_VERSION: &str = "planeai.plugin-host.v2";
-const PROVIDER_HOST_API_VERSION: &str = planeai_plugin_contract::PROVIDER_HOST_API_VERSION;
-
-fn supports_host_api_version(version: &str) -> bool {
-    matches!(
-        version,
-        HOST_API_VERSION | RECIPIENT_HOST_API_VERSION | PROVIDER_HOST_API_VERSION
-    )
-}
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 // A Jira lifecycle writeback may refresh credentials, look up a transition,
 // perform that transition, and add a comment. Each network request is bounded
@@ -1422,20 +1413,6 @@ fn validate_plugin_session_completion(
         return Err("plugin session completion requires a session_id and an optional nonempty message of at most 280 characters".to_string());
     }
     Ok(completion)
-}
-
-fn is_host_controlled_plugin_method(method: &str) -> bool {
-    // Provider session methods carry host-owned lifecycle and routing, so plugin UI
-    // reaches them only through the host's provider session commands.
-    method.starts_with("provider.")
-        || matches!(
-            method,
-            "plugin.handshake"
-                | "plugin.shutdown"
-                | "plugin.taskLifecycle"
-                | "plugin.sessionLifecycle"
-                | "$/cancelRequest"
-        )
 }
 
 fn request_timeout(method: &str) -> Duration {
@@ -3978,6 +3955,7 @@ impl<T> OptionalRow<T> for rusqlite::Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use planeai_plugin_contract::HOST_API_VERSION;
 
     fn database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();

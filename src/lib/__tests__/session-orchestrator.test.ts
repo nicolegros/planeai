@@ -761,6 +761,31 @@ describe("selection explicitness", () => {
   });
 });
 
+describe("prompt delivery failures", () => {
+  it("tells the user a prompt never reached a chat session", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    const listenMock = vi.mocked(listen);
+    listenMock.mockClear();
+    const { showSnackbar } = await import("../snackbar.svelte");
+    vi.mocked(showSnackbar).mockClear();
+    createSession({
+      id: "chat",
+      name: "Refactor auth",
+      status: "active",
+      backend: "plugin",
+    } as Session);
+    const cleanup = startEventListeners();
+    const handler = listenMock.mock.calls.find(
+      (c) => c[0] === "prompt-delivery-failed",
+    )![1] as (event: { payload: { session_id: string; error: string } }) => void;
+    handler({ payload: { session_id: "chat", error: "plugin claude-chat is not running" } });
+    expect(showSnackbar).toHaveBeenCalledWith(
+      "A prompt for Refactor auth was not delivered: plugin claude-chat is not running",
+    );
+    cleanup();
+  });
+});
+
 describe("countSessionsLostOnQuit", () => {
   it("counts active local sessions and busy provider sessions only", () => {
     const sessions = [

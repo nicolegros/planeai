@@ -7,22 +7,21 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db;
 use crate::plugins::{PluginProvider, PluginRuntimeSupervisor, ProviderFeature};
 use crate::session_ops::PROVIDER_BACKEND;
+use planeai_plugin_contract::provider::{
+    self as protocol, validate_handoff_argv, HandoffResponse, SessionEventParams,
+    SessionStatusParams, EVENT_NOTIFICATION, STATUS_NOTIFICATION,
+};
+pub use planeai_plugin_contract::provider::{check_prompt_size, ProviderSessionStatus, StopReason};
 
 /// Frontend event carrying opaque provider session events to the mounted UI.
 pub const SESSION_EVENT: &str = "plugin-provider-session-event";
-
-const EVENT_NOTIFICATION: &str = "host.session.event";
-const STATUS_NOTIFICATION: &str = "host.session.status";
-
-/// Prompts must fit one JSON-RPC frame, as JSON-escaped text, with room for the envelope.
-const MAX_PROMPT_BYTES: usize = 48 * 1024;
 
 /// Provider keys are `<plugin id>:<provider id>`; plugin and provider ids never contain `:`.
 pub fn parse_provider_key(key: &str) -> Option<(&str, &str)> {
@@ -42,8 +41,12 @@ struct Binding {
 #[derive(Default)]
 pub struct ProviderSessions {
     bindings: Mutex<HashMap<String, Binding>>,
-    /// Serializes `ensure` per session so concurrent first uses resume it once.
+    /// Serializes `ensure` and `stop` per session, so concurrent first uses resume it once
+    /// and a session stopped while resuming is never left running.
     ensuring: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Sessions whose start is in flight: their row does not exist yet, which
+    /// reconciliation would otherwise read as a deleted session.
+    launching: Mutex<std::collections::HashSet<String>>,
 }
 
 impl ProviderSessions {
@@ -64,7 +67,6 @@ impl ProviderSessions {
     }
 
     fn unbind(&self, session_id: &str) -> Option<Binding> {
-        self.ensuring.lock().unwrap().remove(session_id);
         self.bindings.lock().unwrap().remove(session_id)
     }
 
@@ -72,8 +74,16 @@ impl ProviderSessions {
         self.bindings.lock().unwrap().get(session_id).cloned()
     }
 
-    fn session_ids(&self) -> Vec<String> {
-        self.bindings.lock().unwrap().keys().cloned().collect()
+    /// Bound sessions whose rows exist, which reconciliation may check.
+    fn launched_session_ids(&self) -> Vec<String> {
+        let launching = self.launching.lock().unwrap();
+        self.bindings
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|session_id| !launching.contains(*session_id))
+            .cloned()
+            .collect()
     }
 
     /// Whether this sidecar instance of the plugin currently drives the session.
@@ -90,10 +100,8 @@ impl ProviderSessions {
             .filter(|(_, binding)| binding.plugin_id == plugin_id && binding.instance == instance)
             .map(|(session_id, _)| session_id.clone())
             .collect();
-        let mut ensuring = self.ensuring.lock().unwrap();
         for session_id in &ended {
             bindings.remove(session_id);
-            ensuring.remove(session_id);
         }
         ended
     }
@@ -111,39 +119,6 @@ pub fn runtime_stopped(
     for session_id in sessions.unbind_instance(plugin_id, instance) {
         crate::notify::release_provider_status(app, &session_id);
     }
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderSessionStatus {
-    Busy,
-    Idle,
-    NeedsAttention,
-    Exited,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SessionEventParams {
-    session_id: String,
-    seq: u64,
-    payload: Value,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SessionStatusParams {
-    session_id: String,
-    status: ProviderSessionStatus,
-}
-
-/// Why a provider session ended; sent to the plugin with `provider.session.stop`.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum StopReason {
-    Archive,
-    Destroy,
-    Exit,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -336,6 +311,38 @@ pub async fn start(
     context: &SessionRuntimeContext,
     initial_prompt: Option<&str>,
 ) -> Result<(), String> {
+    let sessions = supervisor.provider_sessions();
+    sessions
+        .launching
+        .lock()
+        .unwrap()
+        .insert(context.session_id.clone());
+    let started = start_launching(supervisor, context, initial_prompt).await;
+    if started.is_err() {
+        sessions
+            .launching
+            .lock()
+            .unwrap()
+            .remove(&context.session_id);
+    }
+    started
+}
+
+/// The launch committed the session's row, so reconciliation may check it from now on.
+pub fn launched(supervisor: &PluginRuntimeSupervisor, session_id: &str) {
+    supervisor
+        .provider_sessions()
+        .launching
+        .lock()
+        .unwrap()
+        .remove(session_id);
+}
+
+async fn start_launching(
+    supervisor: &PluginRuntimeSupervisor,
+    context: &SessionRuntimeContext,
+    initial_prompt: Option<&str>,
+) -> Result<(), String> {
     let resolved = resolve(supervisor, &context.provider_key).await?;
     if context.yolo && !resolved.provider.supports(ProviderFeature::Yolo) {
         return Err(format!(
@@ -352,7 +359,7 @@ pub async fn start(
         supervisor,
         &context.session_id,
         &resolved,
-        "provider.session.start",
+        protocol::START,
         params,
     )
     .await;
@@ -362,50 +369,33 @@ pub async fn start(
         let stop =
             serde_json::json!({ "session_id": context.session_id, "reason": StopReason::Destroy });
         let _ = supervisor
-            .provider_request(&resolved.plugin_id, "provider.session.stop", stop)
+            .provider_request(&resolved.plugin_id, protocol::STOP, stop)
             .await;
     }
     started
 }
 
-fn check_prompt_size(text: &str) -> Result<(), String> {
-    let encoded = serde_json::to_string(text).map_or(usize::MAX, |json| json.len());
-    if encoded > MAX_PROMPT_BYTES {
-        return Err(format!(
-            "The message is too long ({} KB); the limit is {} KB.",
-            encoded / 1024,
-            MAX_PROMPT_BYTES / 1024
-        ));
-    }
-    Ok(())
-}
-
-/// Make sure the current sidecar instance drives this session, resuming it after
-/// an app or plugin restart.
+/// Make sure the current sidecar instance drives this active session, resuming it after
+/// an app or plugin restart. The session is read under its lock, so one stopped meanwhile,
+/// for example archived while this waited, is never resumed.
 pub async fn ensure(
+    app: &AppHandle,
     supervisor: &PluginRuntimeSupervisor,
-    context: &SessionRuntimeContext,
-) -> Result<(), String> {
-    let lock = supervisor
-        .provider_sessions()
-        .ensure_lock(&context.session_id);
+    session_id: &str,
+) -> Result<SessionRuntimeContext, String> {
+    let lock = supervisor.provider_sessions().ensure_lock(session_id);
     let _ensuring = lock.lock().await;
+    let context = load_context(app, session_id).await?;
     let resolved = resolve(supervisor, &context.provider_key).await?;
     let instance = supervisor.running_instance(&resolved.plugin_id).await;
-    if let Some(binding) = supervisor.provider_sessions().get(&context.session_id) {
+    if let Some(binding) = supervisor.provider_sessions().get(session_id) {
         if binding.plugin_id == resolved.plugin_id && Some(binding.instance) == instance {
-            return Ok(());
+            return Ok(context);
         }
     }
     let params = context.params(&resolved.provider);
-    bind_and_request(
-        supervisor,
-        &context.session_id,
-        &resolved,
-        "provider.session.resume",
-        params,
-    )
-    .await
+    bind_and_request(supervisor, session_id, &resolved, protocol::RESUME, params).await?;
+    Ok(context)
 }
 
 async fn bind_and_request(
@@ -438,37 +428,41 @@ async fn bind_and_request(
 }
 
 /// Deliver user or automation input to a provider session.
-async fn send(
+pub async fn send(
+    app: &AppHandle,
     supervisor: &PluginRuntimeSupervisor,
-    context: &SessionRuntimeContext,
+    session_id: &str,
     text: &str,
 ) -> Result<(), String> {
     if text.trim().is_empty() {
         return Err("prompt text must not be empty".to_string());
     }
     check_prompt_size(text)?;
-    ensure(supervisor, context).await?;
+    ensure(app, supervisor, session_id).await?;
     request_bound(
         supervisor,
-        &context.session_id,
-        "provider.session.send",
-        serde_json::json!({ "session_id": context.session_id, "text": text }),
+        session_id,
+        protocol::SEND,
+        serde_json::json!({ "session_id": session_id, "text": text }),
     )
     .await
+    .map(|_| ())
 }
 
-async fn interrupt(
+pub async fn interrupt(
+    app: &AppHandle,
     supervisor: &PluginRuntimeSupervisor,
-    context: &SessionRuntimeContext,
+    session_id: &str,
 ) -> Result<(), String> {
-    ensure(supervisor, context).await?;
+    ensure(app, supervisor, session_id).await?;
     request_bound(
         supervisor,
-        &context.session_id,
-        "provider.session.interrupt",
-        serde_json::json!({ "session_id": context.session_id }),
+        session_id,
+        protocol::INTERRUPT,
+        serde_json::json!({ "session_id": session_id }),
     )
     .await
+    .map(|_| ())
 }
 
 async fn request_bound(
@@ -476,7 +470,7 @@ async fn request_bound(
     session_id: &str,
     method: &str,
     params: Value,
-) -> Result<(), String> {
+) -> Result<Value, String> {
     let binding = supervisor
         .provider_sessions()
         .get(session_id)
@@ -484,50 +478,30 @@ async fn request_bound(
     supervisor
         .provider_request(&binding.plugin_id, method, params)
         .await
-        .map(|_| ())
-}
-
-#[derive(Debug, Deserialize)]
-struct HandoffResponse {
-    argv: Vec<String>,
 }
 
 /// Hand a session's conversation to its agent's own TUI. The provider detaches
 /// and returns the command that continues the conversation in a terminal.
-async fn handoff(
+pub async fn handoff(
+    app: &AppHandle,
     supervisor: &PluginRuntimeSupervisor,
-    context: &SessionRuntimeContext,
+    session_id: &str,
 ) -> Result<Vec<String>, String> {
-    let resolved = resolve(supervisor, &context.provider_key).await?;
-    if !resolved.provider.supports(ProviderFeature::Handoff) {
-        return Err(format!(
-            "{} cannot continue in a terminal",
-            resolved.provider.label
-        ));
+    let context = ensure(app, supervisor, session_id).await?;
+    let provider = resolve(supervisor, &context.provider_key).await?.provider;
+    if !provider.supports(ProviderFeature::Handoff) {
+        return Err(format!("{} cannot continue in a terminal", provider.label));
     }
-    ensure(supervisor, context).await?;
-    let value = supervisor
-        .provider_request(
-            &resolved.plugin_id,
-            "provider.session.handoff",
-            serde_json::json!({ "session_id": context.session_id }),
-        )
-        .await?;
+    let value = request_bound(
+        supervisor,
+        session_id,
+        protocol::HANDOFF,
+        serde_json::json!({ "session_id": session_id }),
+    )
+    .await?;
     let response: HandoffResponse = serde_json::from_value(value)
         .map_err(|error| format!("invalid provider handoff: {error}"))?;
     validate_handoff_argv(response.argv)
-}
-
-fn validate_handoff_argv(argv: Vec<String>) -> Result<Vec<String>, String> {
-    if argv.is_empty()
-        || argv.len() > 64
-        || argv.iter().any(|arg| arg.is_empty() || arg.contains('\0'))
-    {
-        return Err(
-            "provider handoff must return a nonempty argv of nonempty arguments".to_string(),
-        );
-    }
-    Ok(argv)
 }
 
 /// The terminal that continued a session closed; the provider drives it again.
@@ -538,23 +512,28 @@ pub async fn handback(
 ) -> Result<(), String> {
     // A sidecar restarted during the handoff restores the handoff from its transcript,
     // so it must be resumed to hear that the terminal closed. Ended sessions need nothing.
-    let Ok(context) = load_context(app, session_id).await else {
+    if load_context(app, session_id).await.is_err() {
         return Ok(());
-    };
-    ensure(supervisor, &context).await?;
+    }
+    ensure(app, supervisor, session_id).await?;
     request_bound(
         supervisor,
         session_id,
-        "provider.session.handback",
+        protocol::HANDBACK,
         serde_json::json!({ "session_id": session_id }),
     )
     .await
+    .map(|_| ())
 }
 
 /// Stop a provider session that left the active state. Sessions the current
 /// sidecar never resumed have nothing running and need no request.
 pub async fn stop(supervisor: &PluginRuntimeSupervisor, session_id: &str, reason: StopReason) {
-    let Some(binding) = supervisor.provider_sessions().unbind(session_id) else {
+    let sessions = supervisor.provider_sessions();
+    let lock = sessions.ensure_lock(session_id);
+    let _ensuring = lock.lock().await;
+    sessions.launching.lock().unwrap().remove(session_id);
+    let Some(binding) = sessions.unbind(session_id) else {
         return;
     };
     if supervisor.running_instance(&binding.plugin_id).await != Some(binding.instance) {
@@ -562,7 +541,7 @@ pub async fn stop(supervisor: &PluginRuntimeSupervisor, session_id: &str, reason
     }
     let params = serde_json::json!({ "session_id": session_id, "reason": reason });
     match supervisor
-        .provider_request(&binding.plugin_id, "provider.session.stop", params)
+        .provider_request(&binding.plugin_id, protocol::STOP, params)
         .await
     {
         Ok(_) => {
@@ -595,7 +574,7 @@ fn ended_reason(status: Option<&str>) -> Option<StopReason> {
 /// Stop provider sessions whose rows ended outside the GUI (CLI archive or delete,
 /// task completion). Those paths only notify that sessions changed.
 pub async fn reconcile(app: &AppHandle, supervisor: &PluginRuntimeSupervisor) {
-    let bound = supervisor.provider_sessions().session_ids();
+    let bound = supervisor.provider_sessions().launched_session_ids();
     if bound.is_empty() {
         return;
     }
@@ -624,45 +603,8 @@ pub async fn reconcile(app: &AppHandle, supervisor: &PluginRuntimeSupervisor) {
     }
 }
 
-/// Resume a stored session if needed; called when its UI mounts.
-pub async fn ensure_session(
-    app: &AppHandle,
-    supervisor: &PluginRuntimeSupervisor,
-    session_id: &str,
-) -> Result<(), String> {
-    ensure(supervisor, &load_context(app, session_id).await?).await
-}
-
-pub async fn send_to_session(
-    app: &AppHandle,
-    supervisor: &PluginRuntimeSupervisor,
-    session_id: &str,
-    text: &str,
-) -> Result<(), String> {
-    send(supervisor, &load_context(app, session_id).await?, text).await
-}
-
-pub async fn interrupt_session(
-    app: &AppHandle,
-    supervisor: &PluginRuntimeSupervisor,
-    session_id: &str,
-) -> Result<(), String> {
-    interrupt(supervisor, &load_context(app, session_id).await?).await
-}
-
-pub async fn handoff_session(
-    app: &AppHandle,
-    supervisor: &PluginRuntimeSupervisor,
-    session_id: &str,
-) -> Result<Vec<String>, String> {
-    handoff(supervisor, &load_context(app, session_id).await?).await
-}
-
 /// Look up a session and its runtime context in one blocking DB read.
-pub async fn load_context(
-    app: &AppHandle,
-    session_id: &str,
-) -> Result<SessionRuntimeContext, String> {
+async fn load_context(app: &AppHandle, session_id: &str) -> Result<SessionRuntimeContext, String> {
     let db = app.state::<crate::state::DbState>().0.clone();
     let extra_path_dirs = crate::plugins::configured_extra_path_dirs(app);
     let session_id = session_id.to_string();
@@ -716,23 +658,6 @@ mod tests {
     }
 
     #[test]
-    fn notifications_validate_strictly() {
-        assert!(serde_json::from_value::<SessionEventParams>(
-            serde_json::json!({ "session_id": "s", "seq": 1, "payload": null, "extra": 1 })
-        )
-        .is_err());
-        assert!(serde_json::from_value::<SessionStatusParams>(
-            serde_json::json!({ "session_id": "s", "status": "thinking" })
-        )
-        .is_err());
-        let status: SessionStatusParams = serde_json::from_value(
-            serde_json::json!({ "session_id": "s", "status": "needs_attention" }),
-        )
-        .unwrap();
-        assert_eq!(status.status, ProviderSessionStatus::NeedsAttention);
-    }
-
-    #[test]
     fn bindings_track_ownership() {
         let sessions = ProviderSessions::default();
         sessions.bind(
@@ -750,6 +675,25 @@ mod tests {
         assert!(!sessions.is_driven_by("s1", "a", 2));
         assert!(sessions.unbind("s1").is_some());
         assert!(!sessions.is_driven_by("s1", "a", 1));
+    }
+
+    #[test]
+    fn reconciliation_skips_sessions_still_launching() {
+        // A launching session has no row yet, which reconciliation would read as deleted.
+        let sessions = ProviderSessions::default();
+        let binding = Binding {
+            plugin_id: "a".into(),
+            provider_id: "chat".into(),
+            instance: 1,
+        };
+        sessions.bind("s1", binding.clone());
+        sessions.bind("s2", binding);
+        sessions.launching.lock().unwrap().insert("s2".into());
+        assert_eq!(sessions.launched_session_ids(), ["s1"]);
+        sessions.launching.lock().unwrap().remove("s2");
+        let mut ids = sessions.launched_session_ids();
+        ids.sort();
+        assert_eq!(ids, ["s1", "s2"]);
     }
 
     #[test]
@@ -782,42 +726,5 @@ mod tests {
             serde_json::to_value(StopReason::Archive).unwrap(),
             "archive"
         );
-    }
-
-    #[test]
-    fn handoff_argv_must_be_runnable() {
-        assert_eq!(
-            validate_handoff_argv(vec![
-                "/usr/local/bin/claude".into(),
-                "--resume".into(),
-                "s1".into()
-            ]),
-            Ok(vec![
-                "/usr/local/bin/claude".into(),
-                "--resume".into(),
-                "s1".into()
-            ])
-        );
-        assert!(validate_handoff_argv(vec![]).is_err());
-        assert!(validate_handoff_argv(vec!["claude".into(), String::new()]).is_err());
-        assert!(validate_handoff_argv(vec!["claude\0".into()]).is_err());
-    }
-
-    #[test]
-    fn prompts_must_fit_one_frame() {
-        assert!(check_prompt_size(&"x".repeat(MAX_PROMPT_BYTES - 2)).is_ok());
-        assert!(check_prompt_size(&"x".repeat(MAX_PROMPT_BYTES))
-            .unwrap_err()
-            .contains("too long"));
-        // Escaping doubles newlines, so the encoded size decides.
-        assert!(check_prompt_size(&"\n".repeat(MAX_PROMPT_BYTES / 2)).is_err());
-    }
-
-    #[test]
-    fn terminal_lifecycle_statuses_stop_provider_sessions() {
-        assert_eq!(stop_reason("archived"), Some(StopReason::Archive));
-        assert_eq!(stop_reason("destroyed"), Some(StopReason::Destroy));
-        assert_eq!(stop_reason("exited"), Some(StopReason::Exit));
-        assert_eq!(stop_reason("active"), None);
     }
 }

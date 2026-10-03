@@ -205,10 +205,11 @@ async fn deliver_prompt(app: &AppHandle, session_id: &str, text: String) {
             .is_some_and(|session| session.backend == crate::session_ops::PROVIDER_BACKEND))
     })
     .await;
+    let is_provider = matches!(provider_backed, Ok(true));
     let result = match provider_backed {
         Ok(true) => {
             let supervisor = app.state::<crate::plugins::PluginRuntimeHandle>().0.clone();
-            crate::plugin_providers::send_to_session(app, &supervisor, session_id, &text).await
+            crate::plugin_providers::send(app, &supervisor, session_id, &text).await
         }
         Ok(false) => {
             let pty_manager = app.state::<crate::state::PtyState>().0.clone();
@@ -220,6 +221,13 @@ async fn deliver_prompt(app: &AppHandle, session_id: &str, text: String) {
     };
     if let Err(error) = result {
         tracing::warn!(%session_id, %error, "send_prompt delivery failed");
+        // Its sender was told it was sent; a provider prompt fails for reasons a PTY write does not.
+        if is_provider {
+            let _ = app.emit(
+                "prompt-delivery-failed",
+                serde_json::json!({ "session_id": session_id, "error": error }),
+            );
+        }
     }
 }
 

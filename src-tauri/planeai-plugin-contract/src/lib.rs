@@ -15,12 +15,14 @@ pub enum ProviderFeature {
     Handoff,
 }
 
-const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
-const RECIPIENT_HOST_API_VERSION: &str = "planeai.plugin-host.v2";
+pub mod provider;
+
+pub const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
+pub const RECIPIENT_HOST_API_VERSION: &str = "planeai.plugin-host.v2";
 /// Unstable until plugin-provided session runtimes ship; see ADR-0013.
 pub const PROVIDER_HOST_API_VERSION: &str = "planeai.plugin-host.v3";
 
-fn supports_host_api_version(version: &str) -> bool {
+pub fn supports_host_api_version(version: &str) -> bool {
     matches!(
         version,
         HOST_API_VERSION | RECIPIENT_HOST_API_VERSION | PROVIDER_HOST_API_VERSION
