@@ -532,7 +532,7 @@ fn daemon_send_frames(
 }
 
 /// `sessions.backend` for sessions whose runtime is a plugin provider (ADR-0013).
-pub const PROVIDER_BACKEND: &str = "plugin";
+pub const PLUGIN_BACKEND: &str = "plugin";
 
 pub fn send_prompt(
     conn: &Connection,
@@ -575,7 +575,7 @@ pub fn send_prompt(
             tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to local PTY");
         }
         // The GUI owns provider runtimes, so prompts take the same route as local PTYs.
-        PROVIDER_BACKEND => {
+        PLUGIN_BACKEND => {
             // The GUI delivers it later, so refuse what the provider would reject while the caller can still hear it.
             planeai_plugin_contract::provider::check_prompt_size(text)?;
             ops.notify_socket_send(&session.id, text)?;

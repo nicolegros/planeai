@@ -52,7 +52,7 @@ pub fn restart(
     }
 
     // Provider sessions resume through their plugin when next used (ADR-0013).
-    if session.backend == crate::session_ops::PROVIDER_BACKEND {
+    if session.backend == crate::session_ops::PLUGIN_BACKEND {
         return restore(conn, id, config);
     }
 

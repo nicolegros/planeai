@@ -1,7 +1,12 @@
-import type { PluginInventory, PluginProvider, PluginUiContribution } from "./types";
+import type { PluginInventory, PluginProvider, PluginUiContribution, Session } from "./types";
 
 /** `sessions.backend` for sessions run by a plugin provider. */
-export const PROVIDER_BACKEND = "plugin";
+export const PLUGIN_BACKEND = "plugin";
+
+/** Whether a plugin provider runs the session, rather than a terminal. */
+export function isPluginSession(session: Pick<Session, "backend">): boolean {
+  return session.backend === PLUGIN_BACKEND;
+}
 
 export interface RuntimeProvider {
   /** `<plugin id>:<provider id>`, the value stored as the session's provider. */

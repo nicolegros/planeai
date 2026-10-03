@@ -16,7 +16,7 @@ import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
 import { getCycleState } from "./tab-switcher.svelte";
 import { taskWorkspaceLayout } from "./task-workspace-layout.svelte";
-import { PROVIDER_BACKEND } from "./plugin-providers";
+import { isPluginSession } from "./plugin-providers";
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -412,8 +412,7 @@ export function countSessionsLostOnQuit(
 ): number {
   return candidates.filter(
     (s) =>
-      s.status === "active" &&
-      (s.backend === "local" || (s.backend === PROVIDER_BACKEND && running.has(s.id))),
+      s.status === "active" && (s.backend === "local" || (isPluginSession(s) && running.has(s.id))),
   ).length;
 }
 

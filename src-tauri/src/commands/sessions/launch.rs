@@ -9,7 +9,7 @@ use crate::db;
 use crate::git;
 use crate::plugin_providers;
 use crate::plugins::PluginRuntimeHandle;
-use crate::session_ops::PROVIDER_BACKEND;
+use crate::session_ops::PLUGIN_BACKEND;
 use crate::state::{ConfigState, DaemonState, DbState, NotifyHandle, ProjectOperationState};
 #[cfg(not(windows))]
 use crate::tmux;
@@ -109,7 +109,7 @@ pub async fn launch_session(
         (
             String::new(),
             key,
-            PROVIDER_BACKEND.to_string(),
+            PLUGIN_BACKEND.to_string(),
             0,
             cfg.resolved_extra_path_dirs(),
         )
@@ -224,10 +224,10 @@ pub async fn launch_session(
     };
 
     // Phase 3: async backend spawn — no locks held
-    if backend == "daemon" || backend == planeai_rmux::BACKEND || backend == PROVIDER_BACKEND {
-        let spawn_result = if backend == PROVIDER_BACKEND {
-            // Owned before start so hooks firing while the agent boots cannot claim its status.
-            notify.0.lock().unwrap().mark_provider_owned(&session_id);
+    // Until the row exists, dropping this undoes the provider's start.
+    let mut provider_launch = None;
+    if backend == "daemon" || backend == planeai_rmux::BACKEND || backend == PLUGIN_BACKEND {
+        let spawn_result = if backend == PLUGIN_BACKEND {
             let context = plugin_providers::SessionRuntimeContext {
                 session_id: session_id.clone(),
                 provider_key: provider_key.clone(),
@@ -235,11 +235,9 @@ pub async fn launch_session(
                 yolo: auto_approve,
                 extra_path_dirs: extra_path_dirs.clone(),
             };
-            let providers = plugin_providers::AppRuntime {
-                app: &app,
-                supervisor: &runtime.0,
-            };
-            plugin_providers::start(&providers, &context, task_prompt.as_deref()).await
+            plugin_providers::launch(&app, &context, task_prompt.as_deref())
+                .await
+                .map(|launch| provider_launch = Some(launch))
         } else if backend == planeai_rmux::BACKEND {
             spawn_in_rmux(
                 &app,
@@ -264,9 +262,6 @@ pub async fn launch_session(
         };
 
         if let Err(e) = spawn_result {
-            if backend == PROVIDER_BACKEND {
-                notify.0.lock().unwrap().release_provider_owned(&session_id);
-            }
             {
                 let rp = repo_path.clone();
                 let br = branch.clone();
@@ -314,8 +309,6 @@ pub async fn launch_session(
         e.to_string()
     })?;
 
-    let launched_id = session_id.clone();
-    let backend_is_provider = backend == PROVIDER_BACKEND;
     let session = db::create_session_with_params(
         &conn,
         &planeai_core::services::CreateSessionParams {
@@ -347,33 +340,10 @@ pub async fn launch_session(
         tokio::task::spawn_blocking(move || {
             rollback_branch_creation(&rp, &br, wtp.as_deref(), created_branch);
         });
-        // The provider already runs this session; without a row nothing else would stop it.
-        if backend_is_provider {
-            notify
-                .0
-                .lock()
-                .unwrap()
-                .release_provider_owned(&launched_id);
-            let supervisor = runtime.0.clone();
-            let app = app.clone();
-            let session_id = launched_id.clone();
-            tauri::async_runtime::spawn(async move {
-                let providers = plugin_providers::AppRuntime {
-                    app: &app,
-                    supervisor: &supervisor,
-                };
-                plugin_providers::stop(
-                    &providers,
-                    &session_id,
-                    plugin_providers::StopReason::Destroy,
-                )
-                .await;
-            });
-        }
         e.to_string()
     })?;
-    if backend_is_provider {
-        plugin_providers::launched(runtime.0.provider_sessions(), &launched_id);
+    if let Some(launch) = provider_launch {
+        launch.commit();
     }
 
     {

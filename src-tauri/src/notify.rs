@@ -206,7 +206,7 @@ async fn deliver_prompt(app: &AppHandle, session_id: &str, text: String) {
         let conn = db.lock().map_err(|e| e.to_string())?;
         Ok(crate::db::get_session(&conn, &id)
             .map_err(|e| e.to_string())?
-            .is_some_and(|session| session.backend == crate::session_ops::PROVIDER_BACKEND))
+            .is_some_and(|session| session.backend == crate::session_ops::PLUGIN_BACKEND))
     })
     .await;
     let is_provider = matches!(provider_backed, Ok(true));

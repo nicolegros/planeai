@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db;
 use crate::plugins::{PluginProvider, PluginRuntimeSupervisor, ProviderFeature};
-use crate::session_ops::PROVIDER_BACKEND;
+use crate::session_ops::PLUGIN_BACKEND;
 use planeai_plugin_contract::provider::{
     self as protocol, validate_handoff_argv, HandoffResponse, SessionEventParams,
     SessionStatusParams, EVENT_NOTIFICATION, STATUS_NOTIFICATION,
@@ -240,7 +240,7 @@ impl SessionRuntimeContext {
         session: &db::Session,
         extra_path_dirs: Vec<String>,
     ) -> Result<Self, String> {
-        if session.backend != PROVIDER_BACKEND {
+        if session.backend != PLUGIN_BACKEND {
             return Err(format!("session {} is not provider-backed", session.id));
         }
         let provider_key = session
@@ -330,8 +330,84 @@ pub async fn start<R: ProviderRuntime>(
     started
 }
 
+/// A provider session whose launch has not committed its row yet. Dropping it undoes the
+/// start: the host stops treating the session's status as the provider's, and the plugin
+/// is told to destroy the session, since nothing else would stop it without a row.
+pub struct Launch {
+    app: AppHandle,
+    session_id: String,
+    committed: bool,
+}
+
+impl Launch {
+    /// The session's row exists: reconciliation may check it, and the launch stands.
+    pub fn commit(mut self) {
+        self.committed = true;
+        let supervisor = self
+            .app
+            .state::<crate::plugins::PluginRuntimeHandle>()
+            .0
+            .clone();
+        launched(supervisor.provider_sessions(), &self.session_id);
+    }
+}
+
+impl Drop for Launch {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let notify = self.app.state::<crate::state::NotifyHandle>().0.clone();
+        notify
+            .lock()
+            .unwrap()
+            .release_provider_owned(&self.session_id);
+        let app = self.app.clone();
+        let session_id = self.session_id.clone();
+        tauri::async_runtime::spawn(async move {
+            let supervisor = app.state::<crate::plugins::PluginRuntimeHandle>().0.clone();
+            let runtime = AppRuntime {
+                app: &app,
+                supervisor: &supervisor,
+            };
+            stop(&runtime, &session_id, StopReason::Destroy).await;
+        });
+    }
+}
+
+/// Start a new session's provider; the caller commits the returned launch once its row exists.
+pub async fn launch(
+    app: &AppHandle,
+    context: &SessionRuntimeContext,
+    initial_prompt: Option<&str>,
+) -> Result<Launch, String> {
+    let notify = app.state::<crate::state::NotifyHandle>().0.clone();
+    // Owned before start so hooks firing while the agent boots cannot claim its status.
+    notify
+        .lock()
+        .unwrap()
+        .mark_provider_owned(&context.session_id);
+    let supervisor = app.state::<crate::plugins::PluginRuntimeHandle>().0.clone();
+    let runtime = AppRuntime {
+        app,
+        supervisor: &supervisor,
+    };
+    if let Err(error) = start(&runtime, context, initial_prompt).await {
+        notify
+            .lock()
+            .unwrap()
+            .release_provider_owned(&context.session_id);
+        return Err(error);
+    }
+    Ok(Launch {
+        app: app.clone(),
+        session_id: context.session_id.clone(),
+        committed: false,
+    })
+}
+
 /// The launch committed the session's row, so reconciliation may check it from now on.
-pub fn launched(sessions: &ProviderSessions, session_id: &str) {
+fn launched(sessions: &ProviderSessions, session_id: &str) {
     sessions.launching.lock().unwrap().remove(session_id);
 }
 

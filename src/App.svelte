@@ -47,7 +47,7 @@
   import EmptyTaskWorkspace from "./components/EmptyTaskWorkspace.svelte";
   import PluginContributionHost from "./components/PluginContributionHost.svelte";
   import ProviderSessionView from "./components/ProviderSessionView.svelte";
-  import { PROVIDER_BACKEND, runtimeProviders } from "./lib/plugin-providers";
+  import { isPluginSession, runtimeProviders } from "./lib/plugin-providers";
   import { forgetHandoff, handoffTabFor, startHandoff } from "./lib/provider-handoff";
   import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
@@ -1353,7 +1353,7 @@
             {@const isActiveInLeaf = tabEntry.ptyKey === activeEntry?.ptyKey}
             {@const project = session ? projects.find((p) => p.id === session.project_id) : null}
             {#if isTerminalTab(tabEntry)}
-              {#if session && tabEntry.type === "agent" && session.backend === PROVIDER_BACKEND}
+              {#if session && tabEntry.type === "agent" && isPluginSession(session)}
               <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
                 <ProviderSessionView
                   {session}
