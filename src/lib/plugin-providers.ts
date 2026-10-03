@@ -1,7 +1,7 @@
 import type { PluginInventory, PluginProvider, PluginUiContribution, Session } from "./types";
 
 /** `sessions.backend` for sessions run by a plugin provider. */
-export const PLUGIN_BACKEND = "plugin";
+const PLUGIN_BACKEND = "plugin";
 
 /** Whether a plugin provider runs the session, rather than a terminal. */
 export function isPluginSession(session: Pick<Session, "backend">): boolean {
@@ -15,8 +15,15 @@ export interface RuntimeProvider {
   provider: PluginProvider;
 }
 
-export function runtimeProviderKey(pluginId: string, providerId: string): string {
+function runtimeProviderKey(pluginId: string, providerId: string): string {
   return `${pluginId}:${providerId}`;
+}
+
+/** The plugin and provider ids in a provider key; `null` for a configured provider's key. */
+function parseProviderKey(key: string): { pluginId: string; providerId: string } | null {
+  const separator = key.indexOf(":");
+  if (separator <= 0 || separator === key.length - 1) return null;
+  return { pluginId: key.slice(0, separator), providerId: key.slice(separator + 1) };
 }
 
 /** Providers offered by running plugins that hold the providers capability. */
@@ -37,11 +44,9 @@ export function findRuntimeProvider(
   inventory: PluginInventory[],
   key: string | null,
 ): { plugin: PluginInventory; provider: PluginProvider } | null {
-  if (!key) return null;
-  const separator = key.indexOf(":");
-  if (separator <= 0) return null;
-  const pluginId = key.slice(0, separator);
-  const providerId = key.slice(separator + 1);
+  const parsed = key ? parseProviderKey(key) : null;
+  if (!parsed) return null;
+  const { pluginId, providerId } = parsed;
   const plugin = inventory.find((candidate) => candidate.id === pluginId);
   const provider = plugin?.providers.find((candidate) => candidate.id === providerId);
   return plugin && provider ? { plugin, provider } : null;

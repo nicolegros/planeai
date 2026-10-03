@@ -46,6 +46,9 @@ describe("plugin providers", () => {
     expect(findRuntimeProvider([stopped], "claude-chat:claude")?.plugin).toBe(stopped);
     expect(findRuntimeProvider([stopped], "claude-chat:other")).toBeNull();
     expect(findRuntimeProvider([stopped], "claude")).toBeNull();
+    for (const malformed of [":claude", "claude-chat:"]) {
+      expect(findRuntimeProvider([stopped], malformed)).toBeNull();
+    }
     expect(findRuntimeProvider([stopped], null)).toBeNull();
   });
 
