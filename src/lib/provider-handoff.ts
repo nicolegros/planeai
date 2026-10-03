@@ -5,9 +5,23 @@ import type { TabClose } from "./task-workspace-layout.svelte";
 
 const POSIX_SAFE = /^[A-Za-z0-9_/.:=@%+,-]+$/;
 
+/**
+ * Quote for cmd.exe and the C runtime's argv parser together: backslashes before a quote are
+ * doubled so it keeps its meaning, quotes become `""`, and `%` leaves the quotes as `^%` so
+ * cmd.exe never expands a variable.
+ */
+function quoteForCmd(argument: string): string {
+  if (!/[\s"&|<>^%]/.test(argument)) return argument;
+  const escaped = argument.replace(
+    /(\\*)("|$)/g,
+    (_, slashes: string, quote: string) => slashes.repeat(2) + (quote ? '""' : ""),
+  );
+  return `"${escaped.replace(/%/g, '"^%"')}"`;
+}
+
 /** Quote one argument for the shell a shell tab runs its command in. */
 export function quoteArgument(argument: string, windows = IS_WINDOWS): string {
-  if (windows) return /[\s"&|<>^]/.test(argument) ? `"${argument.replace(/"/g, '""')}"` : argument;
+  if (windows) return quoteForCmd(argument);
   return POSIX_SAFE.test(argument) ? argument : `'${argument.replace(/'/g, `'\\''`)}'`;
 }
 
@@ -71,6 +85,8 @@ export function createProviderHandoff({ api, notify }: ProviderHandoffDeps) {
 
     /** Return the session to its chat by closing its terminal, or directly when the tab is gone. */
     async end(sessionId: string, closeTab: (ptyKey: string) => Promise<TabClose>): Promise<void> {
+      // A handback sent before the tab opens would leave both the chat and the terminal driving.
+      await starting.get(sessionId)?.catch(() => {});
       const ptyKey = tabFor(sessionId);
       const closed = ptyKey ? await closeTab(ptyKey) : "missing";
       if (closed === "starting") throw new Error("The terminal is still starting.");

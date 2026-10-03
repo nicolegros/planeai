@@ -30,6 +30,14 @@ describe("provider handoff", () => {
     expect(quoteArgument("plain", true)).toBe("plain");
   });
 
+  it("keeps cmd.exe from expanding variables or merging arguments", () => {
+    // `^%` outside quotes is a literal percent sign to cmd.exe.
+    expect(quoteArgument("50%PATH%", true)).toBe('"50"^%"PATH"^%""');
+    // Backslashes before the closing quote are doubled, so it still closes the argument.
+    expect(quoteArgument("C:\\my dir\\", true)).toBe('"C:\\my dir\\\\"');
+    expect(quoteArgument('say \\"hi"', true)).toBe('"say \\\\""hi"""');
+  });
+
   it("opens one terminal tab per session and hands back when it closes", async () => {
     const { api, handoff } = setup();
     const open = vi.fn(() => "s1:4");
@@ -98,6 +106,24 @@ describe("provider handoff", () => {
     await handoff.end("s1", closeTab);
     expect(closeTab).not.toHaveBeenCalled();
     expect(api.handback).toHaveBeenCalledWith("s1");
+  });
+
+  it("waits for a handoff still starting, so the chat and the terminal never both drive", async () => {
+    const { api, handoff } = setup();
+    let releaseHandoff!: (argv: string[]) => void;
+    api.handoff.mockReturnValueOnce(new Promise((resolve) => (releaseHandoff = resolve)));
+    const started = handoff.start("s1", () => "s1:1");
+    const closeTab = vi.fn(async (ptyKey: string) => {
+      await handoff.shellClosed(ptyKey);
+      return "closed" as const;
+    });
+    const ended = handoff.end("s1", closeTab);
+    releaseHandoff(["claude"]);
+    await started;
+    await ended;
+    expect(closeTab).toHaveBeenCalledWith("s1:1");
+    expect(api.handback).toHaveBeenCalledOnce();
+    expect(handoff.tabFor("s1")).toBeUndefined();
   });
 
   it("keeps the handoff while its terminal is still starting", async () => {
