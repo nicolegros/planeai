@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { AppConfig } from "../settings.svelte";
 import { PROVIDER_PRESETS } from "../provider-presets";
-import { initialAgentSelection, onboardingAgentsPatch, shouldShowOnboarding } from "../onboarding";
+import {
+  defaultAgentOptions,
+  initialAgentSelection,
+  mergeDetection,
+  onboardingAgentsPatch,
+  shouldShowOnboarding,
+  toggleAgent,
+} from "../onboarding";
 
 const preset = (key: string) =>
   PROVIDER_PRESETS.find((candidate) => candidate.key === key)!.provider;
@@ -82,5 +89,72 @@ describe("onboardingAgentsPatch", () => {
 
   it("changes nothing when no agent is selected, so a default always exists", () => {
     expect(onboardingAgentsPatch(config(), [], null)).toBeNull();
+  });
+});
+
+describe("custom default agents", () => {
+  const aider = { command: "aider", yolo_flag: "--yes" };
+  const withCustomDefault = () =>
+    config({ providers: { ...config().providers, aider }, default_provider: "aider" });
+
+  it("keeps a custom default through selection and saving", () => {
+    const selection = initialAgentSelection(withCustomDefault(), { claude: "/c" });
+    expect(selection.defaultKey).toBe("aider");
+    expect(
+      onboardingAgentsPatch(withCustomDefault(), selection.selected, selection.defaultKey)
+        ?.default_provider,
+    ).toBe("aider");
+  });
+
+  it("offers custom agents in the default picker alongside selected presets", () => {
+    expect(defaultAgentOptions(withCustomDefault(), ["claude"])).toEqual([
+      { value: "claude", label: "Claude Code" },
+      { value: "aider", label: "aider" },
+    ]);
+  });
+});
+
+describe("toggleAgent", () => {
+  it("keeps preset order when selecting", () => {
+    expect(toggleAgent({ selected: ["codex"], defaultKey: "codex" }, "claude").selected).toEqual([
+      "claude",
+      "codex",
+    ]);
+  });
+
+  it("moves the default when its agent is deselected", () => {
+    expect(toggleAgent({ selected: ["claude", "codex"], defaultKey: "claude" }, "claude")).toEqual({
+      selected: ["codex"],
+      defaultKey: "codex",
+    });
+    expect(toggleAgent({ selected: ["claude"], defaultKey: "claude" }, "claude")).toEqual({
+      selected: [],
+      defaultKey: null,
+    });
+  });
+
+  it("leaves a custom default alone", () => {
+    expect(toggleAgent({ selected: ["claude"], defaultKey: "aider" }, "claude")).toEqual({
+      selected: [],
+      defaultKey: "aider",
+    });
+  });
+});
+
+describe("mergeDetection", () => {
+  it("adds only agents that were not found before, keeping the user's choices", () => {
+    const selection = { selected: ["codex"], defaultKey: "codex" };
+    const previous = { claude: "/c", codex: "/x", kiro: null };
+    const next = { claude: "/c", codex: "/x", kiro: "/k" };
+    expect(mergeDetection(selection, previous, next)).toEqual({
+      selected: ["kiro", "codex"],
+      defaultKey: "codex",
+    });
+  });
+
+  it("picks a default once the first agent is found", () => {
+    expect(
+      mergeDetection({ selected: [], defaultKey: null }, { claude: null }, { claude: "/c" }),
+    ).toEqual({ selected: ["claude"], defaultKey: "claude" });
   });
 });

@@ -628,6 +628,13 @@ describe("setup assistant", () => {
     expect(mocks.closeWindow).toHaveBeenCalledOnce();
   });
 
+  it("still closes Preferences when the main window cannot be focused", async () => {
+    mocks.focusMain.mockRejectedValueOnce("not allowed");
+    await render();
+    await click("Run setup again");
+    expect(mocks.closeWindow).toHaveBeenCalledOnce();
+  });
+
   it("stays open when the flag could not be saved", async () => {
     mocks.updateSettings.mockRejectedValueOnce("disk full");
     await render();

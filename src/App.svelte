@@ -9,7 +9,7 @@
   import { isTerminalPaneFocused, releaseTerminalDomFocus } from "./lib/terminal-focus";
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
-  import { installKeyboardRouter, isKeyboardSuspended, matchChord, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT, IS_WINDOWS } from "./lib/keyboard";
+  import { installKeyboardRouter, matchChord, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT, IS_WINDOWS } from "./lib/keyboard";
   import { findPluginShortcut } from "./lib/plugin-shortcuts";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
@@ -214,6 +214,8 @@
     modifiedEditorTabs = next;
   }
 
+  const showOnboarding = $derived(shouldShowOnboarding(getSettings()));
+
   // ─── Terminal DOM focus ─────────────────────────────────────────────────────
 
   // Every dialog that owns the keyboard, not only those that gated `focused`
@@ -223,7 +225,7 @@
   const keyboardModalOpen = $derived(
     showNewItemModal || !!sessionToDelete || showTaskForm || showProjectForm || !!modalPluginId
       || showSessionForm || showLoopForm || commandMenuOpen || showShortcuts
-      || !!projectToDelete || !!loopToDelete || showQuitConfirm,
+      || !!projectToDelete || !!loopToDelete || showQuitConfirm || showOnboarding,
   );
   const terminalKeyboardOwnership = $derived({
     zone,
@@ -512,7 +514,19 @@
     if (ptyKeySessionId(tab.ptyKey) !== activeSessionId) selectTerminalTab(tab.ptyKey);
   }
 
-  const showOnboarding = $derived(shouldShowOnboarding(getSettings()));
+  function closeOverlays(): void {
+    showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; closePluginContributionModal(); showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false; commandMenuRenameId = null;
+  }
+
+  // Setup can restart mid-session; anything left open would sit under the wizard and keep the keyboard.
+  $effect(() => {
+    if (!showOnboarding) return;
+    untrack(() => {
+      closeOverlays();
+      projectToDelete = null;
+      loopToDelete = null;
+    });
+  });
 
   // ─── Project management ─────────────────────────────────────────────────────
   async function openPreferences(location?: SettingsLocation) {
@@ -918,7 +932,7 @@
       // This capture listener runs before the host router. Defer plugin routing
       // until propagation completes so a built-in shortcut always wins.
       queueMicrotask(() => {
-      if (event.defaultPrevented || isKeyboardSuspended()) return;
+      if (event.defaultPrevented || showOnboarding) return;
       const target = findPluginShortcut(event, sessionPanelCommands, mainPaneCommands);
       if (!target) return;
       event.preventDefault();
@@ -982,7 +996,7 @@
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
           if (navCycle.isCycling()) navCycle.cancel();
-          showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; closePluginContributionModal(); showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false; commandMenuRenameId = null;
+          closeOverlays();
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; commandMenuRenameId = null; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
@@ -1028,6 +1042,7 @@
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !modalPluginId && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
       () => getActiveZone() === "editor" && workspaceLayout.focusedTab()?.type === "editor",
       () => !!document.activeElement?.closest('[data-form-keyboard]'),
+      () => showOnboarding,
     );
 
     function onModalKeydown(e: KeyboardEvent) {
@@ -1104,7 +1119,7 @@
   });
 </script>
 
-<main class="flex flex-col h-screen">
+<main class="flex flex-col h-screen" inert={showOnboarding}>
   <Titlebar
     projectName={activeProjectName}
     sessionName={activeSessionName}
@@ -1667,14 +1682,16 @@
   </div>
 {/if}
 
-{#each interactionPluginContributions as { plugin, contribution } (`${plugin.id}:${contribution.id}`)}
-  <div class="pointer-events-none fixed inset-0 z-[90]" data-plugin-interaction-host={`${plugin.id}:${contribution.id}`}>
-    <PluginContributionHost {plugin} {contribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={() => openPreferences(pluginPreferencesLocation(plugin))} />
-  </div>
-{/each}
-<PostMergePrompt />
-<UpdateToast />
-
+<!-- Workspace prompts would sit on top of setup and act on the hidden workspace; they return after it. -->
 {#if showOnboarding}
   <Onboarding />
+{:else}
+  {#each interactionPluginContributions as { plugin, contribution } (`${plugin.id}:${contribution.id}`)}
+    <div class="pointer-events-none fixed inset-0 z-[90]" data-plugin-interaction-host={`${plugin.id}:${contribution.id}`}>
+      <PluginContributionHost {plugin} {contribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={() => openPreferences(pluginPreferencesLocation(plugin))} />
+    </div>
+  {/each}
+  <UpdateToast />
 {/if}
+<!-- Stays visible during setup: its countdown keeps running and acts when it ends. -->
+<PostMergePrompt />

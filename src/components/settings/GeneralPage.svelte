@@ -39,10 +39,10 @@
     if (!(await saveSettings({ onboarding_completed: false }))) return;
     try {
       await (await WebviewWindow.getByLabel("main"))?.setFocus();
-      await getCurrentWindow().close();
     } catch (error) {
-      console.warn("Failed to switch to the main window:", error);
+      console.warn("Failed to focus the main window:", error);
     }
+    await getCurrentWindow().close();
   }
 
   async function checkForAppUpdates() {

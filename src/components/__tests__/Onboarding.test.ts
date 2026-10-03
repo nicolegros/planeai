@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mount, tick, unmount } from "svelte";
+import { mount, unmount } from "svelte";
 import type { AppConfig } from "../../lib/settings.svelte";
 import { PROVIDER_PRESETS } from "../../lib/provider-presets";
 
@@ -47,22 +47,13 @@ vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.openDialog }));
 
 import Onboarding from "../Onboarding.svelte";
-import { isKeyboardSuspended } from "../../lib/keyboard";
 
 let component: ReturnType<typeof mount> | undefined;
-
-async function flush() {
-  for (let i = 0; i < 4; i++) {
-    await Promise.resolve();
-    await tick();
-  }
-}
 
 async function render() {
   const target = document.body.appendChild(document.createElement("div"));
   component = mount(Onboarding, { target });
   await vi.waitFor(() => expect(target.textContent).not.toContain("Looking for agents"));
-  await flush();
   return target;
 }
 
@@ -74,11 +65,6 @@ function button(label: string): HTMLButtonElement {
   return match;
 }
 
-async function click(label: string) {
-  button(label).click();
-  await flush();
-}
-
 function agent(label: string): HTMLButtonElement {
   const match = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')).find(
     (row) => row.textContent?.trim().startsWith(label),
@@ -87,9 +73,19 @@ function agent(label: string): HTMLButtonElement {
   return match;
 }
 
+const title = () => document.querySelector("h1")?.textContent;
+
+async function continueTo(nextTitle: string) {
+  button("Continue").click();
+  await vi.waitFor(() => expect(title()).toBe(nextTitle));
+}
+
 beforeEach(() => {
   mocks.config = firstLaunchConfig();
-  mocks.updateSettings.mockResolvedValue(undefined);
+  // Behaves like the store: a successful save is visible to later reads of the same config.
+  mocks.updateSettings.mockImplementation(async (patch: Partial<AppConfig>) => {
+    Object.assign(mocks.config, patch);
+  });
   mocks.detectProviders.mockResolvedValue({
     kiro: null,
     claude: "/opt/homebrew/bin/claude",
@@ -111,18 +107,32 @@ describe("onboarding", () => {
     expect(agent("Claude Code").getAttribute("aria-checked")).toBe("true");
     expect(agent("Codex").getAttribute("aria-checked")).toBe("true");
     expect(agent("Kiro").getAttribute("aria-checked")).toBe("false");
-    await click("Continue");
-    expect(mocks.updateSettings).toHaveBeenCalledWith({
+    await continueTo("Where do your projects live?");
+    expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith({
       providers: { claude: preset("claude"), codex: preset("codex") },
       default_provider: "claude",
     });
-    expect(document.body.textContent).toContain("Where do your projects live?");
+  });
+
+  it("keeps a custom default agent", async () => {
+    mocks.config = {
+      ...firstLaunchConfig(),
+      providers: { ...firstLaunchConfig().providers, aider: { command: "aider", yolo_flag: null } },
+      default_provider: "aider",
+    };
+    await render();
+    await continueTo("Where do your projects live?");
+    expect(mocks.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ default_provider: "aider" }),
+    );
   });
 
   it("finishes immediately when skipped", async () => {
     await render();
-    await click("Skip setup");
-    expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith({ onboarding_completed: true });
+    button("Skip setup").click();
+    await vi.waitFor(() =>
+      expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith({ onboarding_completed: true }),
+    );
   });
 
   it("offers to add a PATH folder when no agent is found, then selects what it finds", async () => {
@@ -141,9 +151,9 @@ describe("onboarding", () => {
     mocks.openDialog.mockResolvedValue("/opt/tools");
     await render();
     expect(document.body.textContent).toContain("No agents found on your PATH.");
-    await click("Add a folder to PATH…");
-    expect(mocks.updateSettings).toHaveBeenCalledWith({ extra_path_dirs: ["/opt/tools"] });
+    button("Add a folder to PATH…").click();
     await vi.waitFor(() => expect(agent("Claude Code").getAttribute("aria-checked")).toBe("true"));
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ extra_path_dirs: ["/opt/tools"] });
   });
 
   it("keeps the configured agents when none is selected", async () => {
@@ -154,53 +164,82 @@ describe("onboarding", () => {
       codex: null,
     });
     await render();
-    await click("Continue");
+    await continueTo("Where do your projects live?");
     expect(mocks.updateSettings).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Where do your projects live?");
   });
 
   it("saves the projects folder only when it changed", async () => {
     await render();
-    await click("Continue");
-    mocks.updateSettings.mockClear();
+    await continueTo("Where do your projects live?");
+    await continueTo("Pick a look");
+    expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
+
+    button("Back").click();
+    await vi.waitFor(() => expect(title()).toBe("Where do your projects live?"));
     const input = document.querySelector<HTMLInputElement>('input[aria-label="Projects folder"]')!;
     input.value = "~/Developer";
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    await click("Continue");
-    expect(mocks.updateSettings).toHaveBeenCalledWith({ projects_base_path: "~/Developer" });
-    mocks.updateSettings.mockClear();
-    await click("Back");
-    await click("Continue");
-    expect(mocks.updateSettings).toHaveBeenCalledWith({ projects_base_path: "~/Developer" });
+    await continueTo("Pick a look");
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({ projects_base_path: "~/Developer" });
+
+    button("Back").click();
+    await vi.waitFor(() => expect(title()).toBe("Where do your projects live?"));
+    await continueTo("Pick a look");
+    expect(mocks.updateSettings).toHaveBeenCalledTimes(2);
   });
 
   it("applies the look right away and finishes setup", async () => {
     await render();
-    await click("Continue");
-    await click("Continue");
+    await continueTo("Where do your projects live?");
+    await continueTo("Pick a look");
     document
       .querySelector<HTMLInputElement>('input[name="onboarding-appearance-mode"][value="dark"]')!
       .click();
-    await flush();
-    expect(mocks.updateSettings).toHaveBeenCalledWith({
-      appearance: { mode: "dark", theme: "default" },
-    });
-    await click("Finish");
-    expect(mocks.updateSettings).toHaveBeenLastCalledWith({ onboarding_completed: true });
+    await vi.waitFor(() =>
+      expect(mocks.updateSettings).toHaveBeenCalledWith({
+        appearance: { mode: "dark", theme: "default" },
+      }),
+    );
+    button("Finish").click();
+    await vi.waitFor(() =>
+      expect(mocks.updateSettings).toHaveBeenLastCalledWith({ onboarding_completed: true }),
+    );
   });
 
   it("stays on the step when saving it fails", async () => {
     await render();
     mocks.updateSettings.mockRejectedValueOnce("disk full");
-    await click("Continue");
-    expect(document.body.textContent).toContain("Which agents do you use?");
+    button("Continue").click();
+    await vi.waitFor(() => expect(button("Continue").disabled).toBe(false));
+    expect(title()).toBe("Which agents do you use?");
   });
 
-  it("suspends app shortcuts while it is open", async () => {
+  it("takes focus on open and on every step", async () => {
+    const terminal = document.body.appendChild(document.createElement("textarea"));
+    terminal.focus();
     await render();
-    expect(isKeyboardSuspended()).toBe(true);
-    unmount(component!);
-    component = undefined;
-    expect(isKeyboardSuspended()).toBe(false);
+    await vi.waitFor(() => expect(document.activeElement).toBe(document.querySelector("h1")));
+    await continueTo("Where do your projects live?");
+    await vi.waitFor(() =>
+      expect(document.activeElement?.textContent).toBe("Where do your projects live?"),
+    );
+  });
+
+  it("keeps keys typed outside the wizard from reaching workspace shortcuts", async () => {
+    const workspaceShortcut = vi.fn();
+    window.addEventListener("keydown", workspaceShortcut);
+    try {
+      await render();
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+      expect(workspaceShortcut).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(document.querySelector("h1"));
+
+      document
+        .querySelector("h1")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+      expect(workspaceShortcut).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener("keydown", workspaceShortcut);
+    }
   });
 });

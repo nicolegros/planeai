@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  IS_MAC,
-  installKeyboardRouter,
-  setKeyboardSuspended,
-  type KeyboardAction,
-} from "../keyboard";
+import { IS_MAC, installKeyboardRouter, type KeyboardAction } from "../keyboard";
 
 describe("installKeyboardRouter shortcut ownership", () => {
   let onAction: (action: KeyboardAction) => void;
@@ -81,8 +76,9 @@ describe("installKeyboardRouter shortcut ownership", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
-  it("leaves every shortcut alone while app shortcuts are suspended", () => {
-    setKeyboardSuspended(true);
+  it("leaves every shortcut alone while suspended", () => {
+    cleanup();
+    cleanup = installKeyboardRouter(onAction, undefined, undefined, undefined, () => true);
     const event = new KeyboardEvent("keydown", {
       bubbles: true,
       cancelable: true,
@@ -91,7 +87,6 @@ describe("installKeyboardRouter shortcut ownership", () => {
     });
 
     document.body.dispatchEvent(event);
-    setKeyboardSuspended(false);
 
     expect(onAction).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
