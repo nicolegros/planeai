@@ -21,7 +21,7 @@ describe("TaskWorkspace session selection", () => {
     // The guard now lives in the tested `isTerminalPaneFocused` predicate; see
     // src/lib/__tests__/terminal-focus.test.ts for its behaviour.
     expect(appSource).toMatch(
-      /focused=\{isTerminalPaneFocused\(\{[\s\S]*?belongsToActiveSession: sessionId === activeSessionId,/,
+      /paneFocused = isTerminalPaneFocused\(\{[\s\S]*?belongsToActiveSession: sessionId === activeSessionId,[\s\S]*?focused=\{paneFocused\}/,
     );
   });
 
@@ -105,7 +105,7 @@ describe("TaskWorkspace session selection", () => {
 
 it("ignores a hidden terminal's focus event after a session switch", () => {
   expect(appSource).toMatch(
-    /onFocused=\{\(event\) => \{\s*if \(event\.type === "focusin" && !isActiveInLeaf\) return;/,
+    /onFocused=\{\(event\) => \{\s*if \(event\.type !== "focusin" \|\| isActiveInLeaf\) claimAgentPane\(/,
   );
 });
 
