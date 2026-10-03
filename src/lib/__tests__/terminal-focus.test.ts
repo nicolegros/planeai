@@ -179,8 +179,12 @@ describe("releaseTerminalDomFocus with a provider session's chat", () => {
     ]) {
       const frame = mountFocusedFrame();
       const blur = vi.spyOn(frame, "blur");
+      // WebKit keeps sending keys to a blurred frame until the app's own window takes focus.
+      const focusWindow = vi.spyOn(window, "focus");
       releaseTerminalDomFocus(ownership);
       expect(blur).toHaveBeenCalledOnce();
+      expect(focusWindow).toHaveBeenCalledOnce();
+      focusWindow.mockRestore();
     }
   });
 

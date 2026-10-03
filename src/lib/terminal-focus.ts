@@ -84,6 +84,8 @@ export function releaseTerminalDomFocus(
   // of flags drifts as dialogs are added.
   if (terminalMayOwnKeyboard(ownership) && !hasOpenDialog(root)) return;
   active.blur();
+  // WebKit keeps sending keys to a blurred frame until the app's own window takes focus.
+  if (active.hasAttribute(PROVIDER_FRAME_ATTRIBUTE)) root.defaultView?.focus();
 }
 
 /**
