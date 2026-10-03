@@ -33,3 +33,18 @@ export function findPluginShortcut(
     null
   );
 }
+
+/**
+ * Mod chords a text field handles itself: caret and selection moves, deletion, clipboard,
+ * select all, undo and redo. Plugin frames inline this function's source, so it must not
+ * reference anything outside itself.
+ */
+export function isTextEditingChord(
+  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey">,
+): boolean {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey) return false;
+  return (
+    /^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Backspace|Delete)$/.test(event.key) ||
+    /^[acvxyz]$/i.test(event.key)
+  );
+}

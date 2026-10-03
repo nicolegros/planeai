@@ -12,6 +12,7 @@
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import { focusSidebar } from "../lib/focus.svelte";
   import { PROVIDER_FRAME_ATTRIBUTE } from "../lib/terminal-focus";
+  import { isTextEditingChord } from "../lib/plugin-shortcuts";
   import { isDark } from "../lib/settings.svelte";
   import type { PluginInventory, PluginUiContribution, ProviderSessionEvent } from "../lib/types";
 
@@ -324,8 +325,11 @@
             repeat: event.repeat,
           });
         };
+        const isTextEditingChord = ${isTextEditingChord.toString()};
         const forwardHostChord = (event) => {
           if (event.isComposing || !(event.metaKey || event.ctrlKey)) return;
+          // A text field's own chords, such as Mod+Shift+Arrow selection, stay with it.
+          if (isEditableTarget(event.target) && isTextEditingChord(event)) return;
           if (event.defaultPrevented && !isReservedChord(event)) return;
           sendHostKey(event);
         };
@@ -522,10 +526,18 @@
           .updateSettings(plugin.id, message.params as Record<string, unknown>)
           .then((value) => respond(message.requestId, true, value))
           .catch((error) => respond(message.requestId, false, error));
-      } else if (message.type === "host-key" && typeof message.key === "string" && (message.phase === "keydown" || message.phase === "keyup")) {
+      } else if (message.type === "host-key") {
+        // The frame's own script can post anything, so the host enforces what it replays: only
+        // chords and their modifier release, and only from the frame that has the keyboard.
+        const key = typeof message.key === "string" ? message.key : "";
+        const phase = message.phase === "keydown" || message.phase === "keyup" ? message.phase : null;
+        const replayable = phase === "keydown"
+          ? message.ctrlKey === true || message.metaKey === true
+          : phase === "keyup" && (key === "Control" || key === "Meta");
+        if (!phase || !replayable || root.activeElement !== frame) return;
         window.dispatchEvent(
-          new KeyboardEvent(message.phase, {
-            key: message.key,
+          new KeyboardEvent(phase, {
+            key,
             code: typeof message.code === "string" ? message.code : "",
             altKey: message.altKey === true,
             ctrlKey: message.ctrlKey === true,

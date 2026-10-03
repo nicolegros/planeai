@@ -246,6 +246,7 @@ describe("PluginContributionHost provider sessions", () => {
   it("replays app chords from the frame on the host window, where the shortcut router listens", async () => {
     const frame = await mountHost(providerContribution(provider));
     expect(frame.srcdoc).toContain("forwardHostChord");
+    expect(frame.srcdoc).toContain("isTextEditingChord(event)");
     const seen: KeyboardEvent[] = [];
     const record = (event: KeyboardEvent) => seen.push(event);
     window.addEventListener("keydown", record);
@@ -258,9 +259,17 @@ describe("PluginContributionHost provider sessions", () => {
             data: { type: "host-key", ...data },
           }),
         );
+      // A frame without focus cannot inject shortcuts.
+      fromFrame({ phase: "keydown", key: "[", metaKey: true });
+      frame.focus();
       fromFrame({ phase: "keydown", key: "{", code: "BracketLeft", metaKey: true, shiftKey: true });
       fromFrame({ phase: "keyup", key: "Control" });
       fromFrame({ phase: "keypress", key: "x", metaKey: true });
+      // Only chords and their modifier release are replayed: plain keys would answer host
+      // dialogs such as the delete confirmation, whatever the frame's own script claims.
+      fromFrame({ phase: "keydown", key: "y" });
+      fromFrame({ phase: "keydown", key: "d", shiftKey: true, altKey: true });
+      fromFrame({ phase: "keyup", key: "y" });
       window.dispatchEvent(
         new MessageEvent("message", {
           source: window,
