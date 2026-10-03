@@ -8,7 +8,6 @@ use crate::config;
 use crate::db;
 use crate::git;
 use crate::plugin_providers;
-use crate::plugins::PluginRuntimeHandle;
 use crate::session_ops::PLUGIN_BACKEND;
 use crate::state::{ConfigState, DaemonState, DbState, NotifyHandle, ProjectOperationState};
 #[cfg(not(windows))]
@@ -43,7 +42,6 @@ pub async fn launch_session(
     notify: State<'_, NotifyHandle>,
     config_state: State<'_, ConfigState>,
     operations: State<'_, ProjectOperationState>,
-    runtime: State<'_, PluginRuntimeHandle>,
     project_id: String,
     project_name: String,
     repo_path: String,
@@ -89,14 +87,7 @@ pub async fn launch_session(
     // Plugin providers have no command: their sidecar runs the agent (ADR-0013).
     let runtime_provider = match provider.as_deref() {
         Some(key) if plugin_providers::parse_provider_key(key).is_some() => {
-            plugin_providers::resolve(
-                &plugin_providers::AppRuntime {
-                    app: &app,
-                    supervisor: &runtime.0,
-                },
-                key,
-            )
-            .await?;
+            plugin_providers::resolve(&plugin_providers::AppRuntime::new(&app), key).await?;
             Some(key.to_string())
         }
         _ => None,
@@ -235,9 +226,13 @@ pub async fn launch_session(
                 yolo: auto_approve,
                 extra_path_dirs: extra_path_dirs.clone(),
             };
-            plugin_providers::launch(&app, &context, task_prompt.as_deref())
-                .await
-                .map(|launch| provider_launch = Some(launch))
+            plugin_providers::launch(
+                std::sync::Arc::new(plugin_providers::AppRuntime::new(&app)),
+                &context,
+                task_prompt.as_deref(),
+            )
+            .await
+            .map(|launch| provider_launch = Some(launch))
         } else if backend == planeai_rmux::BACKEND {
             spawn_in_rmux(
                 &app,

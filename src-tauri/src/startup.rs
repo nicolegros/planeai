@@ -2,7 +2,6 @@ use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 
 use crate::commands::sessions::helpers::register_notify_session;
-use crate::commands::sessions::lifecycle::session_lifecycle_event;
 use crate::config;
 use crate::db;
 use crate::notify::SharedNotifyState;
@@ -291,20 +290,14 @@ pub fn start_daemon_event_listener(app_handle: &tauri::AppHandle) {
                         let Ok(conn) = db.0.lock() else {
                             continue;
                         };
-                        match db::get_session(&conn, &evt.session_id) {
-                            Ok(Some(session)) if session.status == "active" => {
-                                if db::mark_session_exited(&conn, &evt.session_id).is_ok() {
-                                    Some(session_lifecycle_event(&session, "active", "exited"))
-                                } else {
-                                    None
-                                }
-                            }
-                            Ok(_) => None,
-                            Err(error) => {
-                                tracing::warn!(session_id = %evt.session_id, %error, "failed to read daemon session before exit transition");
-                                None
-                            }
-                        }
+                        crate::commands::sessions::lifecycle::exit_active_session(
+                            &conn,
+                            &evt.session_id,
+                        )
+                        .unwrap_or_else(|error| {
+                            tracing::warn!(session_id = %evt.session_id, %error, "failed to mark daemon session exited");
+                            None
+                        })
                     };
                     if let Some(event) = lifecycle_event {
                         app.state::<PluginRuntimeHandle>()

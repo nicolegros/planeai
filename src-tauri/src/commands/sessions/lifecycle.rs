@@ -9,20 +9,46 @@ use crate::db;
 use crate::plugins::{PluginRuntimeHandle, PluginRuntimeSupervisor};
 use crate::state::{ConfigState, DbState, PtyState};
 
+/// A session status transition, as plugins receive it in `plugin.sessionLifecycle`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "type", rename = "status_changed")]
+pub(crate) struct SessionLifecycleEvent {
+    pub session_id: String,
+    pub project_id: String,
+    pub branch: String,
+    pub linked_task_key: Option<String>,
+    pub previous_status: String,
+    pub status: String,
+}
+
 pub(crate) fn session_lifecycle_event(
     session: &db::Session,
     previous_status: &str,
     status: &str,
-) -> serde_json::Value {
-    serde_json::json!({
-        "type": "status_changed",
-        "session_id": session.id,
-        "project_id": session.project_id,
-        "branch": session.branch,
-        "linked_task_key": session.task_key,
-        "previous_status": previous_status,
-        "status": status,
-    })
+) -> SessionLifecycleEvent {
+    SessionLifecycleEvent {
+        session_id: session.id.clone(),
+        project_id: session.project_id.clone(),
+        branch: session.branch.clone(),
+        linked_task_key: session.task_key.clone(),
+        previous_status: previous_status.to_string(),
+        status: status.to_string(),
+    }
+}
+
+/// Marks an active session exited, returning the event to dispatch; `None` when it was not active.
+pub(crate) fn exit_active_session(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<SessionLifecycleEvent>, String> {
+    let Some(session) = db::get_session(conn, session_id).map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    if session.status != "active" {
+        return Ok(None);
+    }
+    db::mark_session_exited(conn, session_id).map_err(|e| e.to_string())?;
+    Ok(Some(session_lifecycle_event(&session, "active", "exited")))
 }
 
 #[tauri::command]
@@ -143,4 +169,69 @@ pub async fn destroy_session(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(conn: &Connection) -> db::Session {
+        db::migrate(conn).unwrap();
+        planeai_tasks::sqlite::migrate(conn).unwrap();
+        let project = db::create_project(conn, "app", "/tmp/app").unwrap();
+        db::create_session_with_id(
+            conn,
+            "s1",
+            &project.id,
+            "chat",
+            None,
+            "feat/chat",
+            None,
+            Some("chat:claude"),
+            "plugin",
+            false,
+            Some("PLA-1"),
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn lifecycle_events_keep_their_wire_shape() {
+        let conn = Connection::open_in_memory().unwrap();
+        let session = session(&conn);
+        let event =
+            serde_json::to_value(session_lifecycle_event(&session, "active", "archived")).unwrap();
+        assert_eq!(
+            event,
+            serde_json::json!({
+                "type": "status_changed",
+                "session_id": "s1",
+                "project_id": session.project_id,
+                "branch": "feat/chat",
+                "linked_task_key": "PLA-1",
+                "previous_status": "active",
+                "status": "archived",
+            })
+        );
+    }
+
+    #[test]
+    fn only_an_active_session_exits() {
+        let conn = Connection::open_in_memory().unwrap();
+        session(&conn);
+        let event = exit_active_session(&conn, "s1").unwrap().unwrap();
+        assert_eq!(
+            (event.previous_status.as_str(), event.status.as_str()),
+            ("active", "exited")
+        );
+        assert_eq!(
+            db::get_session(&conn, "s1").unwrap().unwrap().status,
+            "exited"
+        );
+        // Already exited, or unknown: nothing changes and nothing is announced.
+        assert_eq!(exit_active_session(&conn, "s1").unwrap(), None);
+        assert_eq!(exit_active_session(&conn, "missing").unwrap(), None);
+    }
 }

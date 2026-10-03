@@ -234,20 +234,10 @@ pub async fn local_plugin_provider_ui_source(
 
 /// Called when a provider session's UI mounts; resumes it after an app or plugin restart.
 #[tauri::command]
-pub async fn provider_session_ensure(
-    session_id: String,
-    app: AppHandle,
-    runtime: State<'_, PluginRuntimeHandle>,
-) -> Result<(), String> {
-    crate::plugin_providers::ensure(
-        &crate::plugin_providers::AppRuntime {
-            app: &app,
-            supervisor: &runtime.0,
-        },
-        &session_id,
-    )
-    .await
-    .map(|_| ())
+pub async fn provider_session_ensure(session_id: String, app: AppHandle) -> Result<(), String> {
+    crate::plugin_providers::ensure(&crate::plugin_providers::AppRuntime::new(&app), &session_id)
+        .await
+        .map(|_| ())
 }
 
 #[tauri::command]
@@ -255,13 +245,9 @@ pub async fn provider_session_send(
     session_id: String,
     text: String,
     app: AppHandle,
-    runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
     crate::plugin_providers::send(
-        &crate::plugin_providers::AppRuntime {
-            app: &app,
-            supervisor: &runtime.0,
-        },
+        &crate::plugin_providers::AppRuntime::new(&app),
         &session_id,
         &text,
     )
@@ -269,19 +255,9 @@ pub async fn provider_session_send(
 }
 
 #[tauri::command]
-pub async fn provider_session_interrupt(
-    session_id: String,
-    app: AppHandle,
-    runtime: State<'_, PluginRuntimeHandle>,
-) -> Result<(), String> {
-    crate::plugin_providers::interrupt(
-        &crate::plugin_providers::AppRuntime {
-            app: &app,
-            supervisor: &runtime.0,
-        },
-        &session_id,
-    )
-    .await
+pub async fn provider_session_interrupt(session_id: String, app: AppHandle) -> Result<(), String> {
+    crate::plugin_providers::interrupt(&crate::plugin_providers::AppRuntime::new(&app), &session_id)
+        .await
 }
 
 /// Detach a provider session so its agent's TUI can continue it; returns that command.
@@ -289,30 +265,13 @@ pub async fn provider_session_interrupt(
 pub async fn provider_session_handoff(
     session_id: String,
     app: AppHandle,
-    runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<Vec<String>, String> {
-    crate::plugin_providers::handoff(
-        &crate::plugin_providers::AppRuntime {
-            app: &app,
-            supervisor: &runtime.0,
-        },
-        &session_id,
-    )
-    .await
+    crate::plugin_providers::handoff(&crate::plugin_providers::AppRuntime::new(&app), &session_id)
+        .await
 }
 
 #[tauri::command]
-pub async fn provider_session_handback(
-    session_id: String,
-    app: AppHandle,
-    runtime: State<'_, PluginRuntimeHandle>,
-) -> Result<(), String> {
-    crate::plugin_providers::handback(
-        &crate::plugin_providers::AppRuntime {
-            app: &app,
-            supervisor: &runtime.0,
-        },
-        &session_id,
-    )
-    .await
+pub async fn provider_session_handback(session_id: String, app: AppHandle) -> Result<(), String> {
+    crate::plugin_providers::handback(&crate::plugin_providers::AppRuntime::new(&app), &session_id)
+        .await
 }

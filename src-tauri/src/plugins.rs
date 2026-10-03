@@ -2850,7 +2850,10 @@ impl PluginRuntimeSupervisor {
 
     /// Deliver a committed session lifecycle event in the background. Delivery
     /// is best-effort and requires both manifest capability and handshake opt-in.
-    pub fn dispatch_session_lifecycle(self: &Arc<Self>, event: Value) {
+    pub fn dispatch_session_lifecycle(
+        self: &Arc<Self>,
+        event: crate::commands::sessions::lifecycle::SessionLifecycleEvent,
+    ) {
         if self.shutting_down.load(Ordering::Acquire) {
             tracing::warn!(
                 "skipped session lifecycle delivery while plugin runtime is shutting down"
@@ -2861,18 +2864,17 @@ impl PluginRuntimeSupervisor {
         tauri::async_runtime::spawn(async move {
             // Sessions the GUI ends dispatch this event; ends from the CLI or task
             // completion reach `plugin_providers::reconcile` instead.
-            let stop = event
-                .get("status")
-                .and_then(Value::as_str)
-                .and_then(crate::plugin_providers::stop_reason)
-                .zip(event.get("session_id").and_then(Value::as_str));
-            if let Some((reason, session_id)) = stop {
-                let runtime = crate::plugin_providers::AppRuntime {
-                    app: &supervisor.app,
-                    supervisor: &supervisor,
-                };
-                crate::plugin_providers::stop(&runtime, session_id, reason).await;
+            if let Some(reason) = crate::plugin_providers::stop_reason(&event.status) {
+                let runtime = crate::plugin_providers::AppRuntime::new(&supervisor.app);
+                crate::plugin_providers::stop(&runtime, &event.session_id, reason).await;
             }
+            let event = match serde_json::to_value(&event) {
+                Ok(event) => event,
+                Err(error) => {
+                    tracing::warn!(%error, "failed to encode session lifecycle event");
+                    return;
+                }
+            };
             let processes = supervisor
                 .processes
                 .lock()
