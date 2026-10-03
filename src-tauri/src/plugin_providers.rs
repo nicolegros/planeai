@@ -5,6 +5,7 @@
 //! notifications are routed here by the sidecar stdout reader.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -224,6 +225,7 @@ fn provider_notification(frame: &str) -> Option<(String, Value)> {
 }
 
 /// Everything a provider needs to run one session in its worktree.
+#[derive(Debug)]
 pub struct SessionRuntimeContext {
     pub session_id: String,
     pub provider_key: String,
@@ -291,13 +293,13 @@ pub struct ResolvedProvider {
 }
 
 /// Resolve a provider key to a running plugin that declares it.
-pub async fn resolve(
-    supervisor: &PluginRuntimeSupervisor,
+pub async fn resolve<R: ProviderRuntime>(
+    runtime: &R,
     provider_key: &str,
 ) -> Result<ResolvedProvider, String> {
     let (plugin_id, provider_id) = parse_provider_key(provider_key)
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
-    let provider = supervisor.running_provider(plugin_id, provider_id).await?;
+    let provider = runtime.running_provider(plugin_id, provider_id).await?;
     Ok(ResolvedProvider {
         plugin_id: plugin_id.to_string(),
         provider,
@@ -306,18 +308,18 @@ pub async fn resolve(
 
 /// Start a brand-new provider session. The binding exists before the request so
 /// notifications emitted while starting are accepted.
-pub async fn start(
-    supervisor: &PluginRuntimeSupervisor,
+pub async fn start<R: ProviderRuntime>(
+    runtime: &R,
     context: &SessionRuntimeContext,
     initial_prompt: Option<&str>,
 ) -> Result<(), String> {
-    let sessions = supervisor.provider_sessions();
+    let sessions = runtime.sessions();
     sessions
         .launching
         .lock()
         .unwrap()
         .insert(context.session_id.clone());
-    let started = start_launching(supervisor, context, initial_prompt).await;
+    let started = start_launching(runtime, context, initial_prompt).await;
     if started.is_err() {
         sessions
             .launching
@@ -329,21 +331,16 @@ pub async fn start(
 }
 
 /// The launch committed the session's row, so reconciliation may check it from now on.
-pub fn launched(supervisor: &PluginRuntimeSupervisor, session_id: &str) {
-    supervisor
-        .provider_sessions()
-        .launching
-        .lock()
-        .unwrap()
-        .remove(session_id);
+pub fn launched(sessions: &ProviderSessions, session_id: &str) {
+    sessions.launching.lock().unwrap().remove(session_id);
 }
 
-async fn start_launching(
-    supervisor: &PluginRuntimeSupervisor,
+async fn start_launching<R: ProviderRuntime>(
+    runtime: &R,
     context: &SessionRuntimeContext,
     initial_prompt: Option<&str>,
 ) -> Result<(), String> {
-    let resolved = resolve(supervisor, &context.provider_key).await?;
+    let resolved = resolve(runtime, &context.provider_key).await?;
     if context.yolo && !resolved.provider.supports(ProviderFeature::Yolo) {
         return Err(format!(
             "{} does not support auto-approve",
@@ -356,7 +353,7 @@ async fn start_launching(
         params.insert("initial_prompt".into(), prompt.into());
     }
     let started = bind_and_request(
-        supervisor,
+        runtime,
         &context.session_id,
         &resolved,
         protocol::START,
@@ -368,8 +365,8 @@ async fn start_launching(
         // and the launch rollback is about to remove its worktree.
         let stop =
             serde_json::json!({ "session_id": context.session_id, "reason": StopReason::Destroy });
-        let _ = supervisor
-            .provider_request(&resolved.plugin_id, protocol::STOP, stop)
+        let _ = runtime
+            .request(&resolved.plugin_id, protocol::STOP, stop)
             .await;
     }
     started
@@ -378,38 +375,37 @@ async fn start_launching(
 /// Make sure the current sidecar instance drives this active session, resuming it after
 /// an app or plugin restart. The session is read under its lock, so one stopped meanwhile,
 /// for example archived while this waited, is never resumed.
-pub async fn ensure(
-    app: &AppHandle,
-    supervisor: &PluginRuntimeSupervisor,
+pub async fn ensure<R: ProviderRuntime>(
+    runtime: &R,
     session_id: &str,
 ) -> Result<SessionRuntimeContext, String> {
-    let lock = supervisor.provider_sessions().ensure_lock(session_id);
+    let lock = runtime.sessions().ensure_lock(session_id);
     let _ensuring = lock.lock().await;
-    let context = load_context(app, session_id).await?;
-    let resolved = resolve(supervisor, &context.provider_key).await?;
-    let instance = supervisor.running_instance(&resolved.plugin_id).await;
-    if let Some(binding) = supervisor.provider_sessions().get(session_id) {
+    let context = runtime.session_context(session_id).await?;
+    let resolved = resolve(runtime, &context.provider_key).await?;
+    let instance = runtime.running_instance(&resolved.plugin_id).await;
+    if let Some(binding) = runtime.sessions().get(session_id) {
         if binding.plugin_id == resolved.plugin_id && Some(binding.instance) == instance {
             return Ok(context);
         }
     }
     let params = context.params(&resolved.provider);
-    bind_and_request(supervisor, session_id, &resolved, protocol::RESUME, params).await?;
+    bind_and_request(runtime, session_id, &resolved, protocol::RESUME, params).await?;
     Ok(context)
 }
 
-async fn bind_and_request(
-    supervisor: &PluginRuntimeSupervisor,
+async fn bind_and_request<R: ProviderRuntime>(
+    runtime: &R,
     session_id: &str,
     resolved: &ResolvedProvider,
     method: &str,
     params: serde_json::Map<String, Value>,
 ) -> Result<(), String> {
-    let instance = supervisor
+    let instance = runtime
         .running_instance(&resolved.plugin_id)
         .await
         .ok_or_else(|| format!("plugin {} is not running", resolved.plugin_id))?;
-    let sessions = supervisor.provider_sessions();
+    let sessions = runtime.sessions();
     sessions.bind(
         session_id,
         Binding {
@@ -418,8 +414,8 @@ async fn bind_and_request(
             instance,
         },
     );
-    let result = supervisor
-        .provider_request(&resolved.plugin_id, method, Value::Object(params))
+    let result = runtime
+        .request(&resolved.plugin_id, method, Value::Object(params))
         .await;
     if result.is_err() {
         sessions.unbind(session_id);
@@ -428,9 +424,8 @@ async fn bind_and_request(
 }
 
 /// Deliver user or automation input to a provider session.
-pub async fn send(
-    app: &AppHandle,
-    supervisor: &PluginRuntimeSupervisor,
+pub async fn send<R: ProviderRuntime>(
+    runtime: &R,
     session_id: &str,
     text: &str,
 ) -> Result<(), String> {
@@ -438,9 +433,9 @@ pub async fn send(
         return Err("prompt text must not be empty".to_string());
     }
     check_prompt_size(text)?;
-    ensure(app, supervisor, session_id).await?;
+    ensure(runtime, session_id).await?;
     request_bound(
-        supervisor,
+        runtime,
         session_id,
         protocol::SEND,
         serde_json::json!({ "session_id": session_id, "text": text }),
@@ -449,14 +444,10 @@ pub async fn send(
     .map(|_| ())
 }
 
-pub async fn interrupt(
-    app: &AppHandle,
-    supervisor: &PluginRuntimeSupervisor,
-    session_id: &str,
-) -> Result<(), String> {
-    ensure(app, supervisor, session_id).await?;
+pub async fn interrupt<R: ProviderRuntime>(runtime: &R, session_id: &str) -> Result<(), String> {
+    ensure(runtime, session_id).await?;
     request_bound(
-        supervisor,
+        runtime,
         session_id,
         protocol::INTERRUPT,
         serde_json::json!({ "session_id": session_id }),
@@ -465,35 +456,32 @@ pub async fn interrupt(
     .map(|_| ())
 }
 
-async fn request_bound(
-    supervisor: &PluginRuntimeSupervisor,
+async fn request_bound<R: ProviderRuntime>(
+    runtime: &R,
     session_id: &str,
     method: &str,
     params: Value,
 ) -> Result<Value, String> {
-    let binding = supervisor
-        .provider_sessions()
+    let binding = runtime
+        .sessions()
         .get(session_id)
         .ok_or_else(|| format!("session {session_id} has no running provider"))?;
-    supervisor
-        .provider_request(&binding.plugin_id, method, params)
-        .await
+    runtime.request(&binding.plugin_id, method, params).await
 }
 
 /// Hand a session's conversation to its agent's own TUI. The provider detaches
 /// and returns the command that continues the conversation in a terminal.
-pub async fn handoff(
-    app: &AppHandle,
-    supervisor: &PluginRuntimeSupervisor,
+pub async fn handoff<R: ProviderRuntime>(
+    runtime: &R,
     session_id: &str,
 ) -> Result<Vec<String>, String> {
-    let context = ensure(app, supervisor, session_id).await?;
-    let provider = resolve(supervisor, &context.provider_key).await?.provider;
+    let context = ensure(runtime, session_id).await?;
+    let provider = resolve(runtime, &context.provider_key).await?.provider;
     if !provider.supports(ProviderFeature::Handoff) {
         return Err(format!("{} cannot continue in a terminal", provider.label));
     }
     let value = request_bound(
-        supervisor,
+        runtime,
         session_id,
         protocol::HANDOFF,
         serde_json::json!({ "session_id": session_id }),
@@ -505,19 +493,15 @@ pub async fn handoff(
 }
 
 /// The terminal that continued a session closed; the provider drives it again.
-pub async fn handback(
-    app: &AppHandle,
-    supervisor: &PluginRuntimeSupervisor,
-    session_id: &str,
-) -> Result<(), String> {
+pub async fn handback<R: ProviderRuntime>(runtime: &R, session_id: &str) -> Result<(), String> {
     // A sidecar restarted during the handoff restores the handoff from its transcript,
     // so it must be resumed to hear that the terminal closed. Ended sessions need nothing.
-    if load_context(app, session_id).await.is_err() {
+    if runtime.session_context(session_id).await.is_err() {
         return Ok(());
     }
-    ensure(app, supervisor, session_id).await?;
+    ensure(runtime, session_id).await?;
     request_bound(
-        supervisor,
+        runtime,
         session_id,
         protocol::HANDBACK,
         serde_json::json!({ "session_id": session_id }),
@@ -528,20 +512,20 @@ pub async fn handback(
 
 /// Stop a provider session that left the active state. Sessions the current
 /// sidecar never resumed have nothing running and need no request.
-pub async fn stop(supervisor: &PluginRuntimeSupervisor, session_id: &str, reason: StopReason) {
-    let sessions = supervisor.provider_sessions();
+pub async fn stop<R: ProviderRuntime>(runtime: &R, session_id: &str, reason: StopReason) {
+    let sessions = runtime.sessions();
     let lock = sessions.ensure_lock(session_id);
     let _ensuring = lock.lock().await;
     sessions.launching.lock().unwrap().remove(session_id);
     let Some(binding) = sessions.unbind(session_id) else {
         return;
     };
-    if supervisor.running_instance(&binding.plugin_id).await != Some(binding.instance) {
+    if runtime.running_instance(&binding.plugin_id).await != Some(binding.instance) {
         return;
     }
     let params = serde_json::json!({ "session_id": session_id, "reason": reason });
-    match supervisor
-        .provider_request(&binding.plugin_id, protocol::STOP, params)
+    match runtime
+        .request(&binding.plugin_id, protocol::STOP, params)
         .await
     {
         Ok(_) => {
@@ -573,60 +557,363 @@ fn ended_reason(status: Option<&str>) -> Option<StopReason> {
 
 /// Stop provider sessions whose rows ended outside the GUI (CLI archive or delete,
 /// task completion). Those paths only notify that sessions changed.
-pub async fn reconcile(app: &AppHandle, supervisor: &PluginRuntimeSupervisor) {
-    let bound = supervisor.provider_sessions().launched_session_ids();
+pub async fn reconcile<R: ProviderRuntime>(runtime: &R) {
+    let bound = runtime.sessions().launched_session_ids();
     if bound.is_empty() {
         return;
     }
-    let db = app.state::<crate::state::DbState>().0.clone();
-    let ended = crate::commands::blocking(move || {
-        let conn = db.lock().map_err(|error| error.to_string())?;
-        let mut ended = Vec::new();
-        for session_id in bound {
-            let status = db::get_session(&conn, &session_id)
-                .map_err(|error| error.to_string())?
-                .map(|session| session.status);
-            if let Some(reason) = ended_reason(status.as_deref()) {
-                ended.push((session_id, reason));
-            }
-        }
-        Ok(ended)
-    })
-    .await;
-    match ended {
-        Ok(ended) => {
-            for (session_id, reason) in ended {
-                stop(supervisor, &session_id, reason).await;
+    match runtime.session_statuses(bound).await {
+        Ok(statuses) => {
+            for (session_id, status) in statuses {
+                if let Some(reason) = ended_reason(status.as_deref()) {
+                    stop(runtime, &session_id, reason).await;
+                }
             }
         }
         Err(error) => tracing::warn!(%error, "provider session reconciliation failed"),
     }
 }
 
-/// Look up a session and its runtime context in one blocking DB read.
-async fn load_context(app: &AppHandle, session_id: &str) -> Result<SessionRuntimeContext, String> {
-    let db = app.state::<crate::state::DbState>().0.clone();
-    let extra_path_dirs = crate::plugins::configured_extra_path_dirs(app);
-    let session_id = session_id.to_string();
-    crate::commands::blocking(move || {
-        let conn = db.lock().map_err(|error| error.to_string())?;
-        let session = db::get_session(&conn, &session_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("session not found: {session_id}"))?;
-        if session.status != "active" {
-            return Err(format!(
-                "session is not active (status: {})",
-                session.status
-            ));
-        }
-        SessionRuntimeContext::for_session(&conn, &session, extra_path_dirs)
-    })
-    .await
+/// What session routing needs from the app: the plugin runtimes and the session store.
+/// `AppRuntime` provides them for real; tests drive routing through a fake.
+pub trait ProviderRuntime: Sync {
+    fn sessions(&self) -> &ProviderSessions;
+    /// The provider, when its plugin is running and declares it.
+    fn running_provider(
+        &self,
+        plugin_id: &str,
+        provider_id: &str,
+    ) -> impl Future<Output = Result<PluginProvider, String>> + Send;
+    fn running_instance(&self, plugin_id: &str) -> impl Future<Output = Option<u64>> + Send;
+    fn request(
+        &self,
+        plugin_id: &str,
+        method: &str,
+        params: Value,
+    ) -> impl Future<Output = Result<Value, String>> + Send;
+    /// The session's runtime context; an error when it is unknown or not active.
+    fn session_context(
+        &self,
+        session_id: &str,
+    ) -> impl Future<Output = Result<SessionRuntimeContext, String>> + Send;
+    /// Each session's stored status, `None` when it has no row.
+    fn session_statuses(
+        &self,
+        session_ids: Vec<String>,
+    ) -> impl Future<Output = Result<Vec<(String, Option<String>)>, String>> + Send;
+}
+
+/// The app's plugin supervisor and database.
+pub struct AppRuntime<'a> {
+    pub app: &'a AppHandle,
+    pub supervisor: &'a PluginRuntimeSupervisor,
+}
+
+impl ProviderRuntime for AppRuntime<'_> {
+    fn sessions(&self) -> &ProviderSessions {
+        self.supervisor.provider_sessions()
+    }
+
+    async fn running_provider(
+        &self,
+        plugin_id: &str,
+        provider_id: &str,
+    ) -> Result<PluginProvider, String> {
+        self.supervisor
+            .running_provider(plugin_id, provider_id)
+            .await
+    }
+
+    async fn running_instance(&self, plugin_id: &str) -> Option<u64> {
+        self.supervisor.running_instance(plugin_id).await
+    }
+
+    async fn request(&self, plugin_id: &str, method: &str, params: Value) -> Result<Value, String> {
+        self.supervisor
+            .provider_request(plugin_id, method, params)
+            .await
+    }
+
+    async fn session_context(&self, session_id: &str) -> Result<SessionRuntimeContext, String> {
+        let db = self.app.state::<crate::state::DbState>().0.clone();
+        let extra_path_dirs = crate::plugins::configured_extra_path_dirs(self.app);
+        let session_id = session_id.to_string();
+        crate::commands::blocking(move || {
+            let conn = db.lock().map_err(|error| error.to_string())?;
+            let session = db::get_session(&conn, &session_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("session not found: {session_id}"))?;
+            if session.status != "active" {
+                return Err(format!(
+                    "session is not active (status: {})",
+                    session.status
+                ));
+            }
+            SessionRuntimeContext::for_session(&conn, &session, extra_path_dirs)
+        })
+        .await
+    }
+
+    async fn session_statuses(
+        &self,
+        session_ids: Vec<String>,
+    ) -> Result<Vec<(String, Option<String>)>, String> {
+        let db = self.app.state::<crate::state::DbState>().0.clone();
+        crate::commands::blocking(move || {
+            let conn = db.lock().map_err(|error| error.to_string())?;
+            session_ids
+                .into_iter()
+                .map(|session_id| {
+                    let status = db::get_session(&conn, &session_id)
+                        .map_err(|error| error.to_string())?
+                        .map(|session| session.status);
+                    Ok((session_id, status))
+                })
+                .collect()
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plugin sidecar and session store driven by the tests.
+    #[derive(Default)]
+    struct FakeRuntime {
+        sessions: ProviderSessions,
+        instance: Mutex<Option<u64>>,
+        /// Requests sent, with whether the session was bound when each was sent.
+        requests: Mutex<Vec<(String, bool)>>,
+        /// Stored session statuses; a session without one has no row.
+        statuses: Mutex<HashMap<String, String>>,
+        failing: Mutex<Vec<&'static str>>,
+        /// While set, a resume waits for it.
+        resume_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
+    }
+
+    impl FakeRuntime {
+        fn running(statuses: &[(&str, &str)]) -> Self {
+            let runtime = Self::default();
+            *runtime.instance.lock().unwrap() = Some(1);
+            runtime.statuses.lock().unwrap().extend(
+                statuses
+                    .iter()
+                    .map(|(id, status)| (id.to_string(), status.to_string())),
+            );
+            runtime
+        }
+
+        fn sent(&self) -> Vec<String> {
+            self.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(method, _)| method.clone())
+                .collect()
+        }
+    }
+
+    fn context(session_id: &str) -> SessionRuntimeContext {
+        SessionRuntimeContext {
+            session_id: session_id.into(),
+            provider_key: "chat:claude".into(),
+            cwd: "/workspace".into(),
+            yolo: false,
+            extra_path_dirs: Vec::new(),
+        }
+    }
+
+    impl ProviderRuntime for FakeRuntime {
+        fn sessions(&self) -> &ProviderSessions {
+            &self.sessions
+        }
+
+        async fn running_provider(
+            &self,
+            _plugin_id: &str,
+            provider_id: &str,
+        ) -> Result<PluginProvider, String> {
+            Ok(PluginProvider {
+                id: provider_id.into(),
+                label: "Claude".into(),
+                entrypoint: "ui/chat.js".into(),
+                supports: vec![ProviderFeature::Handoff],
+            })
+        }
+
+        async fn running_instance(&self, _plugin_id: &str) -> Option<u64> {
+            *self.instance.lock().unwrap()
+        }
+
+        async fn request(
+            &self,
+            _plugin_id: &str,
+            method: &str,
+            params: Value,
+        ) -> Result<Value, String> {
+            let session_id = params["session_id"].as_str().unwrap_or_default();
+            let bound = self.sessions.get(session_id).is_some();
+            self.requests
+                .lock()
+                .unwrap()
+                .push((method.to_string(), bound));
+            let gate = self.resume_gate.lock().unwrap().clone();
+            if let (protocol::RESUME, Some(gate)) = (method, gate) {
+                gate.notified().await;
+            }
+            if self.failing.lock().unwrap().contains(&method) {
+                return Err(format!("{method} failed"));
+            }
+            Ok(serde_json::json!({}))
+        }
+
+        async fn session_context(&self, session_id: &str) -> Result<SessionRuntimeContext, String> {
+            match self
+                .statuses
+                .lock()
+                .unwrap()
+                .get(session_id)
+                .map(String::as_str)
+            {
+                Some("active") => Ok(context(session_id)),
+                Some(status) => Err(format!("session is not active (status: {status})")),
+                None => Err(format!("session not found: {session_id}")),
+            }
+        }
+
+        async fn session_statuses(
+            &self,
+            session_ids: Vec<String>,
+        ) -> Result<Vec<(String, Option<String>)>, String> {
+            let statuses = self.statuses.lock().unwrap();
+            Ok(session_ids
+                .into_iter()
+                .map(|id| {
+                    let status = statuses.get(&id).cloned();
+                    (id, status)
+                })
+                .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_start_binds_before_it_asks_and_undoes_itself_when_refused() {
+        let runtime = FakeRuntime::running(&[]);
+        start(&runtime, &context("s1"), None).await.unwrap();
+        // Notifications the sidecar sends while starting must find the session bound.
+        assert_eq!(
+            *runtime.requests.lock().unwrap(),
+            [(protocol::START.to_string(), true)]
+        );
+        assert!(runtime.sessions.launching.lock().unwrap().contains("s1"));
+
+        runtime.failing.lock().unwrap().push(protocol::START);
+        assert!(start(&runtime, &context("s2"), None).await.is_err());
+        assert!(runtime.sessions.get("s2").is_none());
+        assert!(!runtime.sessions.launching.lock().unwrap().contains("s2"));
+        // A start cut short may still run in the sidecar, so it is told to stop.
+        assert_eq!(
+            runtime.sent().last().map(String::as_str),
+            Some(protocol::STOP)
+        );
+    }
+
+    #[tokio::test]
+    async fn sessions_resume_once_per_sidecar_instance() {
+        let runtime = FakeRuntime::running(&[("s1", "active")]);
+        ensure(&runtime, "s1").await.unwrap();
+        ensure(&runtime, "s1").await.unwrap();
+        assert_eq!(runtime.sent(), [protocol::RESUME]);
+        *runtime.instance.lock().unwrap() = Some(2);
+        ensure(&runtime, "s1").await.unwrap();
+        assert_eq!(runtime.sent(), [protocol::RESUME, protocol::RESUME]);
+    }
+
+    #[tokio::test]
+    async fn a_refused_resume_leaves_the_session_unbound() {
+        let runtime = FakeRuntime::running(&[("s1", "active")]);
+        runtime.failing.lock().unwrap().push(protocol::RESUME);
+        assert!(ensure(&runtime, "s1").await.is_err());
+        assert!(runtime.sessions.get("s1").is_none());
+    }
+
+    #[tokio::test]
+    async fn ended_sessions_are_never_resumed() {
+        let runtime = FakeRuntime::running(&[("s1", "archived")]);
+        assert!(ensure(&runtime, "s1")
+            .await
+            .unwrap_err()
+            .contains("not active"));
+        assert!(runtime.sent().is_empty());
+    }
+
+    #[tokio::test]
+    async fn stop_skips_a_session_its_current_sidecar_never_resumed() {
+        let runtime = FakeRuntime::running(&[("s1", "active")]);
+        ensure(&runtime, "s1").await.unwrap();
+        *runtime.instance.lock().unwrap() = Some(2);
+        stop(&runtime, "s1", StopReason::Archive).await;
+        assert_eq!(runtime.sent(), [protocol::RESUME]);
+        assert!(runtime.sessions.get("s1").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_session_archived_while_resuming_is_stopped_after_the_resume() {
+        let runtime = Arc::new(FakeRuntime::running(&[("s1", "active")]));
+        let gate = Arc::new(tokio::sync::Notify::new());
+        *runtime.resume_gate.lock().unwrap() = Some(gate.clone());
+        let resuming = tokio::spawn({
+            let runtime = runtime.clone();
+            async move { ensure(&*runtime, "s1").await.map(|_| ()) }
+        });
+        while runtime.sent().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        runtime
+            .statuses
+            .lock()
+            .unwrap()
+            .insert("s1".into(), "archived".into());
+        let stopping = tokio::spawn({
+            let runtime = runtime.clone();
+            async move { stop(&*runtime, "s1", StopReason::Archive).await }
+        });
+        tokio::task::yield_now().await;
+        // The stop waits for the resume it would otherwise race.
+        assert_eq!(runtime.sent(), [protocol::RESUME]);
+        gate.notify_one();
+        resuming.await.unwrap().unwrap();
+        stopping.await.unwrap();
+        assert_eq!(runtime.sent(), [protocol::RESUME, protocol::STOP]);
+        assert!(runtime.sessions.get("s1").is_none());
+        // Anything that asks for it later finds it archived.
+        *runtime.resume_gate.lock().unwrap() = None;
+        assert!(ensure(&*runtime, "s1").await.is_err());
+        assert_eq!(runtime.sent(), [protocol::RESUME, protocol::STOP]);
+    }
+
+    #[tokio::test]
+    async fn reconciliation_stops_ended_sessions_but_not_launching_ones() {
+        let runtime = FakeRuntime::running(&[("live", "active"), ("archived", "active")]);
+        for id in ["live", "archived"] {
+            ensure(&runtime, id).await.unwrap();
+        }
+        start(&runtime, &context("launching"), None).await.unwrap();
+        runtime
+            .statuses
+            .lock()
+            .unwrap()
+            .insert("archived".into(), "archived".into());
+        runtime.requests.lock().unwrap().clear();
+
+        reconcile(&runtime).await;
+        assert_eq!(runtime.sent(), [protocol::STOP]);
+        assert!(runtime.sessions.get("archived").is_none());
+        assert!(runtime.sessions.get("live").is_some());
+        assert!(runtime.sessions.get("launching").is_some());
+    }
 
     #[test]
     fn provider_keys_split_plugin_and_provider() {

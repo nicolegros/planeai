@@ -2855,15 +2855,19 @@ impl PluginRuntimeSupervisor {
         }
         let supervisor = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
-            // Every path that ends a session dispatches this event, which makes it
-            // the single place provider sessions are told to stop.
+            // Sessions the GUI ends dispatch this event; ends from the CLI or task
+            // completion reach `plugin_providers::reconcile` instead.
             let stop = event
                 .get("status")
                 .and_then(Value::as_str)
                 .and_then(crate::plugin_providers::stop_reason)
                 .zip(event.get("session_id").and_then(Value::as_str));
             if let Some((reason, session_id)) = stop {
-                crate::plugin_providers::stop(&supervisor, session_id, reason).await;
+                let runtime = crate::plugin_providers::AppRuntime {
+                    app: &supervisor.app,
+                    supervisor: &supervisor,
+                };
+                crate::plugin_providers::stop(&runtime, session_id, reason).await;
             }
             let processes = supervisor
                 .processes

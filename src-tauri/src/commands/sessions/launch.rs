@@ -89,7 +89,14 @@ pub async fn launch_session(
     // Plugin providers have no command: their sidecar runs the agent (ADR-0013).
     let runtime_provider = match provider.as_deref() {
         Some(key) if plugin_providers::parse_provider_key(key).is_some() => {
-            plugin_providers::resolve(&runtime.0, key).await?;
+            plugin_providers::resolve(
+                &plugin_providers::AppRuntime {
+                    app: &app,
+                    supervisor: &runtime.0,
+                },
+                key,
+            )
+            .await?;
             Some(key.to_string())
         }
         _ => None,
@@ -228,7 +235,11 @@ pub async fn launch_session(
                 yolo: auto_approve,
                 extra_path_dirs: extra_path_dirs.clone(),
             };
-            plugin_providers::start(&runtime.0, &context, task_prompt.as_deref()).await
+            let providers = plugin_providers::AppRuntime {
+                app: &app,
+                supervisor: &runtime.0,
+            };
+            plugin_providers::start(&providers, &context, task_prompt.as_deref()).await
         } else if backend == planeai_rmux::BACKEND {
             spawn_in_rmux(
                 &app,
@@ -344,10 +355,15 @@ pub async fn launch_session(
                 .unwrap()
                 .release_provider_owned(&launched_id);
             let supervisor = runtime.0.clone();
+            let app = app.clone();
             let session_id = launched_id.clone();
             tauri::async_runtime::spawn(async move {
+                let providers = plugin_providers::AppRuntime {
+                    app: &app,
+                    supervisor: &supervisor,
+                };
                 plugin_providers::stop(
-                    &supervisor,
+                    &providers,
                     &session_id,
                     plugin_providers::StopReason::Destroy,
                 )
@@ -357,7 +373,7 @@ pub async fn launch_session(
         e.to_string()
     })?;
     if backend_is_provider {
-        plugin_providers::launched(&runtime.0, &launched_id);
+        plugin_providers::launched(runtime.0.provider_sessions(), &launched_id);
     }
 
     {

@@ -180,7 +180,11 @@ fn reconcile_provider_sessions(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let supervisor = app.state::<crate::plugins::PluginRuntimeHandle>().0.clone();
-        crate::plugin_providers::reconcile(&app, &supervisor).await;
+        let runtime = crate::plugin_providers::AppRuntime {
+            app: &app,
+            supervisor: &supervisor,
+        };
+        crate::plugin_providers::reconcile(&runtime).await;
     });
 }
 
@@ -209,7 +213,11 @@ async fn deliver_prompt(app: &AppHandle, session_id: &str, text: String) {
     let result = match provider_backed {
         Ok(true) => {
             let supervisor = app.state::<crate::plugins::PluginRuntimeHandle>().0.clone();
-            crate::plugin_providers::send(app, &supervisor, session_id, &text).await
+            let runtime = crate::plugin_providers::AppRuntime {
+                app,
+                supervisor: &supervisor,
+            };
+            crate::plugin_providers::send(&runtime, session_id, &text).await
         }
         Ok(false) => {
             let pty_manager = app.state::<crate::state::PtyState>().0.clone();

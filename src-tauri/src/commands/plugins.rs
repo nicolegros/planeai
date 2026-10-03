@@ -239,9 +239,15 @@ pub async fn provider_session_ensure(
     app: AppHandle,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
-    crate::plugin_providers::ensure(&app, &runtime.0, &session_id)
-        .await
-        .map(|_| ())
+    crate::plugin_providers::ensure(
+        &crate::plugin_providers::AppRuntime {
+            app: &app,
+            supervisor: &runtime.0,
+        },
+        &session_id,
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
@@ -251,7 +257,15 @@ pub async fn provider_session_send(
     app: AppHandle,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
-    crate::plugin_providers::send(&app, &runtime.0, &session_id, &text).await
+    crate::plugin_providers::send(
+        &crate::plugin_providers::AppRuntime {
+            app: &app,
+            supervisor: &runtime.0,
+        },
+        &session_id,
+        &text,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -260,7 +274,14 @@ pub async fn provider_session_interrupt(
     app: AppHandle,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
-    crate::plugin_providers::interrupt(&app, &runtime.0, &session_id).await
+    crate::plugin_providers::interrupt(
+        &crate::plugin_providers::AppRuntime {
+            app: &app,
+            supervisor: &runtime.0,
+        },
+        &session_id,
+    )
+    .await
 }
 
 /// Detach a provider session so its agent's TUI can continue it; returns that command.
@@ -270,7 +291,14 @@ pub async fn provider_session_handoff(
     app: AppHandle,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<Vec<String>, String> {
-    crate::plugin_providers::handoff(&app, &runtime.0, &session_id).await
+    crate::plugin_providers::handoff(
+        &crate::plugin_providers::AppRuntime {
+            app: &app,
+            supervisor: &runtime.0,
+        },
+        &session_id,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -279,5 +307,12 @@ pub async fn provider_session_handback(
     app: AppHandle,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
-    crate::plugin_providers::handback(&app, &runtime.0, &session_id).await
+    crate::plugin_providers::handback(
+        &crate::plugin_providers::AppRuntime {
+            app: &app,
+            supervisor: &runtime.0,
+        },
+        &session_id,
+    )
+    .await
 }
