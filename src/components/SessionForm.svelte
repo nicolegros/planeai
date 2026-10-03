@@ -210,8 +210,8 @@
       { key: "m", toggle: onCreateTask },
       { key: "s", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='name'] input") ?? null },
       { key: "w", toggle: () => { useWorktree = !useWorktree; } },
-      { key: "a", toggle: () => { autoApprove = !autoApprove; } },
-      { key: "p", toggle: () => { const current = selectedProvider || config.default_provider; const idx = providerKeys.indexOf(current); selectedProvider = providerKeys[(idx + 1) % providerKeys.length]; }, shiftToggle: () => { const current = selectedProvider || config.default_provider; const idx = providerKeys.indexOf(current); selectedProvider = providerKeys[(idx - 1 + providerKeys.length) % providerKeys.length]; } },
+      { key: "a", toggle: () => { if (autoApproveSupported) autoApprove = !autoApprove; } },
+      { key: "p", toggle: () => { selectedProvider = providerKeys[(providerKeys.indexOf(providerKey) + 1) % providerKeys.length]; }, shiftToggle: () => { selectedProvider = providerKeys[(providerKeys.indexOf(providerKey) - 1 + providerKeys.length) % providerKeys.length]; } },
       { key: "b", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
       { key: "n", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='branch'] input") ?? null },
     ],
@@ -327,7 +327,7 @@
     <div class="flex items-center gap-4">
       <Checkbox id="use-worktree" label="Worktree" bind:checked={useWorktree} tabindex={-1} />
       <span class="font-mono text-[10px] px-1 rounded {badge}">W</span>
-      <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} disabled={!autoApproveSupported} title={autoApproveSupported ? undefined : `${selectedRuntimeProvider?.provider.label} does not support auto-approve`} tabindex={-1} />
+      <Checkbox id="auto-approve" label="Auto-approve" bind:checked={() => autoApprove && autoApproveSupported, (value) => (autoApprove = value)} disabled={!autoApproveSupported} title={autoApproveSupported ? undefined : `${selectedRuntimeProvider?.provider.label} does not support auto-approve`} tabindex={-1} />
       <span class="font-mono text-[10px] px-1 rounded {badge}">A</span>
     </div>
     {#if providerKeys.length > 1}
