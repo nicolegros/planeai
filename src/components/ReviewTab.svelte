@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { git, pty } from "../lib/api";
+  import { git } from "../lib/api";
   import type { ChangedFile } from "../lib/types";
   import { onDestroy, onMount } from "svelte";
   import { isDark, getSettings } from "../lib/settings.svelte";
@@ -27,9 +27,11 @@
     sessionId: string;
     onEditFile?: (filePath: string) => void;
     onFileChange?: (fileName: string) => void;
+    /** Submit a message to the session's agent. */
+    onSend: (text: string) => Promise<void>;
   }
 
-  let { repoPath, baseBranch, visible, sessionId, onEditFile, onFileChange }: Props = $props();
+  let { repoPath, baseBranch, visible, sessionId, onEditFile, onFileChange, onSend }: Props = $props();
   let files = $state<ChangedFile[]>([]);
   let selectedIndex = $state(0);
   let loading = $state(true);
@@ -376,10 +378,8 @@
         }
         diffs.set(filePath, latest);
       }
-      const bytes = Array.from(new TextEncoder().encode(serializeComments(comments, diffs)));
+      await onSend(serializeComments(comments, diffs));
       recordUserInput(sessionId);
-      await pty.write(sessionId, bytes);
-      await pty.write(sessionId, [0x0d]);
       const count = comments.length;
       clearComments(sessionId);
       showSnackbar(`Feedback sent (${count} comment${count === 1 ? "" : "s"})`, "success");

@@ -75,6 +75,27 @@ export interface PluginUiHost {
     openModal(options: PluginModalOptions): PluginModalControls;
     openProjectForm(): Promise<Project | null>;
   };
+  /**
+   * Present only for a provider's session UI. Input goes through the host so CLI,
+   * recipes and the UI share one delivery path; events are the sidecar's own
+   * `host.session.event` payloads, in `seq` order, for this session only.
+   */
+  session?: {
+    send(text: string): Promise<void>;
+    interrupt(): Promise<void>;
+    onEvent(listener: (event: PluginSessionEvent) => void): () => void;
+    /**
+     * For providers that support `handoff`: continue the session in its agent's
+     * TUI in a terminal tab. `handback` closes that tab and returns to the chat.
+     */
+    handoff(): Promise<void>;
+    handback(): Promise<void>;
+  };
+}
+
+export interface PluginSessionEvent {
+  seq: number;
+  payload: unknown;
 }
 
 export interface PluginSessionContext {

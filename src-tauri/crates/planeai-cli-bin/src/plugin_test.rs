@@ -3,7 +3,7 @@
 //! Optional scenarios are stable JSONL request sequences executed after the
 //! handshake, before the standard lifecycle and shutdown checks.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -12,6 +12,12 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
+use planeai_plugin_contract::provider::{
+    self as protocol, is_host_controlled_method, validate_handoff_argv, HandoffResponse,
+    ProviderSessionStatus, SessionEventParams, SessionStatusParams, StopReason, EVENT_NOTIFICATION,
+    STATUS_NOTIFICATION,
+};
+use planeai_plugin_contract::ProviderFeature;
 use serde_json::{json, Map, Value};
 
 #[cfg(test)]
@@ -20,8 +26,9 @@ const MAX_FRAME_BYTES: usize = 64 * 1024;
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const CANCELLATION_ACK_TIMEOUT: Duration = Duration::from_secs(3);
+const PROVIDER_TEST_SESSION: &str = "planeai-cli-plugin-test";
 
-pub fn run(package: &Path, scenario: Option<&Path>) -> Result<()> {
+pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>) -> Result<()> {
     let scenario = scenario.map(read_scenario).transpose()?;
 
     let package = package
@@ -64,6 +71,17 @@ pub fn run(package: &Path, scenario: Option<&Path>) -> Result<()> {
         }
         request_id += 1;
     }
+    if let Some((provider_id, handoff)) = first_provider(&manifest) {
+        request_id = check_provider(
+            &mut process,
+            request_id,
+            &provider_id,
+            handoff,
+            provider_turn,
+        )?;
+    } else if provider_turn.is_some() {
+        bail!("--provider-turn requires a plugin that declares providers");
+    }
     if lifecycle_delivery_is_granted(&capabilities, &subscriptions) {
         process.call(
             request_id,
@@ -96,6 +114,88 @@ pub fn run(package: &Path, scenario: Option<&Path>) -> Result<()> {
         manifest["id"].as_str().unwrap_or("<unknown>")
     );
     Ok(())
+}
+
+fn first_provider(manifest: &Value) -> Option<(String, bool)> {
+    let provider = manifest.get("providers")?.as_array()?.first()?;
+    let handoff = provider
+        .get("supports")
+        .and_then(|features| serde_json::from_value::<Vec<ProviderFeature>>(features.clone()).ok())
+        .is_some_and(|features| features.contains(&ProviderFeature::Handoff));
+    Some((provider.get("id")?.as_str()?.to_owned(), handoff))
+}
+
+/// Exercise the provider session contract: start, an optional full turn that must
+/// reach `idle`, then stop. Real agent plugins skip the turn so tests stay offline.
+fn check_provider(
+    process: &mut PluginProcess,
+    mut request_id: u64,
+    provider_id: &str,
+    handoff: bool,
+    provider_turn: Option<&str>,
+) -> Result<u64> {
+    let cwd = process.state.data_dir.display().to_string();
+    process
+        .provider_sessions
+        .insert(PROVIDER_TEST_SESSION.to_owned(), 0);
+    process
+        .call(
+            request_id,
+            protocol::START,
+            json!({
+                "session_id": PROVIDER_TEST_SESSION,
+                "provider_id": provider_id,
+                "cwd": cwd,
+                "env": { "PLANEAI_SESSION_ID": PROVIDER_TEST_SESSION },
+                "yolo": false,
+            }),
+        )
+        .with_context(|| format!("{} failed", protocol::START))?;
+    request_id += 1;
+    if let Some(text) = provider_turn {
+        let statuses_before = process.provider_statuses.len();
+        process
+            .call(
+                request_id,
+                protocol::SEND,
+                json!({ "session_id": PROVIDER_TEST_SESSION, "text": text }),
+            )
+            .with_context(|| format!("{} failed", protocol::SEND))?;
+        request_id += 1;
+        process.await_provider_turn(statuses_before, RPC_TIMEOUT)?;
+        if process.provider_events_received == 0 {
+            bail!("provider turn completed without emitting a host.session.event");
+        }
+    }
+    if handoff {
+        let result = process
+            .call(
+                request_id,
+                protocol::HANDOFF,
+                json!({ "session_id": PROVIDER_TEST_SESSION }),
+            )
+            .with_context(|| format!("{} failed", protocol::HANDOFF))?;
+        request_id += 1;
+        let response: HandoffResponse = serde_json::from_value(result)
+            .with_context(|| format!("{} must return {{ argv }}", protocol::HANDOFF))?;
+        validate_handoff_argv(response.argv).map_err(|error| anyhow!(error))?;
+        process
+            .call(
+                request_id,
+                protocol::HANDBACK,
+                json!({ "session_id": PROVIDER_TEST_SESSION }),
+            )
+            .with_context(|| format!("{} failed", protocol::HANDBACK))?;
+        request_id += 1;
+    }
+    process
+        .call(
+            request_id,
+            protocol::STOP,
+            json!({ "session_id": PROVIDER_TEST_SESSION, "reason": StopReason::Destroy }),
+        )
+        .with_context(|| format!("{} failed", protocol::STOP))?;
+    Ok(request_id + 1)
 }
 
 #[derive(Debug, PartialEq)]
@@ -158,17 +258,6 @@ fn parse_scenario_line(line: &str) -> Result<ScenarioRequest> {
         params: object.get("params").cloned().unwrap_or(Value::Null),
         timeout,
     })
-}
-
-fn is_host_controlled_method(method: &str) -> bool {
-    matches!(
-        method,
-        "plugin.handshake"
-            | "plugin.shutdown"
-            | "plugin.taskLifecycle"
-            | "plugin.sessionLifecycle"
-            | "$/cancelRequest"
-    )
 }
 
 fn manifest_capabilities(manifest: &Value) -> Vec<String> {
@@ -360,7 +449,11 @@ struct PluginProcess {
     frames: Receiver<Result<String>>,
     settings: Value,
     capabilities: HashSet<String>,
-    _state: TemporaryPluginState,
+    /// Last event sequence number seen per started provider session.
+    provider_sessions: HashMap<String, u64>,
+    provider_statuses: Vec<ProviderSessionStatus>,
+    provider_events_received: usize,
+    state: TemporaryPluginState,
 }
 
 struct WriteFrame {
@@ -395,7 +488,10 @@ impl PluginProcess {
             frames,
             settings: json!({}),
             capabilities: capabilities.iter().cloned().collect(),
-            _state: state,
+            provider_sessions: HashMap::new(),
+            provider_statuses: Vec::new(),
+            provider_events_received: 0,
+            state,
         })
     }
 
@@ -501,21 +597,95 @@ impl PluginProcess {
                     bail!("plugin closed stdout before responding")
                 }
             };
-            match parse_frame(&line)? {
-                Frame::Response {
-                    id: response_id,
-                    result,
-                } => {
-                    if response_id != json!(expected_id) {
-                        bail!("mismatched JSON-RPC response id: expected {expected_id}, got {response_id}");
-                    }
-                    return Ok(Some(result));
+            if let Some((response_id, result)) = self.dispatch(&line)? {
+                if response_id != json!(expected_id) {
+                    bail!("mismatched JSON-RPC response id: expected {expected_id}, got {response_id}");
                 }
-                Frame::Request { id, method, params } => {
-                    self.handle_host_request(id, &method, params)?
-                }
+                return Ok(Some(result));
             }
         }
+    }
+
+    /// Serve a plugin's request or notification; a response is returned to the caller.
+    fn dispatch(
+        &mut self,
+        line: &str,
+    ) -> Result<Option<(Value, std::result::Result<Value, RpcError>)>> {
+        match parse_frame(line)? {
+            Frame::Response { id, result } => return Ok(Some((id, result))),
+            Frame::Request { id, method, params } => {
+                self.handle_host_request(id, &method, params)?
+            }
+            Frame::Notification { method, params } => self.handle_notification(&method, params)?,
+        }
+        Ok(None)
+    }
+
+    /// Pump plugin output until a turn completes: `busy` then `idle`, both after `after`.
+    /// Statuses still queued from earlier requests (start's `idle`) cannot satisfy it.
+    fn await_provider_turn(&mut self, after: usize, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let statuses = &self.provider_statuses[after..];
+            if let Some(busy) = statuses
+                .iter()
+                .position(|status| *status == ProviderSessionStatus::Busy)
+            {
+                if statuses[busy..].contains(&ProviderSessionStatus::Idle) {
+                    return Ok(());
+                }
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let line = match self.frames.recv_timeout(remaining) {
+                Ok(frame) => frame?,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    bail!("provider turn did not report busy then idle in time")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    bail!("plugin closed stdout during a provider turn")
+                }
+            };
+            if let Some((id, _)) = self.dispatch(&line)? {
+                bail!("unexpected JSON-RPC response {id} during a provider turn");
+            }
+        }
+    }
+
+    fn handle_notification(&mut self, method: &str, params: Option<Value>) -> Result<()> {
+        if !self.capabilities.contains("providers") {
+            bail!("plugin sent notification {method} without the providers capability");
+        }
+        let params = params.unwrap_or(Value::Null);
+        // The host's own parameter types, so this check cannot accept what the host rejects.
+        let invalid = |error: serde_json::Error| anyhow!("invalid {method}: {error}");
+        match method {
+            EVENT_NOTIFICATION => {
+                let event: SessionEventParams = serde_json::from_value(params).map_err(invalid)?;
+                let last_seq = self.provider_session_seq(method, &event.session_id)?;
+                if event.seq <= *last_seq {
+                    bail!(
+                        "{method} seq must increase per session: {} after {last_seq}",
+                        event.seq
+                    );
+                }
+                *last_seq = event.seq;
+                self.provider_events_received += 1;
+            }
+            STATUS_NOTIFICATION => {
+                let status: SessionStatusParams =
+                    serde_json::from_value(params).map_err(invalid)?;
+                self.provider_session_seq(method, &status.session_id)?;
+                self.provider_statuses.push(status.status);
+            }
+            _ => bail!("plugin sent undocumented notification {method}"),
+        }
+        Ok(())
+    }
+
+    fn provider_session_seq(&mut self, method: &str, session_id: &str) -> Result<&mut u64> {
+        self.provider_sessions
+            .get_mut(session_id)
+            .ok_or_else(|| anyhow!("{method} referenced unknown session {session_id}"))
     }
 
     fn send(&self, frame: Value) -> Result<()> {
@@ -786,6 +956,10 @@ enum Frame {
         id: Value,
         result: std::result::Result<Value, RpcError>,
     },
+    Notification {
+        method: String,
+        params: Option<Value>,
+    },
 }
 
 fn parse_frame(line: &str) -> Result<Frame> {
@@ -796,6 +970,18 @@ fn parse_frame(line: &str) -> Result<Frame> {
         .ok_or_else(|| anyhow!("malformed JSON-RPC output: frame must be an object"))?;
     if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
         bail!("malformed JSON-RPC output: expected jsonrpc 2.0");
+    }
+    if !object.contains_key("id") {
+        if let Some(method) = object
+            .get("method")
+            .and_then(Value::as_str)
+            .filter(|method| matches!(*method, "host.session.event" | "host.session.status"))
+        {
+            return Ok(Frame::Notification {
+                method: method.to_owned(),
+                params: object.get("params").cloned(),
+            });
+        }
     }
     let id = valid_id(object.get("id"))?;
     if let Some(method) = object.get("method") {
@@ -967,7 +1153,7 @@ mod tests {
         assert!(validate_local_manifest(&recipient_api, "test-platform").is_ok());
 
         let mut incompatible_api = manifest();
-        incompatible_api["host_api_version"] = json!("planeai.plugin-host.v3");
+        incompatible_api["host_api_version"] = json!("planeai.plugin-host.v4");
         assert!(validate_local_manifest(&incompatible_api, "test-platform").is_err());
 
         let mut unsupported_capability = manifest();
@@ -1221,7 +1407,7 @@ mod tests {
                 assert_eq!(id, json!(1));
                 assert_eq!(result.unwrap(), json!({ "ok": true }));
             }
-            Frame::Request { .. } => panic!("expected response"),
+            _ => panic!("expected response"),
         }
         match parse_frame(
             r#"{"jsonrpc":"2.0","id":"get","method":"host.settings.get","params":null}"#,
@@ -1229,7 +1415,18 @@ mod tests {
         .unwrap()
         {
             Frame::Request { method, .. } => assert_eq!(method, "host.settings.get"),
-            Frame::Response { .. } => panic!("expected request"),
+            _ => panic!("expected request"),
+        }
+        match parse_frame(
+            r#"{"jsonrpc":"2.0","method":"host.session.status","params":{"session_id":"s","status":"idle"}}"#,
+        )
+        .unwrap()
+        {
+            Frame::Notification { method, params } => {
+                assert_eq!(method, "host.session.status");
+                assert_eq!(params.unwrap()["status"], "idle");
+            }
+            _ => panic!("expected notification"),
         }
     }
 

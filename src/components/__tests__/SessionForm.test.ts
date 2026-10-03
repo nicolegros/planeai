@@ -514,3 +514,35 @@ describe("cross-project task link", () => {
     target.remove();
   });
 });
+
+describe("SessionForm with a provider that cannot auto-approve", () => {
+  it("shows auto-approve off and ignores its shortcut, keeping the choice for other providers", () => {
+    const target = renderForm({
+      runtimeProviders: [
+        {
+          key: "chat:claude",
+          plugin: { id: "chat", name: "Chat" },
+          provider: {
+            id: "claude",
+            label: "Claude (chat)",
+            entrypoint: "ui/chat.js",
+            supports: [],
+          },
+        },
+      ],
+    });
+    const form = target.querySelector<HTMLElement>("[data-form-keyboard]")!;
+    const press = (key: string) => {
+      form.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      flushSync();
+    };
+    const checkbox = () => target.querySelector<HTMLInputElement>("#auto-approve")!;
+    expect(checkbox().checked).toBe(true);
+    press("p");
+    expect(checkbox().disabled).toBe(true);
+    expect(checkbox().checked).toBe(false);
+    press("a");
+    press("p");
+    expect(checkbox().checked).toBe(true);
+  });
+});

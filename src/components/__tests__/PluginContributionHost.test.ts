@@ -113,6 +113,7 @@ describe("PluginContributionHost", () => {
       backend_entrypoint: "planeai-plugin-jira",
       capabilities: [],
       ui_contributions: [],
+      providers: [],
       installed_hash: null,
       installed_path: null,
       original_display_path: null,

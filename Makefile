@@ -76,6 +76,7 @@ test-plugin-fixture: sidecar-placeholders local-plugin-fixture
 	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo run -p planeai-cli-bin -- plugin test --package plugins/local-fixture --scenario plugins/local-fixture/scenarios/persist-settings.jsonl
 	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo run -p planeai-cli-bin -- plugin test --package plugins/local-fixture --scenario plugins/local-fixture/scenarios/state-environment.jsonl
 	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo run -p planeai-cli-bin -- plugin test --package plugins/local-fixture --scenario plugins/local-fixture/scenarios/cancellation.jsonl
+	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo run -p planeai-cli-bin -- plugin test --package plugins/local-fixture --provider-turn "hello from plugin test"
 
 test-e2e: build
 	./tests/e2e_session_persistence.sh

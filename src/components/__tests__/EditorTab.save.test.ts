@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 
-const { mockGit, mockPty } = vi.hoisted(() => ({
+const { mockGit } = vi.hoisted(() => ({
   mockGit: { readFile: vi.fn(), writeFile: vi.fn() },
-  mockPty: { write: vi.fn() },
 }));
 
-vi.mock("../../lib/api", () => ({ git: mockGit, pty: mockPty }));
+vi.mock("../../lib/api", () => ({ git: mockGit }));
 vi.mock("../../lib/settings.svelte", () => ({
   getSettings: () => ({
     terminal: { font_size: 14, font_family: "monospace" },
@@ -64,6 +63,7 @@ describe("EditorTab save command wiring", () => {
         initialFile: FILE,
         onClose: vi.fn(),
         onFocusEditor: vi.fn(),
+        onSend: vi.fn(),
       },
     });
   });

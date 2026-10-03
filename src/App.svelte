@@ -46,6 +46,10 @@
   import LoopDashboard from "./components/LoopDashboard.svelte";
   import EmptyTaskWorkspace from "./components/EmptyTaskWorkspace.svelte";
   import PluginContributionHost from "./components/PluginContributionHost.svelte";
+  import ProviderSessionView from "./components/ProviderSessionView.svelte";
+  import { isPluginSession, runtimeProviders } from "./lib/plugin-providers";
+  import { providerHandoff } from "./lib/provider-handoff";
+  import { sendToAgent } from "./lib/agent-input";
   import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
@@ -338,6 +342,11 @@
     const leaf = workspaceLayout.layout ? findLeaf(workspaceLayout.layout, paneId) : null;
     const tab = activeTabOf(leaf);
     if (!tab || !isTerminalTab(tab)) return;
+    const session = sessions.find((candidate) => candidate.id === ptyKeySessionId(tab.ptyKey));
+    if (tab.type === "agent" && session && isPluginSession(session)) {
+      showSnackbar("Chats do not take dropped files yet. Drop them on a terminal tab instead.", "error");
+      return;
+    }
     const { text, skipped } = droppedPathsText(paths, { windows: IS_WINDOWS });
     if (skipped.length > 0) {
       showSnackbar(
@@ -527,6 +536,23 @@
       loopToDelete = null;
     });
   });
+
+  /** The user focused a terminal or chat pane: its pane, tab and the keyboard zone follow. */
+  function claimAgentPane(leafId: string, ptyKey: string): void {
+    workspaceLayout.focusPane(leafId);
+    selectTerminalTab(ptyKey);
+    focusTerminal();
+  }
+
+  // ─── Provider session terminal handoff ─────────────────────────────────────
+
+  async function handoffProviderSession(sessionId: string): Promise<void> {
+    await providerHandoff.start(sessionId, (command, label) => workspaceLayout.openCommand(sessionId, command, label));
+  }
+
+  function handbackProviderSession(sessionId: string): Promise<void> {
+    return providerHandoff.end(sessionId, (ptyKey) => workspaceLayout.closeTab(ptyKey));
+  }
 
   // ─── Project management ─────────────────────────────────────────────────────
   async function openPreferences(location?: SettingsLocation) {
@@ -1194,6 +1220,7 @@
         {projects}
         {sessions}
         {taskPrefill}
+        runtimeProviders={runtimeProviders(pluginInventory)}
         currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
         onCreateTask={() => {
           showSessionForm = false;
@@ -1212,6 +1239,7 @@
         mode={taskWorkspaceToEdit ? "edit" : "create"}
         {projects}
         {sessions}
+        runtimeProviders={runtimeProviders(pluginInventory)}
         tasks={taskStore.getAllTasks()}
         initial={taskWorkspaceToEdit ? {
           key: taskWorkspaceToEdit.task.key,
@@ -1332,19 +1360,35 @@
             {@const isActiveInLeaf = tabEntry.ptyKey === activeEntry?.ptyKey}
             {@const project = session ? projects.find((p) => p.id === session.project_id) : null}
             {#if isTerminalTab(tabEntry)}
-              {#if session}
+              {@const paneFocused = isTerminalPaneFocused({
+                ...terminalKeyboardOwnership,
+                isActiveTabInLeaf: isActiveInLeaf,
+                isFocusedLeaf,
+                belongsToActiveSession: sessionId === activeSessionId,
+              })}
+              {#if session && tabEntry.type === "agent" && isPluginSession(session)}
+              <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
+                <ProviderSessionView
+                  {session}
+                  inventory={pluginInventory}
+                  focused={paneFocused}
+                  onFocused={() => {
+                    if (isActiveInLeaf) claimAgentPane(leaf.id, tabEntry.ptyKey);
+                  }}
+                  onNavigate={openPluginContribution}
+                  onOpenPreferences={openPreferences}
+                  onHandoff={handoffProviderSession}
+                  onHandback={handbackProviderSession}
+                />
+              </div>
+              {:else if session}
               <!-- Wrapper hides inactive tabs; Terminal's visible prop also pauses during loop overlay -->
               <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
                 <Terminal
                   focusRequest={terminalFocusRequest}
                   sessionId={tabEntry.ptyKey}
                   visible={isActiveInLeaf && !activeLoopId && !activePluginId}
-                  focused={isTerminalPaneFocused({
-                    ...terminalKeyboardOwnership,
-                    isActiveTabInLeaf: isActiveInLeaf,
-                    isFocusedLeaf,
-                    belongsToActiveSession: sessionId === activeSessionId,
-                  })}
+                  focused={paneFocused}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
                   initialCommand={tabEntry.type === "shell" ? workspaceLayout.pendingCommand(tabEntry.ptyKey) : undefined}
@@ -1358,10 +1402,7 @@
                     else showSnackbar(String(error));
                   }}
                   onFocused={(event) => {
-                    if (event.type === "focusin" && !isActiveInLeaf) return;
-                    workspaceLayout.focusPane(leaf.id);
-                    selectTerminalTab(tabEntry.ptyKey);
-                    focusTerminal();
+                    if (event.type !== "focusin" || isActiveInLeaf) claimAgentPane(leaf.id, tabEntry.ptyKey);
                   }}
                   onUserInput={() => orchestrator.recordUserInput(sessionId)}
                 />
@@ -1381,6 +1422,7 @@
                     sessionId={sessionId}
                     onEditFile={(filePath) => openFile(sessionId, filePath)}
                     onFileChange={(name) => workspaceLayout.setTabTitle(tabEntry.ptyKey, name)}
+                    onSend={(text) => sendToAgent(session, text)}
                   />
                 {:else}
                   <div class="flex items-center justify-center h-full text-t3 text-sm" role="status">No project associated with this session</div>
@@ -1403,6 +1445,7 @@
                   onFocusEditor={() => { workspaceLayout.focusTab(tabEntry.ptyKey); focusEditor(); }}
                   onFileChange={(name) => workspaceLayout.setTabTitle(tabEntry.ptyKey, name)}
                   onModifiedChange={(modified) => setEditorTabModified(tabEntry.ptyKey, modified)}
+                  onSend={(text) => sendToAgent(session, text)}
                 />
               {:else if isActiveInLeaf}
                 <div class="flex items-center justify-center h-full text-t3 text-sm" role="status">No project associated with this session</div>
@@ -1572,7 +1615,7 @@
               <span class="text-[13px] font-semibold text-t1">{quitDirectCount} active session{quitDirectCount > 1 ? 's' : ''} will be terminated.</span>
               <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
             </div>
-            <p class="text-[11px] text-t3">Direct sessions don't survive app quit.</p>
+            <p class="text-[11px] text-t3">Local sessions and running chat turns don't survive app quit.</p>
           </div>
           <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
             <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showQuitConfirm = false; }}>

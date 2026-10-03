@@ -23,6 +23,7 @@ import { editor as editorApi, pty, sessions as sessionsApi } from "./api";
 import { toTaskWorkspaceId } from "./sidebar-session-order";
 import { sessionTaskProjectId, type Session } from "./types";
 import { disposeTerminalView } from "./terminal-views";
+import { providerHandoff } from "./provider-handoff";
 
 export type WorkspaceIdentity =
   | { kind: "task"; key: string; projectId: string; taskKey: string }
@@ -57,6 +58,8 @@ export interface TaskWorkspaceLayoutDeps {
   store: LayoutStore;
   /** Kill a shell tab's backend process. Rejects when it may still be running. */
   closeShell: (sessionId: string, index: number) => Promise<unknown>;
+  /** A shell tab left the layout, closed or exited by itself; it never rejects. */
+  shellClosed?: (ptyKey: string) => Promise<void>;
   getTerminalCommand: (sessionId: string, filePath: string) => Promise<string>;
   disposeView: (ptyKey: string) => void;
   saveDelayMs?: number;
@@ -179,6 +182,23 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     return highest + 1;
   }
 
+  /** Reserve a shell tab whose PTY runs `command`, so the terminal that mounts for it starts it. */
+  function openCommandTab(
+    sessionId: string,
+    paneId: string,
+    command: string,
+    label: string,
+    focus = false,
+  ): string | null {
+    if (!layout || loading || !tree.findLeaf(layout, paneId)) return null;
+    const ptyKey = shellPtyKey(sessionId, allocateShellIndex(sessionId));
+    pendingCommands.set(ptyKey, command);
+    const next = tree.addTab(layout, paneId, shellTab(ptyKey, label));
+    commit(focus ? tree.focusLeaf(next, paneId) : next);
+    saveNow();
+    return ptyKey;
+  }
+
   function shellTab(ptyKey: string, label: string): TabEntry {
     return { ptyKey, label, icon: "terminal", type: "shell" };
   }
@@ -221,6 +241,7 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     // shell running with no UI to reach it.
     await deps.closeShell(parts.sessionId, parts.index);
     removeShell(ptyKey);
+    await deps.shellClosed?.(ptyKey);
   }
 
   return {
@@ -366,12 +387,13 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       const paneId = loading ? null : layout?.focusedLeafId;
       if (!paneId) return null;
       const command = await deps.getTerminalCommand(sessionId, filePath);
-      if (!layout || loading || !tree.findLeaf(layout, paneId)) return null;
-      const ptyKey = shellPtyKey(sessionId, allocateShellIndex(sessionId));
-      pendingCommands.set(ptyKey, command);
-      commit(tree.addTab(layout, paneId, shellTab(ptyKey, fileName(filePath))));
-      saveNow();
-      return ptyKey;
+      return openCommandTab(sessionId, paneId, command, fileName(filePath));
+    },
+
+    /** Open a shell tab in the focused pane that runs `command` when its PTY spawns, and focus it. */
+    openCommand(sessionId: string, command: string, label: string): string | null {
+      const paneId = loading ? null : layout?.focusedLeafId;
+      return paneId ? openCommandTab(sessionId, paneId, command, label, true) : null;
     },
 
     /** Command a shell tab must run when its PTY spawns, if it is a terminal editor. */
@@ -450,6 +472,8 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       if (parts?.kind !== "shell" || goneShells.has(ptyKey)) return;
       pendingCommands.delete(ptyKey);
       removeShell(ptyKey);
+      // The process is gone even when finalizing its backend fails below.
+      await deps.shellClosed?.(ptyKey);
       await deps.closeShell(parts.sessionId, parts.index);
     },
 
@@ -579,6 +603,7 @@ export const taskWorkspaceLayout = createTaskWorkspaceLayout({
         : sessionsApi.saveLayout(workspace.sessionId, layoutJson),
   },
   closeShell: (sessionId, index) => pty.closeTab(sessionId, index),
+  shellClosed: (ptyKey) => providerHandoff.shellClosed(ptyKey),
   getTerminalCommand: (sessionId, filePath) => editorApi.getTerminalCommand(sessionId, filePath),
   disposeView: disposeTerminalView,
   onSaveError: (workspace, error) =>

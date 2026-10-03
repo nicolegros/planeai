@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Command, Dialog, computeCommandScore } from "bits-ui";
   import { MOD_LABEL } from "../lib/keyboard";
+  import { isPluginSession } from "../lib/plugin-providers";
   import { sessions as sessionsApi, projects as projectsApi, git } from "../lib/api";
   import type { Session, Project, TaskItem, PluginInventory, PluginUiContribution } from "../lib/types";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -49,6 +50,11 @@
   const sessions = $derived(orchestrator.getSessions());
   const activeSessionId = $derived(orchestrator.getActiveSessionId());
   const projects = $derived(projectStore.getProjects());
+  /** A chat session has no terminal to reset. */
+  const activeHasTerminal = $derived.by(() => {
+    const session = sessions.find((s) => s.id === activeSessionId);
+    return !!session && !isPluginSession(session);
+  });
 
   /** Repo path of the project owning the active session — its tasks sort first. */
   const activeProjectPath = $derived.by(() => {
@@ -595,7 +601,7 @@
                 <Command.Item
                   value="reset terminal"
                   keywords={["reset", "clear", "redraw", "refresh", "fix"]}
-                  disabled={!activeSessionId}
+                  disabled={!activeHasTerminal}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={() => { onResetTerminal(); close(); }}
                 >

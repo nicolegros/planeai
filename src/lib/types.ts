@@ -86,7 +86,9 @@ export type PluginUiPlacement =
   | "session.panel"
   | "session.indicator"
   | "titlebar"
-  | "interaction";
+  | "interaction"
+  /** Host-synthesized placement for a provider's session UI; never declared in manifests. */
+  | "session.main";
 
 export interface PluginUiContribution {
   id: string;
@@ -95,6 +97,24 @@ export interface PluginUiContribution {
   entrypoint: string;
   order: number | null;
   shortcut: string | null;
+}
+
+export type ProviderFeature = "yolo" | "handoff";
+
+/** A session runtime declared by a plugin; its UI replaces the agent terminal (ADR-0013). */
+export interface PluginProvider {
+  id: string;
+  label: string;
+  entrypoint: string;
+  supports: ProviderFeature[];
+}
+
+/** An opaque provider event forwarded from the sidecar to the session's UI. */
+export interface ProviderSessionEvent {
+  plugin_id: string;
+  session_id: string;
+  seq: number;
+  payload: unknown;
 }
 
 /** A sidecar-registered action rendered in a host session context menu. */
@@ -142,6 +162,7 @@ export interface PluginInventory {
     default_interval_ms: number;
   } | null;
   ui_contributions: PluginUiContribution[];
+  providers: PluginProvider[];
   installed_hash: string | null;
   installed_path: string | null;
   original_display_path: string | null;

@@ -7,12 +7,14 @@ use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 use crate::config;
 use crate::db;
 use crate::git;
+use crate::plugin_providers;
+use crate::session_ops::PLUGIN_BACKEND;
 use crate::state::{ConfigState, DaemonState, DbState, NotifyHandle, ProjectOperationState};
 #[cfg(not(windows))]
 use crate::tmux;
 use crate::util::sanitize_project_name;
 
-use super::helpers::{fire_task_hook, provider_has_hook};
+use super::helpers::{fire_task_hook, register_notify_session};
 
 /// Result of launching a session, with an optional warning for the frontend to display.
 #[derive(Debug, Clone, Serialize)]
@@ -82,8 +84,27 @@ pub async fn launch_session(
     .await?;
     let workspace_project_id = task_project_id.as_deref().unwrap_or(&project_id);
     tracing::info!(task_prompt = ?task_prompt, auto_approve, provider = ?provider, task_key = ?task_key, "launch_session called");
+    // Plugin providers have no command: their sidecar runs the agent (ADR-0013).
+    let runtime_provider = match provider.as_deref() {
+        Some(key) if plugin_providers::parse_provider_key(key).is_some() => {
+            plugin_providers::resolve(&plugin_providers::AppRuntime::new(&app), key).await?;
+            Some(key.to_string())
+        }
+        _ => None,
+    };
     // Phase 1: gather params from config (holding config lock briefly)
-    let (cmd, provider_key, hook_enabled, backend, scrollback_bytes, extra_path_dirs) = {
+    let (cmd, provider_key, backend, scrollback_bytes, extra_path_dirs) = if let Some(key) =
+        runtime_provider
+    {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        (
+            String::new(),
+            key,
+            PLUGIN_BACKEND.to_string(),
+            0,
+            cfg.resolved_extra_path_dirs(),
+        )
+    } else {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         let pk = provider.unwrap_or_else(|| cfg.default_provider.clone());
         let provider_def = cfg
@@ -106,11 +127,10 @@ pub async fn launch_session(
         let c = launch_cmd.command;
         tracing::info!(command = %c, prompt_injected = launch_cmd.prompt_was_injected, approve_applied = launch_cmd.auto_approve_was_applied, "launch command built");
 
-        let he = provider_has_hook(&pk, &cfg);
         let be = config::resolve_backend(&cfg).to_string();
         let sb = 1_048_576;
         let epd = cfg.resolved_extra_path_dirs();
-        (c, pk, he, be, sb, epd)
+        (c, pk, be, sb, epd)
     };
 
     // Phase 2: async work — detect base branch, git worktree/checkout
@@ -195,8 +215,25 @@ pub async fn launch_session(
     };
 
     // Phase 3: async backend spawn — no locks held
-    if backend == "daemon" || backend == planeai_rmux::BACKEND {
-        let spawn_result = if backend == planeai_rmux::BACKEND {
+    // Until the row exists, dropping this undoes the provider's start.
+    let mut provider_launch = None;
+    if backend == "daemon" || backend == planeai_rmux::BACKEND || backend == PLUGIN_BACKEND {
+        let spawn_result = if backend == PLUGIN_BACKEND {
+            let context = plugin_providers::SessionRuntimeContext {
+                session_id: session_id.clone(),
+                provider_key: provider_key.clone(),
+                cwd: working_dir.clone(),
+                yolo: auto_approve,
+                extra_path_dirs: extra_path_dirs.clone(),
+            };
+            plugin_providers::launch(
+                std::sync::Arc::new(plugin_providers::AppRuntime::new(&app)),
+                &context,
+                task_prompt.as_deref(),
+            )
+            .await
+            .map(|launch| provider_launch = Some(launch))
+        } else if backend == planeai_rmux::BACKEND {
             spawn_in_rmux(
                 &app,
                 &session_id,
@@ -267,12 +304,6 @@ pub async fn launch_session(
         e.to_string()
     })?;
 
-    {
-        let mut ns = notify.0.lock().unwrap();
-        let display_name = if name.is_empty() { &branch } else { &name };
-        ns.register_session(&session_id, display_name, &project_name, hook_enabled);
-    }
-
     let session = db::create_session_with_params(
         &conn,
         &planeai_core::services::CreateSessionParams {
@@ -306,10 +337,16 @@ pub async fn launch_session(
         });
         e.to_string()
     })?;
+    if let Some(launch) = provider_launch {
+        launch.commit();
+    }
 
-    if session.task_key.is_some() {
+    {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-        fire_task_hook(&cfg, &session, "on_start", &conn);
+        register_notify_session(&mut notify.0.lock().unwrap(), &session, &project_name, &cfg);
+        if session.task_key.is_some() {
+            fire_task_hook(&cfg, &session, "on_start", &conn);
+        }
     }
 
     // If we reused an existing worktree, check if another active session is already there

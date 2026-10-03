@@ -16,12 +16,15 @@ import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
 import { getCycleState } from "./tab-switcher.svelte";
 import { taskWorkspaceLayout } from "./task-workspace-layout.svelte";
+import { isPluginSession } from "./plugin-providers";
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
 let sessions = $state<Session[]>([]);
 let activeSessionId = $state<string | null>(null);
 let agentStates = $state<Record<string, string>>({});
+/** Sessions whose agent is mid-turn. Unlike `agentStates`, selecting a session does not clear it. */
+const turns = new Set<string>();
 
 let symphonyStatus = $state<{ active: boolean; slots_used: number; max_concurrent: number } | null>(
   null,
@@ -34,6 +37,7 @@ export function _resetForTests(): void {
   sessions = [];
   setActiveSession(null);
   agentStates = {};
+  turns.clear();
   symphonyStatus = null;
   reviewReady = {};
 }
@@ -281,10 +285,31 @@ export function startEventListeners(): () => void {
     }),
   );
 
+  // Its sender, a CLI command, loop or recipe, was already told the prompt was sent.
+  unlisteners.push(
+    listen<{ session_id: string; error: string }>("prompt-delivery-failed", (event) => {
+      const session = sessions.find((s) => s.id === event.payload.session_id);
+      showSnackbar(
+        `A prompt for ${session?.name ?? "a session"} was not delivered: ${event.payload.error}`,
+      );
+    }),
+  );
+
+  // A provider's sidecar went away mid-turn: the turn ended without finishing.
+  unlisteners.push(
+    listen<{ session_id: string }>("agent-released", (event) => {
+      const id = event.payload.session_id;
+      turns.delete(id);
+      if (agentStates[id] === "Busy") clearAgentState(id);
+    }),
+  );
+
   // Agent state changes (Busy/Idle)
   unlisteners.push(
     listen<{ session_id: string; state: string }>("agent-state-change", (event) => {
       agentStates = { ...agentStates, [event.payload.session_id]: event.payload.state };
+      if (event.payload.state === "Busy") turns.add(event.payload.session_id);
+      else turns.delete(event.payload.session_id);
       if (event.payload.state === "Idle") {
         if (getSettings().sound_enabled !== false) {
           playTaskComplete();
@@ -376,14 +401,25 @@ export function startSymphonyPolling(): () => void {
 
 // ─── Quit confirmation helper ────────────────────────────────────────────────
 
-export function getActiveDirectCount(): number {
-  return sessions.filter((s) => s.status === "active" && s.backend === "direct").length;
+/** Local PTYs die with the app, and so does a provider session's in-flight turn. */
+export function runningTurns(): ReadonlySet<string> {
+  return turns;
+}
+
+export function countSessionsLostOnQuit(
+  candidates: Pick<Session, "id" | "status" | "backend">[],
+  running: ReadonlySet<string>,
+): number {
+  return candidates.filter(
+    (s) =>
+      s.status === "active" && (s.backend === "local" || (isPluginSession(s) && running.has(s.id))),
+  ).length;
 }
 
 export function setupQuitGuard(onShowConfirm: (count: number) => void): Promise<() => void> {
   return getCurrentWindow().onCloseRequested(async (event) => {
     flushMru().catch(() => {});
-    const count = getActiveDirectCount();
+    const count = countSessionsLostOnQuit(sessions, turns);
     if (count > 0) {
       event.preventDefault();
       onShowConfirm(count);

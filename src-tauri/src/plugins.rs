@@ -14,20 +14,16 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
-use tokio::sync::{Mutex as AsyncMutex, Notify};
+use tokio::sync::{mpsc, Mutex as AsyncMutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 
 use crate::commands;
 use crate::task_lifecycle::TaskLifecycleBatch;
-
-const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
-const RECIPIENT_HOST_API_VERSION: &str = "planeai.plugin-host.v2";
-
-fn supports_host_api_version(version: &str) -> bool {
-    matches!(version, HOST_API_VERSION | RECIPIENT_HOST_API_VERSION)
-}
+use planeai_plugin_contract::provider::is_host_controlled_method as is_host_controlled_plugin_method;
+use planeai_plugin_contract::supports_host_api_version;
+pub use planeai_plugin_contract::ProviderFeature;
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 // A Jira lifecycle writeback may refresh credentials, look up a transition,
 // perform that transition, and add a comment. Each network request is bounded
@@ -40,6 +36,8 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_RPC_FRAME_BYTES: u64 = 64 * 1024;
 const MAX_PLUGIN_SESSION_PROMPT_CHARS: usize = 100_000;
+const FRAME_QUEUE_CAPACITY: usize = 256;
+const STDOUT_CLOSED_ERROR: &str = "plugin process closed stdout unexpectedly";
 const JIRA_PLUGIN_ID: &str = "jira";
 const GITHUB_PLUGIN_ID: &str = "github";
 const JIRA_BACKEND_ENTRYPOINT: &str = "planeai-plugin-jira";
@@ -63,6 +61,8 @@ pub struct PluginManifest {
     pub capabilities: Vec<PluginHostCapability>,
     #[serde(default)]
     pub background_service: Option<PluginBackgroundService>,
+    #[serde(default)]
+    pub providers: Vec<PluginProvider>,
     #[serde(default, rename = "ui_entrypoint")]
     legacy_ui_entrypoint: LegacyUiEntrypoint,
 }
@@ -159,6 +159,25 @@ pub enum PluginHostCapability {
     Storage,
     #[serde(rename = "sidebar.navigation")]
     SidebarNavigation,
+    #[serde(rename = "providers")]
+    Providers,
+}
+
+/// A session runtime a plugin offers as a provider; its UI replaces the agent terminal.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginProvider {
+    pub id: String,
+    pub label: String,
+    pub entrypoint: String,
+    #[serde(default)]
+    pub supports: Vec<ProviderFeature>,
+}
+
+impl PluginProvider {
+    pub fn supports(&self, feature: ProviderFeature) -> bool {
+        self.supports.contains(&feature)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -279,6 +298,7 @@ impl PluginManifest {
                     "ui_contributions": self.ui_contributions,
                     "capabilities": self.capabilities,
                     "background_service": self.background_service,
+                    "providers": (!self.providers.is_empty()).then_some(&self.providers),
                 });
                 planeai_plugin_contract::validate_local_manifest(&manifest, platform)
                     .map_err(|error| error.to_string())?;
@@ -291,6 +311,9 @@ impl PluginManifest {
             .is_some_and(|entrypoint| entrypoint.trim().is_empty())
         {
             return Err("legacy ui_entrypoint must not be empty".to_string());
+        }
+        if !self.providers.is_empty() {
+            return Err("bundled plugins cannot declare providers".to_string());
         }
         validate_ui_contributions(&self.id, &self.effective_ui_contributions())?;
         validate_background_service(self.background_service.as_ref())?;
@@ -339,6 +362,7 @@ fn validate_capabilities(
                     | PluginHostCapability::TasksCreate
                     | PluginHostCapability::TasksTransition
                     | PluginHostCapability::TaskEvents
+                    | PluginHostCapability::Providers
             )
         })
     {
@@ -505,6 +529,7 @@ pub struct PluginInventory {
     pub ui_contributions: Vec<PluginUiContribution>,
     pub capabilities: Vec<PluginHostCapability>,
     pub background_service: Option<PluginBackgroundService>,
+    pub providers: Vec<PluginProvider>,
     pub installed_hash: Option<String>,
     pub installed_path: Option<String>,
     pub original_display_path: Option<String>,
@@ -664,13 +689,23 @@ fn request_queue_timeout_error(method: &str) -> String {
     format!("plugin RPC {method} request queue timed out")
 }
 
+/// Prefix for requests refused before any byte reached the sidecar.
+const REQUEST_NOT_SENT: &str = "plugin RPC request not sent: ";
+
+/// A request too large or malformed to send fails before reaching the sidecar.
+fn encode_request(id: u64, method: &str, params: Value) -> Result<String, String> {
+    encode_json_rpc_line(id, method, params).map_err(|error| format!("{REQUEST_NOT_SENT}{error}"))
+}
+
 fn is_fatal_plugin_runtime_error(error: &str) -> bool {
     // A valid JSON-RPC error is an application-level response and leaves the
     // connection usable. A request that never acquired the local queue also
     // leaves the sidecar untouched. Any other request failure means stdout or
     // the request protocol can no longer be trusted, so retire this runtime
     // before another request can consume a stale or malformed frame.
-    !error.starts_with("plugin RPC error ") && !error.ends_with(" request queue timed out")
+    !error.starts_with("plugin RPC error ")
+        && !error.starts_with(REQUEST_NOT_SENT)
+        && !error.ends_with(" request queue timed out")
 }
 
 pub fn bundled_manifests() -> Result<Vec<PluginManifest>, String> {
@@ -719,6 +754,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ("ui_contributions", "TEXT NOT NULL DEFAULT '[]'"),
         ("capabilities", "TEXT NOT NULL DEFAULT '[]'"),
         ("background_service", "TEXT"),
+        ("providers", "TEXT NOT NULL DEFAULT '[]'"),
     ] {
         let has_column = conn
             .prepare("PRAGMA table_info(plugin_inventory)")?
@@ -905,6 +941,29 @@ pub fn reconcile_interrupted_runs(conn: &Connection) -> rusqlite::Result<usize> 
     )
 }
 
+/// The manifest fields stored as JSON columns of `plugin_inventory`.
+struct ManifestColumns {
+    ui_contributions: String,
+    capabilities: String,
+    background_service: String,
+    providers: String,
+}
+
+impl ManifestColumns {
+    fn of(manifest: &PluginManifest) -> Result<Self, String> {
+        fn json<T: Serialize>(value: &T, what: &str) -> Result<String, String> {
+            serde_json::to_string(value)
+                .map_err(|error| format!("failed to serialize plugin {what}: {error}"))
+        }
+        Ok(Self {
+            ui_contributions: json(&manifest.effective_ui_contributions(), "UI contributions")?,
+            capabilities: json(&manifest.capabilities, "capabilities")?,
+            background_service: json(&manifest.background_service, "background service")?,
+            providers: json(&manifest.providers, "providers")?,
+        })
+    }
+}
+
 pub fn insert_local_inventory(
     conn: &Connection,
     manifest: &PluginManifest,
@@ -921,17 +980,17 @@ pub fn insert_local_inventory(
     }
     manifest.validate()?;
     validate_shortcut_collisions(conn, manifest)?;
-    let ui_contributions = serde_json::to_string(&manifest.effective_ui_contributions())
-        .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
-    let capabilities = serde_json::to_string(&manifest.capabilities)
-        .map_err(|error| format!("failed to serialize plugin capabilities: {error}"))?;
-    let background_service = serde_json::to_string(&manifest.background_service)
-        .map_err(|error| format!("failed to serialize plugin background service: {error}"))?;
+    let ManifestColumns {
+        ui_contributions,
+        capabilities,
+        background_service,
+        providers,
+    } = ManifestColumns::of(manifest)?;
     conn.execute(
         "INSERT INTO plugin_inventory (
             id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions, capabilities, background_service,
-            installed_hash, installed_path, original_display_path, enabled, runtime_state
-        ) VALUES (?1, ?2, ?3, ?4, 'local', ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 'disabled')",
+            installed_hash, installed_path, original_display_path, enabled, runtime_state, providers
+        ) VALUES (?1, ?2, ?3, ?4, 'local', ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 'disabled', ?12)",
         params![
             manifest.id,
             manifest.name,
@@ -944,6 +1003,7 @@ pub fn insert_local_inventory(
             content_hash,
             package_dir.display().to_string(),
             original_display_path,
+            providers,
         ],
     )
     .map_err(|error| format!("failed to persist imported local plugin: {error}"))?;
@@ -971,19 +1031,19 @@ pub fn replace_local_inventory(
     }
     manifest.validate()?;
     validate_shortcut_collisions(conn, manifest)?;
-    let ui_contributions = serde_json::to_string(&manifest.effective_ui_contributions())
-        .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
-    let capabilities = serde_json::to_string(&manifest.capabilities)
-        .map_err(|error| format!("failed to serialize plugin capabilities: {error}"))?;
-    let background_service = serde_json::to_string(&manifest.background_service)
-        .map_err(|error| format!("failed to serialize plugin background service: {error}"))?;
+    let ManifestColumns {
+        ui_contributions,
+        capabilities,
+        background_service,
+        providers,
+    } = ManifestColumns::of(manifest)?;
     conn.execute(
         "UPDATE plugin_inventory SET
             name = ?2, version = ?3, host_api_version = ?4, backend_entrypoint = ?5,
             ui_contributions = ?6, capabilities = ?7, background_service = ?8,
             installed_hash = ?9, installed_path = ?10, original_display_path = ?11,
             enabled = 0, runtime_state = 'disabled', last_error = NULL, log_path = NULL,
-            updated_at = CURRENT_TIMESTAMP
+            providers = ?12, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?1 AND source_kind = 'local'",
         params![
             manifest.id,
@@ -997,6 +1057,7 @@ pub fn replace_local_inventory(
             content_hash,
             package_dir.display().to_string(),
             original_display_path,
+            providers,
         ],
     )
     .map_err(|error| format!("failed to replace local plugin inventory: {error}"))?;
@@ -1008,7 +1069,7 @@ pub fn replace_local_inventory(
 pub fn list_inventory(conn: &Connection) -> rusqlite::Result<Vec<PluginInventory>> {
     let mut statement = conn.prepare(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path
+                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers
          FROM plugin_inventory ORDER BY name COLLATE NOCASE",
     )?;
     let rows = statement.query_map([], row_to_inventory)?;
@@ -1021,7 +1082,7 @@ pub fn get_inventory(
 ) -> rusqlite::Result<Option<PluginInventory>> {
     conn.query_row(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path
+                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers
          FROM plugin_inventory WHERE id = ?1",
         [plugin_id],
         row_to_inventory,
@@ -1104,6 +1165,13 @@ fn row_to_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInventory
         state: PluginRuntimeState::from_db(&state),
         last_error: row.get(14)?,
         log_path: row.get(15)?,
+        providers: serde_json::from_str(&row.get::<_, String>(16)?).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                16,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?,
     })
 }
 
@@ -1159,6 +1227,7 @@ impl PluginRuntimeHandle {
             lifecycle: Arc::new(AsyncMutex::new(())),
             shutting_down: AtomicBool::new(false),
             exit_permitted: AtomicBool::new(false),
+            provider_sessions: Arc::new(crate::plugin_providers::ProviderSessions::default()),
         }))
     }
 }
@@ -1172,6 +1241,7 @@ pub struct PluginRuntimeSupervisor {
     lifecycle: Arc<AsyncMutex<()>>,
     shutting_down: AtomicBool,
     exit_permitted: AtomicBool,
+    provider_sessions: Arc<crate::plugin_providers::ProviderSessions>,
 }
 
 struct BackgroundWorker {
@@ -1181,11 +1251,16 @@ struct BackgroundWorker {
     task: JoinHandle<()>,
 }
 
+static NEXT_RUNTIME_INSTANCE: AtomicU64 = AtomicU64::new(1);
+
 struct RuntimeProcess {
     app: AppHandle,
+    /// Distinguishes sidecar restarts of the same plugin.
+    instance: u64,
     child: AsyncMutex<Child>,
     stdin: AsyncMutex<ChildStdin>,
-    stdout: AsyncMutex<BufReader<ChildStdout>>,
+    /// Frames from the stdout reader task, minus provider notifications it routes itself.
+    frames: AsyncMutex<mpsc::Receiver<Result<String, String>>>,
     request_lock: AsyncMutex<()>,
     next_request_id: AtomicU64,
     plugin_id: String,
@@ -1193,6 +1268,8 @@ struct RuntimeProcess {
     capabilities: HashSet<PluginHostCapability>,
     lifecycle_event_subscriptions: AsyncMutex<HashSet<String>>,
     session_actions: AsyncMutex<Vec<PluginSessionAction>>,
+    /// Set for provider plugins: the sessions this instance may drive.
+    provider_sessions: Option<Arc<crate::plugin_providers::ProviderSessions>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1343,17 +1420,6 @@ fn validate_plugin_session_completion(
     Ok(completion)
 }
 
-fn is_host_controlled_plugin_method(method: &str) -> bool {
-    matches!(
-        method,
-        "plugin.handshake"
-            | "plugin.shutdown"
-            | "plugin.taskLifecycle"
-            | "plugin.sessionLifecycle"
-            | "$/cancelRequest"
-    )
-}
-
 fn request_timeout(method: &str) -> Duration {
     match method {
         "jira.syncNow" => JIRA_SYNC_RPC_TIMEOUT,
@@ -1382,7 +1448,7 @@ impl RuntimeProcess {
             .await
             .map_err(|_| request_queue_timeout_error(method))?;
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let frame = encode_json_rpc_line(request_id, method, params)?;
+        let frame = encode_request(request_id, method, params)?;
         self.write_request_frame(&frame, deadline).await?;
 
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -1482,21 +1548,13 @@ impl RuntimeProcess {
 
     async fn read_matching_response(&self) -> Result<String, String> {
         loop {
-            let mut bytes = Vec::new();
-            let bytes_read = {
-                let mut stdout = self.stdout.lock().await;
-                (&mut *stdout)
-                    .take(MAX_RPC_FRAME_BYTES + 1)
-                    .read_until(b'\n', &mut bytes)
-                    .await
-                    .map_err(|e| format!("failed to read plugin JSON-RPC response: {e}"))?
-            };
-            if bytes_read == 0 {
-                return Err("plugin process closed stdout unexpectedly".to_string());
-            }
-            validate_plugin_response_frame(&bytes)?;
-            let frame = String::from_utf8(bytes)
-                .map_err(|e| format!("plugin JSON-RPC response was not valid UTF-8: {e}"))?;
+            let frame = self
+                .frames
+                .lock()
+                .await
+                .recv()
+                .await
+                .unwrap_or_else(|| Err(STDOUT_CLOSED_ERROR.to_string()))?;
             let value: Value = serde_json::from_str(frame.trim_end())
                 .map_err(|e| format!("malformed plugin JSON-RPC frame: {e}"))?;
             if value.get("method").is_some() {
@@ -1672,7 +1730,20 @@ impl RuntimeProcess {
         decode_json_rpc_frame(&frame, request_id)
     }
 
+    /// This instance no longer drives sessions; see `plugin_providers::runtime_stopped`.
+    fn release_provider_sessions(&self) {
+        if let Some(sessions) = &self.provider_sessions {
+            crate::plugin_providers::runtime_stopped(
+                &self.app,
+                sessions,
+                &self.plugin_id,
+                self.instance,
+            );
+        }
+    }
+
     async fn stop(&self) -> Result<(), String> {
+        self.release_provider_sessions();
         let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
         let _ = self.request_shutdown(deadline).await;
         let mut child = self.child.lock().await;
@@ -2779,7 +2850,10 @@ impl PluginRuntimeSupervisor {
 
     /// Deliver a committed session lifecycle event in the background. Delivery
     /// is best-effort and requires both manifest capability and handshake opt-in.
-    pub fn dispatch_session_lifecycle(self: &Arc<Self>, event: Value) {
+    pub fn dispatch_session_lifecycle(
+        self: &Arc<Self>,
+        event: crate::commands::sessions::lifecycle::SessionLifecycleEvent,
+    ) {
         if self.shutting_down.load(Ordering::Acquire) {
             tracing::warn!(
                 "skipped session lifecycle delivery while plugin runtime is shutting down"
@@ -2788,6 +2862,19 @@ impl PluginRuntimeSupervisor {
         }
         let supervisor = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
+            // Sessions the GUI ends dispatch this event; ends from the CLI or task
+            // completion reach `plugin_providers::reconcile` instead.
+            if let Some(reason) = crate::plugin_providers::stop_reason(&event.status) {
+                let runtime = crate::plugin_providers::AppRuntime::new(&supervisor.app);
+                crate::plugin_providers::stop(&runtime, &event.session_id, reason).await;
+            }
+            let event = match serde_json::to_value(&event) {
+                Ok(event) => event,
+                Err(error) => {
+                    tracing::warn!(%error, "failed to encode session lifecycle event");
+                    return;
+                }
+            };
             let processes = supervisor
                 .processes
                 .lock()
@@ -2824,10 +2911,99 @@ impl PluginRuntimeSupervisor {
         });
     }
 
+    pub fn provider_sessions(&self) -> &Arc<crate::plugin_providers::ProviderSessions> {
+        &self.provider_sessions
+    }
+
+    /// The live sidecar instance for a plugin, if it is running.
+    pub async fn running_instance(&self, plugin_id: &str) -> Option<u64> {
+        self.processes
+            .lock()
+            .await
+            .get(plugin_id)
+            .map(|process| process.instance)
+    }
+
+    /// A provider declared by a running plugin that holds the providers capability.
+    pub async fn running_provider(
+        &self,
+        plugin_id: &str,
+        provider_id: &str,
+    ) -> Result<PluginProvider, String> {
+        let inventory = self
+            .inventory(plugin_id)
+            .await?
+            .ok_or_else(|| format!("Unknown provider: {plugin_id}:{provider_id}"))?;
+        if !inventory
+            .capabilities
+            .contains(&PluginHostCapability::Providers)
+        {
+            return Err(format!("plugin {plugin_id} does not provide sessions"));
+        }
+        let provider = inventory
+            .providers
+            .into_iter()
+            .find(|provider| provider.id == provider_id)
+            .ok_or_else(|| format!("Unknown provider: {plugin_id}:{provider_id}"))?;
+        if inventory.state != PluginRuntimeState::Running {
+            return Err(format!(
+                "{} is unavailable because plugin {} is not running",
+                provider.label, inventory.name
+            ));
+        }
+        Ok(provider)
+    }
+
+    /// Host-controlled provider session request; plugin UI cannot reach these methods.
+    pub async fn provider_request(
+        &self,
+        plugin_id: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        debug_assert!(method.starts_with("provider."));
+        self.call_internal(plugin_id, method, params, true).await
+    }
+
+    pub async fn local_provider_ui_source(
+        &self,
+        plugin_id: &str,
+        provider_id: &str,
+    ) -> Result<String, String> {
+        self.read_local_bundle(plugin_id, |inventory| {
+            inventory
+                .providers
+                .iter()
+                .find(|provider| provider.id == provider_id)
+                .map(|provider| provider.entrypoint.clone())
+                .ok_or_else(|| format!("plugin {plugin_id} has no provider {provider_id}"))
+        })
+        .await
+    }
+
     pub async fn local_ui_source(
         &self,
         plugin_id: &str,
         contribution_id: &str,
+    ) -> Result<String, String> {
+        self.read_local_bundle(plugin_id, |inventory| {
+            inventory
+                .ui_contributions
+                .iter()
+                .find(|contribution| contribution.id == contribution_id)
+                .map(|contribution| contribution.entrypoint.clone())
+                .ok_or_else(|| {
+                    format!("plugin {plugin_id} has no UI contribution {contribution_id}")
+                })
+        })
+        .await
+    }
+
+    /// Read a UI bundle from a local plugin's imported package.
+    async fn read_local_bundle(
+        &self,
+        plugin_id: &str,
+        entrypoint: impl FnOnce(&PluginInventory) -> Result<String, String>,
     ) -> Result<String, String> {
         let inventory = self
             .inventory(plugin_id)
@@ -2836,17 +3012,10 @@ impl PluginRuntimeSupervisor {
         if inventory.source_kind != PluginSourceKind::Local {
             return Err("builtin plugins use their bundled UI entrypoints".to_string());
         }
+        let entrypoint = entrypoint(&inventory)?;
         let package = inventory
             .installed_path
             .ok_or_else(|| format!("local plugin {plugin_id} has no imported package path"))?;
-        let entrypoint = inventory
-            .ui_contributions
-            .iter()
-            .find(|contribution| contribution.id == contribution_id)
-            .map(|contribution| contribution.entrypoint.clone())
-            .ok_or_else(|| {
-                format!("plugin {plugin_id} has no UI contribution {contribution_id}")
-            })?;
         commands::blocking(move || {
             std::fs::read_to_string(Path::new(&package).join(entrypoint))
                 .map_err(|error| format!("failed to read imported plugin UI bundle: {error}"))
@@ -3095,6 +3264,7 @@ impl PluginRuntimeSupervisor {
             state_path.as_deref(),
             &id,
             capabilities.clone(),
+            self.provider_sessions.clone(),
         )
         .await
         {
@@ -3363,6 +3533,7 @@ impl PluginRuntimeSupervisor {
                     worker.cancel.cancel();
                     worker.task.abort();
                 }
+                process.release_provider_sessions();
                 if stop_process_after_removal {
                     if let Err(stop_error) = stop_process(process.clone()).await {
                         tracing::warn!(plugin_id, %stop_error, "failed to stop unhealthy plugin runtime");
@@ -3499,7 +3670,7 @@ fn plugin_runtime_path(extra_path_dirs: &[String]) -> String {
 /// directories on its PATH. That fallback is warned about rather than silent: it
 /// leaves a plugin unable to find CLIs installed outside the conventional
 /// directories, which is the failure this PATH handling exists to prevent.
-fn configured_extra_path_dirs(app: &AppHandle) -> Vec<String> {
+pub(crate) fn configured_extra_path_dirs(app: &AppHandle) -> Vec<String> {
     let Some(config_state) = app.try_state::<crate::state::ConfigState>() else {
         tracing::warn!("config state unavailable; plugin PATH omits extra_path_dirs");
         return Vec::new();
@@ -3539,6 +3710,7 @@ async fn spawn_runtime(
     state_root: Option<&Path>,
     plugin_id: &str,
     capabilities: HashSet<PluginHostCapability>,
+    provider_sessions: Arc<crate::plugin_providers::ProviderSessions>,
 ) -> Result<RuntimeProcess, String> {
     let path_env = plugin_runtime_path(&configured_extra_path_dirs(&app));
     let mut command = build_runtime_command(binary, state_root, &path_env);
@@ -3553,6 +3725,19 @@ async fn spawn_runtime(
         .stdout
         .take()
         .ok_or_else(|| "plugin runtime did not provide stdout".to_string())?;
+    let (frame_sender, frames) = mpsc::channel(FRAME_QUEUE_CAPACITY);
+    let instance = NEXT_RUNTIME_INSTANCE.fetch_add(1, Ordering::Relaxed);
+    let provider_sessions = capabilities
+        .contains(&PluginHostCapability::Providers)
+        .then_some(provider_sessions);
+    let notification_sink = provider_sessions.clone().map(|sessions| {
+        crate::plugin_providers::NotificationSink::new(app.clone(), plugin_id, instance, sessions)
+    });
+    tokio::spawn(read_stdout_frames(
+        BufReader::new(stdout),
+        frame_sender,
+        notification_sink,
+    ));
     if let Some(stderr) = child.stderr.take() {
         drain_stderr(stderr, log_path.to_path_buf());
     }
@@ -3561,9 +3746,10 @@ async fn spawn_runtime(
         .ok_or("plugin runtime state root was not provided")?;
     Ok(RuntimeProcess {
         app,
+        instance,
         child: AsyncMutex::new(child),
         stdin: AsyncMutex::new(stdin),
-        stdout: AsyncMutex::new(BufReader::new(stdout)),
+        frames: AsyncMutex::new(frames),
         request_lock: AsyncMutex::new(()),
         next_request_id: AtomicU64::new(0),
         plugin_id: plugin_id.to_string(),
@@ -3571,7 +3757,45 @@ async fn spawn_runtime(
         capabilities,
         lifecycle_event_subscriptions: AsyncMutex::new(HashSet::new()),
         session_actions: AsyncMutex::new(Vec::new()),
+        provider_sessions,
     })
+}
+
+/// Owns sidecar stdout for the process lifetime so provider notifications are
+/// delivered while no host request is in flight. Every other frame is queued for
+/// the request path in arrival order; the first transport error ends the stream.
+async fn read_stdout_frames(
+    mut stdout: BufReader<ChildStdout>,
+    frames: mpsc::Sender<Result<String, String>>,
+    notifications: Option<crate::plugin_providers::NotificationSink>,
+) {
+    loop {
+        let frame = read_stdout_frame(&mut stdout).await;
+        if let (Ok(frame), Some(sink)) = (&frame, &notifications) {
+            if sink.try_handle(frame) {
+                continue;
+            }
+        }
+        let failed = frame.is_err();
+        if frames.send(frame).await.is_err() || failed {
+            return;
+        }
+    }
+}
+
+async fn read_stdout_frame(stdout: &mut BufReader<ChildStdout>) -> Result<String, String> {
+    let mut bytes = Vec::new();
+    let bytes_read = stdout
+        .take(MAX_RPC_FRAME_BYTES + 1)
+        .read_until(b'\n', &mut bytes)
+        .await
+        .map_err(|e| format!("failed to read plugin JSON-RPC response: {e}"))?;
+    if bytes_read == 0 {
+        return Err(STDOUT_CLOSED_ERROR.to_string());
+    }
+    validate_plugin_response_frame(&bytes)?;
+    String::from_utf8(bytes)
+        .map_err(|e| format!("plugin JSON-RPC response was not valid UTF-8: {e}"))
 }
 
 fn drain_stderr(mut stderr: ChildStderr, log_path: PathBuf) {
@@ -3741,6 +3965,7 @@ impl<T> OptionalRow<T> for rusqlite::Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use planeai_plugin_contract::HOST_API_VERSION;
 
     fn database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -3983,6 +4208,7 @@ mod tests {
             }],
             capabilities: vec![],
             background_service: None,
+            providers: Vec::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
@@ -4065,6 +4291,7 @@ mod tests {
             ui_contributions: vec![],
             capabilities: vec![],
             background_service: None,
+            providers: Vec::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         sync_inventory(&conn, &[local]).unwrap();
@@ -4099,6 +4326,7 @@ mod tests {
             ui_contributions: vec![],
             capabilities: vec![],
             background_service: None,
+            providers: Vec::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
@@ -4254,6 +4482,7 @@ mod tests {
             ui_contributions: vec![],
             capabilities: vec![],
             background_service: None,
+            providers: Vec::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         assert!(manifest
@@ -4318,6 +4547,7 @@ mod tests {
                 PluginHostCapability::TaskEvents,
             ],
             background_service: None,
+            providers: Vec::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
@@ -4585,10 +4815,70 @@ mod tests {
             "plugin.taskLifecycle",
             "plugin.sessionLifecycle",
             "$/cancelRequest",
+            "provider.session.start",
+            "provider.session.send",
         ] {
             assert!(is_host_controlled_plugin_method(method), "{method}");
         }
         assert!(!is_host_controlled_plugin_method("fixture.status"));
+    }
+
+    #[test]
+    fn oversized_requests_leave_the_runtime_running() {
+        let error = encode_request(
+            1,
+            "provider.session.send",
+            serde_json::json!({ "text": "x".repeat(70_000) }),
+        )
+        .unwrap_err();
+        assert!(!is_fatal_plugin_runtime_error(&error));
+        assert!(is_fatal_plugin_runtime_error(
+            "plugin process closed stdout unexpectedly"
+        ));
+    }
+
+    #[cfg(unix)]
+    async fn stdout_frames_from(script: &str) -> Vec<Result<String, String>> {
+        let mut child = Command::new("sh")
+            .args(["-c", script])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let (sender, mut receiver) = mpsc::channel(8);
+        read_stdout_frames(stdout, sender, None).await;
+        let _ = child.wait().await;
+        let mut frames = Vec::new();
+        while let Ok(frame) = receiver.try_recv() {
+            frames.push(frame);
+        }
+        frames
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stdout_reader_queues_frames_in_order_then_reports_close() {
+        let frames = stdout_frames_from(r#"printf '{"id":1}\n{"id":2}\n'"#).await;
+        assert_eq!(
+            frames,
+            vec![
+                Ok("{\"id\":1}\n".to_string()),
+                Ok("{\"id\":2}\n".to_string()),
+                Err(STDOUT_CLOSED_ERROR.to_string()),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stdout_reader_stops_at_the_first_transport_error() {
+        let frames = stdout_frames_from(r#"printf '{"id":1}'"#).await;
+        assert_eq!(
+            frames,
+            vec![Err(
+                "plugin JSON-RPC response was not newline terminated".to_string()
+            )]
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { jiraDepartedInteractionEntrypoint, jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
@@ -11,8 +11,11 @@
   import type { PluginUiDisposer, PluginUiEntrypoint, PluginUiHost, PluginSessionContext } from "../lib/plugin-sdk";
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import { focusSidebar } from "../lib/focus.svelte";
+  import { PROVIDER_FRAME_ATTRIBUTE } from "../lib/terminal-focus";
+  import { hostKeyReplay, isTextEditingChord } from "../lib/plugin-shortcuts";
   import { isDark } from "../lib/settings.svelte";
   import type { PluginInventory, PluginUiContribution } from "../lib/types";
+  import { serveSessionRequest, type ProviderSessionBridge } from "../lib/provider-session-bridge";
 
   interface Props {
     plugin: PluginInventory;
@@ -24,6 +27,10 @@
     autofocus?: boolean;
     closeOnEscape?: boolean;
     session?: PluginSessionContext;
+    /** Present for a provider session's UI: its session's controls and events. */
+    providerSession?: ProviderSessionBridge;
+    /** Provider session UIs only: their frame received focus, as when the user clicks into it. */
+    onFocused?: () => void;
     /** Resolves the focused session at action time for local plugin recipients. */
     getFocusedAgentSession?: () => PluginSessionContext | undefined;
   }
@@ -47,11 +54,15 @@
     shiftKey?: boolean;
     kind?: "success" | "error";
     message?: string;
+    phase?: unknown;
+    code?: unknown;
+    repeat?: unknown;
     height?: number;
     width?: number;
+    text?: unknown;
   };
 
-  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, getFocusedAgentSession = () => undefined }: Props = $props();
+  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, providerSession, onFocused, getFocusedAgentSession = () => undefined }: Props = $props();
   const serializedSession = $derived(session ? JSON.stringify(session) : "");
   let container = $state<HTMLElement>();
   let disposer: PluginUiDisposer | null = null;
@@ -60,6 +71,13 @@
   const taskDataChangeListeners = new Set<() => void>();
   let refreshLocalPluginTheme: (() => void) | null = null;
   let refreshLocalPluginData: (() => void) | null = null;
+  /**
+   * Whether a newly mounted UI takes focus. Read untracked: mounting runs inside the
+   * mount effect, and tracking it would rebuild the frame, and lose its state, on every focus change.
+   */
+  const initialFocus = (): boolean => untrack(() => autofocus);
+  /** Focuses the mounted provider session frame, if any. */
+  let focusProviderFrame: (() => void) | null = null;
 
   function subscribe(listeners: Set<() => void>, listener: () => void): () => void {
     listeners.add(listener);
@@ -111,6 +129,11 @@
     "jira:jira-sidebar-section": async () => jiraSidebarSectionEntrypoint,
     "jira:jira-departed-interaction": async () => jiraDepartedInteractionEntrypoint,
   };
+
+  /** Placements whose frame takes the whole area the host gives it. */
+  function fillsContainer(placement: PluginUiContribution["placement"]): boolean {
+    return placement === "interaction" || placement === "main-pane" || placement === "session.main" || placement === "titlebar";
+  }
 
   function disposeCurrent(): void {
     const current = disposer;
@@ -172,12 +195,12 @@
 
   function createLocalPluginFrame(root: ShadowRoot, sessionContext?: PluginSessionContext): PluginUiDisposer {
     const isTitlebar = contribution.placement === "titlebar";
+    const bridge = providerSession;
     const isSessionIndicator = contribution.placement === "session.indicator";
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
-    frame.className =
-      contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
+    frame.className = fillsContainer(contribution.placement) || contribution.placement === "session.panel"
         ? "block h-full w-full border-0"
         : isSessionIndicator
           ? "block h-4 w-4 border-0"
@@ -186,11 +209,16 @@
     frame.style.width = isTitlebar ? "88px" : isSessionIndicator ? "16px" : "100%";
     frame.style.border = "0";
     if (isTitlebar || isSessionIndicator) frame.style.backgroundColor = "transparent";
+    if (bridge) {
+      // App releases this frame's keyboard like a terminal's, and a click into it claims the keyboard back.
+      frame.setAttribute(PROVIDER_FRAME_ATTRIBUTE, "");
+      frame.addEventListener("focus", () => onFocused?.());
+    }
     if (isSessionIndicator) {
       frame.style.height = "16px";
       frame.style.pointerEvents = "none";
       frame.tabIndex = -1;
-    } else if (contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "titlebar") {
+    } else if (fillsContainer(contribution.placement)) {
       frame.style.height = "100%";
     } else if (contribution.placement === "session.panel") {
       frame.style.height = "360px";
@@ -213,6 +241,7 @@
         const pending = new Map();
         const registrations = new Map();
         const dataChangeListeners = new Set();
+        const sessionEventListeners = new Set();
         const send = (message) => parent.postMessage(message, "*");
         let sessionPanelContentObserver = null;
         let contentHeightPending = false;
@@ -279,6 +308,37 @@
           event.stopPropagation();
         };
         addEventListener("keydown", forwardSidebarKeydown);
+        // App chords never reach the host window from this frame, so it replays them there.
+        // A plugin claims a chord with preventDefault, except the host-reserved Ctrl+Tab and Mod+N.
+        const isReservedChord = (event) =>
+          (event.ctrlKey && event.key === "Tab") || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n");
+        const sendHostKey = (event) => {
+          send({
+            type: "host-key",
+            phase: event.type,
+            key: event.key,
+            code: event.code,
+            altKey: event.altKey,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            shiftKey: event.shiftKey,
+            repeat: event.repeat,
+          });
+        };
+        const isTextEditingChord = ${isTextEditingChord.toString()};
+        const forwardHostChord = (event) => {
+          if (event.isComposing || !(event.metaKey || event.ctrlKey)) return;
+          // A text field's own chords, such as Mod+Shift+Arrow selection, stay with it.
+          if (isEditableTarget(event.target) && isTextEditingChord(event)) return;
+          if (event.defaultPrevented && !isReservedChord(event)) return;
+          sendHostKey(event);
+        };
+        // The tab switcher commits when its modifier is released.
+        const forwardModifierRelease = (event) => {
+          if (event.key === "Control" || event.key === "Meta") sendHostKey(event);
+        };
+        addEventListener("keydown", forwardHostChord);
+        addEventListener("keyup", forwardModifierRelease);
         const host = {
           call: (method, params = null) => request("call", { method, params }),
           recipient: {
@@ -323,6 +383,16 @@
             },
             notify: (message, kind = "error") => send({ type: "notify", message, kind }),
           },
+          session: {
+            send: (text) => request("session-send", { text }),
+            interrupt: () => request("session-interrupt"),
+            handoff: () => request("session-handoff"),
+            handback: () => request("session-handback"),
+            onEvent: (listener) => {
+              sessionEventListeners.add(listener);
+              return () => sessionEventListeners.delete(listener);
+            },
+          },
         };
         addEventListener("message", async (event) => {
           if (event.source !== parent) return;
@@ -335,6 +405,10 @@
           }
           if (message.type === "data-changed") {
             for (const listener of dataChangeListeners) listener();
+            return;
+          }
+          if (message.type === "session-event") {
+            for (const listener of sessionEventListeners) listener(message.event);
             return;
           }
           if (message.type === "response") {
@@ -355,6 +429,7 @@
           if (message.type === "dispose") {
             if (typeof cleanup === "function") cleanup();
             cleanup = null;
+            sessionEventListeners.clear();
             sessionPanelContentObserver?.disconnect();
             sessionPanelContentObserver = null;
             removeEventListener("keydown", forwardEscapeToHost);
@@ -418,6 +493,7 @@
         if (autofocus) focusFrame();
         return;
       }
+      const sessionRequest = serveSessionRequest(bridge, message);
       if (message.type === "focused-agent-session") {
         respond(message.requestId, true, getFocusedAgentSession() ?? null);
       } else if (message.type === "call" && typeof message.method === "string") {
@@ -450,6 +526,13 @@
         void plugins
           .updateSettings(plugin.id, message.params as Record<string, unknown>)
           .then((value) => respond(message.requestId, true, value))
+          .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "host-key") {
+        const replay = hostKeyReplay(message);
+        if (replay && root.activeElement === frame) window.dispatchEvent(replay);
+      } else if (sessionRequest) {
+        void sessionRequest
+          .then(() => respond(message.requestId, true, null))
           .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "data-changed") {
         void plugins
@@ -509,9 +592,10 @@
         showLoadFailure(root, message.message ?? "local UI bundle failed to load");
       }
     };
+    // A provider UI mounts only once its session is driven by the current sidecar.
+    const loadSource = (): Promise<string> => (bridge ? bridge.loadSource() : plugins.localUiSource(plugin.id, contribution.id));
     const initialise = (): void => {
-      void plugins
-        .localUiSource(plugin.id, contribution.id)
+      void loadSource()
         .then((source) => {
           const context = JSON.parse(JSON.stringify({ plugin, contribution, session: sessionContext })) as {
             plugin: PluginInventory;
@@ -525,11 +609,23 @@
 
     const refreshData = (): void => frame.contentWindow?.postMessage({ type: "data-changed" }, "*");
     if (isSessionIndicator) refreshLocalPluginData = refreshData;
+    let framed = true;
+    let unlistenSessionEvents: (() => void) | undefined;
+    if (bridge) {
+      void bridge.subscribe((event) => frame.contentWindow?.postMessage({ type: "session-event", event }, "*")).then((unlisten) => {
+        if (framed) unlistenSessionEvents = unlisten;
+        else unlisten();
+      });
+    }
     window.addEventListener("message", onMessage);
     frame.addEventListener("load", initialise, { once: true });
     root.replaceChildren(frame);
-    if (autofocus) focusFrame();
+    if (initialFocus()) focusFrame();
+    if (bridge) focusProviderFrame = focusFrame;
     return () => {
+      framed = false;
+      if (focusProviderFrame === focusFrame) focusProviderFrame = null;
+      unlistenSessionEvents?.();
       if (refreshLocalPluginTheme === refreshTheme) refreshLocalPluginTheme = null;
       if (refreshLocalPluginData === refreshData) refreshLocalPluginData = null;
       window.removeEventListener("message", onMessage);
@@ -555,7 +651,7 @@
           return;
         }
         disposer = cleanup;
-        if (autofocus) target.focus();
+        if (initialFocus()) target.focus();
         return;
       }
       const entrypoint = await loadBundledEntrypoint();
@@ -673,6 +769,11 @@
     };
   });
 
+  // A provider session's frame takes the keyboard back whenever its pane owns it again, as a terminal does.
+  $effect(() => {
+    if (autofocus) untrack(() => focusProviderFrame?.());
+  });
+
   $effect(() => {
     if (plugin.id !== "jira" || contribution.placement !== "sidebar.section") return;
     getAllTasks();
@@ -722,7 +823,7 @@
       ? plugin.source_kind === "builtin"
         ? "pointer-events-none"
         : "h-full w-full pointer-events-auto"
-      : contribution.placement === "main-pane" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
+      : fillsContainer(contribution.placement) || contribution.placement === "session.panel"
         ? "h-full w-full"
         : contribution.placement === "session.indicator"
           ? "h-4 w-4 shrink-0 pointer-events-none"

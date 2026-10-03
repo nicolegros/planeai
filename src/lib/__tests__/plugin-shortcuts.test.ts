@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { IS_MAC } from "../keyboard";
-import { findPluginShortcut, type PluginShortcutTarget } from "../plugin-shortcuts";
+import {
+  findPluginShortcut,
+  hostKeyReplay,
+  isTextEditingChord,
+  type PluginShortcutTarget,
+} from "../plugin-shortcuts";
 
 const modKey = IS_MAC ? "metaKey" : "ctrlKey";
 
@@ -13,6 +18,7 @@ const plugin = {
   backend_entrypoint: "bin/github",
   capabilities: [],
   ui_contributions: [],
+  providers: [],
   installed_hash: null,
   installed_path: null,
   original_display_path: null,
@@ -91,5 +97,68 @@ describe("findPluginShortcut", () => {
         [],
       ),
     ).toBeNull();
+  });
+});
+
+describe("isTextEditingChord", () => {
+  const chord = (key: string, extra: Partial<KeyboardEvent> = {}) => ({
+    key,
+    metaKey: true,
+    ctrlKey: false,
+    altKey: false,
+    ...extra,
+  });
+
+  it("recognizes the chords a text field handles itself", () => {
+    for (const key of [
+      "ArrowLeft",
+      "ArrowRight",
+      "ArrowUp",
+      "ArrowDown",
+      "Backspace",
+      "Delete",
+      "a",
+      "c",
+      "v",
+      "x",
+      "z",
+      "Z",
+      "y",
+    ]) {
+      expect(isTextEditingChord(chord(key)), key).toBe(true);
+    }
+    expect(isTextEditingChord(chord("ArrowLeft", { ctrlKey: true, metaKey: false }))).toBe(true);
+  });
+
+  it("leaves app chords, and chords without a modifier, to the app", () => {
+    expect(isTextEditingChord(chord("["))).toBe(false);
+    expect(isTextEditingChord(chord("n"))).toBe(false);
+    // Mod+Alt+Arrow moves tabs between panes.
+    expect(isTextEditingChord(chord("ArrowLeft", { altKey: true }))).toBe(false);
+    expect(isTextEditingChord(chord("ArrowLeft", { metaKey: false }))).toBe(false);
+  });
+
+  it("stays self-contained, since plugin frames inline its source", () => {
+    const inlined = new Function(
+      `return (${isTextEditingChord.toString()})`,
+    )() as typeof isTextEditingChord;
+    expect(inlined(chord("ArrowUp"))).toBe(true);
+  });
+});
+
+describe("hostKeyReplay", () => {
+  it("replays chords and their modifier release", () => {
+    const chord = hostKeyReplay({ phase: "keydown", key: "n", code: "KeyN", metaKey: true });
+    expect(chord).toMatchObject({ type: "keydown", key: "n", code: "KeyN", metaKey: true });
+    expect(chord?.cancelable).toBe(true);
+    expect(hostKeyReplay({ phase: "keyup", key: "Meta" })?.type).toBe("keyup");
+  });
+
+  it("refuses plain typing, other releases and unknown phases", () => {
+    expect(hostKeyReplay({ phase: "keydown", key: "a" })).toBeNull();
+    expect(hostKeyReplay({ phase: "keydown", key: "a", shiftKey: true })).toBeNull();
+    expect(hostKeyReplay({ phase: "keyup", key: "a", metaKey: true })).toBeNull();
+    expect(hostKeyReplay({ phase: "keypress", key: "n", metaKey: true })).toBeNull();
+    expect(hostKeyReplay({ phase: "keydown", key: "n", metaKey: "yes" })).toBeNull();
   });
 });

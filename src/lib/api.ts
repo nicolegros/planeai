@@ -265,7 +265,19 @@ export const plugins = {
     invoke<T>("update_plugin_settings", { pluginId, settings }),
   localUiSource: (pluginId: string, contributionId: string) =>
     invoke<string>("local_plugin_ui_source", { pluginId, contributionId }),
+  localProviderUiSource: (pluginId: string, providerId: string) =>
+    invoke<string>("local_plugin_provider_ui_source", { pluginId, providerId }),
   dataChanged: (pluginId: string) => invoke<void>("plugin_data_changed", { pluginId }),
+};
+
+/** Host-routed control of plugin provider sessions (ADR-0013). */
+export const providerSessions = {
+  ensure: (sessionId: string) => invoke<void>("provider_session_ensure", { sessionId }),
+  send: (sessionId: string, text: string) =>
+    invoke<void>("provider_session_send", { sessionId, text }),
+  interrupt: (sessionId: string) => invoke<void>("provider_session_interrupt", { sessionId }),
+  handoff: (sessionId: string) => invoke<string[]>("provider_session_handoff", { sessionId }),
+  handback: (sessionId: string) => invoke<void>("provider_session_handback", { sessionId }),
 };
 
 export const preferences = {

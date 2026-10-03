@@ -37,6 +37,31 @@ pub(crate) fn fire_task_hook(
     crate::session_ops::fire_task_hook(cfg, session, hook_name, conn);
 }
 
+/// Register a session for status tracking. Provider sessions take status only from
+/// their plugin, so hooks and silence detection never apply to them (ADR-0013).
+pub(crate) fn register_notify_session(
+    ns: &mut planeai_core::notify::NotifyState,
+    session: &db::Session,
+    project_name: &str,
+    cfg: &config::Config,
+) {
+    let display_name = if session.name.is_empty() {
+        &session.branch
+    } else {
+        &session.name
+    };
+    let provider_owned = session.backend == crate::session_ops::PLUGIN_BACKEND;
+    let hook_enabled = provider_owned
+        || session
+            .provider
+            .as_deref()
+            .is_some_and(|pk| provider_has_hook(pk, cfg));
+    ns.register_session(&session.id, display_name, project_name, hook_enabled);
+    if provider_owned {
+        ns.mark_provider_owned(&session.id);
+    }
+}
+
 /// Check if a provider has hook-based idle detection.
 pub(crate) fn provider_has_hook(provider_key: &str, cfg: &config::Config) -> bool {
     cfg.providers
@@ -105,6 +130,24 @@ mod tests {
         }
         invalidate_hook_cache();
         assert!(HOOK_CACHE.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn registering_a_provider_session_hands_its_status_to_the_plugin() {
+        let cfg = config::Config::default();
+        let mut ns = planeai_core::notify::NotifyState::new();
+        let mut provider = test_session(None);
+        provider.backend = crate::session_ops::PLUGIN_BACKEND.into();
+        provider.provider = Some("claude-chat:claude".into());
+        register_notify_session(&mut ns, &provider, "proj", &cfg);
+        assert!(ns.is_provider_owned("test-id"));
+        assert!(ns.get_meta("test-id").unwrap().hook_enabled);
+
+        let mut local = test_session(None);
+        local.id = "local-id".into();
+        register_notify_session(&mut ns, &local, "proj", &cfg);
+        assert!(!ns.is_provider_owned("local-id"));
+        assert_eq!(ns.get_meta("local-id").unwrap().name, "test");
     }
 
     #[test]
