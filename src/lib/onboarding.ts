@@ -75,14 +75,20 @@ export function defaultAgentOptions(
 
 /**
  * Turns the selected presets on and the others off, keeping edits to selected presets and every
- * custom agent. `null` when nothing is selected: the config keeps its agents so a default exists.
+ * custom agent. With no preset selected the config keeps its agents, so only a new custom default is saved.
  */
 export function onboardingAgentsPatch(
   config: AppConfig,
   selected: readonly string[],
   defaultKey: string | null,
 ): Partial<AppConfig> | null {
-  if (selected.length === 0) return null;
+  if (selected.length === 0) {
+    const newCustomDefault =
+      isCustom(defaultKey) &&
+      defaultKey! in config.providers &&
+      defaultKey !== config.default_provider;
+    return newCustomDefault ? { default_provider: defaultKey! } : null;
+  }
   const providers = Object.fromEntries(
     Object.entries(config.providers).filter(([key]) => isCustom(key) || selected.includes(key)),
   );

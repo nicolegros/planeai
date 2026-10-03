@@ -114,6 +114,23 @@ describe("custom default agents", () => {
   });
 });
 
+describe("onboardingAgentsPatch without presets", () => {
+  const custom = {
+    aider: { command: "aider", yolo_flag: null },
+    goose: { command: "goose", yolo_flag: null },
+  };
+
+  it("saves a newly chosen custom default even when no preset is selected", () => {
+    const current = config({ providers: custom, default_provider: "aider" });
+    expect(onboardingAgentsPatch(current, [], "goose")).toEqual({ default_provider: "goose" });
+  });
+
+  it("changes nothing when the default is unchanged", () => {
+    const current = config({ providers: custom, default_provider: "aider" });
+    expect(onboardingAgentsPatch(current, [], "aider")).toBeNull();
+  });
+});
+
 describe("toggleAgent", () => {
   it("keeps preset order when selecting", () => {
     expect(toggleAgent({ selected: ["codex"], defaultKey: "codex" }, "claude").selected).toEqual([
