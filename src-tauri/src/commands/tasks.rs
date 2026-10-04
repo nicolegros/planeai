@@ -334,7 +334,7 @@ pub async fn move_task_item(
         .map(|session| session.id.clone())
         .collect::<Vec<_>>();
 
-    // Detach PTYs (PtyManager is !Send, must stay on main thread)
+    // End the sessions' PTYs, handoff programs included (PtyManager is !Send, must stay on main thread)
     for id in &archived_session_ids {
         pty_state.0.end_session(id);
     }

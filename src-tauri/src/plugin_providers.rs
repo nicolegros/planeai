@@ -697,21 +697,25 @@ fn ended_reason(status: Option<&str>) -> Option<StopReason> {
 
 /// Stop provider sessions whose rows ended outside the GUI (CLI archive or delete,
 /// task completion). Those paths only notify that sessions changed.
-pub async fn reconcile<R: ProviderRuntime>(runtime: &R) {
+/// Returns the sessions it stopped, whose terminals must end with them.
+pub async fn reconcile<R: ProviderRuntime>(runtime: &R) -> Vec<String> {
     let bound = runtime.sessions().launched_session_ids();
     if bound.is_empty() {
-        return;
+        return Vec::new();
     }
+    let mut stopped = Vec::new();
     match runtime.session_statuses(bound).await {
         Ok(statuses) => {
             for (session_id, status) in statuses {
                 if let Some(reason) = ended_reason(status.as_deref()) {
                     stop(runtime, &session_id, reason).await;
+                    stopped.push(session_id);
                 }
             }
         }
         Err(error) => tracing::warn!(%error, "provider session reconciliation failed"),
     }
+    stopped
 }
 
 /// What session routing needs from the app: the plugin runtimes, the session store and
@@ -1155,7 +1159,7 @@ mod tests {
             .insert("archived".into(), "archived".into());
         runtime.requests.lock().unwrap().clear();
 
-        reconcile(&runtime).await;
+        assert_eq!(reconcile(&runtime).await, ["archived"]);
         assert_eq!(runtime.sent(), [protocol::STOP]);
         assert!(runtime.sessions.get("archived").is_none());
         assert!(runtime.sessions.get("live").is_some());

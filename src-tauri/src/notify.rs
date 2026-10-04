@@ -179,7 +179,13 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
 fn reconcile_provider_sessions(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        crate::plugin_providers::reconcile(&crate::plugin_providers::AppRuntime::new(&app)).await;
+        let runtime = crate::plugin_providers::AppRuntime::new(&app);
+        // Ended outside the GUI, these sessions' handoff programs would otherwise run on unseen.
+        for session_id in crate::plugin_providers::reconcile(&runtime).await {
+            app.state::<crate::state::PtyState>()
+                .0
+                .end_session(&session_id);
+        }
     });
 }
 
