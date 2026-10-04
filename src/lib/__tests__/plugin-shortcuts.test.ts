@@ -170,8 +170,13 @@ describe("shouldForwardHostChord", () => {
     if (handled) event.preventDefault();
     return event;
   };
+  // Rebuilt from source as plugin frames inline them, so each case also proves they stay
+  // self-contained.
+  const inline = <T>(fn: T): T => new Function(`return (${String(fn)})`)() as T;
+  const inlinedForward = inline(shouldForwardHostChord);
+  const inlinedTextEditing = inline(isTextEditingChord);
   const forwards = (event: KeyboardEvent, editable = false) =>
-    shouldForwardHostChord(event, editable, isTextEditingChord);
+    inlinedForward(event, editable, inlinedTextEditing);
 
   it("forwards Mod chords the frame leaves alone, never plain typing", () => {
     expect(forwards(chord({ key: "k", [modKey]: true }))).toBe(true);

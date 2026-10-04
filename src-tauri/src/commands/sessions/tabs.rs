@@ -184,22 +184,17 @@ fn prepare_tab_spawn(
         "prepare_tab_spawn"
     );
 
-    let (target, daemon_spawn) = if let Some(argv) = initial_argv {
-        // Programs run without a shell only in local PTYs, which provider sessions' tabs are.
-        if session.backend == "daemon" || session.backend == planeai_rmux::BACKEND {
-            return Err(format!(
-                "{} sessions cannot run a program without a shell",
-                session.backend
-            ));
-        }
-        (
-            pty::PtyTarget::Program {
-                argv,
-                cwd: cwd.clone(),
-            },
-            None,
+    // Programs run without a shell only in local PTYs, which provider sessions' tabs are.
+    let no_program_here = || {
+        format!(
+            "{} sessions cannot run a program without a shell",
+            session.backend
         )
-    } else if session.backend == "daemon" {
+    };
+    let (target, daemon_spawn) = if session.backend == "daemon" {
+        if initial_argv.is_some() {
+            return Err(no_program_here());
+        }
         #[cfg(not(windows))]
         let (daemon_command, daemon_args): (String, Vec<String>) = match initial_command.as_deref()
         {
@@ -235,6 +230,9 @@ fn prepare_tab_spawn(
             Some(daemon_spawn),
         )
     } else if session.backend == planeai_rmux::BACKEND {
+        if initial_argv.is_some() {
+            return Err(no_program_here());
+        }
         // A shell tab becomes its own window in the session's task workspace, so
         // it persists exactly like the agent pane instead of dying with the app.
         let owned_env: Vec<(String, String)> = env.clone();
@@ -259,13 +257,28 @@ fn prepare_tab_spawn(
             None,
         )
     } else {
-        (
-            pty::PtyTarget::Shell {
+        let target = match initial_argv {
+            Some(mut argv) => {
+                // Resolved with the tab's own PATH, as a shell would, so Windows finds `.cmd` shims.
+                let path = env
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
+                    .map(|(_, value)| value.as_str())
+                    .unwrap_or_default();
+                if let Some(program) = crate::config::find_executable_in(&argv[0], path) {
+                    argv[0] = program.to_string_lossy().into_owned();
+                }
+                pty::PtyTarget::Program {
+                    argv,
+                    cwd: cwd.clone(),
+                }
+            }
+            None => pty::PtyTarget::Shell {
                 command: shell_cmd,
                 cwd: cwd.clone(),
             },
-            None,
-        )
+        };
+        (target, None)
     };
 
     Ok(PreparedTab {
@@ -455,6 +468,7 @@ mod tests {
     #[test]
     fn a_program_needs_a_local_tab_and_a_name() {
         assert!(tab_for("daemon", Some(vec!["claude".into()])).is_err());
+        assert!(tab_for(planeai_rmux::BACKEND, Some(vec!["claude".into()])).is_err());
         assert!(tab_for("plugin", Some(Vec::new())).is_err());
     }
 }

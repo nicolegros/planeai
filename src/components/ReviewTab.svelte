@@ -4,6 +4,7 @@
   import { onDestroy, onMount } from "svelte";
   import { isDark, getSettings } from "../lib/settings.svelte";
   import { getActiveZone } from "../lib/focus.svelte";
+  import { reviewShortcutsApply } from "../lib/review-shortcuts";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { ResizeHandle } from "./ui";
   import { addComment, clearComments, editComment, getComments, getFileCommentCount, getTotalCommentCount, reanchorComments, removeComment, type ReviewComment } from "../lib/review-comments.svelte";
@@ -404,7 +405,7 @@
   }
 
   function handleKeydown(e: KeyboardEvent): void {
-    if (!visible || !focused || e.defaultPrevented || getActiveZone() !== "terminal") return;
+    if (!reviewShortcutsApply({ visible, focused, defaultPrevented: e.defaultPrevented, zone: getActiveZone() })) return;
     const element = document.activeElement;
     if (element?.closest("[role='dialog'], [role='alertdialog'], [role='combobox'], dialog[open]")) return;
     if (e.key === "Enter" && e.metaKey) { e.preventDefault(); void sendFeedback(); return; }

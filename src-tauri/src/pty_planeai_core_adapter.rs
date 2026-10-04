@@ -16,6 +16,7 @@ use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter};
 
 use crate::output_observer::OutputObserver;
+use crate::session_backend::{SessionBackend, WriteAck};
 
 /// What a local PTY runs: a command line for the platform shell, or a program and its arguments.
 pub enum SpawnCommand {
@@ -32,7 +33,6 @@ impl SpawnCommand {
         }
     }
 }
-use crate::session_backend::{SessionBackend, WriteAck};
 
 /// Forwards planeai-pty events to the Tauri frontend via the existing output channel.
 pub struct TauriPtySink {

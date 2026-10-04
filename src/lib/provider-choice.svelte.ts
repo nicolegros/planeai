@@ -17,7 +17,8 @@ export class ProviderChoice {
   constructor(runtimeProviders: () => RuntimeProvider[]) {
     this.#runtimeProviders = runtimeProviders;
     this.keys = $derived([
-      ...Object.keys(getSettings().providers ?? {}),
+      // Keys with `:` belong to plugin providers; saving the config refuses them anyway.
+      ...Object.keys(getSettings().providers ?? {}).filter((key) => !key.includes(":")),
       ...runtimeProviders().map((provider) => provider.key),
     ]);
     this.key = $derived(this.selected || getSettings().default_provider);

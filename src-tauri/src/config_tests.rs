@@ -968,6 +968,21 @@ fn find_executable_in_searches_each_path_entry() {
     assert_eq!(find_executable_in("missing-agent", &path), None);
 }
 
+#[cfg(windows)]
+#[test]
+fn find_executable_in_prefers_a_runnable_shim_on_windows() {
+    // npm installs an extensionless shell script beside the `.cmd` shim Windows can run.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("claude"), "#!/bin/sh\n").unwrap();
+    let shim = dir.path().join("claude.cmd");
+    fs::write(&shim, "@echo off\r\n").unwrap();
+    let path = dir.path().display().to_string();
+    let found = find_executable_in("claude", &path).unwrap();
+    assert!(found
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&shim.to_string_lossy()));
+}
+
 #[cfg(not(windows))]
 #[test]
 fn find_executable_in_accepts_explicit_paths() {

@@ -716,17 +716,25 @@ pub fn find_executable_in(name: &str, path: &str) -> Option<PathBuf> {
             return None;
         }
         let plain = directory.join(name);
-        if plain.is_file() {
-            return Some(plain);
+        // Windows runs only files with an executable extension: npm installs an extensionless
+        // shell script beside `claude.cmd`, which must not win.
+        if cfg!(windows) {
+            with_executable_extension(&directory, name).or_else(|| plain.is_file().then_some(plain))
+        } else if plain.is_file() {
+            Some(plain)
+        } else {
+            with_executable_extension(&directory, name)
         }
-        // Windows executables carry an extension.
-        let extensions = std::env::var_os("PATHEXT")?;
-        std::env::split_paths(&extensions).find_map(|extension| {
-            let suffix = extension.to_string_lossy();
-            let suffix = suffix.trim_start_matches('.');
-            let candidate = directory.join(format!("{name}.{suffix}"));
-            (!suffix.is_empty() && candidate.is_file()).then_some(candidate)
-        })
+    })
+}
+
+fn with_executable_extension(directory: &std::path::Path, name: &str) -> Option<PathBuf> {
+    let extensions = std::env::var_os("PATHEXT")?;
+    std::env::split_paths(&extensions).find_map(|extension| {
+        let suffix = extension.to_string_lossy();
+        let suffix = suffix.trim_start_matches('.');
+        let candidate = directory.join(format!("{name}.{suffix}"));
+        (!suffix.is_empty() && candidate.is_file()).then_some(candidate)
     })
 }
 
