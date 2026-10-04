@@ -89,7 +89,7 @@ pub async fn archive_session(
     config_state: State<'_, ConfigState>,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
-    pty_state.0.detach(&id);
+    pty_state.0.end_session(&id);
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
     archive_off_main_thread(id, db_state.0.clone(), runtime.0.clone(), Some(cfg)).await
 }
@@ -101,7 +101,7 @@ pub async fn park_session(
     pty_state: State<'_, PtyState>,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
-    pty_state.0.detach(&id);
+    pty_state.0.end_session(&id);
     // Parking closes an agent without declaring its linked task complete.
     archive_off_main_thread(id, db_state.0.clone(), runtime.0.clone(), None).await
 }
@@ -141,7 +141,7 @@ pub async fn destroy_session(
     runtime: State<'_, PluginRuntimeHandle>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    pty_state.0.detach(&id);
+    pty_state.0.end_session(&id);
 
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let session = db::get_session(&conn, &id)

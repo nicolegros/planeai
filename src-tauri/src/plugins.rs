@@ -1669,7 +1669,7 @@ impl RuntimeProcess {
                                 if let Ok(session) =
                                     serde_json::from_value::<crate::db::Session>(session.clone())
                                 {
-                                    pty_state.0.detach(&session.id);
+                                    pty_state.0.end_session(&session.id);
                                     runtime.0.dispatch_session_lifecycle(
                                         crate::commands::sessions::lifecycle::session_lifecycle_event(&session, &session.status, "archived"),
                                     );

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -195,6 +195,8 @@ pub struct PtyManager {
     observer: Arc<RwLock<Arc<dyn OutputObserver>>>,
     /// Tabs being closed, or whose close ended their backend.
     tab_closes: Arc<Mutex<HashMap<String, CloseState>>>,
+    /// Published tabs running a program, such as a provider handoff's TUI.
+    program_tabs: Arc<Mutex<HashSet<String>>>,
 }
 
 impl PtyManager {
@@ -203,6 +205,7 @@ impl PtyManager {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             observer: Arc::new(RwLock::new(Arc::new(NoopObserver))),
             tab_closes: Arc::new(Mutex::new(HashMap::new())),
+            program_tabs: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -336,6 +339,12 @@ impl PtyManager {
             old.detach();
         }
         sessions.insert(session_id.to_string(), backend);
+        let mut programs = self.program_tabs();
+        if runs_program {
+            programs.insert(session_id.to_string());
+        } else {
+            programs.remove(session_id);
+        }
         Ok(())
     }
 
@@ -715,10 +724,32 @@ impl PtyManager {
         let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
         if let Some(backend) = sessions.remove(session_id) {
             backend.detach();
+            self.program_tabs().remove(session_id);
             if let Some(state) = self.tab_closes().get_mut(session_id) {
                 *state = CloseState::Closed;
             }
         }
+    }
+
+    /// A session leaves (archived, parked, destroyed): its agent PTY ends, and so does any
+    /// program in its tabs, such as a provider handoff's TUI, which would otherwise keep
+    /// driving its conversation with no tab left to show or close it.
+    pub fn end_session(&self, session_id: &str) {
+        self.detach(session_id);
+        let prefix = format!("{session_id}:");
+        let programs: Vec<String> = self
+            .program_tabs()
+            .iter()
+            .filter(|key| key.starts_with(&prefix))
+            .cloned()
+            .collect();
+        for key in programs {
+            self.detach(&key);
+        }
+    }
+
+    fn program_tabs(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
+        self.program_tabs.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Pause reading from a session's PTY (flow control back pressure).
@@ -846,6 +877,24 @@ mod tests {
         // So a later close that never ends anything still refuses a program spawn.
         assert!(manager.claim_tab_close("s1:2"));
         assert!(manager.prepare_attach("s1:2", true).is_err());
+    }
+
+    #[test]
+    fn a_leaving_session_ends_its_programs_but_not_its_shells() {
+        let manager = PtyManager::new();
+        let (agent, agent_ended) = spawned();
+        let (program, program_ended) = spawned();
+        let (shell, shell_ended) = spawned();
+        let (other, other_ended) = spawned();
+        manager.publish("s1", false, agent).unwrap();
+        manager.publish("s1:2", true, program).unwrap();
+        manager.publish("s1:3", false, shell).unwrap();
+        manager.publish("s10:2", true, other).unwrap();
+        manager.end_session("s1");
+        assert!(agent_ended.load(Ordering::SeqCst));
+        assert!(program_ended.load(Ordering::SeqCst));
+        assert!(!shell_ended.load(Ordering::SeqCst));
+        assert!(!other_ended.load(Ordering::SeqCst));
     }
 
     #[test]

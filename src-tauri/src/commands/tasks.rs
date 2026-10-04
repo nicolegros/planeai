@@ -336,7 +336,7 @@ pub async fn move_task_item(
 
     // Detach PTYs (PtyManager is !Send, must stay on main thread)
     for id in &archived_session_ids {
-        pty_state.0.detach(id);
+        pty_state.0.end_session(id);
     }
 
     if !archived_session_ids.is_empty() {

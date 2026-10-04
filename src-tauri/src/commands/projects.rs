@@ -211,7 +211,7 @@ pub async fn delete_project(
     // PtyState is main-thread-only; detach before moving process and filesystem
     // teardown to the blocking worker.
     for session in &sessions {
-        pty_state.0.detach(&session.id);
+        pty_state.0.end_session(&session.id);
     }
 
     let teardown_sessions = sessions.clone();
