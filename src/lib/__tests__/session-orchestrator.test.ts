@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 vi.mock("@tauri-apps/api/window", () => ({
@@ -226,6 +226,9 @@ describe("session-orchestrator", () => {
   });
 
   describe("archiveSession", () => {
+    // Spies on the shared handoff singleton must not outlive their test, even a failing one.
+    afterEach(() => vi.restoreAllMocks());
+
     it("removes session from list", async () => {
       api.list.mockResolvedValue([makeSession({ id: "s1" })]);
       await loadSessions();
@@ -251,7 +254,6 @@ describe("session-orchestrator", () => {
       await loadSessions();
       await archiveSession(makeSession({ id: "s1" }));
       expect(release).toHaveBeenCalledWith("s1");
-      release.mockRestore();
     });
   });
 

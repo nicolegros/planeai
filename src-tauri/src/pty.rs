@@ -214,8 +214,23 @@ impl PtyManager {
 
     /// A program tab closed while its spawn was in flight, such as a handoff whose session
     /// left the app: starting it now would run a TUI no tab shows.
-    fn closed_before_start(&self, pty_key: &str, target: &PtyTarget) -> bool {
-        matches!(target, PtyTarget::Program { .. }) && self.has_close_claim(pty_key)
+    fn closed_before_start(&self, pty_key: &str, runs_program: bool) -> bool {
+        runs_program && self.has_close_claim(pty_key)
+    }
+
+    /// Before a spawn, in one step: a program tab already closed is refused, and keeps its
+    /// claim for the check at publish; any other key is closable again once reattached.
+    fn claim_attach(&self, pty_key: &str, runs_program: bool) -> Result<(), String> {
+        let mut claims = self
+            .tab_close_claims
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !runs_program {
+            claims.remove(pty_key);
+        } else if claims.contains(pty_key) {
+            return Err(closed_before_start_error(pty_key));
+        }
+        Ok(())
     }
 
     fn has_close_claim(&self, pty_key: &str) -> bool {
@@ -246,10 +261,7 @@ impl PtyManager {
         env: Vec<(String, String)>,
     ) -> Result<(), String> {
         let runs_program = matches!(target, PtyTarget::Program { .. });
-        if self.closed_before_start(session_id, &target) {
-            return Err(closed_before_start_error(session_id));
-        }
-        self.clear_tab_close_claim(session_id);
+        self.claim_attach(session_id, runs_program)?;
 
         // Handle daemon target via async path
         if let PtyTarget::Daemon {
@@ -312,17 +324,27 @@ impl PtyManager {
         let backend = PlaneaiPtyBackend::spawn(
             session_id, command, &cwd, env, app, on_data, cancelled, observer,
         )?;
+        self.publish(session_id, runs_program, Box::new(backend))
+    }
+
+    /// Make a spawned local backend the session's, replacing any previous one. Checked again
+    /// under the sessions lock: a close claimed during the spawn either shows here, or its
+    /// detach waits for this lock and then ends the backend.
+    fn publish(
+        &self,
+        session_id: &str,
+        runs_program: bool,
+        backend: Box<dyn SessionBackend>,
+    ) -> Result<(), String> {
         let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
-        // Checked again under the sessions lock: a close claimed during the spawn either shows
-        // here, or its detach waits for this lock and then ends the backend.
-        if runs_program && self.has_close_claim(session_id) {
+        if self.closed_before_start(session_id, runs_program) {
             backend.detach();
             return Err(closed_before_start_error(session_id));
         }
         if let Some(old) = sessions.get(session_id) {
             old.detach();
         }
-        sessions.insert(session_id.to_string(), Box::new(backend));
+        sessions.insert(session_id.to_string(), backend);
         Ok(())
     }
 
@@ -722,24 +744,87 @@ impl PtyManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{PtyManager, PtyTarget};
+    use super::PtyManager;
+    use crate::session_backend::{SessionBackend, WriteAck};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// A spawned backend that records whether it was ended.
+    #[derive(Default)]
+    struct FakeBackend {
+        detached: Arc<AtomicBool>,
+    }
+
+    impl SessionBackend for FakeBackend {
+        fn write(&self, _data: &[u8]) -> Result<WriteAck, String> {
+            Ok(WriteAck::Immediate)
+        }
+        fn resize(&self, _rows: u16, _cols: u16) -> Result<(), String> {
+            Ok(())
+        }
+        fn pause(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn resume(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn detach(&self) {
+            self.detached.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn spawned() -> (Box<dyn SessionBackend>, Arc<AtomicBool>) {
+        let backend = FakeBackend::default();
+        let detached = backend.detached.clone();
+        (Box::new(backend), detached)
+    }
 
     #[test]
-    fn a_program_tab_closed_while_spawning_never_starts() {
+    fn a_program_tab_closed_before_its_spawn_never_starts() {
         let manager = PtyManager::new();
-        let program = PtyTarget::Program {
-            argv: vec!["claude".into()],
-            cwd: "/".into(),
-        };
-        let shell = PtyTarget::Shell {
-            command: "zsh".into(),
-            cwd: "/".into(),
-        };
-        assert!(!manager.closed_before_start("s1:2", &program));
+        manager.claim_attach("s1:2", true).unwrap();
         assert!(manager.claim_tab_close("s1:2"));
-        assert!(manager.closed_before_start("s1:2", &program));
-        // Shell keys keep their reattach semantics.
-        assert!(!manager.closed_before_start("s1:2", &shell));
+        assert!(manager.claim_attach("s1:2", true).is_err());
+        // The claim stays, so a close racing the spawn is still seen when it publishes.
+        assert!(manager.closed_before_start("s1:2", true));
+    }
+
+    #[test]
+    fn a_shell_tab_reattaching_is_closable_again() {
+        let manager = PtyManager::new();
+        assert!(manager.claim_tab_close("s1:2"));
+        manager.claim_attach("s1:2", false).unwrap();
+        assert!(manager.claim_tab_close("s1:2"));
+    }
+
+    #[test]
+    fn a_program_tab_closed_during_its_spawn_is_ended_instead_of_published() {
+        let manager = PtyManager::new();
+        let (backend, detached) = spawned();
+        assert!(manager.claim_tab_close("s1:2"));
+        assert!(manager.publish("s1:2", true, backend).is_err());
+        assert!(detached.load(Ordering::SeqCst));
+        assert!(!manager.sessions.read().unwrap().contains_key("s1:2"));
+    }
+
+    #[test]
+    fn a_shell_tab_publishes_whatever_its_close_claim() {
+        let manager = PtyManager::new();
+        let (backend, detached) = spawned();
+        assert!(manager.claim_tab_close("s1:2"));
+        manager.publish("s1:2", false, backend).unwrap();
+        assert!(!detached.load(Ordering::SeqCst));
+        assert!(manager.sessions.read().unwrap().contains_key("s1:2"));
+    }
+
+    #[test]
+    fn a_close_after_publishing_ends_the_program() {
+        let manager = PtyManager::new();
+        let (backend, detached) = spawned();
+        manager.publish("s1:2", true, backend).unwrap();
+        assert!(manager.claim_tab_close("s1:2"));
+        manager.detach("s1:2");
+        assert!(detached.load(Ordering::SeqCst));
     }
 
     #[test]
