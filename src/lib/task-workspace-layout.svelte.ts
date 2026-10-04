@@ -238,8 +238,8 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
   }
 
   /**
-   * A shell whose process is gone, or never started: its tab goes right away, and the
-   * backend close that follows only finalizes it, and may reject.
+   * Removes a shell whose process is gone or never started; the backend close after it
+   * only finalizes it, and may reject.
    */
   async function dropShell(ptyKey: string, exited: boolean): Promise<void> {
     const parts = parsePtyKey(ptyKey);
@@ -480,8 +480,7 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     },
 
     /**
-     * A shell's process exited by itself. Its tab goes right away; the backend
-     * close that follows only finalizes it, and may reject.
+     * A shell's process exited by itself.
      */
     async shellExited(ptyKey: string): Promise<void> {
       await dropShell(ptyKey, true);
@@ -610,6 +609,8 @@ export function resolveRestoredLayoutSelection(input: {
   return { kind: "adopt_restored_session", sessionId: input.liveRestoredSessionId };
 }
 
+const closeShellPty = (sessionId: string, index: number) => pty.closeTab(sessionId, index);
+
 /** The app's TaskWorkspace layout. */
 export const taskWorkspaceLayout = createTaskWorkspaceLayout({
   store: {
@@ -622,7 +623,7 @@ export const taskWorkspaceLayout = createTaskWorkspaceLayout({
         ? sessionsApi.saveTaskWorkspaceLayout(workspace.projectId, workspace.taskKey, layoutJson)
         : sessionsApi.saveLayout(workspace.sessionId, layoutJson),
   },
-  closeShell: (sessionId, index) => pty.closeTab(sessionId, index),
+  closeShell: closeShellPty,
   shellClosed: (ptyKey, exited) => providerHandoff.shellClosed(ptyKey, exited),
   getTerminalCommand: (sessionId, filePath) => editorApi.getTerminalCommand(sessionId, filePath),
   disposeView: disposeTerminalView,
@@ -639,7 +640,7 @@ export const providerHandoff = createProviderHandoff({
   discardTab: (ptyKey) => taskWorkspaceLayout.discardShell(ptyKey),
   closeTerminal: async (ptyKey) => {
     const parts = parsePtyKey(ptyKey);
-    if (parts?.kind === "shell") await pty.closeTab(parts.sessionId, parts.index);
+    if (parts?.kind === "shell") await closeShellPty(parts.sessionId, parts.index);
   },
   notify: (message) => showSnackbar(message),
 });

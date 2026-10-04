@@ -39,6 +39,10 @@ pub enum PtyTarget {
     },
 }
 
+fn closed_before_start_error(pty_key: &str) -> String {
+    format!("{pty_key} was closed before its program started")
+}
+
 // Flusher coalesces output so bursts arrive as single chunks.
 const FLUSH_COALESCE: Duration = Duration::from_millis(4);
 const FLUSH_MAX_IDLE: Duration = Duration::from_millis(50);
@@ -211,12 +215,14 @@ impl PtyManager {
     /// A program tab closed while its spawn was in flight, such as a handoff whose session
     /// left the app: starting it now would run a TUI no tab shows.
     fn closed_before_start(&self, pty_key: &str, target: &PtyTarget) -> bool {
-        matches!(target, PtyTarget::Program { .. })
-            && self
-                .tab_close_claims
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .contains(pty_key)
+        matches!(target, PtyTarget::Program { .. }) && self.has_close_claim(pty_key)
+    }
+
+    fn has_close_claim(&self, pty_key: &str) -> bool {
+        self.tab_close_claims
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(pty_key)
     }
 
     fn clear_tab_close_claim(&self, pty_key: &str) {
@@ -239,10 +245,9 @@ impl PtyManager {
         on_data: Channel<Response>,
         env: Vec<(String, String)>,
     ) -> Result<(), String> {
+        let runs_program = matches!(target, PtyTarget::Program { .. });
         if self.closed_before_start(session_id, &target) {
-            return Err(format!(
-                "{session_id} was closed before its program started"
-            ));
+            return Err(closed_before_start_error(session_id));
         }
         self.clear_tab_close_claim(session_id);
 
@@ -308,6 +313,12 @@ impl PtyManager {
             session_id, command, &cwd, env, app, on_data, cancelled, observer,
         )?;
         let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
+        // Checked again under the sessions lock: a close claimed during the spawn either shows
+        // here, or its detach waits for this lock and then ends the backend.
+        if runs_program && self.has_close_claim(session_id) {
+            backend.detach();
+            return Err(closed_before_start_error(session_id));
+        }
         if let Some(old) = sessions.get(session_id) {
             old.detach();
         }

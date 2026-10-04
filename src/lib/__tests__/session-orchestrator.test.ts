@@ -56,7 +56,7 @@ vi.mock("../api", () => ({
 }));
 
 import { sessions as sessionsApi, symphony } from "../api";
-import { taskWorkspaceLayout } from "../task-workspace-layout.svelte";
+import { providerHandoff, taskWorkspaceLayout } from "../task-workspace-layout.svelte";
 import { getSettings } from "../settings.svelte";
 import type { Session } from "../types";
 import {
@@ -246,12 +246,12 @@ describe("session-orchestrator", () => {
     });
 
     it("closes a terminal still continuing the session", async () => {
-      const { providerHandoff } = await import("../task-workspace-layout.svelte");
       const release = vi.spyOn(providerHandoff, "release").mockResolvedValue();
       api.list.mockResolvedValue([makeSession({ id: "s1" })]);
       await loadSessions();
       await archiveSession(makeSession({ id: "s1" }));
       expect(release).toHaveBeenCalledWith("s1");
+      release.mockRestore();
     });
   });
 
