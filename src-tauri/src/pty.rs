@@ -182,7 +182,12 @@ impl SessionBackend for RmuxBackend {
 pub struct PtyManager {
     sessions: Arc<RwLock<HashMap<String, Box<dyn SessionBackend>>>>,
     observer: Arc<RwLock<Arc<dyn OutputObserver>>>,
+    /// Tabs being closed. A claim makes a duplicate close a no-op; for a program tab it also
+    /// stops a spawn in flight from being published.
     tab_close_claims: Arc<Mutex<HashSet<String>>>,
+    /// Keys whose backend a detach ended: a claim on one is from that finished close, not from
+    /// a close racing a new spawn, so a key reused later (after a webview reload) starts fresh.
+    ended_tabs: Arc<Mutex<HashSet<String>>>,
 }
 
 impl PtyManager {
@@ -191,6 +196,7 @@ impl PtyManager {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             observer: Arc::new(RwLock::new(Arc::new(NoopObserver))),
             tab_close_claims: Arc::new(Mutex::new(HashSet::new())),
+            ended_tabs: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -198,53 +204,34 @@ impl PtyManager {
         *self.observer.write().unwrap() = observer;
     }
 
-    /// Claim responsibility for closing a shell tab. A claim persists after a
-    /// successful close so delayed duplicate exit notifications are harmless.
+    /// Claim responsibility for closing a tab. A claim persists after a successful close so
+    /// delayed duplicate exit notifications are harmless.
     pub(crate) fn claim_tab_close(&self, pty_key: &str) -> bool {
-        self.tab_close_claims
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(pty_key.to_string())
+        self.close_claims().insert(pty_key.to_string())
     }
 
     /// Release a close claim when closing failed so a later retry can proceed.
     pub(crate) fn cancel_tab_close(&self, pty_key: &str) {
-        self.clear_tab_close_claim(pty_key);
+        self.close_claims().remove(pty_key);
     }
 
-    /// A program tab closed while its spawn was in flight, such as a handoff whose session
-    /// left the app: starting it now would run a TUI no tab shows.
-    fn closed_before_start(&self, pty_key: &str, runs_program: bool) -> bool {
-        runs_program && self.has_close_claim(pty_key)
-    }
-
-    /// Before a spawn, in one step: a program tab already closed is refused, and keeps its
-    /// claim for the check at publish; any other key is closable again once reattached.
-    fn claim_attach(&self, pty_key: &str, runs_program: bool) -> Result<(), String> {
-        let mut claims = self
-            .tab_close_claims
+    fn close_claims(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
+        self.tab_close_claims
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if !runs_program {
-            claims.remove(pty_key);
-        } else if claims.contains(pty_key) {
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Before a spawn, in one step: a program tab closed before anything ran in it is refused,
+    /// consuming its claim; otherwise the key starts fresh, so a claim seen at publish can only
+    /// come from a close racing this spawn.
+    fn prepare_attach(&self, pty_key: &str, runs_program: bool) -> Result<(), String> {
+        let mut claims = self.close_claims();
+        let mut ended = self.ended_tabs.lock().unwrap_or_else(|e| e.into_inner());
+        let closed_unstarted = claims.remove(pty_key) && !ended.remove(pty_key);
+        if runs_program && closed_unstarted {
             return Err(closed_before_start_error(pty_key));
         }
         Ok(())
-    }
-
-    fn has_close_claim(&self, pty_key: &str) -> bool {
-        self.tab_close_claims
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(pty_key)
-    }
-
-    fn clear_tab_close_claim(&self, pty_key: &str) {
-        self.tab_close_claims
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(pty_key);
     }
 
     /// Attach a PTY to a session. The command run inside depends on the PtyTarget variant.
@@ -261,7 +248,7 @@ impl PtyManager {
         env: Vec<(String, String)>,
     ) -> Result<(), String> {
         let runs_program = matches!(target, PtyTarget::Program { .. });
-        self.claim_attach(session_id, runs_program)?;
+        self.prepare_attach(session_id, runs_program)?;
 
         // Handle daemon target via async path
         if let PtyTarget::Daemon {
@@ -337,7 +324,7 @@ impl PtyManager {
         backend: Box<dyn SessionBackend>,
     ) -> Result<(), String> {
         let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
-        if self.closed_before_start(session_id, runs_program) {
+        if runs_program && self.close_claims().remove(session_id) {
             backend.detach();
             return Err(closed_before_start_error(session_id));
         }
@@ -724,6 +711,10 @@ impl PtyManager {
         let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
         if let Some(backend) = sessions.remove(session_id) {
             backend.detach();
+            self.ended_tabs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(session_id.to_string());
         }
     }
 
@@ -782,18 +773,18 @@ mod tests {
     #[test]
     fn a_program_tab_closed_before_its_spawn_never_starts() {
         let manager = PtyManager::new();
-        manager.claim_attach("s1:2", true).unwrap();
+        manager.prepare_attach("s1:2", true).unwrap();
         assert!(manager.claim_tab_close("s1:2"));
-        assert!(manager.claim_attach("s1:2", true).is_err());
-        // The claim stays, so a close racing the spawn is still seen when it publishes.
-        assert!(manager.closed_before_start("s1:2", true));
+        assert!(manager.prepare_attach("s1:2", true).is_err());
+        // The refusal consumed the claim: a later tab on the key starts.
+        manager.prepare_attach("s1:2", true).unwrap();
     }
 
     #[test]
     fn a_shell_tab_reattaching_is_closable_again() {
         let manager = PtyManager::new();
         assert!(manager.claim_tab_close("s1:2"));
-        manager.claim_attach("s1:2", false).unwrap();
+        manager.prepare_attach("s1:2", false).unwrap();
         assert!(manager.claim_tab_close("s1:2"));
     }
 
@@ -805,6 +796,7 @@ mod tests {
         assert!(manager.publish("s1:2", true, backend).is_err());
         assert!(detached.load(Ordering::SeqCst));
         assert!(!manager.sessions.read().unwrap().contains_key("s1:2"));
+        manager.prepare_attach("s1:2", true).unwrap();
     }
 
     #[test]
@@ -818,12 +810,29 @@ mod tests {
     }
 
     #[test]
-    fn a_close_after_publishing_ends_the_program() {
+    fn a_close_after_publishing_ends_the_program_and_frees_its_key() {
         let manager = PtyManager::new();
         let (backend, detached) = spawned();
         manager.publish("s1:2", true, backend).unwrap();
         assert!(manager.claim_tab_close("s1:2"));
         manager.detach("s1:2");
+        assert!(detached.load(Ordering::SeqCst));
+        // After a webview reload the layout may hand the key out again.
+        manager.prepare_attach("s1:2", true).unwrap();
+    }
+
+    #[test]
+    fn a_closed_shell_key_reused_for_a_program_starts() {
+        let manager = PtyManager::new();
+        let (shell, _) = spawned();
+        manager.publish("s1:3", false, shell).unwrap();
+        assert!(manager.claim_tab_close("s1:3"));
+        manager.detach("s1:3");
+        manager.prepare_attach("s1:3", true).unwrap();
+        // A close racing this new spawn is still caught when it publishes.
+        assert!(manager.claim_tab_close("s1:3"));
+        let (program, detached) = spawned();
+        assert!(manager.publish("s1:3", true, program).is_err());
         assert!(detached.load(Ordering::SeqCst));
     }
 
@@ -844,7 +853,7 @@ mod tests {
             "a failed close must remain retryable"
         );
 
-        manager.clear_tab_close_claim(pty_key);
+        manager.prepare_attach(pty_key, false).unwrap();
         assert!(
             manager.claim_tab_close(pty_key),
             "a newly attached PTY key must be closable again"
