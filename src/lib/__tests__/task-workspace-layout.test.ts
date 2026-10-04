@@ -331,6 +331,22 @@ describe("shell tabs", () => {
     expect(workspace.findTab(ptyKey)).toBeNull();
   });
 
+  it("makes a second close of a tab wait for the one in flight", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = workspace.openShell("a")!;
+    let finish!: () => void;
+    deps.closeShell.mockReturnValueOnce(new Promise<void>((resolve) => (finish = resolve)));
+    const first = workspace.closeTab(ptyKey);
+    const second = workspace.discardShell(ptyKey);
+    // Nothing is reported closed before the backend confirms the first close.
+    expect(deps.shellClosed).not.toHaveBeenCalled();
+    finish();
+    await Promise.all([first, second]);
+    expect(deps.closeShell).toHaveBeenCalledOnce();
+    expect(deps.shellClosed).toHaveBeenCalledOnce();
+  });
+
   it("drops a shell that exited while its close failed", async () => {
     const { workspace, deps, show } = setup();
     await show(TASK, ["a"], "a");
@@ -488,6 +504,20 @@ describe("handoff terminals", () => {
       selectionIsExplicit: true,
     });
     expect(deps.handoffRestored).toHaveBeenCalledWith(ptyKey);
+  });
+
+  it("adopts only the handoff terminals of sessions still in the workspace", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a", "b"], "a");
+    workspace.openCommand("b", ["claude"], "Terminal", { handoff: true });
+    const reloaded = createTaskWorkspaceLayout(deps);
+    // b left the workspace (archived) while it was not shown.
+    await reloaded.show(TASK, {
+      agents: [agent("a")],
+      selectedSessionId: "a",
+      selectionIsExplicit: true,
+    });
+    expect(deps.handoffRestored).not.toHaveBeenCalled();
   });
 
   it("does not mark other command tabs", async () => {

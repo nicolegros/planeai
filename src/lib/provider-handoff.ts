@@ -13,6 +13,8 @@ export interface ProviderHandoffDeps {
   discardTab(ptyKey: string): Promise<boolean>;
   /** Ends a terminal's process when its tab is in a layout not loaded. */
   closeTerminal(ptyKey: string): Promise<void>;
+  /** Whether the terminal still runs its program: an app restart leaves a plain shell. */
+  isProgramRunning(ptyKey: string): Promise<boolean>;
   notify(message: string): void;
   now?: () => number;
 }
@@ -25,6 +27,7 @@ export function createProviderHandoff({
   api,
   discardTab,
   closeTerminal,
+  isProgramRunning,
   notify,
   now = Date.now,
 }: ProviderHandoffDeps) {
@@ -114,12 +117,14 @@ export function createProviderHandoff({
     },
 
     /**
-     * A loaded layout holds this handoff terminal, as after a webview reload or an app restart:
-     * closing it must still return its session to the chat.
+     * A loaded layout holds this handoff terminal, as after a webview reload: closing it must
+     * still return its session to the chat. After an app restart its TUI is gone and the tab
+     * is a plain shell, which must never receive the session's prompts.
      */
-    adopt(ptyKey: string): void {
+    async adopt(ptyKey: string): Promise<void> {
       const parts = parsePtyKey(ptyKey);
       if (parts?.kind !== "shell" || tabs.has(ptyKey)) return;
+      if (!(await isProgramRunning(ptyKey))) return;
       // Not just opened: its exit says nothing about whether the TUI could start.
       tabs.set(ptyKey, { sessionId: parts.sessionId, openedAt: -Infinity });
     },

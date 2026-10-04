@@ -39,6 +39,16 @@ pub enum PtyTarget {
     },
 }
 
+/// A session's shell tab key, `<session id>:<tab index>`, as the frontend's pty keys spell it.
+pub fn tab_key(session_id: &str, tab_index: u32) -> String {
+    format!("{session_id}:{tab_index}")
+}
+
+/// The session a tab key belongs to; `None` for a session's own (agent) key.
+fn tab_owner(pty_key: &str) -> Option<&str> {
+    pty_key.split_once(':').map(|(session_id, _)| session_id)
+}
+
 fn closed_before_start_error(pty_key: &str) -> String {
     format!("{pty_key} was closed before its program started")
 }
@@ -736,16 +746,26 @@ impl PtyManager {
     /// driving its conversation with no tab left to show or close it.
     pub fn end_session(&self, session_id: &str) {
         self.detach(session_id);
-        let prefix = format!("{session_id}:");
         let programs: Vec<String> = self
             .program_tabs()
             .iter()
-            .filter(|key| key.starts_with(&prefix))
+            .filter(|key| tab_owner(key) == Some(session_id))
             .cloned()
             .collect();
         for key in programs {
             self.detach(&key);
         }
+    }
+
+    /// The keys among `pty_keys` whose program still runs, as after a webview reload; an app
+    /// restart ends every program, leaving their tabs plain shells.
+    pub fn running_programs(&self, pty_keys: &[String]) -> Vec<String> {
+        let programs = self.program_tabs();
+        pty_keys
+            .iter()
+            .filter(|key| programs.contains(*key))
+            .cloned()
+            .collect()
     }
 
     fn program_tabs(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
@@ -769,7 +789,7 @@ impl PtyManager {
 
 #[cfg(test)]
 mod tests {
-    use super::PtyManager;
+    use super::{tab_key, PtyManager};
     use crate::session_backend::{SessionBackend, WriteAck};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -887,14 +907,19 @@ mod tests {
         let (shell, shell_ended) = spawned();
         let (other, other_ended) = spawned();
         manager.publish("s1", false, agent).unwrap();
-        manager.publish("s1:2", true, program).unwrap();
-        manager.publish("s1:3", false, shell).unwrap();
-        manager.publish("s10:2", true, other).unwrap();
+        manager.publish(&tab_key("s1", 2), true, program).unwrap();
+        manager.publish(&tab_key("s1", 3), false, shell).unwrap();
+        manager.publish(&tab_key("s10", 2), true, other).unwrap();
+        assert_eq!(
+            manager.running_programs(&[tab_key("s1", 2), tab_key("s1", 3)]),
+            [tab_key("s1", 2)]
+        );
         manager.end_session("s1");
         assert!(agent_ended.load(Ordering::SeqCst));
         assert!(program_ended.load(Ordering::SeqCst));
         assert!(!shell_ended.load(Ordering::SeqCst));
         assert!(!other_ended.load(Ordering::SeqCst));
+        assert!(manager.running_programs(&[tab_key("s1", 2)]).is_empty());
     }
 
     #[test]

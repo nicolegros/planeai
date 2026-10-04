@@ -157,7 +157,7 @@ fn prepare_tab_spawn(
         }
     });
 
-    let pty_key = format!("{}:{}", session_id, tab_index);
+    let pty_key = pty::tab_key(&session_id, tab_index);
 
     // Build canonical env (augmented PATH, TERM, COLORFGBG, PLANEAI_SOCKET, etc.)
     // via prepare_session() — same for both backends.
@@ -359,15 +359,27 @@ fn prepare_tab_close(
     connection: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
 ) -> Result<TabClosePlan, String> {
     let conn = connection.lock().map_err(|e| e.to_string())?;
-    let session = db::get_session(&conn, &session_id)
+    // A session deleted already (from the CLI, or with its project) leaves only local tabs to
+    // end, such as a handoff's program, which must not outlive it.
+    let backend = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
-        .ok_or("session not found")?;
+        .map(|session| session.backend);
 
     Ok(TabClosePlan {
-        pty_key: format!("{}:{}", session_id, tab_index),
-        daemon_backed: session.backend == "daemon",
-        rmux_backed: session.backend == planeai_rmux::BACKEND,
+        pty_key: pty::tab_key(&session_id, tab_index),
+        daemon_backed: backend.as_deref() == Some("daemon"),
+        rmux_backed: backend.as_deref() == Some(planeai_rmux::BACKEND),
     })
+}
+
+/// The tabs among `pty_keys` still running their program, so a reloaded webview can tell a
+/// live provider handoff from a tab that came back as a plain shell after an app restart.
+#[tauri::command]
+pub async fn running_program_tabs(
+    pty_keys: Vec<String>,
+    state: State<'_, PtyState>,
+) -> Result<Vec<String>, String> {
+    Ok(state.0.running_programs(&pty_keys))
 }
 
 #[tauri::command]

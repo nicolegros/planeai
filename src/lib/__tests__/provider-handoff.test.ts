@@ -19,16 +19,18 @@ function setup() {
   const notify = vi.fn();
   const discardTab = vi.fn(async (_ptyKey: string) => true);
   const closeTerminal = vi.fn(async (_ptyKey: string) => {});
+  const isProgramRunning = vi.fn(async (_ptyKey: string) => true);
   let time = 0;
   const clock = { advance: (ms: number) => (time += ms) };
   const handoff = createProviderHandoff({
     api,
     discardTab,
     closeTerminal,
+    isProgramRunning,
     notify,
     now: () => time,
   });
-  return { api, notify, discardTab, closeTerminal, clock, handoff };
+  return { api, notify, discardTab, closeTerminal, isProgramRunning, clock, handoff };
 }
 
 describe("provider handoff", () => {
@@ -200,12 +202,20 @@ describe("provider handoff", () => {
 
   it("adopts a restored handoff terminal, whose close hands its session back", async () => {
     const { api, notify, handoff } = setup();
-    handoff.adopt("s1:3");
-    handoff.adopt("s1:diff");
+    await handoff.adopt("s1:3");
+    await handoff.adopt("s1:diff");
     expect(handoff.tabFor("s1")).toBe("s1:3");
     // Its exit right after the reload says nothing about the TUI failing to start.
     await handoff.shellClosed("s1:3", true);
     expect(api.handback).toHaveBeenCalledWith("s1");
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("never adopts a restored tab whose program is gone, which is a plain shell", async () => {
+    // After an app restart the TUI died with the app: prompts must not be typed into a shell.
+    const { isProgramRunning, handoff } = setup();
+    isProgramRunning.mockResolvedValueOnce(false);
+    await handoff.adopt("s1:3");
+    expect(handoff.tabFor("s1")).toBeUndefined();
   });
 });

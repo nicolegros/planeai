@@ -60,9 +60,7 @@ export interface TaskWorkspaceLayoutDeps {
   store: LayoutStore;
   /** Kill a shell tab's backend process. Rejects when it may still be running. */
   closeShell: (sessionId: string, index: number) => Promise<unknown>;
-  /**
-   * A shell tab left the layout, closed or exited by itself (`exited`); it never rejects.
-   */
+  /** A shell tab left the layout, closed or exited by itself (`exited`); it never rejects. */
   shellClosed?: (ptyKey: string, exited: boolean) => Promise<void>;
   /** A loaded layout holds a provider handoff's terminal, so its close must still hand back. */
   handoffRestored?: (ptyKey: string) => void;
@@ -135,10 +133,10 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
    */
   const goneShells = new Set<string>();
   /**
-   * Shells whose explicit close is in flight, with whether their process exited meanwhile.
-   * The exit is their close's own doing, so it must not send the backend a second close.
+   * Shells whose explicit close is in flight: whether their process exited meanwhile, as their
+   * close's own doing, and the close itself, which a second close of the tab waits for.
    */
-  const closingShells = new Map<string, boolean>();
+  const closingShells = new Map<string, { exited: boolean; done: Promise<void> }>();
 
   function commit(next: Layout | null): void {
     if (next === layout) return;
@@ -255,8 +253,9 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     const parts = parsePtyKey(ptyKey);
     // An explicit close already finalized it, or will: closing again would be redundant.
     if (parts?.kind !== "shell" || goneShells.has(ptyKey)) return;
-    if (closingShells.has(ptyKey)) {
-      closingShells.set(ptyKey, true);
+    const closing = closingShells.get(ptyKey);
+    if (closing) {
+      closing.exited = true;
       return;
     }
     pendingCommands.delete(ptyKey);
@@ -268,21 +267,26 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
   async function closeShell(ptyKey: string): Promise<void> {
     const parts = parsePtyKey(ptyKey);
     if (parts?.kind !== "shell") return;
+    const inFlight = closingShells.get(ptyKey);
+    if (inFlight) return inFlight.done;
     // Keep the tab until the backend confirms, so a failed kill does not leave a
     // shell running with no UI to reach it.
-    closingShells.set(ptyKey, false);
-    try {
-      await deps.closeShell(parts.sessionId, parts.index);
-    } catch (error) {
-      const exited = closingShells.get(ptyKey);
+    const closing = { exited: false, done: Promise.resolve() };
+    closing.done = (async () => {
+      try {
+        await deps.closeShell(parts.sessionId, parts.index);
+      } catch (error) {
+        closingShells.delete(ptyKey);
+        // Its process is gone anyway, so its tab goes as for any exit.
+        if (closing.exited) await dropShell(ptyKey, true);
+        throw error;
+      }
       closingShells.delete(ptyKey);
-      // Its process is gone anyway, so its tab goes as for any exit.
-      if (exited) await dropShell(ptyKey, true);
-      throw error;
-    }
-    closingShells.delete(ptyKey);
-    removeShell(ptyKey);
-    await deps.shellClosed?.(ptyKey, false);
+      removeShell(ptyKey);
+      await deps.shellClosed?.(ptyKey, false);
+    })();
+    closingShells.set(ptyKey, closing);
+    return closing.done;
   }
 
   return {
@@ -364,11 +368,12 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       }
       const pruned = restored && pruneGoneShells(restored);
       layout = pruned || tree.createLayout(agentTabs(), selectedTab);
-      for (const tab of tree.tabsOf(layout)) if (tab.handoff) deps.handoffRestored?.(tab.ptyKey);
       workspace = target;
       focusedSessionId = adoptedSessionId ?? options.selectedSessionId;
       loading = false;
       reconcileNow();
+      // After reconcile, so tabs of sessions gone from the workspace are never adopted.
+      for (const tab of tree.tabsOf(layout)) if (tab.handoff) deps.handoffRestored?.(tab.ptyKey);
       if (pruned !== restored) saveNow();
       return { adoptedSessionId, restored: !!pruned };
     },
@@ -657,7 +662,11 @@ export const taskWorkspaceLayout = createTaskWorkspaceLayout({
   },
   closeShell: closeShellPty,
   shellClosed: (ptyKey, exited) => providerHandoff.shellClosed(ptyKey, exited),
-  handoffRestored: (ptyKey) => providerHandoff.adopt(ptyKey),
+  handoffRestored: (ptyKey) => {
+    void providerHandoff
+      .adopt(ptyKey)
+      .catch((error) => console.warn("Failed to restore a handoff terminal", ptyKey, error));
+  },
   getTerminalCommand: (sessionId, filePath) => editorApi.getTerminalCommand(sessionId, filePath),
   disposeView: disposeTerminalView,
   onSaveError: (workspace, error) =>
@@ -675,5 +684,6 @@ export const providerHandoff = createProviderHandoff({
     const parts = parsePtyKey(ptyKey);
     if (parts?.kind === "shell") await closeShellPty(parts.sessionId, parts.index);
   },
+  isProgramRunning: async (ptyKey) => (await pty.runningPrograms([ptyKey])).includes(ptyKey),
   notify: (message) => showSnackbar(message),
 });
