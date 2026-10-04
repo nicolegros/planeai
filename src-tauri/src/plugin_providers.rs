@@ -604,9 +604,16 @@ pub async fn handoff<R: ProviderRuntime>(
     .await?;
     // The provider detached when it answered, whatever its answer.
     runtime.sessions().set_handed_off(session_id, true);
-    let response: HandoffResponse = serde_json::from_value(value)
-        .map_err(|error| format!("invalid provider handoff: {error}"))?;
-    validate_handoff_argv(response.argv)
+    let argv = serde_json::from_value::<HandoffResponse>(value)
+        .map_err(|error| format!("invalid provider handoff: {error}"))
+        .and_then(|response| validate_handoff_argv(response.argv));
+    if argv.is_err() {
+        // Without a command to continue in, nothing would ever drive the session again.
+        if let Err(error) = handback(runtime, session_id).await {
+            tracing::warn!(session_id, %error, "provider session handback after a bad handoff failed");
+        }
+    }
+    argv
 }
 
 /// The terminal that continued a session closed; the provider drives it again.
@@ -902,6 +909,8 @@ pub(crate) mod fake {
         pub(crate) failing: Mutex<Vec<&'static str>>,
         /// While set, a resume waits for it.
         pub(crate) resume_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
+        /// What the provider answers a handoff with, instead of a runnable argv.
+        pub(crate) handoff_answer: Mutex<Option<Value>>,
         pub(crate) status: FakeStatus,
     }
 
@@ -985,7 +994,9 @@ pub(crate) mod fake {
                 return Err(format!("{method} failed"));
             }
             if method == protocol::HANDOFF {
-                return Ok(serde_json::json!({ "argv": ["claude", "--resume", session_id] }));
+                return Ok(self.handoff_answer.lock().unwrap().clone().unwrap_or_else(
+                    || serde_json::json!({ "argv": ["claude", "--resume", session_id] }),
+                ));
             }
             Ok(serde_json::json!({}))
         }
@@ -1399,5 +1410,22 @@ mod tests {
         let sink = NotificationSink::new(status, "chat", 1, sessions);
         assert!(sink.try_handle(&status_frame("s1", "busy")));
         assert_eq!(sink.status.status.take(), ["Busy s1", "release s1"]);
+    }
+
+    #[tokio::test]
+    async fn a_handoff_without_a_runnable_command_returns_the_session_to_its_chat() {
+        let runtime = FakeRuntime::running(&[("s1", "active")]);
+        *runtime.handoff_answer.lock().unwrap() = Some(serde_json::json!({ "argv": [] }));
+        assert!(handoff(&runtime, "s1").await.is_err());
+        send(&runtime, "s1", "hi").await.unwrap();
+        assert_eq!(
+            runtime.sent(),
+            [
+                protocol::RESUME,
+                protocol::HANDOFF,
+                protocol::HANDBACK,
+                protocol::SEND
+            ]
+        );
     }
 }

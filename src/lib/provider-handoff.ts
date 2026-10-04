@@ -1,27 +1,39 @@
-import { providerSessions } from "./api";
+import { providerSessions, pty } from "./api";
+import { parsePtyKey } from "./pty-key";
 import { showSnackbar } from "./snackbar.svelte";
 import type { TabClose } from "./task-workspace-layout.svelte";
+
+/** A terminal that exits sooner than this after opening most likely failed to start the TUI. */
+const QUICK_EXIT_MS = 5_000;
 
 export interface ProviderHandoffDeps {
   api: {
     handoff(sessionId: string): Promise<string[]>;
     handback(sessionId: string): Promise<void>;
   };
+  /** Ends a terminal's process; its session left the app, so its tab is already gone. */
+  closeTerminal(ptyKey: string): Promise<void>;
   notify(message: string): void;
+  now?: () => number;
 }
 
 /**
  * Continues provider sessions in their agent's TUI. The provider detaches first, so
  * only one side ever drives the conversation; closing the tab hands it back.
  */
-export function createProviderHandoff({ api, notify }: ProviderHandoffDeps) {
+export function createProviderHandoff({
+  api,
+  closeTerminal,
+  notify,
+  now = Date.now,
+}: ProviderHandoffDeps) {
   /** Terminal tabs continuing a provider session, keyed by pty key. One per session. */
-  const tabs = new Map<string, string>();
+  const tabs = new Map<string, { sessionId: string; openedAt: number }>();
   /** Handoffs still asking the provider for its command, so a repeat request joins them. */
   const starting = new Map<string, Promise<string>>();
 
   function tabFor(sessionId: string): string | undefined {
-    for (const [ptyKey, owner] of tabs) if (owner === sessionId) return ptyKey;
+    for (const [ptyKey, tab] of tabs) if (tab.sessionId === sessionId) return ptyKey;
     return undefined;
   }
 
@@ -36,7 +48,7 @@ export function createProviderHandoff({ api, notify }: ProviderHandoffDeps) {
       await api.handback(sessionId);
       throw new Error("There is no pane to open the terminal in.");
     }
-    tabs.set(ptyKey, sessionId);
+    tabs.set(ptyKey, { sessionId, openedAt: now() });
     return ptyKey;
   }
 
@@ -68,7 +80,7 @@ export function createProviderHandoff({ api, notify }: ProviderHandoffDeps) {
       if (!ptyKey) return api.handback(sessionId);
       const closed = await closeTab(ptyKey);
       if (closed === "starting") throw new Error("The terminal is still starting.");
-      // Its shell still runs, in a workspace not shown or not loaded yet.
+      // Its terminal still runs, in a workspace not shown or not loaded yet.
       if (closed === "missing") {
         throw new Error("Close the session's terminal to return to the chat.");
       }
@@ -78,17 +90,30 @@ export function createProviderHandoff({ api, notify }: ProviderHandoffDeps) {
      * Every shell tab that leaves the layout, closed or exited by itself, passes through
      * here; a handoff tab returns its session to the chat. A failed handback never fails the close.
      */
-    async shellClosed(ptyKey: string): Promise<void> {
-      const sessionId = tabs.get(ptyKey);
-      if (!sessionId) return;
+    async shellClosed(ptyKey: string, exited: boolean): Promise<void> {
+      const tab = tabs.get(ptyKey);
+      if (!tab) return;
       tabs.delete(ptyKey);
+      if (exited && now() - tab.openedAt < QUICK_EXIT_MS) {
+        notify(
+          "The terminal closed right after it opened, so the session is back in its chat. Check that the agent's CLI starts in a terminal.",
+        );
+      }
       try {
-        await api.handback(sessionId);
+        await api.handback(tab.sessionId);
       } catch (error) {
         notify(
           `The session could not return to the chat: ${String(error)}. Try again from the session's chat.`,
         );
       }
+    },
+
+    /** The session left the app: its terminal must not keep driving a conversation no one sees. */
+    async release(sessionId: string): Promise<void> {
+      const ptyKey = tabFor(sessionId);
+      if (!ptyKey) return;
+      tabs.delete(ptyKey);
+      await closeTerminal(ptyKey);
     },
   };
 }
@@ -98,6 +123,10 @@ export const providerHandoff = createProviderHandoff({
   api: {
     handoff: (sessionId) => providerSessions.handoff(sessionId),
     handback: (sessionId) => providerSessions.handback(sessionId),
+  },
+  closeTerminal: async (ptyKey) => {
+    const parts = parsePtyKey(ptyKey);
+    if (parts?.kind === "shell") await pty.closeTab(parts.sessionId, parts.index);
   },
   notify: (message) => showSnackbar(message),
 });

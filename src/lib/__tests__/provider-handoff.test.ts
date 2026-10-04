@@ -17,7 +17,11 @@ function setup() {
     handback: vi.fn(async (_sessionId: string) => {}),
   };
   const notify = vi.fn();
-  return { api, notify, handoff: createProviderHandoff({ api, notify }) };
+  const closeTerminal = vi.fn(async (_ptyKey: string) => {});
+  let time = 0;
+  const clock = { advance: (ms: number) => (time += ms) };
+  const handoff = createProviderHandoff({ api, closeTerminal, notify, now: () => time });
+  return { api, notify, closeTerminal, clock, handoff };
 }
 
 describe("provider handoff", () => {
@@ -34,9 +38,9 @@ describe("provider handoff", () => {
     expect(api.handoff).toHaveBeenCalledOnce();
     expect(handoff.tabFor("s1")).toBe("s1:4");
 
-    await handoff.shellClosed("s2:1");
+    await handoff.shellClosed("s2:1", false);
     expect(api.handback).not.toHaveBeenCalled();
-    await handoff.shellClosed("s1:4");
+    await handoff.shellClosed("s1:4", false);
     expect(api.handback).toHaveBeenCalledWith("s1");
     expect(handoff.tabFor("s1")).toBeUndefined();
   });
@@ -54,7 +58,7 @@ describe("provider handoff", () => {
     const { api, notify, handoff } = setup();
     await handoff.start("s1", () => "s1:1");
     api.handback.mockRejectedValueOnce(new Error("plugin is not running"));
-    await expect(handoff.shellClosed("s1:1")).resolves.toBeUndefined();
+    await expect(handoff.shellClosed("s1:1", false)).resolves.toBeUndefined();
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("could not return to the chat"));
     expect(handoff.tabFor("s1")).toBeUndefined();
   });
@@ -70,7 +74,7 @@ describe("provider handoff", () => {
     const { api, handoff } = setup();
     await handoff.start("s1", () => "s1:1");
     const closeTab = vi.fn(async (ptyKey: string) => {
-      await handoff.shellClosed(ptyKey);
+      await handoff.shellClosed(ptyKey, false);
       return "closed" as const;
     });
     await handoff.end("s1", closeTab);
@@ -87,7 +91,7 @@ describe("provider handoff", () => {
     expect(api.handback).not.toHaveBeenCalled();
     expect(handoff.tabFor("s1")).toBe("s1:1");
     // Closing it later, wherever it is, still hands the session back.
-    await handoff.shellClosed("s1:1");
+    await handoff.shellClosed("s1:1", false);
     expect(api.handback).toHaveBeenCalledWith("s1");
   });
 
@@ -105,7 +109,7 @@ describe("provider handoff", () => {
     api.handoff.mockReturnValueOnce(new Promise((resolve) => (releaseHandoff = resolve)));
     const started = handoff.start("s1", () => "s1:1");
     const closeTab = vi.fn(async (ptyKey: string) => {
-      await handoff.shellClosed(ptyKey);
+      await handoff.shellClosed(ptyKey, false);
       return "closed" as const;
     });
     const ended = handoff.end("s1", closeTab);
@@ -123,5 +127,35 @@ describe("provider handoff", () => {
     await expect(handoff.end("s1", async () => "starting")).rejects.toThrow("still starting");
     expect(api.handback).not.toHaveBeenCalled();
     expect(handoff.tabFor("s1")).toBe("s1:1");
+  });
+
+  it("explains a terminal that exits right after it opens", async () => {
+    const { notify, clock, handoff } = setup();
+    await handoff.start("s1", () => "s1:1");
+    clock.advance(800);
+    await handoff.shellClosed("s1:1", true);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("closed right after it opened"));
+  });
+
+  it("stays quiet when the user closes the terminal or the TUI ran a while", async () => {
+    const { notify, clock, handoff } = setup();
+    await handoff.start("s1", () => "s1:1");
+    await handoff.shellClosed("s1:1", false);
+    await handoff.start("s2", () => "s2:1");
+    clock.advance(60_000);
+    await handoff.shellClosed("s2:1", true);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("closes the terminal of a session that leaves the app, so nothing drives it unseen", async () => {
+    const { api, closeTerminal, handoff } = setup();
+    await handoff.start("s1", () => "s1:1");
+    await handoff.release("s1");
+    expect(closeTerminal).toHaveBeenCalledWith("s1:1");
+    expect(handoff.tabFor("s1")).toBeUndefined();
+    // Restored later, it returns to the chat and can hand off again.
+    await handoff.end("s1", vi.fn());
+    expect(api.handback).toHaveBeenCalledWith("s1");
+    await expect(handoff.start("s1", () => "s1:2")).resolves.toBe("s1:2");
   });
 });

@@ -17,6 +17,7 @@ import { playTaskComplete } from "./soundPlayer";
 import { getCycleState } from "./tab-switcher.svelte";
 import { taskWorkspaceLayout } from "./task-workspace-layout.svelte";
 import { isPluginSession } from "./plugin-providers";
+import { providerHandoff } from "./provider-handoff";
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -169,6 +170,9 @@ export function createSession(session: Session): void {
 function removeSessionViews(sessionId: string): void {
   removeMru(sessionId);
   disposeSessionTerminalViews(sessionId);
+  void providerHandoff
+    .release(sessionId)
+    .catch((error) => console.warn("Failed to close a handoff terminal", sessionId, error));
 }
 
 export async function deleteSession(s: Session): Promise<void> {

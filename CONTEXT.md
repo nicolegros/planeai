@@ -341,6 +341,7 @@ Choosing one creates a session with the `plugin` backend; there is no PTY or com
 - Restarting an exited provider session only restores the row; the provider resumes it on next use.
 - Providers that support `handoff` can continue a session in a terminal tab running their agent's TUI (`provider.session.handoff` returns its argv, run directly without a shell, so the tab closes when the TUI exits); every shell tab that leaves the layout, closed or exited by itself, goes through `providerHandoff.shellClosed`, which hands a handoff tab's session back to the provider.
 - While a session continues in a terminal, the host refuses provider prompts for it; feedback from the Diff and editor tabs is typed into that terminal instead.
+- A session leaving the app (archived, parked, deleted) closes its handoff terminal, and a handoff answered without a runnable argv is handed straight back, so neither leaves a conversation driven unseen or stuck in a terminal that never opened.
 
 ### rmux (experimental)
 

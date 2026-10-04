@@ -60,7 +60,8 @@ export interface TaskWorkspaceLayoutDeps {
   /** Kill a shell tab's backend process. Rejects when it may still be running. */
   closeShell: (sessionId: string, index: number) => Promise<unknown>;
   /** A shell tab left the layout, closed or exited by itself; it never rejects. */
-  shellClosed?: (ptyKey: string) => Promise<void>;
+  /** `exited` when its process ended by itself rather than being closed. */
+  shellClosed?: (ptyKey: string, exited: boolean) => Promise<void>;
   getTerminalCommand: (sessionId: string, filePath: string) => Promise<string>;
   disposeView: (ptyKey: string) => void;
   saveDelayMs?: number;
@@ -242,7 +243,7 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     // shell running with no UI to reach it.
     await deps.closeShell(parts.sessionId, parts.index);
     removeShell(ptyKey);
-    await deps.shellClosed?.(ptyKey);
+    await deps.shellClosed?.(ptyKey, false);
   }
 
   return {
@@ -397,11 +398,11 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       return paneId ? openCommandTab(sessionId, paneId, command, label, true) : null;
     },
 
-    /** Command a shell tab must run when its PTY spawns, if it is a terminal editor. */
+    /** What a shell tab runs first when its PTY spawns: a terminal editor, or a provider's handoff. */
     pendingCommand: (ptyKey: string): TabCommand | undefined => pendingCommands.get(ptyKey),
     isStarting: (ptyKey: string): boolean => pendingCommands.has(ptyKey),
 
-    /** A shell tab's PTY spawned; its editor command has been consumed. */
+    /** A shell tab's PTY spawned; its pending command has been consumed. */
     shellStarted(ptyKey: string): void {
       pendingCommands.delete(ptyKey);
     },
@@ -474,7 +475,7 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       pendingCommands.delete(ptyKey);
       removeShell(ptyKey);
       // The process is gone even when finalizing its backend fails below.
-      await deps.shellClosed?.(ptyKey);
+      await deps.shellClosed?.(ptyKey, true);
       await deps.closeShell(parts.sessionId, parts.index);
     },
 
@@ -604,7 +605,7 @@ export const taskWorkspaceLayout = createTaskWorkspaceLayout({
         : sessionsApi.saveLayout(workspace.sessionId, layoutJson),
   },
   closeShell: (sessionId, index) => pty.closeTab(sessionId, index),
-  shellClosed: (ptyKey) => providerHandoff.shellClosed(ptyKey),
+  shellClosed: (ptyKey, exited) => providerHandoff.shellClosed(ptyKey, exited),
   getTerminalCommand: (sessionId, filePath) => editorApi.getTerminalCommand(sessionId, filePath),
   disposeView: disposeTerminalView,
   onSaveError: (workspace, error) =>
