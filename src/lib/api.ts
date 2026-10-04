@@ -104,8 +104,8 @@ export const pty = {
   pause: (sessionId: string) => invoke("pause_pty", { sessionId }),
   resume: (sessionId: string) => invoke("resume_pty", { sessionId }),
   closeTab: (sessionId: string, tabIndex: number) => invoke("close_tab", { sessionId, tabIndex }),
-  /** The keys among `ptyKeys` still running their program, such as a provider handoff's TUI. */
-  runningPrograms: (ptyKeys: string[]) => invoke<string[]>("running_program_tabs", { ptyKeys }),
+  /** Whether the tab still runs its program, such as a provider handoff's TUI. */
+  isProgramRunning: (ptyKey: string) => invoke<boolean>("is_program_running", { ptyKey }),
 };
 
 export interface LspConnection {

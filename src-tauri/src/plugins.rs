@@ -1669,7 +1669,7 @@ impl RuntimeProcess {
                                 if let Ok(session) =
                                     serde_json::from_value::<crate::db::Session>(session.clone())
                                 {
-                                    pty_state.0.end_session(&session.id);
+                                    pty_state.0.detach(&session.id);
                                     runtime.0.dispatch_session_lifecycle(
                                         crate::commands::sessions::lifecycle::session_lifecycle_event(&session, &session.status, "archived"),
                                     );
@@ -2872,6 +2872,13 @@ impl PluginRuntimeSupervisor {
             // Sessions the GUI ends dispatch this event; ends from the CLI or task
             // completion reach `plugin_providers::reconcile` instead.
             if let Some(reason) = crate::plugin_providers::stop_reason(&event.status) {
+                // Every path that ends a session in the GUI dispatches this, so its handoff
+                // programs end here, whichever path it was.
+                supervisor
+                    .app
+                    .state::<crate::state::PtyState>()
+                    .0
+                    .end_programs(&event.session_id);
                 let runtime = crate::plugin_providers::AppRuntime::new(&supervisor.app);
                 crate::plugin_providers::stop(&runtime, &event.session_id, reason).await;
             }

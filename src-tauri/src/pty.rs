@@ -741,11 +741,10 @@ impl PtyManager {
         }
     }
 
-    /// A session leaves (archived, parked, destroyed): its agent PTY ends, and so does any
-    /// program in its tabs, such as a provider handoff's TUI, which would otherwise keep
-    /// driving its conversation with no tab left to show or close it.
-    pub fn end_session(&self, session_id: &str) {
-        self.detach(session_id);
+    /// A session ended (archived, parked, destroyed, exited): any program in its tabs, such as
+    /// a provider handoff's TUI, ends with it rather than drive its conversation with no tab
+    /// left to show or close it. Its shell tabs keep their own lifecycle.
+    pub fn end_programs(&self, session_id: &str) {
         let programs: Vec<String> = self
             .program_tabs()
             .iter()
@@ -757,15 +756,10 @@ impl PtyManager {
         }
     }
 
-    /// The keys among `pty_keys` whose program still runs, as after a webview reload; an app
-    /// restart ends every program, leaving their tabs plain shells.
-    pub fn running_programs(&self, pty_keys: &[String]) -> Vec<String> {
-        let programs = self.program_tabs();
-        pty_keys
-            .iter()
-            .filter(|key| programs.contains(*key))
-            .cloned()
-            .collect()
+    /// Whether the tab still runs its program, as after a webview reload; an app restart ends
+    /// every program, leaving its tab a plain shell.
+    pub fn is_program_running(&self, pty_key: &str) -> bool {
+        self.program_tabs().contains(pty_key)
     }
 
     fn program_tabs(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
@@ -900,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn a_leaving_session_ends_its_programs_but_not_its_shells() {
+    fn an_ended_session_ends_its_programs_but_not_its_shells() {
         let manager = PtyManager::new();
         let (agent, agent_ended) = spawned();
         let (program, program_ended) = spawned();
@@ -910,16 +904,15 @@ mod tests {
         manager.publish(&tab_key("s1", 2), true, program).unwrap();
         manager.publish(&tab_key("s1", 3), false, shell).unwrap();
         manager.publish(&tab_key("s10", 2), true, other).unwrap();
-        assert_eq!(
-            manager.running_programs(&[tab_key("s1", 2), tab_key("s1", 3)]),
-            [tab_key("s1", 2)]
-        );
-        manager.end_session("s1");
-        assert!(agent_ended.load(Ordering::SeqCst));
+        assert!(manager.is_program_running(&tab_key("s1", 2)));
+        assert!(!manager.is_program_running(&tab_key("s1", 3)));
+        manager.end_programs("s1");
+        // The agent's own PTY is its session commands' to end.
+        assert!(!agent_ended.load(Ordering::SeqCst));
         assert!(program_ended.load(Ordering::SeqCst));
         assert!(!shell_ended.load(Ordering::SeqCst));
         assert!(!other_ended.load(Ordering::SeqCst));
-        assert!(manager.running_programs(&[tab_key("s1", 2)]).is_empty());
+        assert!(!manager.is_program_running(&tab_key("s1", 2)));
     }
 
     #[test]

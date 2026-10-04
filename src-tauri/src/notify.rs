@@ -184,7 +184,7 @@ fn reconcile_provider_sessions(app: &AppHandle) {
         for session_id in crate::plugin_providers::reconcile(&runtime).await {
             app.state::<crate::state::PtyState>()
                 .0
-                .end_session(&session_id);
+                .end_programs(&session_id);
         }
     });
 }

@@ -218,4 +218,26 @@ describe("provider handoff", () => {
     await handoff.adopt("s1:3");
     expect(handoff.tabFor("s1")).toBeUndefined();
   });
+
+  it("drops an adoption whose tab closed while its program was checked", async () => {
+    const { isProgramRunning, handoff } = setup();
+    let answer!: (running: boolean) => void;
+    isProgramRunning.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const adopting = handoff.adopt("s1:3");
+    await handoff.shellClosed("s1:3", true);
+    answer(true);
+    await adopting;
+    expect(handoff.tabFor("s1")).toBeUndefined();
+  });
+
+  it("drops an adoption whose session left while its program was checked", async () => {
+    const { isProgramRunning, handoff } = setup();
+    let answer!: (running: boolean) => void;
+    isProgramRunning.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const adopting = handoff.adopt("s1:3");
+    await handoff.release("s1");
+    answer(true);
+    await adopting;
+    expect(handoff.tabFor("s1")).toBeUndefined();
+  });
 });

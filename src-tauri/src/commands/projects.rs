@@ -91,7 +91,6 @@ pub fn list_archived_projects(state: State<DbState>) -> Result<Vec<db::Project>,
 pub fn archive_project(
     state: State<DbState>,
     runtime: State<PluginRuntimeHandle>,
-    pty_state: State<PtyState>,
     id: String,
 ) -> Result<(), String> {
     let lifecycle_events = {
@@ -104,9 +103,6 @@ pub fn archive_project(
             .map(|session| session_lifecycle_event(&session, &session.status, "archived"))
             .collect::<Vec<_>>()
     };
-    for event in &lifecycle_events {
-        pty_state.0.end_session(&event.session_id);
-    }
     for event in lifecycle_events {
         runtime.0.dispatch_session_lifecycle(event);
     }
@@ -212,10 +208,10 @@ pub async fn delete_project(
         (sessions, project_path, owned_worktrees)
     };
 
-    // PtyState is main-thread-only; end the sessions' PTYs, handoff programs included,
-    // before moving process and filesystem teardown to the blocking worker.
+    // PtyState is main-thread-only; detach before moving process and filesystem
+    // teardown to the blocking worker.
     for session in &sessions {
-        pty_state.0.end_session(&session.id);
+        pty_state.0.detach(&session.id);
     }
 
     let teardown_sessions = sessions.clone();

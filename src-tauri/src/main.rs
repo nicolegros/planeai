@@ -377,7 +377,7 @@ fn main() {
             save_mru_order,
             spawn_tab,
             close_tab,
-            running_program_tabs,
+            is_program_running,
             check_tmux_available,
             check_rmux_available,
             save_session_layout,

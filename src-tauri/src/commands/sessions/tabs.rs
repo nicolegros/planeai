@@ -372,14 +372,14 @@ fn prepare_tab_close(
     })
 }
 
-/// The tabs among `pty_keys` still running their program, so a reloaded webview can tell a
-/// live provider handoff from a tab that came back as a plain shell after an app restart.
+/// Whether the tab still runs its program, so a reloaded webview can tell a live provider
+/// handoff from a tab that came back as a plain shell after an app restart.
 #[tauri::command]
-pub async fn running_program_tabs(
-    pty_keys: Vec<String>,
+pub async fn is_program_running(
+    pty_key: String,
     state: State<'_, PtyState>,
-) -> Result<Vec<String>, String> {
-    Ok(state.0.running_programs(&pty_keys))
+) -> Result<bool, String> {
+    Ok(state.0.is_program_running(&pty_key))
 }
 
 #[tauri::command]

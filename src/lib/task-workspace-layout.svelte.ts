@@ -269,24 +269,32 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     if (parts?.kind !== "shell") return;
     const inFlight = closingShells.get(ptyKey);
     if (inFlight) return inFlight.done;
+    // Registered before any work, so even a close failing at once is tracked, then forgotten.
+    const closing = { exited: false, done: Promise.resolve() };
+    closingShells.set(ptyKey, closing);
+    closing.done = finishClose(ptyKey, parts.sessionId, parts.index, closing);
+    return closing.done;
+  }
+
+  async function finishClose(
+    ptyKey: string,
+    sessionId: string,
+    index: number,
+    closing: { exited: boolean },
+  ): Promise<void> {
     // Keep the tab until the backend confirms, so a failed kill does not leave a
     // shell running with no UI to reach it.
-    const closing = { exited: false, done: Promise.resolve() };
-    closing.done = (async () => {
-      try {
-        await deps.closeShell(parts.sessionId, parts.index);
-      } catch (error) {
-        closingShells.delete(ptyKey);
-        // Its process is gone anyway, so its tab goes as for any exit.
-        if (closing.exited) await dropShell(ptyKey, true);
-        throw error;
-      }
+    try {
+      await deps.closeShell(sessionId, index);
+    } catch (error) {
       closingShells.delete(ptyKey);
-      removeShell(ptyKey);
-      await deps.shellClosed?.(ptyKey, false);
-    })();
-    closingShells.set(ptyKey, closing);
-    return closing.done;
+      // Its process is gone anyway, so its tab goes as for any exit.
+      if (closing.exited) await dropShell(ptyKey, true);
+      throw error;
+    }
+    closingShells.delete(ptyKey);
+    removeShell(ptyKey);
+    await deps.shellClosed?.(ptyKey, false);
   }
 
   return {
@@ -684,6 +692,6 @@ export const providerHandoff = createProviderHandoff({
     const parts = parsePtyKey(ptyKey);
     if (parts?.kind === "shell") await closeShellPty(parts.sessionId, parts.index);
   },
-  isProgramRunning: async (ptyKey) => (await pty.runningPrograms([ptyKey])).includes(ptyKey),
+  isProgramRunning: (ptyKey) => pty.isProgramRunning(ptyKey),
   notify: (message) => showSnackbar(message),
 });

@@ -35,6 +35,8 @@ export function createProviderHandoff({
   const tabs = new Map<string, { sessionId: string; openedAt: number }>();
   /** Handoffs still asking the provider for its command, so a repeat request joins them. */
   const starting = new Map<string, Promise<string>>();
+  /** Restored tabs being checked for a running program; a close or release meanwhile cancels. */
+  const adopting = new Set<string>();
 
   function tabFor(sessionId: string): string | undefined {
     for (const [ptyKey, tab] of tabs) if (tab.sessionId === sessionId) return ptyKey;
@@ -98,6 +100,7 @@ export function createProviderHandoff({
      * here; a handoff tab returns its session to the chat. A failed handback never fails the close.
      */
     async shellClosed(ptyKey: string, exited: boolean): Promise<void> {
+      adopting.delete(ptyKey);
       const tab = tabs.get(ptyKey);
       if (!tab) return;
       tabs.delete(ptyKey);
@@ -123,8 +126,16 @@ export function createProviderHandoff({
      */
     async adopt(ptyKey: string): Promise<void> {
       const parts = parsePtyKey(ptyKey);
-      if (parts?.kind !== "shell" || tabs.has(ptyKey)) return;
-      if (!(await isProgramRunning(ptyKey))) return;
+      if (parts?.kind !== "shell" || tabs.has(ptyKey) || adopting.has(ptyKey)) return;
+      adopting.add(ptyKey);
+      let running = false;
+      try {
+        running = await isProgramRunning(ptyKey);
+      } finally {
+        // Cancelled when its tab closed or its session left while this checked.
+        if (!adopting.delete(ptyKey)) running = false;
+      }
+      if (!running || tabs.has(ptyKey)) return;
       // Not just opened: its exit says nothing about whether the TUI could start.
       tabs.set(ptyKey, { sessionId: parts.sessionId, openedAt: -Infinity });
     },
@@ -133,6 +144,9 @@ export function createProviderHandoff({
     async release(sessionId: string): Promise<void> {
       // A handoff still asking the provider would otherwise open its terminal afterwards.
       await starting.get(sessionId)?.catch(() => {});
+      for (const ptyKey of adopting) {
+        if (parsePtyKey(ptyKey)?.sessionId === sessionId) adopting.delete(ptyKey);
+      }
       const ptyKey = tabFor(sessionId);
       if (!ptyKey) return;
       // Forgotten first, so closing it does not hand back a session that has left.
