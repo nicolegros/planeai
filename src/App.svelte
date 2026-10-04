@@ -490,7 +490,9 @@
   async function handleShellAttachError(ptyKey: string, error: unknown): Promise<void> {
     // A shell that never started would otherwise linger as a dead pane; this
     // close is not the user's, so it must not steal focus.
-    const message = workspaceLayout.isStarting(ptyKey) ? "Failed to open terminal editor" : "Failed to start shell";
+    const message = providerHandoff.isHandoffTab(ptyKey)
+      ? "Failed to start the agent's terminal; the session is back in its chat"
+      : workspaceLayout.isStarting(ptyKey) ? "Failed to open terminal editor" : "Failed to start shell";
     showSnackbar(`${message}: ${error}`, "error");
     try {
       await workspaceLayout.shellFailedToStart(ptyKey);

@@ -19,6 +19,11 @@ function runtimeProviderKey(pluginId: string, providerId: string): string {
   return `${pluginId}:${providerId}`;
 }
 
+/** Keys with `:` belong to plugin providers, never to configured ones (as the host's contract says). */
+export function isReservedProviderKey(key: string): boolean {
+  return key.includes(":");
+}
+
 /** The plugin and provider ids in a provider key; `null` for a configured provider's key. */
 function parseProviderKey(key: string): { pluginId: string; providerId: string } | null {
   const separator = key.indexOf(":");

@@ -1,4 +1,4 @@
-import { supportsYolo, type RuntimeProvider } from "./plugin-providers";
+import { isReservedProviderKey, supportsYolo, type RuntimeProvider } from "./plugin-providers";
 import { getSettings } from "./settings.svelte";
 
 /**
@@ -17,8 +17,8 @@ export class ProviderChoice {
   constructor(runtimeProviders: () => RuntimeProvider[]) {
     this.#runtimeProviders = runtimeProviders;
     this.keys = $derived([
-      // Keys with `:` belong to plugin providers; saving the config refuses them anyway.
-      ...Object.keys(getSettings().providers ?? {}).filter((key) => !key.includes(":")),
+      // Saving the config refuses these anyway; a plugin's provider is listed below.
+      ...Object.keys(getSettings().providers ?? {}).filter((key) => !isReservedProviderKey(key)),
       ...runtimeProviders().map((provider) => provider.key),
     ]);
     this.key = $derived(this.selected || getSettings().default_provider);

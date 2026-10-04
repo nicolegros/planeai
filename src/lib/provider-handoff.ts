@@ -11,7 +11,9 @@ export interface ProviderHandoffDeps {
     handoff(sessionId: string): Promise<string[]>;
     handback(sessionId: string): Promise<void>;
   };
-  /** Ends a terminal's process; its session left the app, so its tab is already gone. */
+  /** Closes a terminal's tab in the shown layout; false when that layout does not hold it. */
+  discardTab(ptyKey: string): Promise<boolean>;
+  /** Ends a terminal's process when its tab is in a layout not loaded. */
   closeTerminal(ptyKey: string): Promise<void>;
   notify(message: string): void;
   now?: () => number;
@@ -23,6 +25,7 @@ export interface ProviderHandoffDeps {
  */
 export function createProviderHandoff({
   api,
+  discardTab,
   closeTerminal,
   notify,
   now = Date.now,
@@ -54,6 +57,9 @@ export function createProviderHandoff({
 
   return {
     tabFor,
+
+    /** Whether the tab continues a provider session. */
+    isHandoffTab: (ptyKey: string): boolean => tabs.has(ptyKey),
 
     start(
       sessionId: string,
@@ -94,26 +100,30 @@ export function createProviderHandoff({
       const tab = tabs.get(ptyKey);
       if (!tab) return;
       tabs.delete(ptyKey);
-      if (exited && now() - tab.openedAt < QUICK_EXIT_MS) {
-        notify(
-          "The terminal closed right after it opened, so the session is back in its chat. Check that the agent's CLI starts in a terminal.",
-        );
-      }
       try {
         await api.handback(tab.sessionId);
       } catch (error) {
         notify(
           `The session could not return to the chat: ${String(error)}. Try again from the session's chat.`,
         );
+        return;
+      }
+      if (exited && now() - tab.openedAt < QUICK_EXIT_MS) {
+        notify(
+          "The terminal closed right after it opened, so the session is back in its chat. Check that the agent's CLI starts in a terminal.",
+        );
       }
     },
 
     /** The session left the app: its terminal must not keep driving a conversation no one sees. */
     async release(sessionId: string): Promise<void> {
+      // A handoff still asking the provider would otherwise open its terminal afterwards.
+      await starting.get(sessionId)?.catch(() => {});
       const ptyKey = tabFor(sessionId);
       if (!ptyKey) return;
+      // Forgotten first, so closing it does not hand back a session that has left.
       tabs.delete(ptyKey);
-      await closeTerminal(ptyKey);
+      if (!(await discardTab(ptyKey))) await closeTerminal(ptyKey);
     },
   };
 }
@@ -124,6 +134,9 @@ export const providerHandoff = createProviderHandoff({
     handoff: (sessionId) => providerSessions.handoff(sessionId),
     handback: (sessionId) => providerSessions.handback(sessionId),
   },
+  // Looked up when used: the layout's own deps route shell closes back here.
+  discardTab: async (ptyKey) =>
+    (await import("./task-workspace-layout.svelte")).taskWorkspaceLayout.discardShell(ptyKey),
   closeTerminal: async (ptyKey) => {
     const parts = parsePtyKey(ptyKey);
     if (parts?.kind === "shell") await pty.closeTab(parts.sessionId, parts.index);

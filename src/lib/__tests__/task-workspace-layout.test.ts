@@ -428,6 +428,21 @@ describe("workspaceOf", () => {
   });
 });
 
+describe("discarding a shell", () => {
+  it("closes it whatever its state, telling whether this layout held it", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = workspace.openCommand("a", ["claude", "--resume"], "Terminal")!;
+    // Still starting, which closeTab would refuse.
+    expect(await workspace.closeTab(ptyKey)).toBe("starting");
+    expect(await workspace.discardShell(ptyKey)).toBe(true);
+    expect(workspace.findTab(ptyKey)).toBeNull();
+    expect(deps.closeShell).toHaveBeenCalledWith("a", 1);
+    expect(deps.shellClosed).toHaveBeenCalledWith(ptyKey, false);
+    expect(await workspace.discardShell("other:3")).toBe(false);
+  });
+});
+
 describe("terminal editor tabs", () => {
   it("reserves the editor command before the tab can mount", async () => {
     const { workspace, show } = setup();

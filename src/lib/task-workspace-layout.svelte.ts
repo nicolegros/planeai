@@ -479,6 +479,17 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       await deps.closeShell(parts.sessionId, parts.index);
     },
 
+    /**
+     * Close a shell tab whatever its state, for a session leaving the app. False when this
+     * layout does not hold it: another workspace's load drops it with its session.
+     */
+    async discardShell(ptyKey: string): Promise<boolean> {
+      if (!layout || tree.findTab(layout, ptyKey)?.tab.type !== "shell") return false;
+      pendingCommands.delete(ptyKey);
+      await closeShell(ptyKey);
+      return true;
+    },
+
     /** A shell tab's PTY failed to spawn; release it. Rejects if the backend close does. */
     async shellFailedToStart(ptyKey: string): Promise<void> {
       pendingCommands.delete(ptyKey);

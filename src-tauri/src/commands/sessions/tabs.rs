@@ -259,15 +259,7 @@ fn prepare_tab_spawn(
     } else {
         let target = match initial_argv {
             Some(mut argv) => {
-                // Resolved with the tab's own PATH, as a shell would, so Windows finds `.cmd` shims.
-                let path = env
-                    .iter()
-                    .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
-                    .map(|(_, value)| value.as_str())
-                    .unwrap_or_default();
-                if let Some(program) = crate::config::find_executable_in(&argv[0], path) {
-                    argv[0] = program.to_string_lossy().into_owned();
-                }
+                resolve_program(&mut argv, &env);
                 pty::PtyTarget::Program {
                     argv,
                     cwd: cwd.clone(),
@@ -287,6 +279,22 @@ fn prepare_tab_spawn(
         env,
         daemon_spawn,
     })
+}
+
+/// Resolves a bare program name with the tab's own PATH, as a shell would, so Windows runs
+/// the `.cmd` shim npm installs; a name not found is left for the spawn to report.
+fn resolve_program(argv: &mut [String], env: &[(String, String)]) {
+    let path = env
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
+        .map(|(_, value)| value.as_str())
+        .unwrap_or_default();
+    if let Some(program) = argv
+        .first()
+        .and_then(|name| crate::config::find_executable_in(name, path))
+    {
+        argv[0] = program.to_string_lossy().into_owned();
+    }
 }
 
 struct TabClosePlan {
@@ -470,5 +478,25 @@ mod tests {
         assert!(tab_for("daemon", Some(vec!["claude".into()])).is_err());
         assert!(tab_for(planeai_rmux::BACKEND, Some(vec!["claude".into()])).is_err());
         assert!(tab_for("plugin", Some(Vec::new())).is_err());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_tab_program_resolves_with_the_tabs_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("fake-agent");
+        std::fs::write(&program, "").unwrap();
+        let env = vec![("PATH".to_string(), dir.path().display().to_string())];
+
+        let mut argv = vec!["fake-agent".to_string(), "--resume".to_string()];
+        resolve_program(&mut argv, &env);
+        assert_eq!(
+            argv,
+            [program.display().to_string(), "--resume".to_string()]
+        );
+
+        let mut missing = vec!["missing-agent".to_string()];
+        resolve_program(&mut missing, &env);
+        assert_eq!(missing, ["missing-agent"]);
     }
 }

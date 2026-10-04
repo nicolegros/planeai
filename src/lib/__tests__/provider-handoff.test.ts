@@ -17,11 +17,18 @@ function setup() {
     handback: vi.fn(async (_sessionId: string) => {}),
   };
   const notify = vi.fn();
+  const discardTab = vi.fn(async (_ptyKey: string) => true);
   const closeTerminal = vi.fn(async (_ptyKey: string) => {});
   let time = 0;
   const clock = { advance: (ms: number) => (time += ms) };
-  const handoff = createProviderHandoff({ api, closeTerminal, notify, now: () => time });
-  return { api, notify, closeTerminal, clock, handoff };
+  const handoff = createProviderHandoff({
+    api,
+    discardTab,
+    closeTerminal,
+    notify,
+    now: () => time,
+  });
+  return { api, notify, discardTab, closeTerminal, clock, handoff };
 }
 
 describe("provider handoff", () => {
@@ -37,6 +44,8 @@ describe("provider handoff", () => {
     await expect(handoff.start("s1", open)).resolves.toBe("s1:4");
     expect(api.handoff).toHaveBeenCalledOnce();
     expect(handoff.tabFor("s1")).toBe("s1:4");
+    expect(handoff.isHandoffTab("s1:4")).toBe(true);
+    expect(handoff.isHandoffTab("s1:5")).toBe(false);
 
     await handoff.shellClosed("s2:1", false);
     expect(api.handback).not.toHaveBeenCalled();
@@ -137,6 +146,14 @@ describe("provider handoff", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("closed right after it opened"));
   });
 
+  it("does not claim the session returned when its handback failed", async () => {
+    const { api, notify, handoff } = setup();
+    await handoff.start("s1", () => "s1:1");
+    api.handback.mockRejectedValueOnce(new Error("plugin is not running"));
+    await handoff.shellClosed("s1:1", true);
+    expect(notify.mock.calls).toEqual([[expect.stringContaining("could not return to the chat")]]);
+  });
+
   it("stays quiet when the user closes the terminal or the TUI ran a while", async () => {
     const { notify, clock, handoff } = setup();
     await handoff.start("s1", () => "s1:1");
@@ -148,14 +165,36 @@ describe("provider handoff", () => {
   });
 
   it("closes the terminal of a session that leaves the app, so nothing drives it unseen", async () => {
-    const { api, closeTerminal, handoff } = setup();
+    const { api, discardTab, closeTerminal, handoff } = setup();
     await handoff.start("s1", () => "s1:1");
     await handoff.release("s1");
-    expect(closeTerminal).toHaveBeenCalledWith("s1:1");
+    expect(discardTab).toHaveBeenCalledWith("s1:1");
+    expect(closeTerminal).not.toHaveBeenCalled();
     expect(handoff.tabFor("s1")).toBeUndefined();
     // Restored later, it returns to the chat and can hand off again.
     await handoff.end("s1", vi.fn());
     expect(api.handback).toHaveBeenCalledWith("s1");
     await expect(handoff.start("s1", () => "s1:2")).resolves.toBe("s1:2");
+  });
+
+  it("ends the process of a terminal whose workspace is not loaded", async () => {
+    const { discardTab, closeTerminal, handoff } = setup();
+    await handoff.start("s1", () => "s1:1");
+    discardTab.mockResolvedValueOnce(false);
+    await handoff.release("s1");
+    expect(closeTerminal).toHaveBeenCalledWith("s1:1");
+  });
+
+  it("closes a terminal that opens after its session left the app", async () => {
+    const { api, discardTab, handoff } = setup();
+    let answer!: (argv: string[]) => void;
+    api.handoff.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const started = handoff.start("s1", () => "s1:1");
+    const released = handoff.release("s1");
+    answer(["claude"]);
+    await started;
+    await released;
+    expect(discardTab).toHaveBeenCalledWith("s1:1");
+    expect(handoff.tabFor("s1")).toBeUndefined();
   });
 });

@@ -159,7 +159,7 @@ PlaneAI calls these sidecar methods; each must return promptly and do its work a
 | `provider.session.interrupt` | `session_id`                                                                 | Stop the current turn.                                                                                                                     |
 | `provider.session.stop`      | `session_id`, `reason` (`archive`, `destroy` or `exit`)                      | The session ended. Release its process; on `destroy`, delete its data.                                                                     |
 | `provider.session.handoff`   | `session_id`                                                                 | With `handoff` only. Stop driving the session and return `{ "argv": [...] }`, the command that continues it in a terminal.                 |
-| `provider.session.handback`  | `session_id`                                                                 | With `handoff` only. The terminal tab closed; drive the session again.                                                                     |
+| `provider.session.handback`  | `session_id`                                                                 | With `handoff` only. The terminal tab closed, or the handoff answer had no runnable `argv`; drive the session again.                       |
 
 PlaneAI rejects a `send` text or `initial_prompt` over 48 KiB, measured as JSON-escaped text, so every request fits one 64 KiB frame.
 Prompts from the CLI, loops and recipes are checked against the same limit before they are queued, and a prompt PlaneAI cannot deliver to the plugin is reported in the app.
