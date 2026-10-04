@@ -15,9 +15,8 @@ import { dismissForSession } from "./post-merge-prompt.svelte";
 import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
 import { getCycleState } from "./tab-switcher.svelte";
-import { taskWorkspaceLayout } from "./task-workspace-layout.svelte";
+import { providerHandoff, taskWorkspaceLayout } from "./task-workspace-layout.svelte";
 import { isPluginSession } from "./plugin-providers";
-import { providerHandoff } from "./provider-handoff";
 
 // ─── State ───────────────────────────────────────────────────────────────────
 

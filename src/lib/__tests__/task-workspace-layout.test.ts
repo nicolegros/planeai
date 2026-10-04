@@ -332,6 +332,17 @@ describe("shell tabs", () => {
     expect(deps.closeShell).toHaveBeenCalledWith("a", 1);
     expect(workspace.findTab(ptyKey)).toBeNull();
   });
+
+  it("drops a shell that never started even when its backend close fails", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = workspace.openShell("a")!;
+    deps.closeShell.mockRejectedValueOnce(new Error("daemon shell-tab kill timed out"));
+    await expect(workspace.shellFailedToStart(ptyKey)).rejects.toThrow("timed out");
+    // So a handoff terminal that never started still returns its session to the chat.
+    expect(deps.shellClosed).toHaveBeenCalledWith(ptyKey, false);
+    expect(workspace.findTab(ptyKey)).toBeNull();
+  });
 });
 
 describe("across workspace switches", () => {

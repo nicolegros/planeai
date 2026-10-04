@@ -25,9 +25,6 @@ vi.mock("../terminal-views", () => ({
   disposeSessionTerminalViews: vi.fn(),
   disposeTerminalView: vi.fn(),
 }));
-vi.mock("../provider-handoff", () => ({
-  providerHandoff: { release: vi.fn(async () => {}) },
-}));
 vi.mock("../mru.svelte", () => ({
   removeMru: vi.fn(),
   touchMru: vi.fn(),
@@ -249,11 +246,12 @@ describe("session-orchestrator", () => {
     });
 
     it("closes a terminal still continuing the session", async () => {
-      const { providerHandoff } = await import("../provider-handoff");
+      const { providerHandoff } = await import("../task-workspace-layout.svelte");
+      const release = vi.spyOn(providerHandoff, "release").mockResolvedValue();
       api.list.mockResolvedValue([makeSession({ id: "s1" })]);
       await loadSessions();
       await archiveSession(makeSession({ id: "s1" }));
-      expect(providerHandoff.release).toHaveBeenCalledWith("s1");
+      expect(release).toHaveBeenCalledWith("s1");
     });
   });
 

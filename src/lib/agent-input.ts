@@ -1,6 +1,6 @@
 import { providerSessions, pty } from "./api";
 import { isPluginSession } from "./plugin-providers";
-import { providerHandoff } from "./provider-handoff";
+import { providerHandoff } from "./task-workspace-layout.svelte";
 import type { Session } from "./types";
 
 /**

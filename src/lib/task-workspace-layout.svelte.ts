@@ -19,11 +19,12 @@ import {
   ptyKeySessionId,
   shellPtyKey,
 } from "./pty-key";
-import { editor as editorApi, pty, sessions as sessionsApi } from "./api";
+import { editor as editorApi, providerSessions, pty, sessions as sessionsApi } from "./api";
 import { toTaskWorkspaceId } from "./sidebar-session-order";
 import { sessionTaskProjectId, type Session } from "./types";
 import { disposeTerminalView } from "./terminal-views";
-import { providerHandoff } from "./provider-handoff";
+import { createProviderHandoff } from "./provider-handoff";
+import { showSnackbar } from "./snackbar.svelte";
 import type { TabCommand } from "./terminal-view";
 
 export type WorkspaceIdentity =
@@ -234,6 +235,20 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     let result: Layout | null = restored;
     for (const ptyKey of goneShells) if (result) result = tree.removeTab(result, ptyKey);
     return result;
+  }
+
+  /**
+   * A shell whose process is gone, or never started: its tab goes right away, and the
+   * backend close that follows only finalizes it, and may reject.
+   */
+  async function dropShell(ptyKey: string, exited: boolean): Promise<void> {
+    const parts = parsePtyKey(ptyKey);
+    // An explicit close already finalized it; closing again would be redundant.
+    if (parts?.kind !== "shell" || goneShells.has(ptyKey)) return;
+    pendingCommands.delete(ptyKey);
+    removeShell(ptyKey);
+    await deps.shellClosed?.(ptyKey, exited);
+    await deps.closeShell(parts.sessionId, parts.index);
   }
 
   async function closeShell(ptyKey: string): Promise<void> {
@@ -469,19 +484,12 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
      * close that follows only finalizes it, and may reject.
      */
     async shellExited(ptyKey: string): Promise<void> {
-      const parts = parsePtyKey(ptyKey);
-      // An explicit close already finalized it; closing again would be redundant.
-      if (parts?.kind !== "shell" || goneShells.has(ptyKey)) return;
-      pendingCommands.delete(ptyKey);
-      removeShell(ptyKey);
-      // The process is gone even when finalizing its backend fails below.
-      await deps.shellClosed?.(ptyKey, true);
-      await deps.closeShell(parts.sessionId, parts.index);
+      await dropShell(ptyKey, true);
     },
 
     /**
-     * Close a shell tab whatever its state, for a session leaving the app. False when this
-     * layout does not hold it: another workspace's load drops it with its session.
+     * Close a shell tab whatever its state, for a session leaving the app. False when the
+     * shown layout does not hold it; the caller then ends its process directly.
      */
     async discardShell(ptyKey: string): Promise<boolean> {
       if (!layout || tree.findTab(layout, ptyKey)?.tab.type !== "shell") return false;
@@ -490,10 +498,9 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       return true;
     },
 
-    /** A shell tab's PTY failed to spawn; release it. Rejects if the backend close does. */
+    /** A shell tab's PTY failed to spawn: nothing runs, so its tab goes even if the backend close rejects. */
     async shellFailedToStart(ptyKey: string): Promise<void> {
-      pendingCommands.delete(ptyKey);
-      await closeShell(ptyKey);
+      await dropShell(ptyKey, false);
     },
 
     // ─── Navigation and arrangement ───────────────────────────────────────────
@@ -621,4 +628,18 @@ export const taskWorkspaceLayout = createTaskWorkspaceLayout({
   disposeView: disposeTerminalView,
   onSaveError: (workspace, error) =>
     console.warn("Failed to save workspace layout", workspace.key, error),
+});
+
+/** Provider sessions continuing in this layout's terminal tabs; built here, as each calls the other. */
+export const providerHandoff = createProviderHandoff({
+  api: {
+    handoff: (sessionId) => providerSessions.handoff(sessionId),
+    handback: (sessionId) => providerSessions.handback(sessionId),
+  },
+  discardTab: (ptyKey) => taskWorkspaceLayout.discardShell(ptyKey),
+  closeTerminal: async (ptyKey) => {
+    const parts = parsePtyKey(ptyKey);
+    if (parts?.kind === "shell") await pty.closeTab(parts.sessionId, parts.index);
+  },
+  notify: (message) => showSnackbar(message),
 });

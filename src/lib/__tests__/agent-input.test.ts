@@ -8,7 +8,7 @@ vi.mock("../api", () => ({ pty, providerSessions }));
 const { tabFor } = vi.hoisted(() => ({
   tabFor: vi.fn((_id: string): string | undefined => undefined),
 }));
-vi.mock("../provider-handoff", () => ({ providerHandoff: { tabFor } }));
+vi.mock("../task-workspace-layout.svelte", () => ({ providerHandoff: { tabFor } }));
 
 import { sendToAgent } from "../agent-input";
 

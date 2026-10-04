@@ -48,13 +48,12 @@
   import PluginContributionHost from "./components/PluginContributionHost.svelte";
   import ProviderSessionView from "./components/ProviderSessionView.svelte";
   import { isPluginSession, runtimeProviders } from "./lib/plugin-providers";
-  import { providerHandoff } from "./lib/provider-handoff";
   import { sendToAgent } from "./lib/agent-input";
   import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
-  import { taskWorkspaceLayout as workspaceLayout, toPaneTabs, workspaceOf, type PaneTab, type WorkspaceAgent, type WorkspaceIdentity } from "./lib/task-workspace-layout.svelte";
+  import { providerHandoff, taskWorkspaceLayout as workspaceLayout, toPaneTabs, workspaceOf, type PaneTab, type WorkspaceAgent, type WorkspaceIdentity } from "./lib/task-workspace-layout.svelte";
   import { activeTabOf, findLeaf, tabsOf, type LeafNode, type NavDirection, type SplitDirection, type TabEntry } from "./lib/layout-tree";
   import { pressTab as pressTabForDrag, tabDrag, type TabDropTarget } from "./lib/tab-drag.svelte";
   import { dropPositionToViewport, droppedPathsText } from "./lib/dropped-paths";
@@ -491,7 +490,7 @@
     // A shell that never started would otherwise linger as a dead pane; this
     // close is not the user's, so it must not steal focus.
     const message = providerHandoff.isHandoffTab(ptyKey)
-      ? "Failed to start the agent's terminal; the session is back in its chat"
+      ? "Failed to start the agent's terminal"
       : workspaceLayout.isStarting(ptyKey) ? "Failed to open terminal editor" : "Failed to start shell";
     showSnackbar(`${message}: ${error}`, "error");
     try {

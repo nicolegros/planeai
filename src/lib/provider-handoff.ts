@@ -1,6 +1,3 @@
-import { providerSessions, pty } from "./api";
-import { parsePtyKey } from "./pty-key";
-import { showSnackbar } from "./snackbar.svelte";
 import type { TabClose } from "./task-workspace-layout.svelte";
 
 /** A terminal that exits sooner than this after opening most likely failed to start the TUI. */
@@ -127,19 +124,3 @@ export function createProviderHandoff({
     },
   };
 }
-
-// Looked up per call, so importing this module never touches the API.
-export const providerHandoff = createProviderHandoff({
-  api: {
-    handoff: (sessionId) => providerSessions.handoff(sessionId),
-    handback: (sessionId) => providerSessions.handback(sessionId),
-  },
-  // Looked up when used: the layout's own deps route shell closes back here.
-  discardTab: async (ptyKey) =>
-    (await import("./task-workspace-layout.svelte")).taskWorkspaceLayout.discardShell(ptyKey),
-  closeTerminal: async (ptyKey) => {
-    const parts = parsePtyKey(ptyKey);
-    if (parts?.kind === "shell") await pty.closeTab(parts.sessionId, parts.index);
-  },
-  notify: (message) => showSnackbar(message),
-});

@@ -208,6 +208,17 @@ impl PtyManager {
         self.clear_tab_close_claim(pty_key);
     }
 
+    /// A program tab closed while its spawn was in flight, such as a handoff whose session
+    /// left the app: starting it now would run a TUI no tab shows.
+    fn closed_before_start(&self, pty_key: &str, target: &PtyTarget) -> bool {
+        matches!(target, PtyTarget::Program { .. })
+            && self
+                .tab_close_claims
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(pty_key)
+    }
+
     fn clear_tab_close_claim(&self, pty_key: &str) {
         self.tab_close_claims
             .lock()
@@ -228,6 +239,11 @@ impl PtyManager {
         on_data: Channel<Response>,
         env: Vec<(String, String)>,
     ) -> Result<(), String> {
+        if self.closed_before_start(session_id, &target) {
+            return Err(format!(
+                "{session_id} was closed before its program started"
+            ));
+        }
         self.clear_tab_close_claim(session_id);
 
         // Handle daemon target via async path
@@ -695,7 +711,25 @@ impl PtyManager {
 
 #[cfg(test)]
 mod tests {
-    use super::PtyManager;
+    use super::{PtyManager, PtyTarget};
+
+    #[test]
+    fn a_program_tab_closed_while_spawning_never_starts() {
+        let manager = PtyManager::new();
+        let program = PtyTarget::Program {
+            argv: vec!["claude".into()],
+            cwd: "/".into(),
+        };
+        let shell = PtyTarget::Shell {
+            command: "zsh".into(),
+            cwd: "/".into(),
+        };
+        assert!(!manager.closed_before_start("s1:2", &program));
+        assert!(manager.claim_tab_close("s1:2"));
+        assert!(manager.closed_before_start("s1:2", &program));
+        // Shell keys keep their reattach semantics.
+        assert!(!manager.closed_before_start("s1:2", &shell));
+    }
 
     #[test]
     fn tab_close_claim_blocks_reentrant_close_until_a_later_attach() {
