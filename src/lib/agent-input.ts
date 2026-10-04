@@ -13,6 +13,12 @@ export async function sendToAgent(
 ): Promise<void> {
   const handoffTab = providerHandoff.tabFor(session.id);
   if (isPluginSession(session) && !handoffTab) return providerSessions.send(session.id, text);
+  // Typed only into the agent's TUI: a plain shell left in its place would run the text.
+  if (handoffTab && !(await pty.isProgramRunning(handoffTab))) {
+    throw new Error(
+      "The session's terminal no longer runs its agent. Close it to return to the chat.",
+    );
+  }
   const ptyKey = handoffTab ?? session.id;
   const typed = await pty.write(ptyKey, Array.from(new TextEncoder().encode(text)));
   // Enter goes on its own, so a TUI that reads the text as a paste still submits it.

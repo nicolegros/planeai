@@ -221,6 +221,10 @@ impl SessionBackend for PlaneaiPtyBackend {
         Ok(())
     }
 
+    fn has_exited(&self) -> bool {
+        self.session.has_exited()
+    }
+
     fn rebind_output(&self, on_data: Channel<Response>) -> bool {
         if self.session.has_exited() {
             return false;

@@ -759,7 +759,13 @@ impl PtyManager {
     /// Whether the tab still runs its program, as after a webview reload; an app restart ends
     /// every program, leaving its tab a plain shell.
     pub fn is_program_running(&self, pty_key: &str) -> bool {
+        let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
+        // A program that exited stays published until its tab closes, which a webview reload
+        // can skip: its key must not read as a live handoff.
         self.program_tabs().contains(pty_key)
+            && sessions
+                .get(pty_key)
+                .is_some_and(|backend| !backend.has_exited())
     }
 
     fn program_tabs(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
@@ -792,6 +798,7 @@ mod tests {
     #[derive(Default)]
     struct FakeBackend {
         detached: Arc<AtomicBool>,
+        exited: Arc<AtomicBool>,
     }
 
     impl SessionBackend for FakeBackend {
@@ -809,6 +816,9 @@ mod tests {
         }
         fn detach(&self) {
             self.detached.store(true, Ordering::SeqCst);
+        }
+        fn has_exited(&self) -> bool {
+            self.exited.load(Ordering::SeqCst)
         }
     }
 
@@ -912,6 +922,20 @@ mod tests {
         assert!(program_ended.load(Ordering::SeqCst));
         assert!(!shell_ended.load(Ordering::SeqCst));
         assert!(!other_ended.load(Ordering::SeqCst));
+        assert!(!manager.is_program_running(&tab_key("s1", 2)));
+    }
+
+    #[test]
+    fn a_program_that_exited_is_not_running() {
+        let manager = PtyManager::new();
+        let backend = FakeBackend::default();
+        let exited = backend.exited.clone();
+        manager
+            .publish(&tab_key("s1", 2), true, Box::new(backend))
+            .unwrap();
+        assert!(manager.is_program_running(&tab_key("s1", 2)));
+        // It exited on its own, and its tab's close never came (the webview reloaded).
+        exited.store(true, Ordering::SeqCst);
         assert!(!manager.is_program_running(&tab_key("s1", 2)));
     }
 

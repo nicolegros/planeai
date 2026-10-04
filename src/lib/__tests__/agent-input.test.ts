@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { pty, providerSessions } = vi.hoisted(() => ({
-  pty: { write: vi.fn(async (_id: string, _bytes: number[]) => true) },
+  pty: {
+    write: vi.fn(async (_id: string, _bytes: number[]) => true),
+    isProgramRunning: vi.fn(async (_key: string) => true),
+  },
   providerSessions: { send: vi.fn(async (_id: string, _text: string) => {}) },
 }));
 vi.mock("../api", () => ({ pty, providerSessions }));
@@ -43,6 +46,15 @@ describe("sendToAgent", () => {
       ["s1:3", [0x68, 0x69]],
       ["s1:3", [0x0d]],
     ]);
+  });
+
+  it("never types into a handoff terminal whose agent is gone", async () => {
+    tabFor.mockReturnValueOnce("s1:3");
+    pty.isProgramRunning.mockResolvedValueOnce(false);
+    await expect(sendToAgent({ id: "s1", backend: "plugin" }, "$(rm -rf ~)")).rejects.toThrow(
+      "no longer runs its agent",
+    );
+    expect(pty.write).not.toHaveBeenCalled();
   });
 
   it("fails when a provider refuses the message", async () => {
