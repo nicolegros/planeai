@@ -60,9 +60,12 @@ export interface TaskWorkspaceLayoutDeps {
   store: LayoutStore;
   /** Kill a shell tab's backend process. Rejects when it may still be running. */
   closeShell: (sessionId: string, index: number) => Promise<unknown>;
-  /** A shell tab left the layout, closed or exited by itself; it never rejects. */
-  /** `exited` when its process ended by itself rather than being closed. */
+  /**
+   * A shell tab left the layout, closed or exited by itself (`exited`); it never rejects.
+   */
   shellClosed?: (ptyKey: string, exited: boolean) => Promise<void>;
+  /** A loaded layout holds a provider handoff's terminal, so its close must still hand back. */
+  handoffRestored?: (ptyKey: string) => void;
   getTerminalCommand: (sessionId: string, filePath: string) => Promise<string>;
   disposeView: (ptyKey: string) => void;
   saveDelayMs?: number;
@@ -197,11 +200,13 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     command: TabCommand,
     label: string,
     focus = false,
+    handoff = false,
   ): string | null {
     if (!layout || loading || !tree.findLeaf(layout, paneId)) return null;
     const ptyKey = shellPtyKey(sessionId, allocateShellIndex(sessionId));
     pendingCommands.set(ptyKey, command);
-    const next = tree.addTab(layout, paneId, shellTab(ptyKey, label));
+    const tab = { ...shellTab(ptyKey, label), ...(handoff ? { handoff: true } : {}) };
+    const next = tree.addTab(layout, paneId, tab);
     commit(focus ? tree.focusLeaf(next, paneId) : next);
     saveNow();
     return ptyKey;
@@ -359,6 +364,7 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       }
       const pruned = restored && pruneGoneShells(restored);
       layout = pruned || tree.createLayout(agentTabs(), selectedTab);
+      for (const tab of tree.tabsOf(layout)) if (tab.handoff) deps.handoffRestored?.(tab.ptyKey);
       workspace = target;
       focusedSessionId = adoptedSessionId ?? options.selectedSessionId;
       loading = false;
@@ -427,9 +433,16 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     },
 
     /** Open a shell tab in the focused pane that runs `command` when its PTY spawns, and focus it. */
-    openCommand(sessionId: string, command: TabCommand, label: string): string | null {
+    openCommand(
+      sessionId: string,
+      command: TabCommand,
+      label: string,
+      options: { handoff?: boolean } = {},
+    ): string | null {
       const paneId = loading ? null : layout?.focusedLeafId;
-      return paneId ? openCommandTab(sessionId, paneId, command, label, true) : null;
+      return paneId
+        ? openCommandTab(sessionId, paneId, command, label, true, options.handoff)
+        : null;
     },
 
     /** What a shell tab runs first when its PTY spawns: a terminal editor, or a provider's handoff. */
@@ -644,6 +657,7 @@ export const taskWorkspaceLayout = createTaskWorkspaceLayout({
   },
   closeShell: closeShellPty,
   shellClosed: (ptyKey, exited) => providerHandoff.shellClosed(ptyKey, exited),
+  handoffRestored: (ptyKey) => providerHandoff.adopt(ptyKey),
   getTerminalCommand: (sessionId, filePath) => editorApi.getTerminalCommand(sessionId, filePath),
   disposeView: disposeTerminalView,
   onSaveError: (workspace, error) =>

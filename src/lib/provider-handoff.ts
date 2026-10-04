@@ -1,3 +1,4 @@
+import { parsePtyKey } from "./pty-key";
 import type { TabClose } from "./task-workspace-layout.svelte";
 
 /** A terminal that exits sooner than this after opening most likely failed to start the TUI. */
@@ -110,6 +111,17 @@ export function createProviderHandoff({
           "The terminal closed right after it opened, so the session is back in its chat. Check that the agent's CLI starts in a terminal.",
         );
       }
+    },
+
+    /**
+     * A loaded layout holds this handoff terminal, as after a webview reload or an app restart:
+     * closing it must still return its session to the chat.
+     */
+    adopt(ptyKey: string): void {
+      const parts = parsePtyKey(ptyKey);
+      if (parts?.kind !== "shell" || tabs.has(ptyKey)) return;
+      // Not just opened: its exit says nothing about whether the TUI could start.
+      tabs.set(ptyKey, { sessionId: parts.sessionId, openedAt: -Infinity });
     },
 
     /** The session left the app: its terminal must not keep driving a conversation no one sees. */

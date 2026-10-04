@@ -548,7 +548,9 @@
   // ─── Provider session terminal handoff ─────────────────────────────────────
 
   async function handoffProviderSession(sessionId: string): Promise<void> {
-    await providerHandoff.start(sessionId, (command, label) => workspaceLayout.openCommand(sessionId, command, label));
+    await providerHandoff.start(sessionId, (command, label) =>
+      workspaceLayout.openCommand(sessionId, command, label, { handoff: true }),
+    );
   }
 
   function handbackProviderSession(sessionId: string): Promise<void> {

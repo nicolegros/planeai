@@ -197,4 +197,15 @@ describe("provider handoff", () => {
     expect(discardTab).toHaveBeenCalledWith("s1:1");
     expect(handoff.tabFor("s1")).toBeUndefined();
   });
+
+  it("adopts a restored handoff terminal, whose close hands its session back", async () => {
+    const { api, notify, handoff } = setup();
+    handoff.adopt("s1:3");
+    handoff.adopt("s1:diff");
+    expect(handoff.tabFor("s1")).toBe("s1:3");
+    // Its exit right after the reload says nothing about the TUI failing to start.
+    await handoff.shellClosed("s1:3", true);
+    expect(api.handback).toHaveBeenCalledWith("s1");
+    expect(notify).not.toHaveBeenCalled();
+  });
 });

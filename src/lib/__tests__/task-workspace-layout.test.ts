@@ -65,6 +65,7 @@ function setup(persisted: Record<string, Layout> = {}) {
     },
     closeShell: vi.fn(async (_sessionId: string, _index: number) => {}),
     shellClosed: vi.fn(async (_ptyKey: string, _exited: boolean) => {}),
+    handoffRestored: vi.fn((_ptyKey: string) => {}),
     getTerminalCommand: vi.fn(async (_sessionId: string, filePath: string) => `nvim ${filePath}`),
     disposeView: vi.fn(),
   } satisfies TaskWorkspaceLayoutDeps;
@@ -466,6 +467,34 @@ describe("workspaceOf", () => {
   it("keys a workspace by identity, unaffected by session updates", () => {
     const renamed = { ...session, task_key: "PLA-1", name: "Renamed", status: "exited" } as Session;
     expect(workspaceOf(renamed).key).toBe(workspaceOf({ ...session, task_key: "PLA-1" }).key);
+  });
+});
+
+describe("handoff terminals", () => {
+  it("keeps a handoff terminal's mark across a reload, so its close still hands back", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = workspace.openCommand("a", ["claude", "--resume"], "Terminal", {
+      handoff: true,
+    })!;
+    expect(workspace.findTab(ptyKey)?.tab.handoff).toBe(true);
+    expect(deps.handoffRestored).not.toHaveBeenCalled();
+
+    // A webview reload or app restart loads the saved layout in a fresh instance.
+    const reloaded = createTaskWorkspaceLayout(deps);
+    await reloaded.show(TASK, {
+      agents: [agent("a")],
+      selectedSessionId: "a",
+      selectionIsExplicit: true,
+    });
+    expect(deps.handoffRestored).toHaveBeenCalledWith(ptyKey);
+  });
+
+  it("does not mark other command tabs", async () => {
+    const { workspace, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = workspace.openCommand("a", "htop", "htop")!;
+    expect(workspace.findTab(ptyKey)?.tab.handoff).toBeUndefined();
   });
 });
 
