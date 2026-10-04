@@ -864,14 +864,14 @@ mod tests {
     }
 
     #[test]
-    fn tab_close_claim_blocks_reentrant_close_until_a_later_attach() {
+    fn a_tab_close_claim_blocks_a_concurrent_close_until_cancelled_or_reattached() {
         let manager = PtyManager::new();
         let pty_key = "session-1:2";
 
         assert!(manager.claim_tab_close(pty_key));
         assert!(
             !manager.claim_tab_close(pty_key),
-            "a delayed pty-exited close must not claim the tab a second time"
+            "a duplicate close must not claim the tab while its first close is under way"
         );
 
         manager.cancel_tab_close(pty_key);

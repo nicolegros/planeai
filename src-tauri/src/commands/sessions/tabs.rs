@@ -346,9 +346,9 @@ pub async fn close_tab(
     }
 
     // Detach only after the daemon shell has been confirmed dead, so a failed
-    // kill leaves the tab live rather than silently orphaning its shell. The close
-    // claim remains until this PTY key is attached again, making duplicate
-    // pty-exited events safe.
+    // kill leaves the tab live rather than silently orphaning its shell. The claim
+    // makes a concurrent duplicate close a no-op; once this close finishes, the
+    // frontend drops a late duplicate for the tab it already removed.
     state.0.detach(&plan.pty_key);
     Ok(())
 }

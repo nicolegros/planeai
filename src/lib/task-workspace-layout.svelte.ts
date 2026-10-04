@@ -131,6 +131,11 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
    * (another workspace was loaded when it went) must not bring it back.
    */
   const goneShells = new Set<string>();
+  /**
+   * Shells whose explicit close is in flight, with whether their process exited meanwhile.
+   * The exit is their close's own doing, so it must not send the backend a second close.
+   */
+  const closingShells = new Map<string, boolean>();
 
   function commit(next: Layout | null): void {
     if (next === layout) return;
@@ -243,8 +248,12 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
    */
   async function dropShell(ptyKey: string, exited: boolean): Promise<void> {
     const parts = parsePtyKey(ptyKey);
-    // An explicit close already finalized it; closing again would be redundant.
+    // An explicit close already finalized it, or will: closing again would be redundant.
     if (parts?.kind !== "shell" || goneShells.has(ptyKey)) return;
+    if (closingShells.has(ptyKey)) {
+      closingShells.set(ptyKey, true);
+      return;
+    }
     pendingCommands.delete(ptyKey);
     removeShell(ptyKey);
     await deps.shellClosed?.(ptyKey, exited);
@@ -256,7 +265,17 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     if (parts?.kind !== "shell") return;
     // Keep the tab until the backend confirms, so a failed kill does not leave a
     // shell running with no UI to reach it.
-    await deps.closeShell(parts.sessionId, parts.index);
+    closingShells.set(ptyKey, false);
+    try {
+      await deps.closeShell(parts.sessionId, parts.index);
+    } catch (error) {
+      const exited = closingShells.get(ptyKey);
+      closingShells.delete(ptyKey);
+      // Its process is gone anyway, so its tab goes as for any exit.
+      if (exited) await dropShell(ptyKey, true);
+      throw error;
+    }
+    closingShells.delete(ptyKey);
     removeShell(ptyKey);
     await deps.shellClosed?.(ptyKey, false);
   }

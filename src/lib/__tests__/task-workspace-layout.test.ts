@@ -314,6 +314,36 @@ describe("shell tabs", () => {
     expect(deps.shellClosed).toHaveBeenCalledWith(ptyKey, false);
   });
 
+  it("does not close again when the shell exits while its close is in flight", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = workspace.openShell("a")!;
+    let finish!: () => void;
+    deps.closeShell.mockReturnValueOnce(new Promise<void>((resolve) => (finish = resolve)));
+    const closing = workspace.closeTab(ptyKey);
+    // The kill ends the shell, whose exit arrives before the close returns.
+    await workspace.shellExited(ptyKey);
+    finish();
+    await closing;
+    expect(deps.closeShell).toHaveBeenCalledOnce();
+    expect(deps.shellClosed).toHaveBeenCalledOnce();
+    expect(workspace.findTab(ptyKey)).toBeNull();
+  });
+
+  it("drops a shell that exited while its close failed", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = workspace.openShell("a")!;
+    let fail!: (error: Error) => void;
+    deps.closeShell.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+    const closing = workspace.closeTab(ptyKey);
+    await workspace.shellExited(ptyKey);
+    fail(new Error("daemon shell-tab kill timed out"));
+    await expect(closing).rejects.toThrow("timed out");
+    expect(workspace.findTab(ptyKey)).toBeNull();
+    expect(deps.shellClosed).toHaveBeenCalledWith(ptyKey, true);
+  });
+
   it("does not close again when the exit follows an explicit close", async () => {
     const { workspace, deps, show } = setup();
     await show(TASK, ["a"], "a");
