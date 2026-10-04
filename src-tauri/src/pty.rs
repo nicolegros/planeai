@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -178,16 +178,23 @@ impl SessionBackend for RmuxBackend {
 
 // ─── PtyManager ──────────────────────────────────────────────────────────────
 
+/// Where a tab's close stands, for a spawn of a program in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseState {
+    /// Claimed, but no backend of the tab has been ended by it: if a program is spawning in the
+    /// tab, the close raced it, and the program must not start.
+    Closing,
+    /// The close ended the tab's backend; a later spawn on its key, after a webview reload
+    /// reused it, starts fresh.
+    Closed,
+}
+
 #[derive(Clone)]
 pub struct PtyManager {
     sessions: Arc<RwLock<HashMap<String, Box<dyn SessionBackend>>>>,
     observer: Arc<RwLock<Arc<dyn OutputObserver>>>,
-    /// Tabs being closed. A claim makes a duplicate close a no-op; for a program tab it also
-    /// stops a spawn in flight from being published.
-    tab_close_claims: Arc<Mutex<HashSet<String>>>,
-    /// Keys whose backend a detach ended: a claim on one is from that finished close, not from
-    /// a close racing a new spawn, so a key reused later (after a webview reload) starts fresh.
-    ended_tabs: Arc<Mutex<HashSet<String>>>,
+    /// Tabs being closed, or whose close ended their backend.
+    tab_closes: Arc<Mutex<HashMap<String, CloseState>>>,
 }
 
 impl PtyManager {
@@ -195,8 +202,7 @@ impl PtyManager {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             observer: Arc::new(RwLock::new(Arc::new(NoopObserver))),
-            tab_close_claims: Arc::new(Mutex::new(HashSet::new())),
-            ended_tabs: Arc::new(Mutex::new(HashSet::new())),
+            tab_closes: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -204,31 +210,29 @@ impl PtyManager {
         *self.observer.write().unwrap() = observer;
     }
 
-    /// Claim responsibility for closing a tab. A claim persists after a successful close so
-    /// delayed duplicate exit notifications are harmless.
+    /// Claim responsibility for closing a tab: false while another close of it is under way.
+    /// A finished close is claimed again, since a tab reusing its key may close in turn.
     pub(crate) fn claim_tab_close(&self, pty_key: &str) -> bool {
-        self.close_claims().insert(pty_key.to_string())
+        let previous = self
+            .tab_closes()
+            .insert(pty_key.to_string(), CloseState::Closing);
+        previous != Some(CloseState::Closing)
     }
 
     /// Release a close claim when closing failed so a later retry can proceed.
     pub(crate) fn cancel_tab_close(&self, pty_key: &str) {
-        self.close_claims().remove(pty_key);
+        self.tab_closes().remove(pty_key);
     }
 
-    fn close_claims(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
-        self.tab_close_claims
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+    fn tab_closes(&self) -> std::sync::MutexGuard<'_, HashMap<String, CloseState>> {
+        self.tab_closes.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Before a spawn, in one step: a program tab closed before anything ran in it is refused,
-    /// consuming its claim; otherwise the key starts fresh, so a claim seen at publish can only
-    /// come from a close racing this spawn.
+    /// Before a spawn the key starts fresh, refusing a program whose tab closed before anything
+    /// ran in it; a close seen at publish can then only be one racing this spawn.
     fn prepare_attach(&self, pty_key: &str, runs_program: bool) -> Result<(), String> {
-        let mut claims = self.close_claims();
-        let mut ended = self.ended_tabs.lock().unwrap_or_else(|e| e.into_inner());
-        let closed_unstarted = claims.remove(pty_key) && !ended.remove(pty_key);
-        if runs_program && closed_unstarted {
+        let state = self.tab_closes().remove(pty_key);
+        if runs_program && state == Some(CloseState::Closing) {
             return Err(closed_before_start_error(pty_key));
         }
         Ok(())
@@ -324,7 +328,7 @@ impl PtyManager {
         backend: Box<dyn SessionBackend>,
     ) -> Result<(), String> {
         let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
-        if runs_program && self.close_claims().remove(session_id) {
+        if runs_program && self.tab_closes().remove(session_id).is_some() {
             backend.detach();
             return Err(closed_before_start_error(session_id));
         }
@@ -711,10 +715,9 @@ impl PtyManager {
         let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
         if let Some(backend) = sessions.remove(session_id) {
             backend.detach();
-            self.ended_tabs
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(session_id.to_string());
+            if let Some(state) = self.tab_closes().get_mut(session_id) {
+                *state = CloseState::Closed;
+            }
         }
     }
 
@@ -819,6 +822,30 @@ mod tests {
         assert!(detached.load(Ordering::SeqCst));
         // After a webview reload the layout may hand the key out again.
         manager.prepare_attach("s1:2", true).unwrap();
+    }
+
+    #[test]
+    fn a_new_close_of_a_reused_key_still_stops_its_program() {
+        let manager = PtyManager::new();
+        let (backend, _) = spawned();
+        manager.publish("s1:2", true, backend).unwrap();
+        assert!(manager.claim_tab_close("s1:2"));
+        manager.detach("s1:2");
+        // A webview reload reuses the key, and its new tab closes before its program spawns.
+        assert!(manager.claim_tab_close("s1:2"));
+        assert!(manager.prepare_attach("s1:2", true).is_err());
+    }
+
+    #[test]
+    fn a_detach_without_a_close_leaves_no_state_behind() {
+        let manager = PtyManager::new();
+        let (backend, _) = spawned();
+        manager.publish("s1:2", false, backend).unwrap();
+        manager.detach("s1:2");
+        assert!(manager.tab_closes().is_empty());
+        // So a later close that never ends anything still refuses a program spawn.
+        assert!(manager.claim_tab_close("s1:2"));
+        assert!(manager.prepare_attach("s1:2", true).is_err());
     }
 
     #[test]
