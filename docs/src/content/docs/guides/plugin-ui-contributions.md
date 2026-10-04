@@ -163,7 +163,7 @@ PlaneAI calls these sidecar methods; each must return promptly and do its work a
 
 PlaneAI rejects a `send` text or `initial_prompt` over 48 KiB, measured as JSON-escaped text, so every request fits one 64 KiB frame.
 Prompts from the CLI, loops and recipes are checked against the same limit before they are queued, and a prompt PlaneAI cannot deliver to the plugin is reported in the app.
-A handoff `argv` must have 1 to 64 nonempty arguments without NUL; PlaneAI runs it as is.
+A handoff `argv` must have 1 to 64 nonempty arguments without NUL; PlaneAI runs it as is, without a shell, and the tab closes when it exits.
 Provider UIs should apply the same limit before calling `send`.
 
 `provider.*` methods are reserved for PlaneAI: plugin UI cannot call them, and `planeai-cli plugin test` scenarios cannot send them.
@@ -187,8 +187,9 @@ Any other notification is still a protocol error.
 The provider UI receives the selected session in `context.session` and a session bridge on `context.host.session`:
 
 - `send(text)` and `interrupt()` route through PlaneAI to `provider.session.send` and `provider.session.interrupt`, so every input path behaves the same.
-- `handoff()` asks the provider for its terminal command and opens it in a new shell tab of the session.
-  `handback()` closes that tab, which returns the session to the provider.
+- `handoff()` asks the provider for its terminal command and opens it in a new terminal tab of the session.
+  `handback()` closes that tab, which returns the session to the provider; so does the command exiting.
+  While handed off, `send()` is refused.
   Both reject for providers without `handoff`.
 - `onEvent(listener)` receives `{ seq, payload }` for this session only and returns an unsubscribe function.
 

@@ -19,16 +19,12 @@ use planeai_plugin_contract::provider::{
     self as protocol, validate_handoff_argv, HandoffResponse, SessionEventParams,
     SessionStatusParams, EVENT_NOTIFICATION, STATUS_NOTIFICATION,
 };
-pub use planeai_plugin_contract::provider::{check_prompt_size, ProviderSessionStatus, StopReason};
+pub use planeai_plugin_contract::provider::{
+    check_prompt_size, parse_provider_key, ProviderSessionStatus, StopReason,
+};
 
 /// Frontend event carrying opaque provider session events to the mounted UI.
 const SESSION_EVENT: &str = "plugin-provider-session-event";
-
-/// Provider keys are `<plugin id>:<provider id>`; plugin and provider ids never contain `:`.
-pub fn parse_provider_key(key: &str) -> Option<(&str, &str)> {
-    let (plugin_id, provider_id) = key.split_once(':')?;
-    (!plugin_id.is_empty() && !provider_id.is_empty()).then_some((plugin_id, provider_id))
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Binding {
@@ -44,6 +40,8 @@ struct State {
     /// Sessions whose start is in flight: their row does not exist yet, which
     /// reconciliation would otherwise read as a deleted session.
     launching: HashSet<String>,
+    /// Sessions continuing in a terminal: their provider is detached until the handback.
+    handed_off: HashSet<String>,
 }
 
 /// Which plugin currently drives each provider session.
@@ -88,6 +86,19 @@ impl ProviderSessions {
 
     fn get(&self, session_id: &str) -> Option<Binding> {
         self.state.lock().unwrap().bindings.get(session_id).cloned()
+    }
+
+    fn set_handed_off(&self, session_id: &str, handed_off: bool) {
+        let mut state = self.state.lock().unwrap();
+        if handed_off {
+            state.handed_off.insert(session_id.to_string());
+        } else {
+            state.handed_off.remove(session_id);
+        }
+    }
+
+    fn is_handed_off(&self, session_id: &str) -> bool {
+        self.state.lock().unwrap().handed_off.contains(session_id)
     }
 
     fn begin_launch(&self, session_id: &str) {
@@ -247,6 +258,16 @@ impl<S: ProviderStatus> NotificationSink<S> {
                     self.sessions.unbind(&params.session_id);
                 }
                 self.status.apply(&params.session_id, params.status);
+                // Stopped while this applied: its stop released the session before it was busy.
+                if params.status == ProviderSessionStatus::Busy
+                    && !self.sessions.is_driven_by(
+                        &params.session_id,
+                        &self.plugin_id,
+                        self.instance,
+                    )
+                {
+                    self.status.release(&params.session_id);
+                }
                 Ok(())
             }
             _ => unreachable!("provider_notification only yields provider methods"),
@@ -269,14 +290,11 @@ fn provider_notification(frame: &str) -> Option<(String, Value)> {
     let Value::Object(mut object) = serde_json::from_str::<Value>(frame.trim_end()).ok()? else {
         return None;
     };
-    if object.contains_key("id") || object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-        return None;
-    }
-    let method = object.get("method")?.as_str()?.to_string();
-    if !matches!(method.as_str(), EVENT_NOTIFICATION | STATUS_NOTIFICATION) {
-        return None;
-    }
-    Some((method, object.remove("params").unwrap_or(Value::Null)))
+    let method = protocol::provider_notification_method(&object)?;
+    Some((
+        method.to_string(),
+        object.remove("params").unwrap_or(Value::Null),
+    ))
 }
 
 /// Everything a provider needs to run one session in its worktree.
@@ -364,7 +382,7 @@ pub async fn resolve<R: ProviderRuntime>(
 
 /// Start a brand-new provider session. The binding exists before the request so
 /// notifications emitted while starting are accepted.
-pub async fn start<R: ProviderRuntime>(
+async fn start<R: ProviderRuntime>(
     runtime: &R,
     context: &SessionRuntimeContext,
     initial_prompt: Option<&str>,
@@ -525,6 +543,12 @@ pub async fn send<R: ProviderRuntime>(
         return Err("prompt text must not be empty".to_string());
     }
     check_prompt_size(text)?;
+    if runtime.sessions().is_handed_off(session_id) {
+        return Err(
+            "The session continues in a terminal. Send it there, or close the terminal to return to the chat."
+                .to_string(),
+        );
+    }
     ensure(runtime, session_id).await?;
     request_bound(
         runtime,
@@ -578,6 +602,8 @@ pub async fn handoff<R: ProviderRuntime>(
         serde_json::json!({ "session_id": session_id }),
     )
     .await?;
+    // The provider detached when it answered, whatever its answer.
+    runtime.sessions().set_handed_off(session_id, true);
     let response: HandoffResponse = serde_json::from_value(value)
         .map_err(|error| format!("invalid provider handoff: {error}"))?;
     validate_handoff_argv(response.argv)
@@ -585,6 +611,8 @@ pub async fn handoff<R: ProviderRuntime>(
 
 /// The terminal that continued a session closed; the provider drives it again.
 pub async fn handback<R: ProviderRuntime>(runtime: &R, session_id: &str) -> Result<(), String> {
+    // The terminal is gone, so prompts go to the provider again.
+    runtime.sessions().set_handed_off(session_id, false);
     // A sidecar restarted during the handoff restores the handoff from its transcript,
     // so it must be resumed to hear that the terminal closed. Ended sessions need nothing.
     if runtime.session_context(session_id).await.is_err() {
@@ -609,6 +637,7 @@ pub async fn stop<R: ProviderRuntime>(runtime: &R, session_id: &str, reason: Sto
     {
         let _stopping = lock.lock().await;
         sessions.end_launch(session_id);
+        sessions.set_handed_off(session_id, false);
         let binding = sessions.unbind(session_id);
         runtime.status().release(session_id);
         if let Some(binding) = binding {
@@ -955,6 +984,9 @@ pub(crate) mod fake {
             if self.failing.lock().unwrap().contains(&method) {
                 return Err(format!("{method} failed"));
             }
+            if method == protocol::HANDOFF {
+                return Ok(serde_json::json!({ "argv": ["claude", "--resume", session_id] }));
+            }
             Ok(serde_json::json!({}))
         }
 
@@ -1117,17 +1149,6 @@ mod tests {
         assert!(runtime.sessions.get("archived").is_none());
         assert!(runtime.sessions.get("live").is_some());
         assert!(runtime.sessions.get("launching").is_some());
-    }
-
-    #[test]
-    fn provider_keys_split_plugin_and_provider() {
-        assert_eq!(
-            parse_provider_key("claude-chat:claude"),
-            Some(("claude-chat", "claude"))
-        );
-        assert_eq!(parse_provider_key("claude"), None);
-        assert_eq!(parse_provider_key(":claude"), None);
-        assert_eq!(parse_provider_key("plugin:"), None);
     }
 
     #[test]
@@ -1320,5 +1341,63 @@ mod tests {
         runtime_stopped(&status, &sessions, "chat", 1);
         assert_eq!(status.take(), ["release s1"]);
         assert!(sessions.get("s2").is_some());
+    }
+
+    #[tokio::test]
+    async fn prompts_are_refused_while_the_session_continues_in_a_terminal() {
+        let runtime = FakeRuntime::running(&[("s1", "active")]);
+        assert_eq!(
+            handoff(&runtime, "s1").await.unwrap(),
+            ["claude", "--resume", "s1"]
+        );
+        assert!(send(&runtime, "s1", "hi")
+            .await
+            .unwrap_err()
+            .contains("continues in a terminal"));
+        handback(&runtime, "s1").await.unwrap();
+        send(&runtime, "s1", "hi").await.unwrap();
+        assert_eq!(
+            runtime.sent(),
+            [
+                protocol::RESUME,
+                protocol::HANDOFF,
+                protocol::HANDBACK,
+                protocol::SEND
+            ]
+        );
+    }
+
+    /// Unbinds the session while a status applies, as a concurrent stop can.
+    struct StoppedMeanwhile {
+        sessions: Arc<ProviderSessions>,
+        status: FakeStatus,
+    }
+
+    impl ProviderStatus for StoppedMeanwhile {
+        fn mark_owned(&self, _session_id: &str) {}
+        fn release_owned(&self, _session_id: &str) {}
+        fn apply(&self, session_id: &str, status: ProviderSessionStatus) {
+            self.sessions.unbind(session_id);
+            self.status.apply(session_id, status);
+        }
+        fn release(&self, session_id: &str) {
+            self.status.release(session_id);
+        }
+        fn emit_event(&self, _event: ProviderSessionEvent) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_turn_starting_as_its_session_stops_is_not_left_busy() {
+        let sessions = Arc::new(ProviderSessions::default());
+        bound(&sessions, "s1", 1);
+        let status = StoppedMeanwhile {
+            sessions: sessions.clone(),
+            status: FakeStatus::default(),
+        };
+        let sink = NotificationSink::new(status, "chat", 1, sessions);
+        assert!(sink.try_handle(&status_frame("s1", "busy")));
+        assert_eq!(sink.status.status.take(), ["Busy s1", "release s1"]);
     }
 }

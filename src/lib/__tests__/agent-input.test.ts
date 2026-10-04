@@ -5,6 +5,10 @@ const { pty, providerSessions } = vi.hoisted(() => ({
   providerSessions: { send: vi.fn(async (_id: string, _text: string) => {}) },
 }));
 vi.mock("../api", () => ({ pty, providerSessions }));
+const { tabFor } = vi.hoisted(() => ({
+  tabFor: vi.fn((_id: string): string | undefined => undefined),
+}));
+vi.mock("../provider-handoff", () => ({ providerHandoff: { tabFor } }));
 
 import { sendToAgent } from "../agent-input";
 
@@ -29,6 +33,16 @@ describe("sendToAgent", () => {
     pty.write.mockResolvedValueOnce(false);
     await expect(sendToAgent({ id: "s1", backend: "local" }, "hi")).rejects.toThrow("not attached");
     expect(pty.write).toHaveBeenCalledOnce();
+  });
+
+  it("types a chat's message into the terminal it continues in", async () => {
+    tabFor.mockReturnValueOnce("s1:3");
+    await sendToAgent({ id: "s1", backend: "plugin" }, "hi");
+    expect(providerSessions.send).not.toHaveBeenCalled();
+    expect(pty.write.mock.calls).toEqual([
+      ["s1:3", [0x68, 0x69]],
+      ["s1:3", [0x0d]],
+    ]);
   });
 
   it("fails when a provider refuses the message", async () => {

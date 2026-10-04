@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../api", () => ({ providerSessions: {} }));
 vi.mock("../snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
 
-import { createProviderHandoff, quoteArgument, shellCommand } from "../provider-handoff";
+import { createProviderHandoff } from "../provider-handoff";
 
 function setup() {
   const api = {
@@ -21,28 +21,15 @@ function setup() {
 }
 
 describe("provider handoff", () => {
-  it("quotes arguments for POSIX shells and cmd.exe", () => {
-    expect(shellCommand(["/opt/claude", "--resume", "s1"], false)).toBe("/opt/claude --resume s1");
-    expect(quoteArgument("it's here", false)).toBe(`'it'\\''s here'`);
-    expect(quoteArgument("C:\\Program Files\\claude.exe", true)).toBe(
-      '"C:\\Program Files\\claude.exe"',
-    );
-    expect(quoteArgument("plain", true)).toBe("plain");
-  });
-
-  it("keeps cmd.exe from expanding variables or merging arguments", () => {
-    // `^%` outside quotes is a literal percent sign to cmd.exe.
-    expect(quoteArgument("50%PATH%", true)).toBe('"50"^%"PATH"^%""');
-    // Backslashes before the closing quote are doubled, so it still closes the argument.
-    expect(quoteArgument("C:\\my dir\\", true)).toBe('"C:\\my dir\\\\"');
-    expect(quoteArgument('say \\"hi"', true)).toBe('"say \\\\""hi"""');
-  });
-
   it("opens one terminal tab per session and hands back when it closes", async () => {
     const { api, handoff } = setup();
     const open = vi.fn(() => "s1:4");
     await expect(handoff.start("s1", open)).resolves.toBe("s1:4");
-    expect(open).toHaveBeenCalledWith("/opt/claude --resume s1 --permission-mode plan", "Terminal");
+    // The argv runs as is: nothing a shell could misread.
+    expect(open).toHaveBeenCalledWith(
+      ["/opt/claude", "--resume", "s1", "--permission-mode", "plan"],
+      "Terminal",
+    );
     await expect(handoff.start("s1", open)).resolves.toBe("s1:4");
     expect(api.handoff).toHaveBeenCalledOnce();
     expect(handoff.tabFor("s1")).toBe("s1:4");
@@ -91,13 +78,17 @@ describe("provider handoff", () => {
     expect(api.handback).toHaveBeenCalledOnce();
   });
 
-  it("hands back directly, and forgets the tab, when the tab is already gone", async () => {
+  it("keeps a terminal it cannot close here, which still drives the session", async () => {
     const { api, handoff } = setup();
     await handoff.start("s1", () => "s1:1");
-    await handoff.end("s1", async () => "missing");
+    await expect(handoff.end("s1", async () => "missing")).rejects.toThrow(
+      "Close the session's terminal",
+    );
+    expect(api.handback).not.toHaveBeenCalled();
+    expect(handoff.tabFor("s1")).toBe("s1:1");
+    // Closing it later, wherever it is, still hands the session back.
+    await handoff.shellClosed("s1:1");
     expect(api.handback).toHaveBeenCalledWith("s1");
-    expect(handoff.tabFor("s1")).toBeUndefined();
-    await expect(handoff.start("s1", () => "s1:2")).resolves.toBe("s1:2");
   });
 
   it("hands back a session without a tab", async () => {

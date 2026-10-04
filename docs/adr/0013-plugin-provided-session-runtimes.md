@@ -52,8 +52,8 @@ A trusted local plugin can provide **session runtimes**, which PlaneAI offers as
   Routing follows the session's stored backend.
   A prompt is limited to 48 KiB as JSON-escaped text, so its request always fits one frame.
 - **Terminal handoff.** A provider that supports `handoff` can hand a session to its agent's own TUI.
-  `provider.session.handoff` detaches the provider and returns the `argv` that continues the conversation, which the host runs in a shell tab of the same session.
-  Closing that tab calls `provider.session.handback`, so only one side ever drives the conversation.
+  `provider.session.handoff` detaches the provider and returns the `argv` that continues the conversation, which the host runs directly, without a shell, in a terminal tab of the same session.
+  Closing that tab, or the TUI exiting, calls `provider.session.handback`, so only one side ever drives the conversation; prompts meant for the provider are refused until then.
 - **Lifecycle.** Runtimes still die with the app.
   Sessions resume lazily through the provider on next use.
   Ending a session through any path stops its provider session, including CLI archive, CLI delete and task completion, which the GUI reconciles when notified.

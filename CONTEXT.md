@@ -339,7 +339,8 @@ Choosing one creates a session with the `plugin` backend; there is no PTY or com
 - Archive, destroy and exit stop the provider session on two paths: the session lifecycle dispatch for sessions the GUI ends, and `plugin_providers::reconcile` for sessions the CLI or task completion ends.
 - A launch that fails before its session row exists stops the provider it started.
 - Restarting an exited provider session only restores the row; the provider resumes it on next use.
-- Providers that support `handoff` can continue a session in a shell tab running their agent's TUI (`provider.session.handoff` returns the command); every shell tab that leaves the layout, closed or exited by itself, goes through `providerHandoff.shellClosed`, which hands a handoff tab's session back to the provider.
+- Providers that support `handoff` can continue a session in a terminal tab running their agent's TUI (`provider.session.handoff` returns its argv, run directly without a shell, so the tab closes when the TUI exits); every shell tab that leaves the layout, closed or exited by itself, goes through `providerHandoff.shellClosed`, which hands a handoff tab's session back to the provider.
+- While a session continues in a terminal, the host refuses provider prompts for it; feedback from the Diff and editor tabs is typed into that terminal instead.
 
 ### rmux (experimental)
 

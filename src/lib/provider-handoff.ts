@@ -1,33 +1,6 @@
 import { providerSessions } from "./api";
-import { IS_WINDOWS } from "./keyboard";
 import { showSnackbar } from "./snackbar.svelte";
 import type { TabClose } from "./task-workspace-layout.svelte";
-
-const POSIX_SAFE = /^[A-Za-z0-9_/.:=@%+,-]+$/;
-
-/**
- * Quote for cmd.exe and the C runtime's argv parser together: backslashes before a quote are
- * doubled so it keeps its meaning, quotes become `""`, and `%` leaves the quotes as `^%` so
- * cmd.exe never expands a variable.
- */
-function quoteForCmd(argument: string): string {
-  if (!/[\s"&|<>^%]/.test(argument)) return argument;
-  const escaped = argument.replace(
-    /(\\*)("|$)/g,
-    (_, slashes: string, quote: string) => slashes.repeat(2) + (quote ? '""' : ""),
-  );
-  return `"${escaped.replace(/%/g, '"^%"')}"`;
-}
-
-/** Quote one argument for the shell a shell tab runs its command in. */
-export function quoteArgument(argument: string, windows = IS_WINDOWS): string {
-  if (windows) return quoteForCmd(argument);
-  return POSIX_SAFE.test(argument) ? argument : `'${argument.replace(/'/g, `'\\''`)}'`;
-}
-
-export function shellCommand(argv: string[], windows = IS_WINDOWS): string {
-  return argv.map((argument) => quoteArgument(argument, windows)).join(" ");
-}
 
 export interface ProviderHandoffDeps {
   api: {
@@ -54,10 +27,11 @@ export function createProviderHandoff({ api, notify }: ProviderHandoffDeps) {
 
   async function openTab(
     sessionId: string,
-    openCommand: (command: string, label: string) => string | null,
+    openCommand: (argv: readonly string[], label: string) => string | null,
   ): Promise<string> {
     const argv = await api.handoff(sessionId);
-    const ptyKey = openCommand(shellCommand(argv), "Terminal");
+    // Run as is, without a shell: no quoting to get wrong, and the TUI exiting closes the tab.
+    const ptyKey = openCommand(argv, "Terminal");
     if (!ptyKey) {
       await api.handback(sessionId);
       throw new Error("There is no pane to open the terminal in.");
@@ -71,7 +45,7 @@ export function createProviderHandoff({ api, notify }: ProviderHandoffDeps) {
 
     start(
       sessionId: string,
-      openCommand: (command: string, label: string) => string | null,
+      openCommand: (argv: readonly string[], label: string) => string | null,
     ): Promise<string> {
       const existing = tabFor(sessionId);
       if (existing) return Promise.resolve(existing);
@@ -83,17 +57,20 @@ export function createProviderHandoff({ api, notify }: ProviderHandoffDeps) {
       return pending;
     },
 
-    /** Return the session to its chat by closing its terminal, or directly when the tab is gone. */
+    /**
+     * Return the session to its chat by closing its terminal, which hands it back through
+     * shellClosed; without a terminal, hand it back directly.
+     */
     async end(sessionId: string, closeTab: (ptyKey: string) => Promise<TabClose>): Promise<void> {
       // A handback sent before the tab opens would leave both the chat and the terminal driving.
       await starting.get(sessionId)?.catch(() => {});
       const ptyKey = tabFor(sessionId);
-      const closed = ptyKey ? await closeTab(ptyKey) : "missing";
+      if (!ptyKey) return api.handback(sessionId);
+      const closed = await closeTab(ptyKey);
       if (closed === "starting") throw new Error("The terminal is still starting.");
-      // Closing the tab hands the session back through shellClosed.
+      // Its shell still runs, in a workspace not shown or not loaded yet.
       if (closed === "missing") {
-        if (ptyKey) tabs.delete(ptyKey);
-        await api.handback(sessionId);
+        throw new Error("Close the session's terminal to return to the chat.");
       }
     },
 
