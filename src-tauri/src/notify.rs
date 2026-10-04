@@ -180,11 +180,13 @@ fn reconcile_provider_sessions(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let runtime = crate::plugin_providers::AppRuntime::new(&app);
-        // Ended outside the GUI, these sessions' handoff programs would otherwise run on unseen.
-        for session_id in crate::plugin_providers::reconcile(&runtime).await {
-            app.state::<crate::state::PtyState>()
-                .0
-                .end_programs(&session_id);
+        let pty = app.state::<crate::state::PtyState>().0.clone();
+        // Ended outside the GUI, these sessions' handoff programs would otherwise run on unseen,
+        // including those of sessions no sidecar drives anymore.
+        let mut ended = crate::plugin_providers::reconcile(&runtime).await;
+        ended.extend(crate::plugin_providers::ended_sessions(&runtime, pty.program_owners()).await);
+        for session_id in ended {
+            pty.end_programs(&session_id);
         }
     });
 }

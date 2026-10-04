@@ -756,6 +756,18 @@ impl PtyManager {
         }
     }
 
+    /// Sessions with a program in one of their tabs.
+    pub fn program_owners(&self) -> Vec<String> {
+        let mut owners: Vec<String> = self
+            .program_tabs()
+            .iter()
+            .filter_map(|key| tab_owner(key).map(str::to_string))
+            .collect();
+        owners.sort();
+        owners.dedup();
+        owners
+    }
+
     /// Whether the tab still runs its program, as after a webview reload; an app restart ends
     /// every program, leaving its tab a plain shell.
     pub fn is_program_running(&self, pty_key: &str) -> bool {
@@ -916,6 +928,7 @@ mod tests {
         manager.publish(&tab_key("s10", 2), true, other).unwrap();
         assert!(manager.is_program_running(&tab_key("s1", 2)));
         assert!(!manager.is_program_running(&tab_key("s1", 3)));
+        assert_eq!(manager.program_owners(), ["s1", "s10"]);
         manager.end_programs("s1");
         // The agent's own PTY is its session commands' to end.
         assert!(!agent_ended.load(Ordering::SeqCst));

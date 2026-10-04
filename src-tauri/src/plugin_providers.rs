@@ -697,6 +697,27 @@ fn ended_reason(status: Option<&str>) -> Option<StopReason> {
 
 /// Stop provider sessions whose rows ended outside the GUI (CLI archive or delete,
 /// task completion). Those paths only notify that sessions changed.
+/// Among `session_ids`, those whose stored status says they ended (or whose row is gone).
+pub async fn ended_sessions<R: ProviderRuntime>(
+    runtime: &R,
+    session_ids: Vec<String>,
+) -> Vec<String> {
+    if session_ids.is_empty() {
+        return Vec::new();
+    }
+    match runtime.session_statuses(session_ids).await {
+        Ok(statuses) => statuses
+            .into_iter()
+            .filter(|(_, status)| ended_reason(status.as_deref()).is_some())
+            .map(|(session_id, _)| session_id)
+            .collect(),
+        Err(error) => {
+            tracing::warn!(%error, "ended session lookup failed");
+            Vec::new()
+        }
+    }
+}
+
 /// Returns the sessions it stopped, whose terminals must end with them.
 pub async fn reconcile<R: ProviderRuntime>(runtime: &R) -> Vec<String> {
     let bound = runtime.sessions().launched_session_ids();
@@ -1431,5 +1452,16 @@ mod tests {
                 protocol::SEND
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn ended_sessions_are_those_ended_or_gone() {
+        let runtime = FakeRuntime::running(&[("live", "active"), ("done", "archived")]);
+        let ended = ended_sessions(
+            &runtime,
+            vec!["live".into(), "done".into(), "deleted".into()],
+        )
+        .await;
+        assert_eq!(ended, ["done", "deleted"]);
     }
 }
