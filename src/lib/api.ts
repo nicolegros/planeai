@@ -18,6 +18,7 @@ import type {
   RecipeSummary,
 } from "./types";
 import type { AppConfig } from "./settings.svelte";
+import type { TabCommand } from "./terminal-view";
 
 export interface LaunchSessionParams {
   projectId: string;
@@ -87,8 +88,17 @@ export const pty = {
     tabIndex: number,
     darkMode: boolean,
     onData: Channel<ArrayBuffer>,
-    initialCommand?: string,
-  ) => invoke("spawn_tab", { sessionId, tabIndex, darkMode, initialCommand, onData }),
+    initialCommand?: TabCommand,
+  ) =>
+    invoke("spawn_tab", {
+      sessionId,
+      tabIndex,
+      darkMode,
+      // A program and its arguments run without a shell, so none of them is parsed.
+      initialCommand: typeof initialCommand === "string" ? initialCommand : undefined,
+      initialArgv: typeof initialCommand === "string" ? undefined : initialCommand,
+      onData,
+    }),
   resize: (sessionId: string, rows: number, cols: number) =>
     invoke("resize_pty", { sessionId, rows, cols }),
   pause: (sessionId: string) => invoke("pause_pty", { sessionId }),

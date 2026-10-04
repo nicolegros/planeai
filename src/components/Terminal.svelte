@@ -4,7 +4,7 @@
   import { getTerminalSettings, isDark } from "../lib/settings.svelte";
   import { extractCommandName } from "../lib/shell-title";
   import { taskWorkspaceLayout } from "../lib/task-workspace-layout.svelte";
-  import type { TerminalView } from "../lib/terminal-view";
+  import type { TabCommand, TerminalView } from "../lib/terminal-view";
   import { acquireTerminalView } from "../lib/terminal-views";
 
   interface Props {
@@ -14,7 +14,7 @@
     focusRequest?: { id: number; sessionId: string } | null;
     exited?: boolean;
     skipAttach?: boolean;
-    initialCommand?: string;
+    initialCommand?: TabCommand;
     onUserInput?: () => void;
     onAttached?: () => void;
     onAttachError?: (error: unknown) => void;

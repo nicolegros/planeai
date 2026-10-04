@@ -45,10 +45,13 @@ export interface TerminalSurface {
   dispose(): void;
 }
 
+/** What a shell tab runs first: a command line for the shell, or a program and its arguments. */
+export type TabCommand = string | readonly string[];
+
 export interface TerminalConnectRequest {
   ptyKey: string;
   kind: TerminalKind;
-  initialCommand?: string;
+  initialCommand?: TabCommand;
 }
 
 export interface TerminalPty {
@@ -78,7 +81,7 @@ export interface GeometryHint {
 export interface TerminalViewOptions {
   ptyKey: string;
   kind: TerminalKind;
-  initialCommand?: string;
+  initialCommand?: TabCommand;
   pty: TerminalPty;
   createSurface: (handlers: TerminalSurfaceHandlers) => TerminalSurface;
   geometryHint?: GeometryHint;

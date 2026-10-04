@@ -65,6 +65,7 @@ pub async fn spawn_tab(
     tab_index: u32,
     dark_mode: Option<bool>,
     initial_command: Option<String>,
+    initial_argv: Option<Vec<String>>,
     on_data: Channel<tauri::ipc::Response>,
     db_state: State<'_, DbState>,
     config_state: State<'_, ConfigState>,
@@ -81,6 +82,7 @@ pub async fn spawn_tab(
             tab_index,
             dark_mode,
             initial_command,
+            initial_argv,
             connection,
             config,
         )
@@ -117,9 +119,13 @@ fn prepare_tab_spawn(
     tab_index: u32,
     dark_mode: Option<bool>,
     initial_command: Option<String>,
+    initial_argv: Option<Vec<String>>,
     connection: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
     config: crate::config::Config,
 ) -> Result<PreparedTab, String> {
+    if initial_argv.as_ref().is_some_and(Vec::is_empty) {
+        return Err("a tab's program cannot be empty".to_string());
+    }
     let conn = connection.lock().map_err(|e| e.to_string())?;
     let session = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
@@ -155,7 +161,10 @@ fn prepare_tab_spawn(
 
     // Build canonical env (augmented PATH, TERM, COLORFGBG, PLANEAI_SOCKET, etc.)
     // via prepare_session() — same for both backends.
-    let shell_cmd = shell_command(&shell, initial_command.as_deref());
+    let shell_cmd = match &initial_argv {
+        Some(argv) => argv.join(" "),
+        None => shell_command(&shell, initial_command.as_deref()),
+    };
     let env = {
         let extra_path_dirs = config.resolved_extra_path_dirs();
         super::helpers::build_local_env(
@@ -175,7 +184,22 @@ fn prepare_tab_spawn(
         "prepare_tab_spawn"
     );
 
-    let (target, daemon_spawn) = if session.backend == "daemon" {
+    let (target, daemon_spawn) = if let Some(argv) = initial_argv {
+        // Programs run without a shell only in local PTYs, which provider sessions' tabs are.
+        if session.backend == "daemon" || session.backend == planeai_rmux::BACKEND {
+            return Err(format!(
+                "{} sessions cannot run a program without a shell",
+                session.backend
+            ));
+        }
+        (
+            pty::PtyTarget::Program {
+                argv,
+                cwd: cwd.clone(),
+            },
+            None,
+        )
+    } else if session.backend == "daemon" {
         #[cfg(not(windows))]
         let (daemon_command, daemon_args): (String, Vec<String>) = match initial_command.as_deref()
         {
@@ -379,5 +403,58 @@ mod tests {
             shell_command(r"C:\Program Files\Git\bin\bash.exe", None),
             r#""C:\Program Files\Git\bin\bash.exe""#
         );
+    }
+
+    fn tab_for(backend: &str, argv: Option<Vec<String>>) -> Result<PreparedTab, String> {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "app", "/tmp").unwrap();
+        db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "chat",
+            None,
+            "main",
+            None,
+            None,
+            backend,
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        prepare_tab_spawn(
+            "s1".into(),
+            2,
+            Some(true),
+            None,
+            argv,
+            std::sync::Arc::new(std::sync::Mutex::new(conn)),
+            crate::config::Config::default(),
+        )
+    }
+
+    #[test]
+    fn a_program_runs_without_a_shell_in_a_local_tab() {
+        let argv = vec![
+            "/opt/claude".to_string(),
+            "--resume".into(),
+            "it's 100%".into(),
+        ];
+        let tab = tab_for("plugin", Some(argv.clone())).unwrap();
+        match tab.target {
+            pty::PtyTarget::Program { argv: target, .. } => assert_eq!(target, argv),
+            other => panic!("expected a program target, got {other:?}"),
+        }
+        assert!(tab.daemon_spawn.is_none());
+    }
+
+    #[test]
+    fn a_program_needs_a_local_tab_and_a_name() {
+        assert!(tab_for("daemon", Some(vec!["claude".into()])).is_err());
+        assert!(tab_for("plugin", Some(Vec::new())).is_err());
     }
 }

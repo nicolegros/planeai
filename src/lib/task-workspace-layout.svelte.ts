@@ -24,6 +24,7 @@ import { toTaskWorkspaceId } from "./sidebar-session-order";
 import { sessionTaskProjectId, type Session } from "./types";
 import { disposeTerminalView } from "./terminal-views";
 import { providerHandoff } from "./provider-handoff";
+import type { TabCommand } from "./terminal-view";
 
 export type WorkspaceIdentity =
   | { kind: "task"; key: string; projectId: string; taskKey: string }
@@ -116,7 +117,7 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
   let generation = 0;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   /** Editor commands for shell tabs that have not attached yet, by pty key. */
-  const pendingCommands = new Map<string, string>();
+  const pendingCommands = new Map<string, TabCommand>();
   /**
    * Highest shell index handed out per session in this app run. Indices are not
    * reused within a run, so a late `pty-exited` for a closed shell can never hit
@@ -186,7 +187,7 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
   function openCommandTab(
     sessionId: string,
     paneId: string,
-    command: string,
+    command: TabCommand,
     label: string,
     focus = false,
   ): string | null {
@@ -391,13 +392,13 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     },
 
     /** Open a shell tab in the focused pane that runs `command` when its PTY spawns, and focus it. */
-    openCommand(sessionId: string, command: string, label: string): string | null {
+    openCommand(sessionId: string, command: TabCommand, label: string): string | null {
       const paneId = loading ? null : layout?.focusedLeafId;
       return paneId ? openCommandTab(sessionId, paneId, command, label, true) : null;
     },
 
     /** Command a shell tab must run when its PTY spawns, if it is a terminal editor. */
-    pendingCommand: (ptyKey: string): string | undefined => pendingCommands.get(ptyKey),
+    pendingCommand: (ptyKey: string): TabCommand | undefined => pendingCommands.get(ptyKey),
     isStarting: (ptyKey: string): boolean => pendingCommands.has(ptyKey),
 
     /** A shell tab's PTY spawned; its editor command has been consumed. */

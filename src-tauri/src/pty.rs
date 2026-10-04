@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::daemon_client::DataConnection;
 use crate::output_observer::{NoopObserver, OutputObserver};
-use crate::pty_planeai_core_adapter::PlaneaiPtyBackend;
+use crate::pty_planeai_core_adapter::{PlaneaiPtyBackend, SpawnCommand};
 use crate::session_backend::{SessionBackend, WriteAck};
 use planeai_pty::FlowControl;
 
@@ -21,6 +21,8 @@ pub enum PtyTarget {
     /// Spawn a command string in a local PTY (shell tabs and agent sessions).
     /// The command is wrapped in the platform shell (`bash -c` on Unix, `cmd /C` on Windows).
     Shell { command: String, cwd: String },
+    /// Run a program with its arguments in a local PTY, without a shell to parse them.
+    Program { argv: Vec<String>, cwd: String },
     /// Attach to a daemon-managed session via data connection.
     Daemon {
         session_id: String,
@@ -249,7 +251,7 @@ impl PtyManager {
 
         // A shell terminal can remount when its split leaf changes. Rebind its
         // output channel instead of killing and recreating the running local PTY.
-        if matches!(&target, PtyTarget::Shell { .. }) {
+        if matches!(&target, PtyTarget::Shell { .. } | PtyTarget::Program { .. }) {
             let sessions = self.sessions.read().map_err(|e| e.to_string())?;
             if let Some(existing) = sessions.get(session_id) {
                 if existing.rebind_output(on_data.clone()) {
@@ -259,7 +261,8 @@ impl PtyManager {
         }
 
         let (command, cwd) = match target {
-            PtyTarget::Shell { command, cwd } => (command, cwd),
+            PtyTarget::Shell { command, cwd } => (SpawnCommand::Shell(command), cwd),
+            PtyTarget::Program { argv, cwd } => (SpawnCommand::Argv(argv), cwd),
             PtyTarget::TmuxAttach { tmux_name } => {
                 #[cfg(not(windows))]
                 {
@@ -271,7 +274,7 @@ impl PtyManager {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
-                    (cmd, cwd)
+                    (SpawnCommand::Shell(cmd), cwd)
                 }
                 #[cfg(windows)]
                 {
@@ -286,7 +289,7 @@ impl PtyManager {
         let cancelled = Arc::new(AtomicBool::new(false));
         let observer = self.observer.read().unwrap().clone();
         let backend = PlaneaiPtyBackend::spawn(
-            session_id, &command, &cwd, env, app, on_data, cancelled, observer,
+            session_id, command, &cwd, env, app, on_data, cancelled, observer,
         )?;
         let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
         if let Some(old) = sessions.get(session_id) {

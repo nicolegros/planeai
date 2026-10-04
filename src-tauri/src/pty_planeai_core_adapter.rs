@@ -16,6 +16,22 @@ use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter};
 
 use crate::output_observer::OutputObserver;
+
+/// What a local PTY runs: a command line for the platform shell, or a program and its arguments.
+pub enum SpawnCommand {
+    Shell(String),
+    Argv(Vec<String>),
+}
+
+impl SpawnCommand {
+    /// As recorded in session logs.
+    fn display(&self) -> String {
+        match self {
+            Self::Shell(command) => command.clone(),
+            Self::Argv(argv) => argv.join(" "),
+        }
+    }
+}
 use crate::session_backend::{SessionBackend, WriteAck};
 
 /// Forwards planeai-pty events to the Tauri frontend via the existing output channel.
@@ -89,7 +105,7 @@ impl PlaneaiPtyBackend {
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         session_id: &str,
-        command: &str,
+        command: SpawnCommand,
         cwd: &str,
         env: Vec<(String, String)>,
         app: AppHandle,
@@ -97,7 +113,7 @@ impl PlaneaiPtyBackend {
         cancelled: Arc<AtomicBool>,
         observer: Arc<dyn OutputObserver>,
     ) -> Result<Self, String> {
-        let full_command = command.to_string();
+        let full_command = command.display();
 
         let tauri_sink = Arc::new(TauriPtySink::new(
             session_id.to_string(),
@@ -148,9 +164,21 @@ impl PlaneaiPtyBackend {
             tauri_sink.clone()
         };
 
+        let (command, program, args) = match command {
+            SpawnCommand::Shell(command) => (Some(command), None, Vec::new()),
+            SpawnCommand::Argv(mut argv) => {
+                if argv.is_empty() {
+                    return Err("cannot run an empty command".to_string());
+                }
+                let program = argv.remove(0);
+                (None, Some(program), argv)
+            }
+        };
         let config = LocalPtyConfig {
             session_id: 0,
-            command: Some(full_command),
+            command,
+            program,
+            args,
             cwd: Some(cwd.into()),
             env,
             cols: 80,
