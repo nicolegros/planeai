@@ -28,6 +28,11 @@ fn is_worktree_conflict(e: &str) -> bool {
     e.contains("already checked out") || e.contains("already used by worktree")
 }
 
+/// Whether a daemon spawn failed because its connection is gone, so the next launch reconnects.
+fn is_daemon_connection_error(e: &str) -> bool {
+    e.contains("Broken pipe") || e.contains("Connection refused") || e.contains("No such file")
+}
+
 fn require_task_key(task_key: Option<String>) -> Result<String, String> {
     task_key
         .filter(|key| !key.trim().is_empty())
@@ -275,11 +280,8 @@ pub async fn launch_session(
             // The rmux backend needs no special case here: every rmux operation
             // already reconnects and retries once via `rmux_client::with_retry`, so
             // a failure that reaches this point is a real one worth reporting
-            // verbatim.
-            if e.contains("Broken pipe")
-                || e.contains("Connection refused")
-                || e.contains("No such file")
-            {
+            // verbatim. Plugin providers fail for their own reasons, reported as is.
+            if backend == "daemon" && is_daemon_connection_error(&e) {
                 let daemon_state = app.state::<DaemonState>();
                 let mut ds = daemon_state.0.lock().await;
                 *ds = None;
@@ -577,7 +579,18 @@ fn rollback_branch_creation(
 mod tests {
     use planeai_core::command::shell_args;
 
-    use super::{require_task_key, rollback_branch_creation};
+    use super::{is_daemon_connection_error, require_task_key, rollback_branch_creation};
+
+    #[test]
+    fn only_a_lost_daemon_connection_reads_as_a_daemon_crash() {
+        assert!(is_daemon_connection_error(
+            "write failed: Broken pipe (os error 32)"
+        ));
+        assert!(is_daemon_connection_error(
+            "connect: No such file or directory"
+        ));
+        assert!(!is_daemon_connection_error("plugin chat is not running"));
+    }
 
     #[test]
     fn user_launch_requires_a_nonempty_task_key() {

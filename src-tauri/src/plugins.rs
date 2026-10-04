@@ -1270,6 +1270,8 @@ struct RuntimeProcess {
     session_actions: AsyncMutex<Vec<PluginSessionAction>>,
     /// Set for provider plugins: the sessions this instance may drive.
     provider_sessions: Option<Arc<crate::plugin_providers::ProviderSessions>>,
+    /// Why the stdout reader stopped, once it has: nothing the sidecar sends is read anymore.
+    stdout_failure: Arc<std::sync::OnceLock<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1704,15 +1706,20 @@ impl RuntimeProcess {
             .map_err(|error| format!("failed to flush host callback response: {error}"))
     }
 
+    /// Why the runtime ended: `Ok` when its process exited, `Err` when it must be stopped.
     async fn exited(&self) -> Result<Option<String>, String> {
-        self.child
+        let exited = self
+            .child
             .lock()
             .await
             .try_wait()
-            .map_err(|e| format!("failed to check plugin process: {e}"))
-            .map(|status| {
-                status.map(|value| format!("plugin process exited unexpectedly ({value})"))
-            })
+            .map_err(|e| format!("failed to check plugin process: {e}"))?
+            .map(|value| format!("plugin process exited unexpectedly ({value})"));
+        // A live process whose stdout can no longer be read would never answer or report again.
+        match (exited, self.stdout_failure.get()) {
+            (None, Some(failure)) => Err(failure.clone()),
+            (exited, _) => Ok(exited),
+        }
     }
 
     async fn request_shutdown(&self, deadline: Instant) -> Result<Value, String> {
@@ -3733,10 +3740,12 @@ async fn spawn_runtime(
     let notification_sink = provider_sessions.clone().map(|sessions| {
         crate::plugin_providers::NotificationSink::new(app.clone(), plugin_id, instance, sessions)
     });
+    let stdout_failure = Arc::new(std::sync::OnceLock::new());
     tokio::spawn(read_stdout_frames(
         BufReader::new(stdout),
         frame_sender,
         notification_sink,
+        stdout_failure.clone(),
     ));
     if let Some(stderr) = child.stderr.take() {
         drain_stderr(stderr, log_path.to_path_buf());
@@ -3758,16 +3767,19 @@ async fn spawn_runtime(
         lifecycle_event_subscriptions: AsyncMutex::new(HashSet::new()),
         session_actions: AsyncMutex::new(Vec::new()),
         provider_sessions,
+        stdout_failure,
     })
 }
 
 /// Owns sidecar stdout for the process lifetime so provider notifications are
 /// delivered while no host request is in flight. Every other frame is queued for
-/// the request path in arrival order; the first transport error ends the stream.
+/// the request path in arrival order; the first transport error ends the stream and is
+/// recorded in `failure`, so the runtime is retired without waiting for a request to see it.
 async fn read_stdout_frames(
     mut stdout: BufReader<ChildStdout>,
     frames: mpsc::Sender<Result<String, String>>,
     notifications: Option<crate::plugin_providers::NotificationSink>,
+    failure: Arc<std::sync::OnceLock<String>>,
 ) {
     loop {
         let frame = read_stdout_frame(&mut stdout).await;
@@ -3775,6 +3787,9 @@ async fn read_stdout_frames(
             if sink.try_handle(frame) {
                 continue;
             }
+        }
+        if let Err(error) = &frame {
+            let _ = failure.set(error.clone());
         }
         let failed = frame.is_err();
         if frames.send(frame).await.is_err() || failed {
@@ -4839,6 +4854,13 @@ mod tests {
 
     #[cfg(unix)]
     async fn stdout_frames_from(script: &str) -> Vec<Result<String, String>> {
+        stdout_frames_and_failure(script).await.0
+    }
+
+    #[cfg(unix)]
+    async fn stdout_frames_and_failure(
+        script: &str,
+    ) -> (Vec<Result<String, String>>, Option<String>) {
         let mut child = Command::new("sh")
             .args(["-c", script])
             .stdout(std::process::Stdio::piped())
@@ -4846,13 +4868,27 @@ mod tests {
             .unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         let (sender, mut receiver) = mpsc::channel(8);
-        read_stdout_frames(stdout, sender, None).await;
+        let failure = Arc::new(std::sync::OnceLock::new());
+        read_stdout_frames(stdout, sender, None, failure.clone()).await;
         let _ = child.wait().await;
         let mut frames = Vec::new();
         while let Ok(frame) = receiver.try_recv() {
             frames.push(frame);
         }
-        frames
+        (frames, failure.get().cloned())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unreadable_frame_records_why_the_reader_stopped() {
+        // One frame over the limit, with the process still running behind it.
+        let (frames, failure) = stdout_frames_and_failure(&format!(
+            "printf '%0{}d\\n' 0; sleep 1",
+            MAX_RPC_FRAME_BYTES + 10
+        ))
+        .await;
+        assert_eq!(frames.len(), 1);
+        assert!(failure.is_some_and(|error| Err(error) == frames[0]));
     }
 
     #[cfg(unix)]

@@ -1419,6 +1419,7 @@
                     {repoPath}
                     {baseBranch}
                     visible={!activePluginId}
+                    focused={isFocusedLeaf}
                     sessionId={sessionId}
                     onEditFile={(filePath) => openFile(sessionId, filePath)}
                     onFileChange={(name) => workspaceLayout.setTabTitle(tabEntry.ptyKey, name)}

@@ -10,8 +10,8 @@ export class ProviderChoice {
   selected = $state("");
   readonly keys: string[];
   readonly key: string;
-  readonly runtimeProvider: RuntimeProvider | null;
-  readonly autoApproveSupported: boolean;
+  /** Why auto-approve is off for this provider, or `undefined` when it can be used. */
+  readonly autoApproveBlocked: string | undefined;
   readonly #runtimeProviders: () => RuntimeProvider[];
 
   constructor(runtimeProviders: () => RuntimeProvider[]) {
@@ -21,12 +21,17 @@ export class ProviderChoice {
       ...runtimeProviders().map((provider) => provider.key),
     ]);
     this.key = $derived(this.selected || getSettings().default_provider);
-    this.runtimeProvider = $derived(
-      runtimeProviders().find((provider) => provider.key === this.key) ?? null,
-    );
-    this.autoApproveSupported = $derived(
-      !this.runtimeProvider || supportsYolo(this.runtimeProvider.provider),
-    );
+    this.autoApproveBlocked = $derived.by(() => {
+      const chosen = runtimeProviders().find((provider) => provider.key === this.key);
+      return chosen && !supportsYolo(chosen.provider)
+        ? `${chosen.provider.label} does not support auto-approve`
+        : undefined;
+    });
+  }
+
+  /** Auto-approve as the session gets it: the user's choice, when the provider supports it. */
+  autoApprove(requested: boolean): boolean {
+    return requested && !this.autoApproveBlocked;
   }
 
   label(key: string): string {

@@ -15,6 +15,32 @@ pub const HANDBACK: &str = "provider.session.handback";
 pub const EVENT_NOTIFICATION: &str = "host.session.event";
 pub const STATUS_NOTIFICATION: &str = "host.session.status";
 
+/// The provider notification a JSON-RPC frame carries, if it is one: no `id`, JSON-RPC 2.0,
+/// and a session event or status method. Callbacks and responses carry an `id`.
+pub fn provider_notification_method(
+    frame: &serde_json::Map<String, Value>,
+) -> Option<&'static str> {
+    if frame.contains_key("id") || frame.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return None;
+    }
+    match frame.get("method")?.as_str()? {
+        EVENT_NOTIFICATION => Some(EVENT_NOTIFICATION),
+        STATUS_NOTIFICATION => Some(STATUS_NOTIFICATION),
+        _ => None,
+    }
+}
+
+/// Plugin provider keys are `<plugin id>:<provider id>`; plugin and provider ids never contain `:`.
+pub fn parse_provider_key(key: &str) -> Option<(&str, &str)> {
+    let (plugin_id, provider_id) = key.split_once(':')?;
+    (!plugin_id.is_empty() && !provider_id.is_empty()).then_some((plugin_id, provider_id))
+}
+
+/// Keys with `:` belong to plugin providers, so a configured provider cannot take one.
+pub fn is_reserved_provider_key(key: &str) -> bool {
+    key.contains(':')
+}
+
 /// Prompts must fit one JSON-RPC frame, as JSON-escaped text, with room for the envelope.
 pub const MAX_PROMPT_BYTES: usize = 48 * 1024;
 
@@ -101,6 +127,22 @@ pub fn is_host_controlled_method(method: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_keys_split_plugin_and_provider() {
+        assert_eq!(
+            parse_provider_key("claude-chat:claude"),
+            Some(("claude-chat", "claude"))
+        );
+        for key in ["claude", ":claude", "plugin:"] {
+            assert_eq!(parse_provider_key(key), None, "{key}");
+        }
+        // Every key routed to a plugin is one configured providers cannot take.
+        for key in ["claude-chat:claude", ":claude", "plugin:"] {
+            assert!(is_reserved_provider_key(key), "{key}");
+        }
+        assert!(!is_reserved_provider_key("claude"));
+    }
 
     #[test]
     fn prompts_must_fit_one_frame() {

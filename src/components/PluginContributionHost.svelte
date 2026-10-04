@@ -12,10 +12,10 @@
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import { focusSidebar } from "../lib/focus.svelte";
   import { PROVIDER_FRAME_ATTRIBUTE } from "../lib/terminal-focus";
-  import { hostKeyReplay, isTextEditingChord } from "../lib/plugin-shortcuts";
+  import { hostKeyReplay, isTextEditingChord, shouldForwardHostChord } from "../lib/plugin-shortcuts";
   import { isDark } from "../lib/settings.svelte";
   import type { PluginInventory, PluginUiContribution } from "../lib/types";
-  import { serveSessionRequest, type ProviderSessionBridge } from "../lib/provider-session-bridge";
+  import { isSessionRequest, serveSessionRequest, type ProviderSessionBridge } from "../lib/provider-session-bridge";
 
   interface Props {
     plugin: PluginInventory;
@@ -310,8 +310,6 @@
         addEventListener("keydown", forwardSidebarKeydown);
         // App chords never reach the host window from this frame, so it replays them there.
         // A plugin claims a chord with preventDefault, except the host-reserved Ctrl+Tab and Mod+N.
-        const isReservedChord = (event) =>
-          (event.ctrlKey && event.key === "Tab") || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n");
         const sendHostKey = (event) => {
           send({
             type: "host-key",
@@ -326,12 +324,9 @@
           });
         };
         const isTextEditingChord = ${isTextEditingChord.toString()};
+        const shouldForwardHostChord = ${shouldForwardHostChord.toString()};
         const forwardHostChord = (event) => {
-          if (event.isComposing || !(event.metaKey || event.ctrlKey)) return;
-          // A text field's own chords, such as Mod+Shift+Arrow selection, stay with it.
-          if (isEditableTarget(event.target) && isTextEditingChord(event)) return;
-          if (event.defaultPrevented && !isReservedChord(event)) return;
-          sendHostKey(event);
+          if (shouldForwardHostChord(event, isEditableTarget(event.target), isTextEditingChord)) sendHostKey(event);
         };
         // The tab switcher commits when its modifier is released.
         const forwardModifierRelease = (event) => {
@@ -493,7 +488,6 @@
         if (autofocus) focusFrame();
         return;
       }
-      const sessionRequest = serveSessionRequest(bridge, message);
       if (message.type === "focused-agent-session") {
         respond(message.requestId, true, getFocusedAgentSession() ?? null);
       } else if (message.type === "call" && typeof message.method === "string") {
@@ -530,8 +524,8 @@
       } else if (message.type === "host-key") {
         const replay = hostKeyReplay(message);
         if (replay && root.activeElement === frame) window.dispatchEvent(replay);
-      } else if (sessionRequest) {
-        void sessionRequest
+      } else if (isSessionRequest(message.type)) {
+        void serveSessionRequest(bridge, message)
           .then(() => respond(message.requestId, true, null))
           .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "data-changed") {

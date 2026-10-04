@@ -24,6 +24,8 @@
     repoPath: string;
     baseBranch: string;
     visible: boolean;
+    /** Its pane owns the keyboard; window-level shortcuts apply only then. */
+    focused: boolean;
     sessionId: string;
     onEditFile?: (filePath: string) => void;
     onFileChange?: (fileName: string) => void;
@@ -31,7 +33,7 @@
     onSend: (text: string) => Promise<void>;
   }
 
-  let { repoPath, baseBranch, visible, sessionId, onEditFile, onFileChange, onSend }: Props = $props();
+  let { repoPath, baseBranch, visible, focused, sessionId, onEditFile, onFileChange, onSend }: Props = $props();
   let files = $state<ChangedFile[]>([]);
   let selectedIndex = $state(0);
   let loading = $state(true);
@@ -402,7 +404,7 @@
   }
 
   function handleKeydown(e: KeyboardEvent): void {
-    if (!visible || getActiveZone() !== "terminal") return;
+    if (!visible || !focused || e.defaultPrevented || getActiveZone() !== "terminal") return;
     const element = document.activeElement;
     if (element?.closest("[role='dialog'], [role='alertdialog'], [role='combobox'], dialog[open]")) return;
     if (e.key === "Enter" && e.metaKey) { e.preventDefault(); void sendFeedback(); return; }

@@ -207,7 +207,7 @@
       { key: "m", toggle: onCreateTask },
       { key: "s", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='name'] input") ?? null },
       { key: "w", toggle: () => { useWorktree = !useWorktree; } },
-      { key: "a", toggle: () => { if (providers.autoApproveSupported) autoApprove = !autoApprove; } },
+      { key: "a", toggle: () => { if (!providers.autoApproveBlocked) autoApprove = !autoApprove; } },
       { key: "p", toggle: () => providers.cycle(1), shiftToggle: () => providers.cycle(-1) },
       { key: "b", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
       { key: "n", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='branch'] input") ?? null },
@@ -241,7 +241,7 @@
         const { session, warning } = await sessionsApi.launch({
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch: worktreeBranch, isNewBranch: true,
-          name: sessionName, useWorktree: true, baseBranch, autoApprove: autoApprove && providers.autoApproveSupported,
+          name: sessionName, useWorktree: true, baseBranch, autoApprove: providers.autoApprove(autoApprove),
           provider: providers.key,
           taskKey: taskKeyParam, taskProjectId: taskProjectIdParam, taskPrompt: taskPromptParam,
         });
@@ -254,7 +254,7 @@
         const { session, warning } = await sessionsApi.launch({
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch, isNewBranch, name: sessionName,
-          useWorktree: false, baseBranch: isNewBranch ? baseBranch : null, autoApprove: autoApprove && providers.autoApproveSupported,
+          useWorktree: false, baseBranch: isNewBranch ? baseBranch : null, autoApprove: providers.autoApprove(autoApprove),
           provider: providers.key,
           taskKey: taskKeyParam, taskProjectId: taskProjectIdParam, taskPrompt: taskPromptParam,
         });
@@ -324,7 +324,7 @@
     <div class="flex items-center gap-4">
       <Checkbox id="use-worktree" label="Worktree" bind:checked={useWorktree} tabindex={-1} />
       <span class="font-mono text-[10px] px-1 rounded {badge}">W</span>
-      <Checkbox id="auto-approve" label="Auto-approve" bind:checked={() => autoApprove && providers.autoApproveSupported, (value) => (autoApprove = value)} disabled={!providers.autoApproveSupported} title={providers.autoApproveSupported ? undefined : `${providers.label(providers.key)} does not support auto-approve`} tabindex={-1} />
+      <Checkbox id="auto-approve" label="Auto-approve" bind:checked={() => providers.autoApprove(autoApprove), (value) => (autoApprove = value)} disabled={!!providers.autoApproveBlocked} title={providers.autoApproveBlocked} tabindex={-1} />
       <span class="font-mono text-[10px] px-1 rounded {badge}">A</span>
     </div>
     {#if providers.keys.length > 1}

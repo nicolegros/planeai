@@ -189,7 +189,7 @@
       ...(startSession ? [
         { key: "p", toggle: () => providers.cycle(1), shiftToggle: () => providers.cycle(-1) },
         { key: "w", toggle: () => { useWorktree = !useWorktree; } },
-        { key: "y", toggle: () => { if (providers.autoApproveSupported) autoApprove = !autoApprove; } },
+        { key: "y", toggle: () => { if (!providers.autoApproveBlocked) autoApprove = !autoApprove; } },
         { key: "n", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='session-branch'] input") ?? null },
         { key: "i", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='session-prompt'] textarea") ?? null },
       ] : []),
@@ -262,7 +262,7 @@
               name,
               useWorktree,
               baseBranch: isNewBranch ? formBaseBranch : null,
-              autoApprove: autoApprove && providers.autoApproveSupported,
+              autoApprove: providers.autoApprove(autoApprove),
               provider,
               taskKey: createdTask.key,
               taskProjectId: null,
@@ -430,7 +430,7 @@
           <div class="flex items-center gap-4 pl-3">
             <Checkbox id="use-worktree" label="Worktree" bind:checked={useWorktree} tabindex={-1} />
             <span class="font-mono text-[10px] px-1 rounded {badge}">W</span>
-            <Checkbox id="auto-approve" label="Auto-approve" bind:checked={() => autoApprove && providers.autoApproveSupported, (value) => (autoApprove = value)} disabled={!providers.autoApproveSupported} title={providers.autoApproveSupported ? undefined : `${providers.label(providers.key)} does not support auto-approve`} tabindex={-1} />
+            <Checkbox id="auto-approve" label="Auto-approve" bind:checked={() => providers.autoApprove(autoApprove), (value) => (autoApprove = value)} disabled={!!providers.autoApproveBlocked} title={providers.autoApproveBlocked} tabindex={-1} />
             <span class="font-mono text-[10px] px-1 rounded {badge}">Y</span>
           </div>
 

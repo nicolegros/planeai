@@ -1145,6 +1145,7 @@ fn broken_config_falls_back_to_existing_user_behavior() {
 
 #[test]
 fn provider_keys_with_a_colon_are_reserved_for_plugins() {
+    // A hand-edited config still loads unchanged, so nothing the user wrote is lost.
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("config.json"),
@@ -1152,21 +1153,10 @@ fn provider_keys_with_a_colon_are_reserved_for_plugins() {
     )
     .unwrap();
     let (config, warnings) = load(dir.path());
-    assert!(!config.providers.contains_key("team:claude"));
-    assert_eq!(warnings.len(), 1, "{warnings:?}");
-    assert!(warnings[0].contains("team:claude"));
-    // The rest of the config still loads.
-    assert_ne!(
-        config.editor.map(|editor| editor.mode).as_deref(),
-        Some(INVALID_EDITOR_MODE)
-    );
-
-    let mut saved = Config::default();
-    saved.providers.insert(
-        "team:claude".into(),
-        saved.providers.values().next().unwrap().clone(),
-    );
-    assert!(validate(&saved)
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(config.providers.contains_key("team:claude"));
+    // Saving asks for it to be renamed first.
+    assert!(validate(&config)
         .unwrap_err()
         .contains("reserved for plugin providers"));
 }

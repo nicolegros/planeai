@@ -971,17 +971,11 @@ fn parse_frame(line: &str) -> Result<Frame> {
     if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
         bail!("malformed JSON-RPC output: expected jsonrpc 2.0");
     }
-    if !object.contains_key("id") {
-        if let Some(method) = object
-            .get("method")
-            .and_then(Value::as_str)
-            .filter(|method| matches!(*method, "host.session.event" | "host.session.status"))
-        {
-            return Ok(Frame::Notification {
-                method: method.to_owned(),
-                params: object.get("params").cloned(),
-            });
-        }
+    if let Some(method) = protocol::provider_notification_method(object) {
+        return Ok(Frame::Notification {
+            method: method.to_owned(),
+            params: object.get("params").cloned(),
+        });
     }
     let id = valid_id(object.get("id"))?;
     if let Some(method) = object.get("method") {

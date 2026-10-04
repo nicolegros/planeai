@@ -49,6 +49,29 @@ export function isTextEditingChord(
   );
 }
 
+type ChordEvent = Pick<
+  KeyboardEvent,
+  "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey" | "isComposing" | "defaultPrevented"
+>;
+
+/**
+ * Whether a plugin frame forwards a keydown to PlaneAI: Mod chords the frame did not handle,
+ * except a text field's own, and PlaneAI's tab switcher and new-item chords even when it did.
+ * Plugin frames inline this function's source, so it must not reference anything outside itself.
+ */
+export function shouldForwardHostChord(
+  event: ChordEvent,
+  editableTarget: boolean,
+  isTextEditingChord: (event: ChordEvent) => boolean,
+): boolean {
+  if (event.isComposing || !(event.metaKey || event.ctrlKey)) return false;
+  if (editableTarget && isTextEditingChord(event)) return false;
+  const reserved =
+    (event.ctrlKey && event.key === "Tab") ||
+    ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n");
+  return !event.defaultPrevented || reserved;
+}
+
 /**
  * The key event to replay for a frame's `host-key` message, or `null` when it may not be
  * replayed. The frame's own script can post anything, so only chords and their modifier

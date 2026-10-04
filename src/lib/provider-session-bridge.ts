@@ -66,17 +66,16 @@ const SESSION_REQUESTS: Record<
   "session-handback": { refusal: HANDOFF_REFUSED, run: (bridge) => bridge.handback?.() },
 };
 
-/**
- * Serve a frame's session request from its bridge, if it has one; `null` when the message is
- * not a session request. Frames can post anything, so only the table's own keys match.
- */
+/** Frames can post anything, so only the table's own keys are session requests. */
+export function isSessionRequest(type: unknown): type is string {
+  return typeof type === "string" && Object.hasOwn(SESSION_REQUESTS, type);
+}
+
+/** Serve a frame's session request from its bridge; refused when it has none. */
 export function serveSessionRequest(
   bridge: ProviderSessionBridge | undefined,
-  message: { type?: unknown; text?: unknown },
-): Promise<void> | null {
-  if (typeof message.type !== "string" || !Object.hasOwn(SESSION_REQUESTS, message.type)) {
-    return null;
-  }
+  message: { type: string; text?: unknown },
+): Promise<void> {
   const request = SESSION_REQUESTS[message.type];
   return (bridge && request.run(bridge, message)) ?? Promise.reject(request.refusal);
 }

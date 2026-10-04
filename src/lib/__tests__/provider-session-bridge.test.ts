@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("../api", () => ({ plugins: {}, providerSessions: {} }));
 
-import { serveSessionRequest, type ProviderSessionBridge } from "../provider-session-bridge";
+import {
+  isSessionRequest,
+  serveSessionRequest,
+  type ProviderSessionBridge,
+} from "../provider-session-bridge";
 
 function bridge(overrides: Partial<ProviderSessionBridge> = {}): ProviderSessionBridge {
   return {
@@ -16,10 +20,11 @@ function bridge(overrides: Partial<ProviderSessionBridge> = {}): ProviderSession
 }
 
 describe("serveSessionRequest", () => {
-  it("ignores messages that are not session requests, including inherited keys", () => {
+  it("recognizes only session requests, never inherited keys", () => {
     for (const type of ["data-changed", "toString", "constructor", "__proto__", 7, undefined]) {
-      expect(serveSessionRequest(bridge(), { type })).toBeNull();
+      expect(isSessionRequest(type)).toBe(false);
     }
+    expect(isSessionRequest("session-send")).toBe(true);
   });
 
   it("serves the session's controls from its bridge", async () => {

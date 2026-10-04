@@ -25,4 +25,11 @@ describe("ReviewTab nested diff sidebar keyboard contract", () => {
       'if ((e.key === "p" && e.ctrlKey) || (e.key === "ArrowUp" && e.ctrlKey))',
     );
   });
+
+  it("leaves window shortcuts to the pane that owns the keyboard", () => {
+    // A chord replayed from another pane's plugin frame must not send this tab's feedback.
+    expect(reviewTabSource).toContain(
+      'if (!visible || !focused || e.defaultPrevented || getActiveZone() !== "terminal") return;',
+    );
+  });
 });

@@ -595,8 +595,7 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         backfill_provider_defaults(&mut config);
         config.onboarding_completed.get_or_insert(true);
         let migrated = migrate_autonomous_prompt_template(&mut config);
-        let warnings = remove_reserved_provider_keys(&mut config);
-        if let Err(error) = validate(&config) {
+        if let Some(Err(error)) = config.editor.as_ref().map(validate_editor_config) {
             config.editor = Some(invalid_editor_config());
             return (config, vec![format!("Invalid config.json: {error}")]);
         }
@@ -604,7 +603,7 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
             // Persist the migration so the file reflects the new structure
             save(config_dir, &config).ok();
         }
-        return (config, warnings);
+        return (config, vec![]);
     }
     let config = Config {
         onboarding_completed: Some(false),
@@ -831,39 +830,15 @@ pub fn validate(config: &Config) -> Result<(), String> {
     if let Some(editor) = &config.editor {
         validate_editor_config(editor)?;
     }
+    // Sessions using such a key are routed to a plugin, never to this provider.
     if let Some(key) = config
         .providers
         .keys()
-        .find(|key| is_reserved_provider_key(key))
+        .find(|key| planeai_plugin_contract::provider::is_reserved_provider_key(key))
     {
-        return Err(reserved_provider_key_error(key));
+        return Err(format!(
+            "Provider \"{key}\" cannot contain \":\", which is reserved for plugin providers"
+        ));
     }
     Ok(())
-}
-
-/// Keys with `:` name plugin providers (`<plugin id>:<provider id>`), so sessions using
-/// one are routed to the plugin; a configured provider cannot take such a key.
-fn is_reserved_provider_key(key: &str) -> bool {
-    key.contains(':')
-}
-
-fn reserved_provider_key_error(key: &str) -> String {
-    format!("Provider \"{key}\" cannot contain \":\", which is reserved for plugin providers")
-}
-
-/// Drops configured providers with a reserved key, so the rest of the config still loads.
-fn remove_reserved_provider_keys(config: &mut Config) -> Vec<String> {
-    let reserved: Vec<String> = config
-        .providers
-        .keys()
-        .filter(|key| is_reserved_provider_key(key))
-        .cloned()
-        .collect();
-    reserved
-        .into_iter()
-        .map(|key| {
-            config.providers.remove(&key);
-            format!("Ignored provider: {}", reserved_provider_key_error(&key))
-        })
-        .collect()
 }

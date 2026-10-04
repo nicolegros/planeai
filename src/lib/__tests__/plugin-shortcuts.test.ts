@@ -4,6 +4,7 @@ import {
   findPluginShortcut,
   hostKeyReplay,
   isTextEditingChord,
+  shouldForwardHostChord,
   type PluginShortcutTarget,
 } from "../plugin-shortcuts";
 
@@ -160,5 +161,32 @@ describe("hostKeyReplay", () => {
     expect(hostKeyReplay({ phase: "keyup", key: "a", metaKey: true })).toBeNull();
     expect(hostKeyReplay({ phase: "keypress", key: "n", metaKey: true })).toBeNull();
     expect(hostKeyReplay({ phase: "keydown", key: "n", metaKey: "yes" })).toBeNull();
+  });
+});
+
+describe("shouldForwardHostChord", () => {
+  const chord = (init: KeyboardEventInit, handled = false) => {
+    const event = new KeyboardEvent("keydown", { cancelable: true, ...init });
+    if (handled) event.preventDefault();
+    return event;
+  };
+  const forwards = (event: KeyboardEvent, editable = false) =>
+    shouldForwardHostChord(event, editable, isTextEditingChord);
+
+  it("forwards Mod chords the frame leaves alone, never plain typing", () => {
+    expect(forwards(chord({ key: "k", [modKey]: true }))).toBe(true);
+    expect(forwards(chord({ key: "k" }))).toBe(false);
+    expect(forwards(chord({ key: "k", [modKey]: true, isComposing: true }))).toBe(false);
+  });
+
+  it("keeps a text field's own chords in the field", () => {
+    expect(forwards(chord({ key: "ArrowLeft", [modKey]: true, shiftKey: true }), true)).toBe(false);
+    expect(forwards(chord({ key: "ArrowLeft", [modKey]: true, shiftKey: true }))).toBe(true);
+  });
+
+  it("forwards PlaneAI's tab switcher and new-item chords even when the frame handled them", () => {
+    expect(forwards(chord({ key: "k", [modKey]: true }, true))).toBe(false);
+    expect(forwards(chord({ key: "Tab", ctrlKey: true }, true))).toBe(true);
+    expect(forwards(chord({ key: "N", metaKey: true }, true))).toBe(true);
   });
 });
