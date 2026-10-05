@@ -141,17 +141,12 @@ pub fn remove_for_workspace(
     )
 }
 
-/// Drop records whose pane is no longer on the daemon.
-///
-/// Returns the session ids that lost at least one resource, so the caller can
-/// reconcile their status.
-pub fn prune_missing(
-    conn: &Connection,
-    live_pane_ids: &std::collections::HashSet<u32>,
-) -> rusqlite::Result<Vec<String>> {
+/// Every recorded resource. A prune reads them before listing live panes, so it never sees a
+/// row written after that listing, as by a launch racing it.
+pub fn list_all(conn: &Connection) -> rusqlite::Result<Vec<ResourceRecord>> {
     let mut statement =
         conn.prepare("SELECT pty_key, session_id, workspace_key, pane_id FROM rmux_resources")?;
-    let records: Vec<ResourceRecord> = statement
+    let records = statement
         .query_map([], |row| {
             Ok(ResourceRecord {
                 pty_key: row.get(0)?,
@@ -160,17 +155,31 @@ pub fn prune_missing(
                 pane_id: row.get::<_, i64>(3)? as u32,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(statement);
+        .collect();
+    records
+}
 
+/// Drop records whose pane is no longer on the daemon.
+///
+/// Returns the session ids that lost at least one resource, so the caller can
+/// reconcile their status.
+pub fn prune_missing(
+    conn: &Connection,
+    records: &[ResourceRecord],
+    live_pane_ids: &std::collections::HashSet<u32>,
+) -> rusqlite::Result<Vec<String>> {
     let mut affected = Vec::new();
     for record in records {
         if live_pane_ids.contains(&record.pane_id) {
             continue;
         }
-        remove(conn, &record.pty_key)?;
+        // Only as read: a resource recorded again meanwhile names a pane of its own.
+        conn.execute(
+            "DELETE FROM rmux_resources WHERE pty_key = ?1 AND pane_id = ?2",
+            params![record.pty_key, record.pane_id],
+        )?;
         if !affected.contains(&record.session_id) {
-            affected.push(record.session_id);
+            affected.push(record.session_id.clone());
         }
     }
     Ok(affected)
@@ -428,11 +437,48 @@ mod tests {
 
         // Only pane 1 is still on the daemon.
         let live = std::collections::HashSet::from([1u32]);
-        let affected = prune_missing(&conn, &live).unwrap();
+        let affected = prune_missing(&conn, &list_all(&conn).unwrap(), &live).unwrap();
 
         assert_eq!(affected, vec!["session-b".to_string()]);
         assert!(get(&conn, "session-a").unwrap().is_some());
         assert!(get(&conn, "session-b").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_resource_recorded_after_the_listing_is_kept() {
+        let conn = setup();
+        put(
+            &conn,
+            "session-a:1",
+            "session-a",
+            &workspace(),
+            ResourceHandle::from_u32(1),
+        )
+        .unwrap();
+        let recorded = list_all(&conn).unwrap();
+        // A launch records a pane the listing below did not see, and another key's pane moves.
+        put(
+            &conn,
+            "session-b",
+            "session-b",
+            &workspace(),
+            ResourceHandle::from_u32(7),
+        )
+        .unwrap();
+        put(
+            &conn,
+            "session-a:1",
+            "session-a",
+            &workspace(),
+            ResourceHandle::from_u32(8),
+        )
+        .unwrap();
+
+        let affected = prune_missing(&conn, &recorded, &std::collections::HashSet::new()).unwrap();
+
+        assert_eq!(affected, vec!["session-a".to_string()]);
+        assert_eq!(get(&conn, "session-b").unwrap().unwrap().pane_id, 7);
+        assert_eq!(get(&conn, "session-a:1").unwrap().unwrap().pane_id, 8);
     }
 
     #[test]
@@ -455,7 +501,12 @@ mod tests {
         )
         .unwrap();
 
-        let affected = prune_missing(&conn, &std::collections::HashSet::new()).unwrap();
+        let affected = prune_missing(
+            &conn,
+            &list_all(&conn).unwrap(),
+            &std::collections::HashSet::new(),
+        )
+        .unwrap();
 
         // Both resources belong to one session, which must be reported once.
         assert_eq!(affected, vec!["session-a".to_string()]);

@@ -192,8 +192,8 @@ pub fn reconcile_rmux_sessions(conn: &rusqlite::Connection) {
                     }
                 }
             }
-            // Without knowing which panes live, a sweep would take every recorded pane for
-            // an orphan: skipped until the next start.
+            // The daemon could not be read, so the sweep could not either: skipped until the
+            // next start.
             Err(error) => {
                 tracing::warn!(%error, "could not reconcile rmux resources");
                 return;

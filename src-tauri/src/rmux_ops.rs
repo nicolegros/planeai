@@ -279,7 +279,8 @@ pub fn delete_workspace(project_id: &str, task_key: &str) -> Result<(), String> 
     tracing::info!(
         task_key,
         forgotten,
-        killed = matches!(kill, Ok(Some(()))),
+        // `Ok(None)`: no daemon runs, or it stopped with this, its last workspace.
+        killed = ?kill,
         "removed task workspace"
     );
     Ok(())
@@ -287,11 +288,27 @@ pub fn delete_workspace(project_id: &str, task_key: &str) -> Result<(), String> 
 
 /// Drop recorded panes the daemon no longer has, returning affected sessions.
 pub fn prune_dead_resources(conn: &Connection) -> Result<Vec<String>, String> {
-    // The caller owns the connection here because it also reconciles session rows. Only no
-    // daemon running means nothing is live: a daemon that could not answer prunes nothing.
-    let live = blocking_existing(|client| async move { client.live_pane_ids().await })?
-        .unwrap_or_default();
-    crate::rmux_resources::prune_missing(conn, &live).map_err(|error| error.to_string())
+    // The caller owns the connection here because it also reconciles session rows. Records are
+    // read first: one written after the listing names a pane the listing could not see.
+    let recorded = crate::rmux_resources::list_all(conn).map_err(|error| error.to_string())?;
+    let listed = blocking_existing(|client| async move { client.live_pane_ids().await });
+    let live = live_for_prune(listed, || {
+        blocking_existing(|_| async { Ok(()) }).map(|daemon| daemon.is_some())
+    })?;
+    crate::rmux_resources::prune_missing(conn, &recorded, &live).map_err(|error| error.to_string())
+}
+
+/// The panes a prune keeps records for. Only no daemon listening means none is live: a daemon
+/// that could not answer, or dropped the listing while it still runs, prunes nothing.
+fn live_for_prune(
+    listed: Result<Option<std::collections::HashSet<u32>>, String>,
+    daemon_listens: impl FnOnce() -> Result<bool, String>,
+) -> Result<std::collections::HashSet<u32>, String> {
+    match listed? {
+        Some(live) => Ok(live),
+        None if daemon_listens()? => Err("the rmux daemon dropped the pane listing".to_string()),
+        None => Ok(Default::default()),
+    }
 }
 
 /// Live panes PlaneAI has no session for, as a proposal rather than an action.
@@ -434,6 +451,23 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_prune_takes_nothing_for_live_only_when_no_daemon_listens() {
+        let listed = std::collections::HashSet::from([3, 5]);
+        assert_eq!(
+            live_for_prune(Ok(Some(listed.clone())), || unreachable!()),
+            Ok(listed)
+        );
+        assert_eq!(
+            live_for_prune(Ok(None), || Ok(false)),
+            Ok(Default::default())
+        );
+        // A daemon that could not answer, or dropped the listing while it runs, prunes nothing.
+        assert!(live_for_prune(Err("timed out".into()), || unreachable!()).is_err());
+        assert!(live_for_prune(Ok(None), || Ok(true)).is_err());
+        assert!(live_for_prune(Ok(None), || Err("busy".into())).is_err());
+    }
     use std::cell::Cell;
 
     #[test]
