@@ -16,9 +16,9 @@ import type {
   LoopRunSummary,
   LoopRunDetail,
   RecipeSummary,
+  TabSpec,
 } from "./types";
 import type { AppConfig } from "./settings.svelte";
-import type { TabCommand } from "./terminal-view";
 
 export interface LaunchSessionParams {
   projectId: string;
@@ -83,27 +83,23 @@ export const pty = {
     invoke<boolean>("write_to_pty", { sessionId, data }),
   attach: (sessionId: string, darkMode: boolean, onData: Channel<ArrayBuffer>) =>
     invoke("attach_session", { sessionId, darkMode, onData }),
-  spawnTab: (
+  /** Reserve a terminal tab running `spec`; resolves its index, never one the session had. */
+  openTab: (sessionId: string, spec: TabSpec) => invoke<number>("open_tab", { sessionId, spec }),
+  /** Start a terminal tab, or connect to the process already running it; false when it ended instead. */
+  attachTab: (
     sessionId: string,
     tabIndex: number,
     darkMode: boolean,
     onData: Channel<ArrayBuffer>,
-    initialCommand?: TabCommand,
-  ) =>
-    invoke("spawn_tab", {
-      sessionId,
-      tabIndex,
-      darkMode,
-      // A program and its arguments run without a shell, so none of them is parsed.
-      initialCommand: typeof initialCommand === "string" ? initialCommand : undefined,
-      initialArgv: typeof initialCommand === "string" ? undefined : initialCommand,
-      onData,
-    }),
+  ) => invoke<boolean>("attach_tab", { sessionId, tabIndex, darkMode, onData }),
   resize: (sessionId: string, rows: number, cols: number) =>
     invoke("resize_pty", { sessionId, rows, cols }),
   pause: (sessionId: string) => invoke("pause_pty", { sessionId }),
   resume: (sessionId: string) => invoke("resume_pty", { sessionId }),
+  /** Close a terminal tab; rejects, leaving it live, when its process could not be ended. */
   closeTab: (sessionId: string, tabIndex: number) => invoke("close_tab", { sessionId, tabIndex }),
+  /** The terminal tabs among `ptyKeys` that ended. */
+  endedTabs: (ptyKeys: string[]) => invoke<string[]>("ended_tabs", { ptyKeys }),
   /** Whether the tab still runs its program, such as a provider handoff's TUI. */
   isProgramRunning: (ptyKey: string) => invoke<boolean>("is_program_running", { ptyKey }),
 };

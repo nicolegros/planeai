@@ -91,6 +91,69 @@ where
     with_retry_for(None, operation).await
 }
 
+/// As [`with_retry`], connecting afresh rather than through the shared client: for callers on
+/// a runtime of their own, whose connection dies with it and must not be cached.
+pub async fn with_fresh<T, Operation, Fut>(operation: Operation) -> Result<T, String>
+where
+    Operation: Fn(Arc<RmuxClient>) -> Fut,
+    Fut: std::future::Future<Output = planeai_rmux::Result<T>>,
+{
+    let connect = || async {
+        RmuxClient::connect(config(None))
+            .await
+            .map(Arc::new)
+            .map_err(|error| error.to_string())
+    };
+    match operation(connect().await?).await {
+        Ok(value) => Ok(value),
+        Err(error) if error.is_daemon_gone() => {
+            tracing::info!(%error, "rmux transport was gone; reconnecting and retrying once");
+            operation(connect().await?)
+                .await
+                .map_err(|error| error.to_string())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Run a lookup or teardown against a daemon already running, never starting one: `None` when
+/// none runs, which hosts nothing. Each call connects afresh: a cached client may be dead.
+/// Closing the last pane stops the daemon mid-reply, so a lost connection after which no daemon
+/// listens means everything is gone, not that the operation failed.
+pub async fn with_existing<T, Operation, Fut>(operation: Operation) -> Result<Option<T>, String>
+where
+    Operation: Fn(Arc<RmuxClient>) -> Fut,
+    Fut: std::future::Future<Output = planeai_rmux::Result<T>>,
+{
+    let connect = || async {
+        RmuxClient::connect_existing(config(None))
+            .await
+            .map_err(|error| error.to_string())
+    };
+    let Some(client) = connect().await? else {
+        return Ok(None);
+    };
+    let error = match operation(Arc::new(client)).await {
+        Ok(value) => return Ok(Some(value)),
+        Err(error) if error.is_daemon_gone() => error,
+        Err(error) => return Err(error.to_string()),
+    };
+    tracing::info!(%error, "rmux transport was gone; reconnecting and retrying once");
+    let Some(client) = connect().await? else {
+        return Ok(None);
+    };
+    match operation(Arc::new(client)).await {
+        Ok(value) => Ok(Some(value)),
+        // Lost twice on fresh connections: a daemon shutting down still accepts them. A timeout
+        // is not: the daemon may be slow, but it runs.
+        Err(error) if error.is_connection_lost() => {
+            tracing::info!(%error, "rmux daemon is going away; nothing is left to act on");
+            Ok(None)
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 /// As [`with_retry`], preferring a bundled sidecar resolved from `app`.
 pub async fn with_retry_for<T, Operation, Fut>(
     app: Option<&tauri::AppHandle>,

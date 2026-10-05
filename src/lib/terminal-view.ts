@@ -45,13 +45,9 @@ export interface TerminalSurface {
   dispose(): void;
 }
 
-/** What a shell tab runs first: a command line for the shell, or a program and its arguments. */
-export type TabCommand = string | readonly string[];
-
 export interface TerminalConnectRequest {
   ptyKey: string;
   kind: TerminalKind;
-  initialCommand?: TabCommand;
 }
 
 export interface TerminalPty {
@@ -81,7 +77,6 @@ export interface GeometryHint {
 export interface TerminalViewOptions {
   ptyKey: string;
   kind: TerminalKind;
-  initialCommand?: TabCommand;
   pty: TerminalPty;
   createSurface: (handlers: TerminalSurfaceHandlers) => TerminalSurface;
   geometryHint?: GeometryHint;
@@ -260,9 +255,7 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
     };
     connection = attempt;
     pty
-      .connect({ ptyKey, kind, initialCommand: options.initialCommand }, (data) =>
-        receive(attempt, data),
-      )
+      .connect({ ptyKey, kind }, (data) => receive(attempt, data))
       .then(() => {
         if (attempt !== connection || phase === "disposed") return;
         attempt.status = "live";

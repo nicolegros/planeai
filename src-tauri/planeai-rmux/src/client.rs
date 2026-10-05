@@ -15,7 +15,7 @@ use rmux_sdk::{
 };
 
 use crate::config::{Endpoint, RmuxConfig};
-use crate::error::{Error, Result};
+use crate::error::{means_pane_gone, Error, Result};
 use crate::naming::{self, WorkspaceName};
 
 /// How much scrollback an AXI read considers. Matches the tmux backend's window.
@@ -146,6 +146,38 @@ impl RmuxClient {
         })
     }
 
+    /// Connect to a daemon already running, never starting one: `None` when none listens,
+    /// which hosts nothing. For lookups and teardown, which only need to learn that.
+    pub async fn connect_existing(config: RmuxConfig) -> Result<Option<Self>> {
+        // A missing pipe would otherwise be waited for until the connect times out.
+        #[cfg(windows)]
+        if pipe_missing(&config) {
+            return Ok(None);
+        }
+        let builder = match config.endpoint() {
+            Endpoint::UnixSocket(path) => Rmux::builder().unix_socket(path.clone()),
+            Endpoint::WindowsPipe(pipe) => Rmux::builder().windows_pipe(pipe.clone()),
+        };
+        match builder.connect().await {
+            Ok(rmux) => Ok(Some(Self { rmux, config })),
+            Err(rmux_sdk::RmuxError::Transport { source, .. })
+                if matches!(
+                    source.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                Ok(None)
+            }
+            // A daemon stopping while the connect retried: its pipe is gone now.
+            #[cfg(windows)]
+            Err(_) if pipe_missing(&config) => Ok(None),
+            Err(source) => Err(Error::DaemonUnavailable {
+                endpoint: config.label(),
+                source,
+            }),
+        }
+    }
+
     async fn attempt_connect(
         config: &RmuxConfig,
     ) -> std::result::Result<Rmux, rmux_sdk::RmuxError> {
@@ -170,8 +202,9 @@ impl RmuxClient {
     /// correlation the retry adds a second pane and abandons the first, which is
     /// the orphan probe 5 produced (ADR-0012).
     ///
-    /// Costs one round trip per pane in the workspace, which is why it is on the
-    /// spawn path and not the hot path.
+    /// Terminal tabs also reconnect and close through it, never trusting a recorded pane
+    /// id. Costs one round trip per pane in the workspace. Fails rather than answer "none"
+    /// when a pane that may be this one could not be read, or the connection died.
     pub async fn find_resource(
         &self,
         workspace: &WorkspaceName,
@@ -186,8 +219,8 @@ impl RmuxClient {
                     source,
                 };
                 // No workspace means no resource, which is an answer rather than
-                // a failure: the caller is about to create it.
-                return if error.means_session_absent() {
+                // a failure. A dead connection is not: `with_retry` reconnects and asks again.
+                return if error.confirms_session_absent() {
                     Ok(None)
                 } else {
                     Err(error)
@@ -198,16 +231,26 @@ impl RmuxClient {
             return Ok(None);
         }
 
-        let session = self.session(&name).await?;
+        let session = match self.session(&name).await {
+            Ok(session) => session,
+            Err(error) if error.confirms_session_absent() => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        // Unreadable panes that may be this one.
+        let mut unread = None;
         for discovered in panes {
             // Resolve through the pane rather than a window index so no
             // assumption about index bases is baked in (ADR-0012 records that
             // rmux's own reference was wrong about this).
-            let Ok(pane) = session.pane_by_id(discovered.pane_id).await else {
-                continue;
-            };
-            let Ok(snapshot) = pane.info().await else {
-                continue;
+            let read = async { session.pane_by_id(discovered.pane_id).await?.info().await };
+            let snapshot = match read.await {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    if !means_pane_gone(&error) {
+                        unread = Some(error);
+                    }
+                    continue;
+                }
             };
             let names_this_resource = snapshot
                 .windows
@@ -219,7 +262,7 @@ impl RmuxClient {
                 }));
             }
         }
-        Ok(None)
+        unread.map_or(Ok(None), |source| Err(Error::sdk("read_pane")(source)))
     }
 
     /// Create a terminal resource, materialising its workspace if needed.
@@ -461,29 +504,22 @@ impl RmuxClient {
         handle: ResourceHandle,
     ) -> Result<()> {
         let name = self.workspace_name(workspace)?;
+        // Already gone is the desired end state, but only the daemon can say so: a dead
+        // connection fails, for `with_retry` to reconnect and ask again.
         let session = match self.session(&name).await {
             Ok(session) => session,
-            Err(error) if error.means_session_absent() => return Ok(()),
+            Err(error) if error.confirms_session_absent() => return Ok(()),
             Err(error) => return Err(error),
         };
         let pane = match session.pane_by_id(handle.pane_id).await {
             Ok(pane) => pane,
-            // Already gone is the desired end state.
-            Err(_) => return Ok(()),
+            Err(source) if means_pane_gone(&source) => return Ok(()),
+            Err(source) => return Err(Error::sdk("pane_by_id")(source)),
         };
         match pane.close().await {
             Ok(_) => Ok(()),
-            Err(source) => {
-                let error = Error::Sdk {
-                    operation: "close_pane",
-                    source,
-                };
-                if error.means_session_absent() {
-                    Ok(())
-                } else {
-                    Err(error)
-                }
-            }
+            Err(source) if means_pane_gone(&source) => Ok(()),
+            Err(source) => Err(Error::sdk("close_pane")(source)),
         }
     }
 
@@ -568,9 +604,9 @@ impl RmuxClient {
 
     /// Whether a workspace currently exists on the daemon.
     ///
-    /// A daemon that has exited hosts nothing, so an unreachable daemon answers
-    /// "no" rather than failing: removing the last workspace stops the daemon, and
-    /// callers asking this question want the state, not the transport detail.
+    /// An unreachable daemon answers "no" rather than failing, though it may hide a daemon still
+    /// running: removing the last workspace stops the daemon, and callers asking this question
+    /// want the state, not the transport detail.
     pub async fn workspace_exists(&self, workspace: &WorkspaceName) -> Result<bool> {
         let name = self.workspace_name(workspace)?;
         match self.rmux.find_sessions().name(name.as_ref()).all().await {
@@ -686,6 +722,18 @@ async fn wait_for_echo_to_settle(output: &mut impl OutputChunks, quiet: Duration
     }
 }
 
+/// Whether the daemon's pipe does not exist. Only "not found" says so: a busy or guarded pipe
+/// exists.
+#[cfg(windows)]
+fn pipe_missing(config: &RmuxConfig) -> bool {
+    match config.endpoint() {
+        Endpoint::WindowsPipe(pipe) => {
+            std::fs::metadata(pipe).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        }
+        Endpoint::UnixSocket(_) => false,
+    }
+}
+
 /// Wrap a command string for the platform shell as explicit argv.
 ///
 /// `EnsureSession::shell` would hand the string to the *user's* login shell —
@@ -712,6 +760,15 @@ fn trim_trailing_blank_lines(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn no_daemon_listening_is_nothing_to_connect_to_not_one_to_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let connected = RmuxClient::connect_existing(RmuxConfig::app_private(dir.path()))
+            .await
+            .unwrap();
+        assert!(connected.is_none());
+    }
 
     #[test]
     fn prompts_are_submitted_with_carriage_return_not_line_feed() {

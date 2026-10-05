@@ -28,6 +28,9 @@ impl ProjectOperationState {
 }
 
 pub struct PtyState(pub pty::PtyManager);
+pub struct TerminalTabsState(
+    pub Arc<crate::terminal_tabs::TerminalTabs<crate::commands::sessions::tabs::PtyTabHost>>,
+);
 pub struct NotifyHandle(pub notify::SharedNotifyState);
 pub struct ConfigState(pub Mutex<config::Config>);
 pub struct FileExplorerState(pub Mutex<file_explorer::WatcherManager>);

@@ -192,7 +192,12 @@ pub fn reconcile_rmux_sessions(conn: &rusqlite::Connection) {
                     }
                 }
             }
-            Err(error) => tracing::warn!(%error, "could not reconcile rmux resources"),
+            // The daemon could not be read, so the sweep could not either: skipped until the
+            // next start.
+            Err(error) => {
+                tracing::warn!(%error, "could not reconcile rmux resources");
+                return;
+            }
         }
     }
 
@@ -304,10 +309,9 @@ pub fn start_daemon_event_listener(app_handle: &tauri::AppHandle) {
                             .0
                             .dispatch_session_lifecycle(event);
                     }
-                    let _ = app.emit(
-                        "pty-exited",
-                        serde_json::json!({ "pty_key": evt.session_id }),
-                    );
+                    app.state::<crate::state::PtyState>()
+                        .0
+                        .report_exit(&evt.session_id);
                     let _ = app.emit("sessions-changed", ());
                 }
                 Ok(Some(_)) => {}   // Ignore unknown events

@@ -33,6 +33,7 @@ mod startup;
 mod state;
 mod symphony;
 mod task_lifecycle;
+mod terminal_tabs;
 #[cfg(not(windows))]
 mod tmux;
 mod updater;
@@ -42,7 +43,7 @@ use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, PredefinedMenuItem, Submenu},
-    Manager,
+    Emitter, Manager,
 };
 
 use commands::*;
@@ -291,12 +292,40 @@ fn main() {
             planeai_core::agent_hooks::refresh_hook_scripts(&config::home_dir());
 
             // PTY manager with notify wired in
-            let pty_mgr = pty::PtyManager::new();
+            let tabs = Arc::new(terminal_tabs::TerminalTabs::new(
+                PtyTabHost::new(app.handle().clone()),
+                Arc::new(terminal_tabs::SqliteTabStore(db_arc.clone())),
+                {
+                    let app = app.handle().clone();
+                    move |ended: &terminal_tabs::TabEnded| {
+                        let _ = app.emit("tab-ended", ended);
+                    }
+                },
+            ));
+            // A terminal tab's exit ends it; any other key's is an agent's, which the frontend
+            // marks exited.
+            let pty_mgr = pty::PtyManager::new({
+                let app = app.handle().clone();
+                let tabs = tabs.clone();
+                Arc::new(
+                    move |pty_key: &str| match terminal_tabs::TabId::parse(pty_key) {
+                        Some(tab) => {
+                            let tabs = tabs.clone();
+                            tauri::async_runtime::spawn(async move { tabs.exited(&tab).await });
+                        }
+                        None => {
+                            let _ =
+                                app.emit("pty-exited", serde_json::json!({ "pty_key": pty_key }));
+                        }
+                    },
+                )
+            });
             pty_mgr.set_observer(Arc::new(notify::NotifyObserver::new(
                 notify_state.clone(),
                 app.handle().clone(),
             )));
             app.manage(PtyState(pty_mgr));
+            app.manage(TerminalTabsState(tabs));
             app.manage(FileExplorerState(Mutex::new(
                 file_explorer::WatcherManager::new(),
             )));
@@ -375,8 +404,10 @@ fn main() {
             acknowledge_session,
             mark_exited,
             save_mru_order,
-            spawn_tab,
+            open_tab,
+            attach_tab,
             close_tab,
+            ended_tabs,
             is_program_running,
             check_tmux_available,
             check_rmux_available,

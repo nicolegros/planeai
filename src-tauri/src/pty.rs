@@ -1,11 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 use tauri::ipc::{Channel, Response};
-use tauri::{AppHandle, Emitter};
 
 use crate::daemon_client::DataConnection;
 use crate::output_observer::{NoopObserver, OutputObserver};
@@ -39,19 +38,12 @@ pub enum PtyTarget {
     },
 }
 
-/// A session's shell tab key, `<session id>:<tab index>`, as the frontend's pty keys spell it.
-pub fn tab_key(session_id: &str, tab_index: u32) -> String {
-    format!("{session_id}:{tab_index}")
+pub fn gone_error(pty_key: &str) -> String {
+    format!("{pty_key} no longer runs")
 }
 
-/// The session a tab key belongs to; `None` for a session's own (agent) key.
-fn tab_owner(pty_key: &str) -> Option<&str> {
-    pty_key.split_once(':').map(|(session_id, _)| session_id)
-}
-
-fn closed_before_start_error(pty_key: &str) -> String {
-    format!("{pty_key} was closed before its program started")
-}
+/// Told the pty key of every PTY whose process ended by itself; a detach silences it.
+pub type ExitSink = Arc<dyn Fn(&str) + Send + Sync>;
 
 // Flusher coalesces output so bursts arrive as single chunks.
 const FLUSH_COALESCE: Duration = Duration::from_millis(4);
@@ -188,34 +180,19 @@ impl SessionBackend for RmuxBackend {
 
 // ─── PtyManager ──────────────────────────────────────────────────────────────
 
-/// Where a tab's close stands, for a spawn of a program in it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CloseState {
-    /// Claimed, but no backend of the tab has been ended by it: if a program is spawning in the
-    /// tab, the close raced it, and the program must not start.
-    Closing,
-    /// The close ended the tab's backend; a later spawn on its key, after a webview reload
-    /// reused it, starts fresh.
-    Closed,
-}
-
 #[derive(Clone)]
 pub struct PtyManager {
     sessions: Arc<RwLock<HashMap<String, Box<dyn SessionBackend>>>>,
     observer: Arc<RwLock<Arc<dyn OutputObserver>>>,
-    /// Tabs being closed, or whose close ended their backend.
-    tab_closes: Arc<Mutex<HashMap<String, CloseState>>>,
-    /// Published tabs running a program, such as a provider handoff's TUI.
-    program_tabs: Arc<Mutex<HashSet<String>>>,
+    exits: ExitSink,
 }
 
 impl PtyManager {
-    pub fn new() -> Self {
+    pub fn new(exits: ExitSink) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             observer: Arc::new(RwLock::new(Arc::new(NoopObserver))),
-            tab_closes: Arc::new(Mutex::new(HashMap::new())),
-            program_tabs: Arc::new(Mutex::new(HashSet::new())),
+            exits,
         }
     }
 
@@ -223,32 +200,9 @@ impl PtyManager {
         *self.observer.write().unwrap() = observer;
     }
 
-    /// Claim responsibility for closing a tab: false while another close of it is under way.
-    /// A finished close is claimed again, since a tab reusing its key may close in turn.
-    pub(crate) fn claim_tab_close(&self, pty_key: &str) -> bool {
-        let previous = self
-            .tab_closes()
-            .insert(pty_key.to_string(), CloseState::Closing);
-        previous != Some(CloseState::Closing)
-    }
-
-    /// Release a close claim when closing failed so a later retry can proceed.
-    pub(crate) fn cancel_tab_close(&self, pty_key: &str) {
-        self.tab_closes().remove(pty_key);
-    }
-
-    fn tab_closes(&self) -> std::sync::MutexGuard<'_, HashMap<String, CloseState>> {
-        self.tab_closes.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Before a spawn the key starts fresh, refusing a program whose tab closed before anything
-    /// ran in it; a close seen at publish can then only be one racing this spawn.
-    fn prepare_attach(&self, pty_key: &str, runs_program: bool) -> Result<(), String> {
-        let state = self.tab_closes().remove(pty_key);
-        if runs_program && state == Some(CloseState::Closing) {
-            return Err(closed_before_start_error(pty_key));
-        }
-        Ok(())
+    /// Report a process that ended outside any attached PTY, such as a daemon session's.
+    pub fn report_exit(&self, pty_key: &str) {
+        (self.exits)(pty_key);
     }
 
     /// Attach a PTY to a session. The command run inside depends on the PtyTarget variant.
@@ -260,20 +214,16 @@ impl PtyManager {
         &self,
         session_id: &str,
         target: PtyTarget,
-        app: AppHandle,
         on_data: Channel<Response>,
         env: Vec<(String, String)>,
     ) -> Result<(), String> {
-        let runs_program = matches!(target, PtyTarget::Program { .. });
-        self.prepare_attach(session_id, runs_program)?;
-
         // Handle daemon target via async path
         if let PtyTarget::Daemon {
             session_id: sid,
             socket_path,
         } = target
         {
-            return self.attach_daemon(&sid, socket_path, app, on_data);
+            return self.attach_daemon(&sid, socket_path, on_data);
         }
 
         // Handle rmux target via async path
@@ -283,18 +233,15 @@ impl PtyManager {
             handle,
         } = target
         {
-            return self.attach_rmux(&pty_key, workspace, handle, app, on_data);
+            return self.attach_rmux(&pty_key, workspace, handle, on_data);
         }
 
-        // A shell terminal can remount when its split leaf changes. Rebind its
-        // output channel instead of killing and recreating the running local PTY.
-        if matches!(&target, PtyTarget::Shell { .. } | PtyTarget::Program { .. }) {
-            let sessions = self.sessions.read().map_err(|e| e.to_string())?;
-            if let Some(existing) = sessions.get(session_id) {
-                if existing.rebind_output(on_data.clone()) {
-                    return Ok(());
-                }
-            }
+        // An agent's terminal remounts when its split leaf changes: its running local PTY gets
+        // the new output channel. Terminal tabs reconnect through `reconnect` instead.
+        if matches!(&target, PtyTarget::Shell { .. })
+            && self.reconnect(session_id, on_data.clone()).is_ok()
+        {
+            return Ok(());
         }
 
         let (command, cwd) = match target {
@@ -326,34 +273,23 @@ impl PtyManager {
         let cancelled = Arc::new(AtomicBool::new(false));
         let observer = self.observer.read().unwrap().clone();
         let backend = PlaneaiPtyBackend::spawn(
-            session_id, command, &cwd, env, app, on_data, cancelled, observer,
+            session_id,
+            command,
+            &cwd,
+            env,
+            self.exits.clone(),
+            on_data,
+            cancelled,
+            observer,
         )?;
-        self.publish(session_id, runs_program, Box::new(backend))
+        self.publish(session_id, Box::new(backend))
     }
 
-    /// Make a spawned local backend the session's, replacing any previous one. Checked again
-    /// under the sessions lock: a close claimed during the spawn either shows here, or its
-    /// detach waits for this lock and then ends the backend.
-    fn publish(
-        &self,
-        session_id: &str,
-        runs_program: bool,
-        backend: Box<dyn SessionBackend>,
-    ) -> Result<(), String> {
+    /// Make a spawned local backend the session's, replacing any previous one.
+    fn publish(&self, session_id: &str, backend: Box<dyn SessionBackend>) -> Result<(), String> {
         let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
-        if runs_program && self.tab_closes().remove(session_id).is_some() {
-            backend.detach();
-            return Err(closed_before_start_error(session_id));
-        }
-        if let Some(old) = sessions.get(session_id) {
+        if let Some(old) = sessions.insert(session_id.to_string(), backend) {
             old.detach();
-        }
-        sessions.insert(session_id.to_string(), backend);
-        let mut programs = self.program_tabs();
-        if runs_program {
-            programs.insert(session_id.to_string());
-        } else {
-            programs.remove(session_id);
         }
         Ok(())
     }
@@ -363,10 +299,10 @@ impl PtyManager {
         &self,
         session_id: &str,
         socket_path: PathBuf,
-        app: AppHandle,
         on_data: Channel<Response>,
     ) -> Result<(), String> {
         tracing::info!(session_id, "attaching to daemon session");
+        let exits = self.exits.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
         let flow = Arc::new(FlowControl::new());
         let sid = session_id.to_string();
@@ -389,7 +325,7 @@ impl PtyManager {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("daemon data connect failed for {}: {}", sid_clone, e);
-                    let _ = app.emit("pty-exited", serde_json::json!({ "pty_key": sid_clone }));
+                    exits(&sid_clone);
                     return;
                 }
             };
@@ -419,7 +355,7 @@ impl PtyManager {
             let cancelled_f = cancelled_clone.clone();
             let flow_f = flow_clone;
             let exit_key = sid_clone.clone();
-            let app_flusher = app.clone();
+            let exits_flusher = exits.clone();
             thread::spawn(move || {
                 let (lock, cv) = &*pending_f;
                 loop {
@@ -432,10 +368,7 @@ impl PtyManager {
                                     let _ = on_data.send(Response::new(chunk));
                                 }
                                 if !cancelled_f.load(Ordering::Acquire) {
-                                    let _ = app_flusher.emit(
-                                        "pty-exited",
-                                        serde_json::json!({ "pty_key": exit_key }),
-                                    );
+                                    exits_flusher(&exit_key);
                                 }
                                 return;
                             }
@@ -458,8 +391,7 @@ impl PtyManager {
                     }
                 }
                 if !cancelled_f.load(Ordering::Acquire) {
-                    let _ =
-                        app_flusher.emit("pty-exited", serde_json::json!({ "pty_key": exit_key }));
+                    exits_flusher(&exit_key);
                 }
             });
 
@@ -505,10 +437,10 @@ impl PtyManager {
         pty_key: &str,
         workspace: planeai_rmux::WorkspaceName,
         handle: planeai_rmux::ResourceHandle,
-        app: AppHandle,
         on_data: Channel<Response>,
     ) -> Result<(), String> {
         tracing::info!(pty_key, %workspace, "attaching to rmux resource");
+        let exits = self.exits.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
         let flow = Arc::new(FlowControl::new());
         let sid = pty_key.to_string();
@@ -537,7 +469,7 @@ impl PtyManager {
                 Ok(attached) => attached,
                 Err(error) => {
                     tracing::error!(pty_key = %sid, %error, "rmux attach failed");
-                    let _ = app.emit("pty-exited", serde_json::json!({ "pty_key": sid }));
+                    exits(&sid);
                     return;
                 }
             };
@@ -567,7 +499,7 @@ impl PtyManager {
             let cancelled_f = cancelled_clone.clone();
             let flow_f = flow_clone;
             let exit_key = sid.clone();
-            let app_flusher = app.clone();
+            let exits_flusher = exits.clone();
             thread::spawn(move || {
                 let (lock, cv) = &*pending_f;
                 loop {
@@ -591,10 +523,7 @@ impl PtyManager {
                                     let _ = on_data.send(Response::new(chunk));
                                 }
                                 if !cancelled_f.load(Ordering::Acquire) {
-                                    let _ = app_flusher.emit(
-                                        "pty-exited",
-                                        serde_json::json!({ "pty_key": exit_key }),
-                                    );
+                                    exits_flusher(&exit_key);
                                 }
                                 return;
                             }
@@ -633,8 +562,7 @@ impl PtyManager {
                     }
                 }
                 if !cancelled_f.load(Ordering::Acquire) {
-                    let _ =
-                        app_flusher.emit("pty-exited", serde_json::json!({ "pty_key": exit_key }));
+                    exits_flusher(&exit_key);
                 }
             });
 
@@ -729,59 +657,30 @@ impl PtyManager {
         backend.resize(rows, cols)
     }
 
+    /// Connect new output to a local PTY still running, never starting one.
+    pub fn reconnect(&self, pty_key: &str, on_data: Channel<Response>) -> Result<(), String> {
+        let sessions = self.sessions.read().map_err(|e| e.to_string())?;
+        match sessions.get(pty_key) {
+            Some(existing) if existing.rebind_output(on_data) => Ok(()),
+            _ => Err(gone_error(pty_key)),
+        }
+    }
+
     /// Detach a session's PTY (cleanup).
     pub fn detach(&self, session_id: &str) {
         let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
         if let Some(backend) = sessions.remove(session_id) {
             backend.detach();
-            self.program_tabs().remove(session_id);
-            if let Some(state) = self.tab_closes().get_mut(session_id) {
-                *state = CloseState::Closed;
-            }
         }
     }
 
-    /// A session ended (archived, parked, destroyed, exited): any program in its tabs, such as
-    /// a provider handoff's TUI, ends with it rather than drive its conversation with no tab
-    /// left to show or close it. Its shell tabs keep their own lifecycle.
-    pub fn end_programs(&self, session_id: &str) {
-        let programs: Vec<String> = self
-            .program_tabs()
-            .iter()
-            .filter(|key| tab_owner(key) == Some(session_id))
-            .cloned()
-            .collect();
-        for key in programs {
-            self.detach(&key);
-        }
-    }
-
-    /// Sessions with a program in one of their tabs.
-    pub fn program_owners(&self) -> Vec<String> {
-        let mut owners: Vec<String> = self
-            .program_tabs()
-            .iter()
-            .filter_map(|key| tab_owner(key).map(str::to_string))
-            .collect();
-        owners.sort();
-        owners.dedup();
-        owners
-    }
-
-    /// Whether the tab still runs its program, as after a webview reload; an app restart ends
-    /// every program, leaving its tab a plain shell.
-    pub fn is_program_running(&self, pty_key: &str) -> bool {
-        let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
-        // A program that exited stays published until its tab closes, which a webview reload
-        // can skip: its key must not read as a live handoff.
-        self.program_tabs().contains(pty_key)
-            && sessions
-                .get(pty_key)
-                .is_some_and(|backend| !backend.has_exited())
-    }
-
-    fn program_tabs(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
-        self.program_tabs.lock().unwrap_or_else(|e| e.into_inner())
+    /// Whether a process runs behind the key; backends that cannot tell count as running.
+    pub fn is_running(&self, pty_key: &str) -> bool {
+        self.sessions
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(pty_key)
+            .is_some_and(|backend| !backend.has_exited())
     }
 
     /// Pause reading from a session's PTY (flow control back pressure).
@@ -801,12 +700,11 @@ impl PtyManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{tab_key, PtyManager};
+    use super::PtyManager;
     use crate::session_backend::{SessionBackend, WriteAck};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
-    /// A spawned backend that records whether it was ended.
     #[derive(Default)]
     struct FakeBackend {
         detached: Arc<AtomicBool>,
@@ -834,160 +732,30 @@ mod tests {
         }
     }
 
-    fn spawned() -> (Box<dyn SessionBackend>, Arc<AtomicBool>) {
-        let backend = FakeBackend::default();
-        let detached = backend.detached.clone();
-        (Box::new(backend), detached)
-    }
-
     #[test]
-    fn a_program_tab_closed_before_its_spawn_never_starts() {
-        let manager = PtyManager::new();
-        manager.prepare_attach("s1:2", true).unwrap();
-        assert!(manager.claim_tab_close("s1:2"));
-        assert!(manager.prepare_attach("s1:2", true).is_err());
-        // The refusal consumed the claim: a later tab on the key starts.
-        manager.prepare_attach("s1:2", true).unwrap();
-    }
-
-    #[test]
-    fn a_shell_tab_reattaching_is_closable_again() {
-        let manager = PtyManager::new();
-        assert!(manager.claim_tab_close("s1:2"));
-        manager.prepare_attach("s1:2", false).unwrap();
-        assert!(manager.claim_tab_close("s1:2"));
-    }
-
-    #[test]
-    fn a_program_tab_closed_during_its_spawn_is_ended_instead_of_published() {
-        let manager = PtyManager::new();
-        let (backend, detached) = spawned();
-        assert!(manager.claim_tab_close("s1:2"));
-        assert!(manager.publish("s1:2", true, backend).is_err());
-        assert!(detached.load(Ordering::SeqCst));
-        assert!(!manager.sessions.read().unwrap().contains_key("s1:2"));
-        manager.prepare_attach("s1:2", true).unwrap();
-    }
-
-    #[test]
-    fn a_shell_tab_publishes_whatever_its_close_claim() {
-        let manager = PtyManager::new();
-        let (backend, detached) = spawned();
-        assert!(manager.claim_tab_close("s1:2"));
-        manager.publish("s1:2", false, backend).unwrap();
-        assert!(!detached.load(Ordering::SeqCst));
-        assert!(manager.sessions.read().unwrap().contains_key("s1:2"));
-    }
-
-    #[test]
-    fn a_close_after_publishing_ends_the_program_and_frees_its_key() {
-        let manager = PtyManager::new();
-        let (backend, detached) = spawned();
-        manager.publish("s1:2", true, backend).unwrap();
-        assert!(manager.claim_tab_close("s1:2"));
-        manager.detach("s1:2");
-        assert!(detached.load(Ordering::SeqCst));
-        // After a webview reload the layout may hand the key out again.
-        manager.prepare_attach("s1:2", true).unwrap();
-    }
-
-    #[test]
-    fn a_new_close_of_a_reused_key_still_stops_its_program() {
-        let manager = PtyManager::new();
-        let (backend, _) = spawned();
-        manager.publish("s1:2", true, backend).unwrap();
-        assert!(manager.claim_tab_close("s1:2"));
-        manager.detach("s1:2");
-        // A webview reload reuses the key, and its new tab closes before its program spawns.
-        assert!(manager.claim_tab_close("s1:2"));
-        assert!(manager.prepare_attach("s1:2", true).is_err());
-    }
-
-    #[test]
-    fn a_detach_without_a_close_leaves_no_state_behind() {
-        let manager = PtyManager::new();
-        let (backend, _) = spawned();
-        manager.publish("s1:2", false, backend).unwrap();
-        manager.detach("s1:2");
-        assert!(manager.tab_closes().is_empty());
-        // So a later close that never ends anything still refuses a program spawn.
-        assert!(manager.claim_tab_close("s1:2"));
-        assert!(manager.prepare_attach("s1:2", true).is_err());
-    }
-
-    #[test]
-    fn an_ended_session_ends_its_programs_but_not_its_shells() {
-        let manager = PtyManager::new();
-        let (agent, agent_ended) = spawned();
-        let (program, program_ended) = spawned();
-        let (shell, shell_ended) = spawned();
-        let (other, other_ended) = spawned();
-        manager.publish("s1", false, agent).unwrap();
-        manager.publish(&tab_key("s1", 2), true, program).unwrap();
-        manager.publish(&tab_key("s1", 3), false, shell).unwrap();
-        manager.publish(&tab_key("s10", 2), true, other).unwrap();
-        assert!(manager.is_program_running(&tab_key("s1", 2)));
-        assert!(!manager.is_program_running(&tab_key("s1", 3)));
-        assert_eq!(manager.program_owners(), ["s1", "s10"]);
-        manager.end_programs("s1");
-        // The agent's own PTY is its session commands' to end.
-        assert!(!agent_ended.load(Ordering::SeqCst));
-        assert!(program_ended.load(Ordering::SeqCst));
-        assert!(!shell_ended.load(Ordering::SeqCst));
-        assert!(!other_ended.load(Ordering::SeqCst));
-        assert!(!manager.is_program_running(&tab_key("s1", 2)));
-    }
-
-    #[test]
-    fn a_program_that_exited_is_not_running() {
-        let manager = PtyManager::new();
-        let backend = FakeBackend::default();
-        let exited = backend.exited.clone();
+    fn publishing_replaces_and_ends_the_previous_backend() {
+        let manager = PtyManager::new(Arc::new(|_: &str| {}));
+        let first = FakeBackend::default();
+        let first_detached = first.detached.clone();
+        manager.publish("s1:2", Box::new(first)).unwrap();
         manager
-            .publish(&tab_key("s1", 2), true, Box::new(backend))
+            .publish("s1:2", Box::new(FakeBackend::default()))
             .unwrap();
-        assert!(manager.is_program_running(&tab_key("s1", 2)));
-        // It exited on its own, and its tab's close never came (the webview reloaded).
+        assert!(first_detached.load(Ordering::SeqCst));
+        assert!(manager.is_running("s1:2"));
+    }
+
+    #[test]
+    fn a_backend_runs_until_it_exits_or_detaches() {
+        let manager = PtyManager::new(Arc::new(|_: &str| {}));
+        let backend = FakeBackend::default();
+        let (exited, detached) = (backend.exited.clone(), backend.detached.clone());
+        manager.publish("s1:2", Box::new(backend)).unwrap();
+        assert!(manager.is_running("s1:2"));
         exited.store(true, Ordering::SeqCst);
-        assert!(!manager.is_program_running(&tab_key("s1", 2)));
-    }
-
-    #[test]
-    fn a_closed_shell_key_reused_for_a_program_starts() {
-        let manager = PtyManager::new();
-        let (shell, _) = spawned();
-        manager.publish("s1:3", false, shell).unwrap();
-        assert!(manager.claim_tab_close("s1:3"));
-        manager.detach("s1:3");
-        manager.prepare_attach("s1:3", true).unwrap();
-        // A close racing this new spawn is still caught when it publishes.
-        assert!(manager.claim_tab_close("s1:3"));
-        let (program, detached) = spawned();
-        assert!(manager.publish("s1:3", true, program).is_err());
+        assert!(!manager.is_running("s1:2"));
+        manager.detach("s1:2");
         assert!(detached.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn a_tab_close_claim_blocks_a_concurrent_close_until_cancelled_or_reattached() {
-        let manager = PtyManager::new();
-        let pty_key = "session-1:2";
-
-        assert!(manager.claim_tab_close(pty_key));
-        assert!(
-            !manager.claim_tab_close(pty_key),
-            "a duplicate close must not claim the tab while its first close is under way"
-        );
-
-        manager.cancel_tab_close(pty_key);
-        assert!(
-            manager.claim_tab_close(pty_key),
-            "a failed close must remain retryable"
-        );
-
-        manager.prepare_attach(pty_key, false).unwrap();
-        assert!(
-            manager.claim_tab_close(pty_key),
-            "a newly attached PTY key must be closable again"
-        );
+        assert!(!manager.is_running("s1:2"));
     }
 }
