@@ -185,6 +185,32 @@ async fn close_named(
     }
 }
 
+/// Close a session's recorded pane, found by name. When some pane of its workspace cannot be
+/// read, the recorded pane id is used instead if that workspace lists it, rather than leave the
+/// agent running until the startup sweep.
+async fn close_recorded(
+    client: &planeai_rmux::RmuxClient,
+    workspace: &WorkspaceName,
+    pty_key: &str,
+    recorded: ResourceHandle,
+) -> planeai_rmux::Result<()> {
+    match client.find_resource(workspace, pty_key).await {
+        Ok(Some(handle)) => client.close_resource(workspace, handle).await,
+        Ok(None) => Ok(()),
+        Err(error) if !error.is_daemon_gone() => {
+            let listed = client.live_panes().await?.iter().any(|pane| {
+                pane.workspace_key == workspace.as_str() && pane.pane_id == recorded.as_u32()
+            });
+            if listed {
+                client.close_resource(workspace, recorded).await
+            } else {
+                Err(error)
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Close every resource of a session, leaving its workspace for siblings.
 ///
 /// A workspace outlives the agents inside it and is removed only when its task is
@@ -200,13 +226,9 @@ pub fn close_session_resources(session_id: &str) -> Result<(), String> {
 
     // Found by window name: a recorded pane id may since name another pane, even in another
     // workspace. A pane never named is left to the startup orphan sweep.
-    let closures: Vec<(WorkspaceName, String)> = records
+    let closures: Vec<(WorkspaceName, String, ResourceHandle)> = records
         .iter()
-        .filter_map(|record| {
-            record
-                .workspace()
-                .map(|name| (name, record.pty_key.clone()))
-        })
+        .filter_map(|record| Some((record.workspace()?, record.pty_key.clone(), record.handle())))
         .collect();
 
     let result = blocking_existing(move |client| {
@@ -215,8 +237,8 @@ pub fn close_session_resources(session_id: &str) -> Result<(), String> {
             // Report the first failure but attempt every resource, so one stuck
             // pane cannot strand the rest.
             let mut first_error = None;
-            for (workspace, pty_key) in closures {
-                if let Err(error) = close_named(&client, &workspace, &pty_key).await {
+            for (workspace, pty_key, recorded) in closures {
+                if let Err(error) = close_recorded(&client, &workspace, &pty_key, recorded).await {
                     first_error = first_error.or(Some(error));
                 }
             }

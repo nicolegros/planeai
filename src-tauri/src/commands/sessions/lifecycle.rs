@@ -142,23 +142,27 @@ pub async fn destroy_session(
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     pty_state.0.detach(&id);
-
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    let session = db::get_session(&conn, &id)
-        .map_err(|e| e.to_string())?
-        .ok_or("session not found")?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
+    let (db, runtime) = (db_state.0.clone(), runtime.0.clone());
 
-    let result = crate::session_ops::destroy(&conn, &id, &Some(cfg), &cleanup::real_ops())?;
-    if session.status != "destroyed" {
-        runtime
-            .0
-            .dispatch_session_lifecycle(session_lifecycle_event(
+    // Destroying removes the worktree and ends backend processes, rmux's through a runtime of
+    // its own, which would panic on an async worker: kept off them, as archiving is.
+    let result = crate::commands::blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        let session = db::get_session(&conn, &id)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?;
+        let result = crate::session_ops::destroy(&conn, &id, &Some(cfg), &cleanup::real_ops())?;
+        if session.status != "destroyed" {
+            runtime.dispatch_session_lifecycle(session_lifecycle_event(
                 &session,
                 &session.status,
                 "destroyed",
             ));
-    }
+        }
+        Ok(result)
+    })
+    .await?;
 
     if !result.cleanup_errors.is_empty() {
         let msg = result.cleanup_errors.join("; ");

@@ -37,39 +37,24 @@ fn config(app: Option<&tauri::AppHandle>) -> RmuxConfig {
 /// Prefer [`with_retry`] over calling this directly: a cached client can be dead
 /// by the time it is used.
 pub async fn client_with(app: Option<&tauri::AppHandle>) -> Result<Arc<RmuxClient>, String> {
-    shared_client(app, true)
-        .await?
-        .ok_or_else(|| "the rmux daemon did not start".to_string())
-}
-
-/// The shared client, connecting if none is cached; `start` starts a daemon when none runs,
-/// otherwise `None` says there is none.
-async fn shared_client(
-    app: Option<&tauri::AppHandle>,
-    start: bool,
-) -> Result<Option<Arc<RmuxClient>>, String> {
     let cell = CLIENT.get_or_init(|| async { Mutex::new(None) }).await;
     {
         // Fast path: reading a cached client is an in-memory clone, so the lock is
         // held only for that.
         let guard = cell.lock().await;
         if let Some(existing) = guard.as_ref() {
-            return Ok(Some(existing.clone()));
+            return Ok(existing.clone());
         }
     }
 
     // Connecting can start the daemon, which is slow. Doing it with the lock
     // released keeps one slow start from serialising every other caller behind it
     // (AGENTS.md: release Mutex locks before `.await`).
-    let connected = if start {
-        RmuxClient::connect(config(app)).await.map(Some)
-    } else {
-        RmuxClient::connect_existing(config(app)).await
-    };
-    let Some(connected) = connected.map_err(|error| error.to_string())? else {
-        return Ok(None);
-    };
-    let connected = Arc::new(connected);
+    let connected = Arc::new(
+        RmuxClient::connect(config(app))
+            .await
+            .map_err(|error| error.to_string())?,
+    );
 
     // Two callers that both missed the fast path each connect. The first to
     // publish wins and the loser's connection is simply dropped: the daemon
@@ -77,10 +62,10 @@ async fn shared_client(
     // leave callers holding different connections to the same daemon.
     let mut guard = cell.lock().await;
     match guard.as_ref() {
-        Some(existing) => Ok(Some(existing.clone())),
+        Some(existing) => Ok(existing.clone()),
         None => {
             *guard = Some(connected.clone());
-            Ok(Some(connected))
+            Ok(connected)
         }
     }
 }
@@ -106,29 +91,38 @@ where
     with_retry_for(None, operation).await
 }
 
-/// As [`with_retry`], but never starting a daemon: `None` when none runs, which hosts nothing.
-/// For lookups and teardown, so learning that a pane is gone, as when closing the last one
-/// stopped the daemon, does not start a fresh one.
+/// Run a lookup or teardown against a daemon already running, never starting one: `None` when
+/// none runs, which hosts nothing. Each call connects afresh: a cached client may be dead.
+/// Closing the last pane stops the daemon mid-reply, so a lost connection after which no daemon
+/// listens means everything is gone, not that the operation failed.
 pub async fn with_existing<T, Operation, Fut>(operation: Operation) -> Result<Option<T>, String>
 where
     Operation: Fn(Arc<RmuxClient>) -> Fut,
     Fut: std::future::Future<Output = planeai_rmux::Result<T>>,
 {
-    let Some(client) = shared_client(None, false).await? else {
+    let connect = || async {
+        RmuxClient::connect_existing(config(None))
+            .await
+            .map_err(|error| error.to_string())
+    };
+    let Some(client) = connect().await? else {
         return Ok(None);
     };
-    match operation(client).await {
+    let error = match operation(Arc::new(client)).await {
+        Ok(value) => return Ok(Some(value)),
+        Err(error) if error.is_daemon_gone() => error,
+        Err(error) => return Err(error.to_string()),
+    };
+    tracing::info!(%error, "rmux transport was gone; reconnecting and retrying once");
+    let Some(client) = connect().await? else {
+        return Ok(None);
+    };
+    match operation(Arc::new(client)).await {
         Ok(value) => Ok(Some(value)),
+        // Lost twice on fresh connections: a daemon shutting down still accepts them.
         Err(error) if error.is_daemon_gone() => {
-            tracing::info!(%error, "rmux transport was gone; reconnecting and retrying once");
-            invalidate().await;
-            let Some(client) = shared_client(None, false).await? else {
-                return Ok(None);
-            };
-            operation(client)
-                .await
-                .map(Some)
-                .map_err(|error| error.to_string())
+            tracing::info!(%error, "rmux daemon is going away; nothing is left to act on");
+            Ok(None)
         }
         Err(error) => Err(error.to_string()),
     }
