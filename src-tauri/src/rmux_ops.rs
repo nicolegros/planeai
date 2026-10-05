@@ -33,11 +33,12 @@ pub const CURSOR_LABEL: &str = "rmux";
 pub const DEFAULT_COLS: u16 = 80;
 pub const DEFAULT_ROWS: u16 = 24;
 
-/// Bridge a synchronous caller to the shared async rmux client.
+/// Bridge a synchronous caller to the async rmux client.
 ///
-/// The operation may run twice: a cached connection can be dead by the time it is
-/// used, and [`crate::rmux_client::with_retry`] reconnects and retries once. That
-/// is why this takes `Fn` rather than `FnOnce` — callers clone what they capture.
+/// Each call connects afresh: the connection lives on this call's runtime and dies with it.
+/// The operation may run twice, as [`crate::rmux_client::with_fresh`] reconnects and retries
+/// once when the transport goes away. That is why this takes `Fn` rather than `FnOnce`:
+/// callers clone what they capture.
 pub fn blocking<Operation, Fut, T>(operation: Operation) -> Result<T, String>
 where
     Operation: Fn(std::sync::Arc<planeai_rmux::RmuxClient>) -> Fut,
@@ -47,7 +48,7 @@ where
         .enable_all()
         .build()
         .map_err(|error| error.to_string())?;
-    runtime.block_on(crate::rmux_client::with_retry(operation))
+    runtime.block_on(crate::rmux_client::with_fresh(operation))
 }
 
 /// As [`blocking`], without starting a daemon: `None` when none runs, which hosts nothing.
@@ -185,32 +186,6 @@ async fn close_named(
     }
 }
 
-/// Close a session's recorded pane, found by name. When some pane of its workspace cannot be
-/// read, the recorded pane id is used instead if that workspace lists it, rather than leave the
-/// agent running until the startup sweep.
-async fn close_recorded(
-    client: &planeai_rmux::RmuxClient,
-    workspace: &WorkspaceName,
-    pty_key: &str,
-    recorded: ResourceHandle,
-) -> planeai_rmux::Result<()> {
-    match client.find_resource(workspace, pty_key).await {
-        Ok(Some(handle)) => client.close_resource(workspace, handle).await,
-        Ok(None) => Ok(()),
-        Err(error) if !error.is_daemon_gone() => {
-            let listed = client.live_panes().await?.iter().any(|pane| {
-                pane.workspace_key == workspace.as_str() && pane.pane_id == recorded.as_u32()
-            });
-            if listed {
-                client.close_resource(workspace, recorded).await
-            } else {
-                Err(error)
-            }
-        }
-        Err(error) => Err(error),
-    }
-}
-
 /// Close every resource of a session, leaving its workspace for siblings.
 ///
 /// A workspace outlives the agents inside it and is removed only when its task is
@@ -225,10 +200,10 @@ pub fn close_session_resources(session_id: &str) -> Result<(), String> {
     }
 
     // Found by window name: a recorded pane id may since name another pane, even in another
-    // workspace. A pane never named is left to the startup orphan sweep.
-    let closures: Vec<(WorkspaceName, String, ResourceHandle)> = records
+    // workspace. A pane that cannot be confirmed is left to the startup orphan sweep.
+    let closures: Vec<(WorkspaceName, String)> = records
         .iter()
-        .filter_map(|record| Some((record.workspace()?, record.pty_key.clone(), record.handle())))
+        .filter_map(|record| Some((record.workspace()?, record.pty_key.clone())))
         .collect();
 
     let result = blocking_existing(move |client| {
@@ -237,8 +212,8 @@ pub fn close_session_resources(session_id: &str) -> Result<(), String> {
             // Report the first failure but attempt every resource, so one stuck
             // pane cannot strand the rest.
             let mut first_error = None;
-            for (workspace, pty_key, recorded) in closures {
-                if let Err(error) = close_recorded(&client, &workspace, &pty_key, recorded).await {
+            for (workspace, pty_key) in closures {
+                if let Err(error) = close_named(&client, &workspace, &pty_key).await {
                     first_error = first_error.or(Some(error));
                 }
             }

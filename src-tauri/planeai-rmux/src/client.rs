@@ -149,11 +149,14 @@ impl RmuxClient {
     /// Connect to a daemon already running, never starting one: `None` when none listens,
     /// which hosts nothing. For lookups and teardown, which only need to learn that.
     pub async fn connect_existing(config: RmuxConfig) -> Result<Option<Self>> {
-        // A missing pipe would otherwise be waited for until the connect times out.
+        // A missing pipe would otherwise be waited for until the connect times out. Only "not
+        // found" says so: a busy or guarded pipe exists.
         #[cfg(windows)]
         if let Endpoint::WindowsPipe(pipe) = config.endpoint() {
-            if !std::path::Path::new(pipe).exists() {
-                return Ok(None);
+            if let Err(error) = std::fs::metadata(pipe) {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    return Ok(None);
+                }
             }
         }
         let builder = match config.endpoint() {

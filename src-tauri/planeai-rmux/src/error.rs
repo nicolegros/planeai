@@ -74,6 +74,27 @@ impl Error {
         }
     }
 
+    /// Whether the connection to the daemon was lost or refused, as when it stops; unlike
+    /// [`Self::is_daemon_gone`], a timed-out request to a daemon still running does not count.
+    pub fn is_connection_lost(&self) -> bool {
+        let source = match self {
+            Self::DaemonUnavailable { source, .. } | Self::Sdk { source, .. } => source,
+            _ => return false,
+        };
+        matches!(
+            source,
+            rmux_sdk::RmuxError::Transport { source, .. } if matches!(
+                source.kind(),
+                std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::ConnectionRefused
+            )
+        )
+    }
+
     /// Whether the failure means the daemon is gone and a retry should restart it.
     ///
     /// Killing the last rmux session terminates the daemon and removes its
@@ -140,6 +161,22 @@ mod tests {
             rmux_proto::RmuxError::SessionNotFound("w".into())
         )));
         assert!(!means_pane_gone(&transport()));
+    }
+
+    #[test]
+    fn a_timed_out_request_is_not_a_lost_connection() {
+        let other = Error::sdk("close_pane")(transport());
+        assert!(!other.is_connection_lost());
+        let eof = Error::sdk("close_pane")(rmux_sdk::RmuxError::transport(
+            "read",
+            std::io::Error::from(std::io::ErrorKind::UnexpectedEof),
+        ));
+        assert!(eof.is_connection_lost());
+        let slow = Error::sdk("close_pane")(rmux_sdk::RmuxError::transport(
+            "read",
+            std::io::Error::from(std::io::ErrorKind::TimedOut),
+        ));
+        assert!(slow.is_daemon_gone() && !slow.is_connection_lost());
     }
 
     #[test]

@@ -278,7 +278,7 @@ pub async fn launch_session(
             }
             // Clear the stale daemon connection so next attempt reconnects automatically.
             // The rmux backend needs no special case here: every rmux operation
-            // already reconnects and retries once via `rmux_client::with_retry`, so
+            // already reconnects and retries once (`rmux_client::with_retry` and its siblings), so
             // a failure that reaches this point is a real one worth reporting
             // verbatim. Plugin providers fail for their own reasons, reported as is.
             if backend == "daemon" && is_daemon_connection_error(&e) {
@@ -487,8 +487,8 @@ async fn spawn_in_rmux(
         "session created via shared launch service"
     );
 
-    // Warm the connection with the bundled sidecar before the blocking spawn, so
-    // the sidecar is preferred over anything on PATH.
+    // Start the daemon from the bundled sidecar before the blocking spawn, which connects
+    // afresh, so the sidecar is preferred over anything on PATH.
     let _ = crate::rmux_client::client_with(Some(app)).await?;
 
     let env: std::collections::HashMap<&str, &str> = launch_result
