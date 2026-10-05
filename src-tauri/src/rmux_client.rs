@@ -15,6 +15,16 @@ use tokio::sync::Mutex;
 static CLIENT: tokio::sync::OnceCell<Mutex<Option<Arc<RmuxClient>>>> =
     tokio::sync::OnceCell::const_new();
 
+static DAEMON_BINARY: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Register the bundled daemon binary at app setup, so every connect that may start the daemon
+/// prefers it, whichever caller connects first.
+pub fn register_daemon_binary(binary: std::path::PathBuf) {
+    if binary.exists() {
+        let _ = DAEMON_BINARY.set(binary);
+    }
+}
+
 /// Resolve the endpoint and bundled daemon binary for this installation.
 fn config(app: Option<&tauri::AppHandle>) -> RmuxConfig {
     // Share the runtime directory with the existing daemon socket so both
@@ -24,11 +34,16 @@ fn config(app: Option<&tauri::AppHandle>) -> RmuxConfig {
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(std::env::temp_dir);
     let config = RmuxConfig::app_private(&runtime_dir);
-    match app.map(crate::paths::resolve_rmux_daemon_binary) {
-        Some(binary) if binary.exists() => config.with_daemon_binary(binary),
+    let binary = app
+        .map(crate::paths::resolve_rmux_daemon_binary)
+        .filter(|binary| binary.exists())
+        .or_else(|| DAEMON_BINARY.get().cloned())
+        .or_else(crate::paths::rmux_daemon_beside_exe);
+    match binary {
+        Some(binary) => config.with_daemon_binary(binary),
         // Without a bundled sidecar the SDK falls back to PATH, which is what a
         // development machine with rmux installed relies on.
-        _ => config,
+        None => config,
     }
 }
 

@@ -89,6 +89,7 @@ impl Error {
                     | std::io::ErrorKind::BrokenPipe
                     | std::io::ErrorKind::ConnectionReset
                     | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::NotConnected
                     | std::io::ErrorKind::NotFound
                     | std::io::ErrorKind::ConnectionRefused
             )
@@ -172,6 +173,11 @@ mod tests {
             std::io::Error::from(std::io::ErrorKind::UnexpectedEof),
         ));
         assert!(eof.is_connection_lost());
+        let not_connected = Error::sdk("close_pane")(rmux_sdk::RmuxError::transport(
+            "write",
+            std::io::Error::from(std::io::ErrorKind::NotConnected),
+        ));
+        assert!(not_connected.is_connection_lost());
         let slow = Error::sdk("close_pane")(rmux_sdk::RmuxError::transport(
             "read",
             std::io::Error::from(std::io::ErrorKind::TimedOut),

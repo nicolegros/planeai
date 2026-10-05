@@ -110,10 +110,11 @@ pub fn spawn_resource_blocking(
                 .map_err(|error| error.to_string())
         },
         || {
-            blocking(move |client| {
+            blocking_existing(move |client| {
                 let workspace = rollback_workspace.clone();
                 async move { client.close_resource(&workspace, handle).await }
             })
+            .map(|_| ())
         },
     )?;
     Ok(handle)
@@ -255,9 +256,10 @@ pub fn delete_workspace(project_id: &str, task_key: &str) -> Result<(), String> 
     }
     .name();
 
+    // No daemon running hosts no workspace: nothing to kill, and none to start for it.
     let kill = {
         let workspace = workspace.clone();
-        blocking(move |client| {
+        blocking_existing(move |client| {
             let workspace = workspace.clone();
             async move { client.kill_workspace(&workspace).await }
         })
@@ -277,7 +279,7 @@ pub fn delete_workspace(project_id: &str, task_key: &str) -> Result<(), String> 
     tracing::info!(
         task_key,
         forgotten,
-        killed = kill.is_ok(),
+        killed = matches!(kill, Ok(Some(()))),
         "removed task workspace"
     );
     Ok(())
@@ -285,8 +287,10 @@ pub fn delete_workspace(project_id: &str, task_key: &str) -> Result<(), String> 
 
 /// Drop recorded panes the daemon no longer has, returning affected sessions.
 pub fn prune_dead_resources(conn: &Connection) -> Result<Vec<String>, String> {
-    // The caller owns the connection here because it also reconciles session rows.
-    let live = blocking(|client| async move { client.live_pane_ids().await }).unwrap_or_default();
+    // The caller owns the connection here because it also reconciles session rows. Only no
+    // daemon running means nothing is live: a daemon that could not answer prunes nothing.
+    let live = blocking_existing(|client| async move { client.live_pane_ids().await })?
+        .unwrap_or_default();
     crate::rmux_resources::prune_missing(conn, &live).map_err(|error| error.to_string())
 }
 
@@ -301,7 +305,8 @@ pub fn orphan_candidates(
     // An unreachable daemon hosts nothing, so there is nothing to propose. Records
     // are left alone: `prune_dead_resources` owns that direction and can tell a
     // dead daemon from a missing pane.
-    let Ok(live) = blocking(|client| async move { client.live_panes().await }) else {
+    let Ok(Some(live)) = blocking_existing(|client| async move { client.live_panes().await })
+    else {
         return Ok(crate::rmux_resources::OrphanSweep::default());
     };
     crate::rmux_resources::orphaned_panes(conn, &live, known_session_ids)
@@ -343,7 +348,7 @@ pub fn sweep_orphan_panes(
     let closed = closures.len();
     if !closures.is_empty() {
         // Attempt every pane: one stuck pane must not strand the rest.
-        let result = blocking(move |client| {
+        let result = blocking_existing(move |client| {
             let closures = closures.clone();
             async move {
                 let mut first_error = None;

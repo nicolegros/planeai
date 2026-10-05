@@ -149,15 +149,10 @@ impl RmuxClient {
     /// Connect to a daemon already running, never starting one: `None` when none listens,
     /// which hosts nothing. For lookups and teardown, which only need to learn that.
     pub async fn connect_existing(config: RmuxConfig) -> Result<Option<Self>> {
-        // A missing pipe would otherwise be waited for until the connect times out. Only "not
-        // found" says so: a busy or guarded pipe exists.
+        // A missing pipe would otherwise be waited for until the connect times out.
         #[cfg(windows)]
-        if let Endpoint::WindowsPipe(pipe) = config.endpoint() {
-            if let Err(error) = std::fs::metadata(pipe) {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    return Ok(None);
-                }
-            }
+        if pipe_missing(&config) {
+            return Ok(None);
         }
         let builder = match config.endpoint() {
             Endpoint::UnixSocket(path) => Rmux::builder().unix_socket(path.clone()),
@@ -173,6 +168,9 @@ impl RmuxClient {
             {
                 Ok(None)
             }
+            // A daemon stopping while the connect retried: its pipe is gone now.
+            #[cfg(windows)]
+            Err(_) if pipe_missing(&config) => Ok(None),
             Err(source) => Err(Error::DaemonUnavailable {
                 endpoint: config.label(),
                 source,
@@ -721,6 +719,18 @@ async fn wait_for_echo_to_settle(output: &mut impl OutputChunks, quiet: Duration
             Ok(true) => echoed = true,
             Ok(false) | Err(_) => return,
         }
+    }
+}
+
+/// Whether the daemon's pipe does not exist. Only "not found" says so: a busy or guarded pipe
+/// exists.
+#[cfg(windows)]
+fn pipe_missing(config: &RmuxConfig) -> bool {
+    match config.endpoint() {
+        Endpoint::WindowsPipe(pipe) => {
+            std::fs::metadata(pipe).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        }
+        Endpoint::UnixSocket(_) => false,
     }
 }
 

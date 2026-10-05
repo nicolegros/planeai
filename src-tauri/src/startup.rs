@@ -192,7 +192,12 @@ pub fn reconcile_rmux_sessions(conn: &rusqlite::Connection) {
                     }
                 }
             }
-            Err(error) => tracing::warn!(%error, "could not reconcile rmux resources"),
+            // Without knowing which panes live, a sweep would take every recorded pane for
+            // an orphan: skipped until the next start.
+            Err(error) => {
+                tracing::warn!(%error, "could not reconcile rmux resources");
+                return;
+            }
         }
     }
 

@@ -55,16 +55,18 @@ pub fn resolve_rmux_daemon_binary(app: &tauri::AppHandle) -> PathBuf {
         }
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sibling = dir.join(bin_name);
-            if sibling.exists() {
-                return sibling;
-            }
-        }
-    }
+    rmux_daemon_beside_exe().unwrap_or_else(|| PathBuf::from(bin_name))
+}
 
-    PathBuf::from(bin_name)
+/// The rmux daemon shipped next to the running executable, as in a bundled install.
+pub fn rmux_daemon_beside_exe() -> Option<PathBuf> {
+    let bin_name = if cfg!(windows) {
+        "rmux-daemon.exe"
+    } else {
+        "rmux-daemon"
+    };
+    let sibling = std::env::current_exe().ok()?.parent()?.join(bin_name);
+    sibling.exists().then_some(sibling)
 }
 
 /// Resolve the daemon binary without an AppHandle (for use in sync contexts).

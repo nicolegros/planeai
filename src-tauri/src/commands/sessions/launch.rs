@@ -240,7 +240,6 @@ pub async fn launch_session(
             .map(|launch| provider_launch = Some(launch))
         } else if backend == planeai_rmux::BACKEND {
             spawn_in_rmux(
-                &app,
                 &session_id,
                 workspace_project_id,
                 Some(task_key.as_str()),
@@ -451,7 +450,6 @@ async fn spawn_in_daemon(
 /// Reuses the shared launch service so the command, cwd, and augmented PATH are
 /// built exactly as they are for every other backend.
 async fn spawn_in_rmux(
-    app: &AppHandle,
     session_id: &str,
     workspace_project_id: &str,
     task_key: Option<&str>,
@@ -486,10 +484,6 @@ async fn spawn_in_rmux(
         workspace = %workspace,
         "session created via shared launch service"
     );
-
-    // Start the daemon from the bundled sidecar before the blocking spawn, which connects
-    // afresh, so the sidecar is preferred over anything on PATH.
-    let _ = crate::rmux_client::client_with(Some(app)).await?;
 
     let env: std::collections::HashMap<&str, &str> = launch_result
         .env
