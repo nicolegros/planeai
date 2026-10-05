@@ -3,7 +3,7 @@ import {
   findRuntimeProvider,
   providerContribution,
   runtimeProviders,
-  supportsYolo,
+  supportsAutoApprove,
 } from "../plugin-providers";
 import type { PluginInventory } from "../types";
 
@@ -18,7 +18,12 @@ function plugin(overrides: Partial<PluginInventory>): PluginInventory {
     capabilities: ["providers"],
     ui_contributions: [],
     providers: [
-      { id: "claude", label: "Claude (chat)", entrypoint: "ui/chat.js", supports: ["yolo"] },
+      {
+        id: "claude",
+        label: "Claude (chat)",
+        entrypoint: "ui/chat.js",
+        supports: ["auto_approve"],
+      },
     ],
     installed_hash: null,
     installed_path: null,
@@ -62,7 +67,7 @@ describe("plugin providers", () => {
       order: null,
       shortcut: null,
     });
-    expect(supportsYolo(provider)).toBe(true);
-    expect(supportsYolo({ ...provider, supports: [] })).toBe(false);
+    expect(supportsAutoApprove(provider)).toBe(true);
+    expect(supportsAutoApprove({ ...provider, supports: [] })).toBe(false);
   });
 });

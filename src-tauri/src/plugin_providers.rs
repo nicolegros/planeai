@@ -16,7 +16,7 @@ use crate::db;
 use crate::plugins::{PluginProvider, PluginRuntimeSupervisor, ProviderFeature};
 use crate::session_ops::PLUGIN_BACKEND;
 use planeai_plugin_contract::provider::{
-    self as protocol, validate_handoff_argv, HandoffResponse, SessionEventParams,
+    self as protocol, error_code, validate_handoff_argv, HandoffResponse, SessionEventParams,
     SessionStatusParams, EVENT_NOTIFICATION, STATUS_NOTIFICATION,
 };
 pub use planeai_plugin_contract::provider::{
@@ -25,6 +25,70 @@ pub use planeai_plugin_contract::provider::{
 
 /// Frontend event carrying opaque provider session events to the mounted UI.
 const SESSION_EVENT: &str = "plugin-provider-session-event";
+
+/// Why a provider session request failed, as its UI receives it.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderErrorCode {
+    /// The session continues in a terminal.
+    HandedOff,
+    PromptTooLarge,
+    /// The session or its plugin is not running.
+    NotRunning,
+    /// The provider does not offer this.
+    Unsupported,
+    /// The provider's agent cannot run now.
+    Unavailable,
+    PluginError,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProviderError {
+    pub code: ProviderErrorCode,
+    pub message: String,
+}
+
+impl ProviderError {
+    fn new(code: ProviderErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    fn rpc_code(&self) -> Option<i64> {
+        crate::plugins::plugin_rpc_error_code(&self.message)
+    }
+}
+
+impl std::fmt::Display for ProviderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl From<ProviderError> for String {
+    fn from(error: ProviderError) -> Self {
+        error.message
+    }
+}
+
+/// A failed request to the plugin, classified by the JSON-RPC error code it answered with.
+impl From<String> for ProviderError {
+    fn from(message: String) -> Self {
+        let code = match crate::plugins::plugin_rpc_error_code(&message) {
+            Some(error_code::HANDED_OFF) => ProviderErrorCode::HandedOff,
+            Some(error_code::PROMPT_TOO_LARGE) => ProviderErrorCode::PromptTooLarge,
+            Some(error_code::UNAVAILABLE) => ProviderErrorCode::Unavailable,
+            _ => ProviderErrorCode::PluginError,
+        };
+        Self { code, message }
+    }
+}
+
+fn not_running(message: impl Into<String>) -> ProviderError {
+    ProviderError::new(ProviderErrorCode::NotRunning, message)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Binding {
@@ -42,6 +106,8 @@ struct State {
     launching: HashSet<String>,
     /// Sessions continuing in a terminal: their provider is detached until the handback.
     handed_off: HashSet<String>,
+    /// The last event `seq` each session's provider sent; it only ever increases.
+    last_seq: HashMap<String, u64>,
 }
 
 /// Which plugin currently drives each provider session.
@@ -99,6 +165,15 @@ impl ProviderSessions {
 
     fn is_handed_off(&self, session_id: &str) -> bool {
         self.state.lock().unwrap().handed_off.contains(session_id)
+    }
+
+    /// Accepts an event whose `seq` follows the session's last one.
+    fn advance_seq(&self, event: &SessionEventParams) -> Result<(), String> {
+        let mut state = self.state.lock().unwrap();
+        let last = state.last_seq.get(&event.session_id).copied().unwrap_or(0);
+        event.check_seq(last)?;
+        state.last_seq.insert(event.session_id.clone(), event.seq);
+        Ok(())
     }
 
     fn begin_launch(&self, session_id: &str) {
@@ -243,6 +318,7 @@ impl<S: ProviderStatus> NotificationSink<S> {
                 let params: SessionEventParams = serde_json::from_value(params)
                     .map_err(|error| format!("invalid session event: {error}"))?;
                 self.require_owner(&params.session_id)?;
+                self.sessions.advance_seq(&params)?;
                 self.status.emit_event(ProviderSessionEvent {
                     plugin_id: self.plugin_id.clone(),
                     session_id: params.session_id,
@@ -303,7 +379,7 @@ pub struct SessionRuntimeContext {
     pub session_id: String,
     pub provider_key: String,
     pub cwd: String,
-    pub yolo: bool,
+    pub auto_approve: bool,
     pub extra_path_dirs: Vec<String>,
 }
 
@@ -333,7 +409,7 @@ impl SessionRuntimeContext {
             session_id: session.id.clone(),
             provider_key,
             cwd,
-            yolo: session.auto_approve,
+            auto_approve: session.auto_approve,
             extra_path_dirs,
         })
     }
@@ -355,7 +431,7 @@ impl SessionRuntimeContext {
         params.insert("provider_id".into(), provider.id.clone().into());
         params.insert("cwd".into(), self.cwd.clone().into());
         params.insert("env".into(), self.env());
-        params.insert("yolo".into(), self.yolo.into());
+        params.insert("auto_approve".into(), self.auto_approve.into());
         params
     }
 }
@@ -370,10 +446,13 @@ pub struct ResolvedProvider {
 pub async fn resolve<R: ProviderRuntime>(
     runtime: &R,
     provider_key: &str,
-) -> Result<ResolvedProvider, String> {
+) -> Result<ResolvedProvider, ProviderError> {
     let (plugin_id, provider_id) = parse_provider_key(provider_key)
-        .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
-    let provider = runtime.running_provider(plugin_id, provider_id).await?;
+        .ok_or_else(|| not_running(format!("Unknown provider: {provider_key}")))?;
+    let provider = runtime
+        .running_provider(plugin_id, provider_id)
+        .await
+        .map_err(not_running)?;
     Ok(ResolvedProvider {
         plugin_id: plugin_id.to_string(),
         provider,
@@ -386,7 +465,7 @@ async fn start<R: ProviderRuntime>(
     runtime: &R,
     context: &SessionRuntimeContext,
     initial_prompt: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), ProviderError> {
     runtime.sessions().begin_launch(&context.session_id);
     let started = start_launching(runtime, context, initial_prompt).await;
     if started.is_err() {
@@ -401,6 +480,7 @@ async fn start<R: ProviderRuntime>(
 pub struct Launch<R: ProviderRuntime + Send + 'static> {
     runtime: Arc<R>,
     session_id: String,
+    provider_key: String,
     committed: bool,
 }
 
@@ -420,8 +500,15 @@ impl<R: ProviderRuntime + Send + 'static> Drop for Launch<R> {
         self.runtime.status().release_owned(&self.session_id);
         let runtime = self.runtime.clone();
         let session_id = std::mem::take(&mut self.session_id);
+        let provider_key = std::mem::take(&mut self.provider_key);
         tauri::async_runtime::spawn(async move {
-            stop(&*runtime, &session_id, StopReason::Destroy).await;
+            stop(
+                &*runtime,
+                &session_id,
+                Some(&provider_key),
+                StopReason::Destroy,
+            )
+            .await;
         });
     }
 }
@@ -431,7 +518,7 @@ pub async fn launch<R: ProviderRuntime + Send + 'static>(
     runtime: Arc<R>,
     context: &SessionRuntimeContext,
     initial_prompt: Option<&str>,
-) -> Result<Launch<R>, String> {
+) -> Result<Launch<R>, ProviderError> {
     // Owned before start so hooks firing while the agent boots cannot claim its status.
     runtime.status().mark_owned(&context.session_id);
     if let Err(error) = start(&*runtime, context, initial_prompt).await {
@@ -441,6 +528,7 @@ pub async fn launch<R: ProviderRuntime + Send + 'static>(
     Ok(Launch {
         runtime,
         session_id: context.session_id.clone(),
+        provider_key: context.provider_key.clone(),
         committed: false,
     })
 }
@@ -449,17 +537,17 @@ async fn start_launching<R: ProviderRuntime>(
     runtime: &R,
     context: &SessionRuntimeContext,
     initial_prompt: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), ProviderError> {
     let resolved = resolve(runtime, &context.provider_key).await?;
-    if context.yolo && !resolved.provider.supports(ProviderFeature::Yolo) {
-        return Err(format!(
-            "{} does not support auto-approve",
-            resolved.provider.label
+    if context.auto_approve && !resolved.provider.supports(ProviderFeature::AutoApprove) {
+        return Err(ProviderError::new(
+            ProviderErrorCode::Unsupported,
+            format!("{} does not support auto-approve", resolved.provider.label),
         ));
     }
     let mut params = context.params(&resolved.provider);
     if let Some(prompt) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
-        check_prompt_size(prompt)?;
+        check_prompt_size(prompt).map_err(too_large)?;
         params.insert("initial_prompt".into(), prompt.into());
     }
     let started = bind_and_request(
@@ -488,10 +576,13 @@ async fn start_launching<R: ProviderRuntime>(
 pub async fn ensure<R: ProviderRuntime>(
     runtime: &R,
     session_id: &str,
-) -> Result<ResolvedProvider, String> {
+) -> Result<ResolvedProvider, ProviderError> {
     let lock = runtime.sessions().session_lock(session_id);
     let _ensuring = lock.lock().await;
-    let context = runtime.session_context(session_id).await?;
+    let context = runtime
+        .session_context(session_id)
+        .await
+        .map_err(not_running)?;
     let resolved = resolve(runtime, &context.provider_key).await?;
     let instance = runtime.running_instance(&resolved.plugin_id).await;
     if let Some(binding) = runtime.sessions().get(session_id) {
@@ -499,9 +590,48 @@ pub async fn ensure<R: ProviderRuntime>(
             return Ok(resolved);
         }
     }
-    let params = context.params(&resolved.provider);
+    let mut params = context.params(&resolved.provider);
+    // The host's record wins: a sidecar restarted during a handoff must not forget it,
+    // and one an app restart ended is over, its terminal gone with the app.
+    params.insert(
+        "handed_off".into(),
+        runtime.sessions().is_handed_off(session_id).into(),
+    );
     bind_and_request(runtime, session_id, &resolved, protocol::RESUME, params).await?;
     Ok(resolved)
+}
+
+/// Sends a request to the provider driving the session, resuming it first when needed.
+/// A plugin that answers it does not know the session, as one that lost it, gets it
+/// resumed and the request once more.
+async fn request_session<R: ProviderRuntime>(
+    runtime: &R,
+    session_id: &str,
+    method: &str,
+    params: Value,
+) -> Result<(ResolvedProvider, Value), ProviderError> {
+    let resolved = ensure(runtime, session_id).await?;
+    match request_bound(runtime, session_id, method, params.clone()).await {
+        Err(error) if error.rpc_code() == Some(error_code::SESSION_NOT_FOUND) => {
+            tracing::info!(session_id, %method, "provider lost the session; resuming it");
+            runtime.sessions().unbind(session_id);
+            let resolved = ensure(runtime, session_id).await?;
+            let value = request_bound(runtime, session_id, method, params).await?;
+            Ok((resolved, value))
+        }
+        result => Ok((resolved, result?)),
+    }
+}
+
+fn too_large(message: String) -> ProviderError {
+    ProviderError::new(ProviderErrorCode::PromptTooLarge, message)
+}
+
+fn handed_off_error() -> ProviderError {
+    ProviderError::new(
+        ProviderErrorCode::HandedOff,
+        "The session continues in a terminal. Send it there, or close the terminal to return to the chat.",
+    )
 }
 
 async fn bind_and_request<R: ProviderRuntime>(
@@ -510,11 +640,11 @@ async fn bind_and_request<R: ProviderRuntime>(
     resolved: &ResolvedProvider,
     method: &str,
     params: serde_json::Map<String, Value>,
-) -> Result<(), String> {
+) -> Result<(), ProviderError> {
     let instance = runtime
         .running_instance(&resolved.plugin_id)
         .await
-        .ok_or_else(|| format!("plugin {} is not running", resolved.plugin_id))?;
+        .ok_or_else(|| not_running(format!("plugin {} is not running", resolved.plugin_id)))?;
     let sessions = runtime.sessions();
     sessions.bind(
         session_id,
@@ -530,7 +660,7 @@ async fn bind_and_request<R: ProviderRuntime>(
     if result.is_err() {
         sessions.unbind(session_id);
     }
-    result.map(|_| ())
+    result.map(|_| ()).map_err(ProviderError::from)
 }
 
 /// Deliver user or automation input to a provider session.
@@ -538,19 +668,18 @@ pub async fn send<R: ProviderRuntime>(
     runtime: &R,
     session_id: &str,
     text: &str,
-) -> Result<(), String> {
+) -> Result<(), ProviderError> {
     if text.trim().is_empty() {
-        return Err("prompt text must not be empty".to_string());
+        return Err(ProviderError::new(
+            ProviderErrorCode::PluginError,
+            "prompt text must not be empty",
+        ));
     }
-    check_prompt_size(text)?;
+    check_prompt_size(text).map_err(too_large)?;
     if runtime.sessions().is_handed_off(session_id) {
-        return Err(
-            "The session continues in a terminal. Send it there, or close the terminal to return to the chat."
-                .to_string(),
-        );
+        return Err(handed_off_error());
     }
-    ensure(runtime, session_id).await?;
-    request_bound(
+    request_session(
         runtime,
         session_id,
         protocol::SEND,
@@ -560,9 +689,11 @@ pub async fn send<R: ProviderRuntime>(
     .map(|_| ())
 }
 
-pub async fn interrupt<R: ProviderRuntime>(runtime: &R, session_id: &str) -> Result<(), String> {
-    ensure(runtime, session_id).await?;
-    request_bound(
+pub async fn interrupt<R: ProviderRuntime>(
+    runtime: &R,
+    session_id: &str,
+) -> Result<(), ProviderError> {
+    request_session(
         runtime,
         session_id,
         protocol::INTERRUPT,
@@ -577,12 +708,12 @@ async fn request_bound<R: ProviderRuntime>(
     session_id: &str,
     method: &str,
     params: Value,
-) -> Result<Value, String> {
+) -> Result<Value, ProviderError> {
     let binding = runtime
         .sessions()
         .get(session_id)
-        .ok_or_else(|| format!("session {session_id} has no running provider"))?;
-    runtime.request(&binding.plugin_id, method, params).await
+        .ok_or_else(|| not_running(format!("session {session_id} has no running provider")))?;
+    Ok(runtime.request(&binding.plugin_id, method, params).await?)
 }
 
 /// Hand a session's conversation to its agent's own TUI. The provider detaches
@@ -590,12 +721,15 @@ async fn request_bound<R: ProviderRuntime>(
 pub async fn handoff<R: ProviderRuntime>(
     runtime: &R,
     session_id: &str,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, ProviderError> {
     let provider = ensure(runtime, session_id).await?.provider;
     if !provider.supports(ProviderFeature::Handoff) {
-        return Err(format!("{} cannot continue in a terminal", provider.label));
+        return Err(ProviderError::new(
+            ProviderErrorCode::Unsupported,
+            format!("{} cannot continue in a terminal", provider.label),
+        ));
     }
-    let value = request_bound(
+    let (_, value) = request_session(
         runtime,
         session_id,
         protocol::HANDOFF,
@@ -606,7 +740,8 @@ pub async fn handoff<R: ProviderRuntime>(
     runtime.sessions().set_handed_off(session_id, true);
     let argv = serde_json::from_value::<HandoffResponse>(value)
         .map_err(|error| format!("invalid provider handoff: {error}"))
-        .and_then(|response| validate_handoff_argv(response.argv));
+        .and_then(|response| validate_handoff_argv(response.argv))
+        .map_err(ProviderError::from);
     if argv.is_err() {
         // Without a command to continue in, nothing would ever drive the session again.
         if let Err(error) = handback(runtime, session_id).await {
@@ -617,16 +752,18 @@ pub async fn handoff<R: ProviderRuntime>(
 }
 
 /// The terminal that continued a session closed; the provider drives it again.
-pub async fn handback<R: ProviderRuntime>(runtime: &R, session_id: &str) -> Result<(), String> {
+pub async fn handback<R: ProviderRuntime>(
+    runtime: &R,
+    session_id: &str,
+) -> Result<(), ProviderError> {
     // The terminal is gone, so prompts go to the provider again.
     runtime.sessions().set_handed_off(session_id, false);
-    // A sidecar restarted during the handoff restores the handoff from its transcript,
-    // so it must be resumed to hear that the terminal closed. Ended sessions need nothing.
+    // Ended sessions need nothing; a sidecar restarted during the handoff is resumed first,
+    // handed off, and hears the terminal closed through this handback.
     if runtime.session_context(session_id).await.is_err() {
         return Ok(());
     }
-    ensure(runtime, session_id).await?;
-    request_bound(
+    request_session(
         runtime,
         session_id,
         protocol::HANDBACK,
@@ -637,18 +774,33 @@ pub async fn handback<R: ProviderRuntime>(runtime: &R, session_id: &str) -> Resu
 }
 
 /// Stop a provider session that left the active state. A turn it was running stops showing
-/// as busy. Sessions the current sidecar never resumed have nothing running and need no request.
-pub async fn stop<R: ProviderRuntime>(runtime: &R, session_id: &str, reason: StopReason) {
+/// as busy. The plugin hears of it even when it does not run the session, so it can drop
+/// what it keeps for it; `provider_key` names the plugin of a session no sidecar drives.
+pub async fn stop<R: ProviderRuntime>(
+    runtime: &R,
+    session_id: &str,
+    provider_key: Option<&str>,
+    reason: StopReason,
+) {
     let sessions = runtime.sessions();
     let lock = sessions.session_lock(session_id);
     {
         let _stopping = lock.lock().await;
         sessions.end_launch(session_id);
         sessions.set_handed_off(session_id, false);
+        sessions.state.lock().unwrap().last_seq.remove(session_id);
         let binding = sessions.unbind(session_id);
         runtime.status().release(session_id);
-        if let Some(binding) = binding {
-            request_stop(runtime, session_id, &binding, reason).await;
+        let plugin_id = binding
+            .as_ref()
+            .map(|binding| binding.plugin_id.as_str())
+            .or_else(|| {
+                provider_key
+                    .and_then(parse_provider_key)
+                    .map(|(plugin_id, _)| plugin_id)
+            });
+        if let Some(plugin_id) = plugin_id {
+            request_stop(runtime, session_id, plugin_id, reason).await;
         }
     }
     sessions.forget_lock(session_id, &lock);
@@ -657,22 +809,18 @@ pub async fn stop<R: ProviderRuntime>(runtime: &R, session_id: &str, reason: Sto
 async fn request_stop<R: ProviderRuntime>(
     runtime: &R,
     session_id: &str,
-    binding: &Binding,
+    plugin_id: &str,
     reason: StopReason,
 ) {
-    if runtime.running_instance(&binding.plugin_id).await != Some(binding.instance) {
+    // A plugin that is not running hears of it through its next reconciliation.
+    if runtime.running_instance(plugin_id).await.is_none() {
         return;
     }
     let params = serde_json::json!({ "session_id": session_id, "reason": reason });
-    match runtime
-        .request(&binding.plugin_id, protocol::STOP, params)
-        .await
-    {
-        Ok(_) => {
-            tracing::info!(session_id, plugin_id = %binding.plugin_id, ?reason, "stopped provider session")
-        }
+    match runtime.request(plugin_id, protocol::STOP, params).await {
+        Ok(_) => tracing::info!(session_id, plugin_id, ?reason, "stopped provider session"),
         Err(error) => {
-            tracing::warn!(session_id, plugin_id = %binding.plugin_id, provider_id = %binding.provider_id, %error, "provider session stop failed")
+            tracing::warn!(session_id, plugin_id, %error, "provider session stop failed")
         }
     }
 }
@@ -729,7 +877,7 @@ pub async fn reconcile<R: ProviderRuntime>(runtime: &R) -> Vec<String> {
         Ok(statuses) => {
             for (session_id, status) in statuses {
                 if let Some(reason) = ended_reason(status.as_deref()) {
-                    stop(runtime, &session_id, reason).await;
+                    stop(runtime, &session_id, None, reason).await;
                     stopped.push(session_id);
                 }
             }
@@ -936,6 +1084,10 @@ pub(crate) mod fake {
         pub(crate) resume_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
         /// What the provider answers a handoff with, instead of a runnable argv.
         pub(crate) handoff_answer: Mutex<Option<Value>>,
+        /// A method the provider answers once with "session not found", as one that lost it.
+        pub(crate) loses_session_on: Mutex<Option<&'static str>>,
+        /// The params of the last request of each method.
+        pub(crate) params: Mutex<HashMap<String, Value>>,
         pub(crate) status: FakeStatus,
     }
 
@@ -966,7 +1118,7 @@ pub(crate) mod fake {
             session_id: session_id.into(),
             provider_key: "chat:claude".into(),
             cwd: "/workspace".into(),
-            yolo: false,
+            auto_approve: false,
             extra_path_dirs: Vec::new(),
         }
     }
@@ -1011,6 +1163,20 @@ pub(crate) mod fake {
                 .lock()
                 .unwrap()
                 .push((method.to_string(), bound));
+            self.params
+                .lock()
+                .unwrap()
+                .insert(method.to_string(), params.clone());
+            {
+                let mut loses = self.loses_session_on.lock().unwrap();
+                if *loses == Some(method) {
+                    *loses = None;
+                    return Err(format!(
+                        "plugin RPC error {}: unknown session",
+                        error_code::SESSION_NOT_FOUND
+                    ));
+                }
+            }
             let gate = self.resume_gate.lock().unwrap().clone();
             if let (protocol::RESUME, Some(gate)) = (method, gate) {
                 gate.notified().await;
@@ -1117,18 +1283,124 @@ mod tests {
         assert!(ensure(&runtime, "s1")
             .await
             .unwrap_err()
+            .message
             .contains("not active"));
         assert!(runtime.sent().is_empty());
     }
 
     #[tokio::test]
-    async fn stop_skips_a_session_its_current_sidecar_never_resumed() {
+    async fn stop_reaches_the_plugin_even_when_no_sidecar_drives_the_session() {
         let runtime = FakeRuntime::running(&[("s1", "active")]);
         ensure(&runtime, "s1").await.unwrap();
         *runtime.instance.lock().unwrap() = Some(2);
-        stop(&runtime, "s1", StopReason::Archive).await;
-        assert_eq!(runtime.sent(), [protocol::RESUME]);
+        stop(&runtime, "s1", None, StopReason::Archive).await;
+        assert_eq!(runtime.sent(), [protocol::RESUME, protocol::STOP]);
         assert!(runtime.sessions.get("s1").is_none());
+
+        // Never bound in this run: its provider key names the plugin.
+        stop(&runtime, "s2", Some("chat:claude"), StopReason::Destroy).await;
+        assert_eq!(
+            runtime.params.lock().unwrap()[protocol::STOP]["session_id"],
+            "s2"
+        );
+        // Without one, nothing can be told.
+        stop(&runtime, "s3", None, StopReason::Destroy).await;
+        assert_eq!(
+            runtime.sent(),
+            [protocol::RESUME, protocol::STOP, protocol::STOP]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stopped_plugin_hears_of_ended_sessions_through_reconciliation() {
+        let runtime = FakeRuntime::running(&[]);
+        *runtime.instance.lock().unwrap() = None;
+        stop(&runtime, "s1", Some("chat:claude"), StopReason::Archive).await;
+        assert!(runtime.sent().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_resume_carries_whether_the_session_is_handed_off() {
+        let runtime = FakeRuntime::running(&[("s1", "active")]);
+        handoff(&runtime, "s1").await.unwrap();
+        assert_eq!(
+            runtime.params.lock().unwrap()[protocol::RESUME]["handed_off"],
+            false
+        );
+        // The sidecar restarts while the terminal still runs.
+        *runtime.instance.lock().unwrap() = Some(2);
+        ensure(&runtime, "s1").await.unwrap();
+        assert_eq!(
+            runtime.params.lock().unwrap()[protocol::RESUME]["handed_off"],
+            true
+        );
+    }
+
+    #[tokio::test]
+    async fn a_plugin_that_lost_a_session_gets_it_resumed_once() {
+        let runtime = FakeRuntime::running(&[("s1", "active")]);
+        *runtime.loses_session_on.lock().unwrap() = Some(protocol::SEND);
+        send(&runtime, "s1", "hi").await.unwrap();
+        assert_eq!(
+            runtime.sent(),
+            [
+                protocol::RESUME,
+                protocol::SEND,
+                protocol::RESUME,
+                protocol::SEND
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn failures_say_why_to_the_session_ui() {
+        let runtime = FakeRuntime::running(&[("s1", "active"), ("done", "archived")]);
+        let code = |error: ProviderError| error.code;
+        assert_eq!(
+            code(
+                send(&runtime, "s1", &"x".repeat(protocol::MAX_PROMPT_BYTES))
+                    .await
+                    .unwrap_err()
+            ),
+            ProviderErrorCode::PromptTooLarge
+        );
+        assert_eq!(
+            code(send(&runtime, "done", "hi").await.unwrap_err()),
+            ProviderErrorCode::NotRunning
+        );
+        handoff(&runtime, "s1").await.unwrap();
+        assert_eq!(
+            code(send(&runtime, "s1", "hi").await.unwrap_err()),
+            ProviderErrorCode::HandedOff
+        );
+        let from_plugin =
+            |code: i64| ProviderError::from(format!("plugin RPC error {code}: refused")).code;
+        assert_eq!(
+            from_plugin(error_code::UNAVAILABLE),
+            ProviderErrorCode::Unavailable
+        );
+        assert_eq!(
+            from_plugin(error_code::HANDED_OFF),
+            ProviderErrorCode::HandedOff
+        );
+        assert_eq!(from_plugin(-32000), ProviderErrorCode::PluginError);
+        assert_eq!(
+            serde_json::to_value(ProviderError::new(ProviderErrorCode::NotRunning, "gone"))
+                .unwrap(),
+            serde_json::json!({ "code": "not_running", "message": "gone" })
+        );
+    }
+
+    #[test]
+    fn event_seq_only_increases_per_session() {
+        let sessions = Arc::new(ProviderSessions::default());
+        bound(&sessions, "s1", 1);
+        let status = Arc::new(FakeStatus::default());
+        let sink = NotificationSink::new(status.clone(), "chat", 1, sessions);
+        for seq in [1, 3, 3, 2, 0] {
+            assert!(sink.try_handle(&event_frame("s1", seq)));
+        }
+        assert_eq!(status.take(), ["event s1 1", "event s1 3"]);
     }
 
     #[tokio::test]
@@ -1150,7 +1422,7 @@ mod tests {
             .insert("s1".into(), "archived".into());
         let stopping = tokio::spawn({
             let runtime = runtime.clone();
-            async move { stop(&*runtime, "s1", StopReason::Archive).await }
+            async move { stop(&*runtime, "s1", None, StopReason::Archive).await }
         });
         tokio::task::yield_now().await;
         // The stop waits for the resume it would otherwise race.
@@ -1189,15 +1461,16 @@ mod tests {
 
     #[test]
     fn only_provider_notifications_are_consumed() {
-        let event = r#"{"jsonrpc":"2.0","method":"host.session.event","params":{"session_id":"s","seq":1,"payload":{}}}"#;
+        let event = r#"{"jsonrpc":"2.0","method":"host.providerSession.event","params":{"session_id":"s","seq":1,"payload":{}}}"#;
         assert_eq!(
             provider_notification(event).map(|(method, _)| method),
             Some(EVENT_NOTIFICATION.to_string())
         );
-        let status = r#"{"jsonrpc":"2.0","method":"host.session.status","params":{}}"#;
+        let status = r#"{"jsonrpc":"2.0","method":"host.providerSession.status","params":{}}"#;
         assert!(provider_notification(status).is_some());
         // Callbacks carry an id and stay on the request path.
-        let callback = r#"{"jsonrpc":"2.0","id":7,"method":"host.session.event","params":{}}"#;
+        let callback =
+            r#"{"jsonrpc":"2.0","id":7,"method":"host.providerSession.event","params":{}}"#;
         assert!(provider_notification(callback).is_none());
         let other = r#"{"jsonrpc":"2.0","method":"host.sessions.prompt","params":{}}"#;
         assert!(provider_notification(other).is_none());
@@ -1287,6 +1560,15 @@ mod tests {
         );
     }
 
+    fn event_frame(session_id: &str, seq: u64) -> String {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": EVENT_NOTIFICATION,
+            "params": { "session_id": session_id, "seq": seq, "payload": {} },
+        })
+        .to_string()
+    }
+
     fn status_frame(session_id: &str, status: &str) -> String {
         serde_json::json!({
             "jsonrpc": "2.0",
@@ -1339,7 +1621,7 @@ mod tests {
 
         let current = NotificationSink::new(status.clone(), "chat", 1, sessions.clone());
         assert!(current.try_handle(&status_frame("s1", "busy")));
-        let event = r#"{"jsonrpc":"2.0","method":"host.session.event","params":{"session_id":"s1","seq":3,"payload":{}}}"#;
+        let event = r#"{"jsonrpc":"2.0","method":"host.providerSession.event","params":{"session_id":"s1","seq":3,"payload":{}}}"#;
         assert!(current.try_handle(event));
         assert_eq!(status.take(), ["Busy s1", "event s1 3"]);
     }
@@ -1362,7 +1644,7 @@ mod tests {
     async fn stopping_a_session_ends_a_running_turn_and_forgets_its_lock() {
         let runtime = FakeRuntime::running(&[("s1", "active")]);
         ensure(&runtime, "s1").await.unwrap();
-        stop(&runtime, "s1", StopReason::Archive).await;
+        stop(&runtime, "s1", None, StopReason::Archive).await;
         assert_eq!(runtime.status.take(), ["release s1"]);
         assert_eq!(runtime.sent(), [protocol::RESUME, protocol::STOP]);
         assert!(runtime.sessions.locks.lock().unwrap().is_empty());
@@ -1389,6 +1671,7 @@ mod tests {
         assert!(send(&runtime, "s1", "hi")
             .await
             .unwrap_err()
+            .message
             .contains("continues in a terminal"));
         handback(&runtime, "s1").await.unwrap();
         send(&runtime, "s1", "hi").await.unwrap();

@@ -57,8 +57,8 @@ export function findRuntimeProvider(
   return plugin && provider ? { plugin, provider } : null;
 }
 
-export function supportsYolo(provider: PluginProvider): boolean {
-  return provider.supports.includes("yolo");
+export function supportsAutoApprove(provider: PluginProvider): boolean {
+  return provider.supports.includes("auto_approve");
 }
 
 export function supportsHandoff(provider: PluginProvider): boolean {

@@ -232,9 +232,14 @@ pub async fn local_plugin_provider_ui_source(
         .await
 }
 
+use crate::plugin_providers::ProviderError;
+
 /// Called when a provider session's UI mounts; resumes it after an app or plugin restart.
 #[tauri::command]
-pub async fn provider_session_ensure(session_id: String, app: AppHandle) -> Result<(), String> {
+pub async fn provider_session_ensure(
+    session_id: String,
+    app: AppHandle,
+) -> Result<(), ProviderError> {
     crate::plugin_providers::ensure(&crate::plugin_providers::AppRuntime::new(&app), &session_id)
         .await
         .map(|_| ())
@@ -245,7 +250,7 @@ pub async fn provider_session_send(
     session_id: String,
     text: String,
     app: AppHandle,
-) -> Result<(), String> {
+) -> Result<(), ProviderError> {
     crate::plugin_providers::send(
         &crate::plugin_providers::AppRuntime::new(&app),
         &session_id,
@@ -255,7 +260,10 @@ pub async fn provider_session_send(
 }
 
 #[tauri::command]
-pub async fn provider_session_interrupt(session_id: String, app: AppHandle) -> Result<(), String> {
+pub async fn provider_session_interrupt(
+    session_id: String,
+    app: AppHandle,
+) -> Result<(), ProviderError> {
     crate::plugin_providers::interrupt(&crate::plugin_providers::AppRuntime::new(&app), &session_id)
         .await
 }
@@ -265,13 +273,16 @@ pub async fn provider_session_interrupt(session_id: String, app: AppHandle) -> R
 pub async fn provider_session_handoff(
     session_id: String,
     app: AppHandle,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, ProviderError> {
     crate::plugin_providers::handoff(&crate::plugin_providers::AppRuntime::new(&app), &session_id)
         .await
 }
 
 #[tauri::command]
-pub async fn provider_session_handback(session_id: String, app: AppHandle) -> Result<(), String> {
+pub async fn provider_session_handback(
+    session_id: String,
+    app: AppHandle,
+) -> Result<(), ProviderError> {
     crate::plugin_providers::handback(&crate::plugin_providers::AppRuntime::new(&app), &session_id)
         .await
 }

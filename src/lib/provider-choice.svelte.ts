@@ -1,4 +1,8 @@
-import { isReservedProviderKey, supportsYolo, type RuntimeProvider } from "./plugin-providers";
+import {
+  isReservedProviderKey,
+  supportsAutoApprove,
+  type RuntimeProvider,
+} from "./plugin-providers";
 import { getSettings } from "./settings.svelte";
 
 /**
@@ -24,7 +28,7 @@ export class ProviderChoice {
     this.key = $derived(this.selected || getSettings().default_provider);
     this.autoApproveBlocked = $derived.by(() => {
       const chosen = runtimeProviders().find((provider) => provider.key === this.key);
-      return chosen && !supportsYolo(chosen.provider)
+      return chosen && !supportsAutoApprove(chosen.provider)
         ? `${chosen.provider.label} does not support auto-approve`
         : undefined;
     });

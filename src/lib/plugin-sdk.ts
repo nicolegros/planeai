@@ -1,4 +1,10 @@
-import type { PluginInventory, PluginUiContribution, Project, TaskItem } from "./types";
+import type {
+  PluginInventory,
+  PluginProvider,
+  PluginUiContribution,
+  Project,
+  TaskItem,
+} from "./types";
 import type { PluginSidebarNavRow } from "./plugin-sidebar-navigation.svelte";
 
 export interface PluginModalControls {
@@ -78,20 +84,30 @@ export interface PluginUiHost {
   /**
    * Present only for a provider's session UI. Input goes through the host so CLI,
    * recipes and the UI share one delivery path; events are the sidecar's own
-   * `host.session.event` payloads, in `seq` order, for this session only.
+   * `host.providerSession.event` payloads, in `seq` order, for this session only.
+   * Failed requests reject with an `Error` whose `code` is a {@link PluginSessionErrorCode}.
    */
   session?: {
     send(text: string): Promise<void>;
     interrupt(): Promise<void>;
     onEvent(listener: (event: PluginSessionEvent) => void): () => void;
     /**
-     * For providers that support `handoff`: continue the session in its agent's
+     * Present when the provider supports `handoff`: continue the session in its agent's
      * TUI in a terminal tab. `handback` closes that tab and returns to the chat.
      */
-    handoff(): Promise<void>;
-    handback(): Promise<void>;
+    handoff?(): Promise<void>;
+    handback?(): Promise<void>;
   };
 }
+
+/** Why a session request failed. */
+export type PluginSessionErrorCode =
+  | "handed_off"
+  | "prompt_too_large"
+  | "not_running"
+  | "unsupported"
+  | "unavailable"
+  | "plugin_error";
 
 export interface PluginSessionEvent {
   seq: number;
@@ -111,8 +127,10 @@ export interface PluginSessionContext {
 export interface PluginUiContext {
   plugin: PluginInventory;
   contribution: PluginUiContribution;
-  /** Present for generic session.panel, session.indicator, and titlebar contributions. */
+  /** Present for session.main (a provider's session UI), session.panel, session.indicator, and titlebar contributions. */
   session?: PluginSessionContext;
+  /** Present for a provider's session UI: the provider the session runs on. */
+  provider?: PluginProvider;
   host: PluginUiHost;
 }
 

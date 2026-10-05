@@ -36,7 +36,7 @@
       "id": "echo",
       "label": "Echo (fixture)",
       "entrypoint": "ui/chat.js",
-      "supports": ["yolo", "handoff"]
+      "supports": ["auto_approve", "handoff"]
     }
   ]
 }

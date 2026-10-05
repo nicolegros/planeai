@@ -164,13 +164,16 @@ pub enum PluginHostCapability {
 }
 
 /// A session runtime a plugin offers as a provider; its UI replaces the agent terminal.
+/// Fields and features from newer hosts are ignored, so such a plugin still loads.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct PluginProvider {
     pub id: String,
     pub label: String,
     pub entrypoint: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "planeai_plugin_contract::deserialize_provider_features"
+    )]
     pub supports: Vec<ProviderFeature>,
 }
 
@@ -645,11 +648,19 @@ fn parse_json_rpc_response(
     Ok((response, result))
 }
 
+const PLUGIN_RPC_ERROR: &str = "plugin RPC error ";
+
+/// The JSON-RPC error code a plugin answered a request with, from the request's error.
+pub(crate) fn plugin_rpc_error_code(error: &str) -> Option<i64> {
+    let (code, _) = error.strip_prefix(PLUGIN_RPC_ERROR)?.split_once(':')?;
+    code.parse().ok()
+}
+
 fn decode_json_rpc_response(line: &str, expected_id: u64) -> Result<Value, String> {
     let (response, result) = parse_json_rpc_response(line, expected_id)?;
     if let Some(error) = response.error {
         return Err(format!(
-            "plugin RPC error {}: {}",
+            "{PLUGIN_RPC_ERROR}{}: {}",
             error.code, error.message
         ));
     }
@@ -703,7 +714,7 @@ fn is_fatal_plugin_runtime_error(error: &str) -> bool {
     // leaves the sidecar untouched. Any other request failure means stdout or
     // the request protocol can no longer be trusted, so retire this runtime
     // before another request can consume a stale or malformed frame.
-    !error.starts_with("plugin RPC error ")
+    !error.starts_with(PLUGIN_RPC_ERROR)
         && !error.starts_with(REQUEST_NOT_SENT)
         && !error.ends_with(" request queue timed out")
 }
@@ -1399,7 +1410,7 @@ fn dispatch_plugin_session_prompt(
     send: impl FnOnce(&str, &str) -> Result<(), String>,
 ) -> Result<Value, String> {
     if !capabilities.contains(&PluginHostCapability::SessionsPrompt) {
-        return Err("plugin capability is not granted".to_string());
+        return Err(CAPABILITY_NOT_GRANTED.to_string());
     }
     let prompt = serde_json::from_value(params)
         .map_err(|error| format!("invalid plugin session prompt: {error}"))
@@ -1426,6 +1437,9 @@ fn request_timeout(method: &str) -> Duration {
     match method {
         "jira.syncNow" => JIRA_SYNC_RPC_TIMEOUT,
         "plugin.taskLifecycle" | "plugin.sessionLifecycle" => JIRA_LIFECYCLE_RPC_TIMEOUT,
+        method if method.starts_with("provider.") => {
+            planeai_plugin_contract::provider::request_timeout(method)
+        }
         _ => RPC_TIMEOUT,
     }
 }
@@ -1559,6 +1573,10 @@ impl RuntimeProcess {
                 .unwrap_or_else(|| Err(STDOUT_CLOSED_ERROR.to_string()))?;
             let value: Value = serde_json::from_str(frame.trim_end())
                 .map_err(|e| format!("malformed plugin JSON-RPC frame: {e}"))?;
+            if let Some(method) = ignored_notification(&value) {
+                tracing::warn!(plugin_id = %self.plugin_id, method, "ignored a host notification this host does not know");
+                continue;
+            }
             if value.get("method").is_some() {
                 self.handle_plugin_request(parse_json_rpc_callback_request(value)?)
                     .await?;
@@ -1576,7 +1594,7 @@ impl RuntimeProcess {
                     .capabilities
                     .contains(&PluginHostCapability::SessionActions)
                 {
-                    Err("plugin capability is not granted".to_string())
+                    Err(CAPABILITY_NOT_GRANTED.to_string())
                 } else {
                     let actions = serde_json::from_value(params)
                         .map_err(|error| format!("invalid plugin session actions: {error}"))
@@ -1598,7 +1616,7 @@ impl RuntimeProcess {
                     .capabilities
                     .contains(&PluginHostCapability::SessionAdvisories)
                 {
-                    Err("plugin capability is not granted".to_string())
+                    Err(CAPABILITY_NOT_GRANTED.to_string())
                 } else {
                     serde_json::from_value(params)
                         .map_err(|error| format!("invalid plugin session advisory: {error}"))
@@ -1632,7 +1650,7 @@ impl RuntimeProcess {
                     .capabilities
                     .contains(&PluginHostCapability::SessionsComplete)
                 {
-                    Err("plugin capability is not granted".to_string())
+                    Err(CAPABILITY_NOT_GRANTED.to_string())
                 } else {
                     serde_json::from_value(params)
                         .map_err(|error| format!("invalid plugin session completion: {error}"))
@@ -1772,15 +1790,30 @@ impl RuntimeProcess {
     }
 }
 
+const HOST_METHOD_NOT_FOUND: &str = "host method not found";
+const CAPABILITY_NOT_GRANTED: &str = "plugin capability is not granted";
+
+/// The JSON-RPC error code a failed host callback answers with.
+fn callback_error_code(message: &str) -> i64 {
+    match message {
+        HOST_METHOD_NOT_FOUND => -32601,
+        CAPABILITY_NOT_GRANTED => -32003,
+        message if message.starts_with("invalid ") => -32602,
+        _ => -32603,
+    }
+}
+
 fn encode_host_callback_response(
     id: Value,
     result: Result<Value, String>,
 ) -> Result<String, String> {
     let response = match result {
         Ok(result) => serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-        Err(message) => {
-            serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": message } })
-        }
+        Err(message) => serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": callback_error_code(&message), "message": message },
+        }),
     };
     let mut frame = serde_json::to_string(&response)
         .map_err(|error| format!("failed to encode host callback response: {error}"))?;
@@ -1959,7 +1992,7 @@ async fn execute_host_task(
         "host.tasks.createChild" => PluginHostCapability::TasksCreate,
         "host.task.create" => PluginHostCapability::TasksCreate,
         "host.task.update" => PluginHostCapability::TasksUpdate,
-        _ => return Err("host method not found".to_string()),
+        _ => return Err(HOST_METHOD_NOT_FOUND.to_string()),
     };
     if !capabilities.contains(&required)
         || (matches!(
@@ -1967,7 +2000,7 @@ async fn execute_host_task(
             "host.task.create" | "host.task.update" | "host.jira.legacyIssue.matches"
         ) && plugin_id != JIRA_PLUGIN_ID)
     {
-        return Err("plugin capability is not granted".to_string());
+        return Err(CAPABILITY_NOT_GRANTED.to_string());
     }
 
     if method == "host.projects.list" {
@@ -2881,7 +2914,13 @@ impl PluginRuntimeSupervisor {
                     .clone();
                 tabs.session_ended(&event.session_id).await;
                 let runtime = crate::plugin_providers::AppRuntime::new(&supervisor.app);
-                crate::plugin_providers::stop(&runtime, &event.session_id, reason).await;
+                crate::plugin_providers::stop(
+                    &runtime,
+                    &event.session_id,
+                    event.provider.as_deref(),
+                    reason,
+                )
+                .await;
             }
             let event = match serde_json::to_value(&event) {
                 Ok(event) => event,
@@ -3298,6 +3337,7 @@ impl PluginRuntimeSupervisor {
                 serde_json::json!({
                     "host_api_version": inventory.host_api_version,
                     "host_capabilities": capabilities,
+                    "host_features": planeai_plugin_contract::provider::HOST_FEATURES,
                 }),
             )
             .await;
@@ -3343,6 +3383,21 @@ impl PluginRuntimeSupervisor {
             });
         }
         tracing::info!(plugin_id = %handshake.plugin_id, version = %handshake.plugin_version, "plugin runtime handshake completed");
+        if process
+            .capabilities
+            .contains(&PluginHostCapability::Providers)
+        {
+            // Before the runtime is published, so no start or resume can precede it.
+            if let Err(error) = self.reconcile_provider_sessions(&id, &process).await {
+                if is_fatal_plugin_runtime_error(&error) {
+                    let _ = stop_process(process).await;
+                    self.update_state(&id, true, PluginRuntimeState::Error, Some(error.clone()))
+                        .await?;
+                    return Err(error);
+                }
+                tracing::warn!(plugin_id = %id, %error, "provider session reconciliation failed");
+            }
+        }
 
         // Publish the ready runtime before emitting the running lifecycle event so
         // mounted UI contributions cannot observe `running` without a callable handle.
@@ -3372,6 +3427,39 @@ impl PluginRuntimeSupervisor {
         self.inventory(&id)
             .await?
             .ok_or_else(|| format!("plugin inventory entry not found after startup: {id}"))
+    }
+
+    /// Tells a freshly started provider plugin which of its sessions still exist, so it can
+    /// drop what it keeps for the others.
+    async fn reconcile_provider_sessions(
+        &self,
+        plugin_id: &str,
+        process: &RuntimeProcess,
+    ) -> Result<(), String> {
+        let owner = plugin_id.to_string();
+        let sessions = self
+            .with_db(move |conn| {
+                crate::db::list_plugin_provider_sessions(conn, &owner)
+                    .map_err(|error| error.to_string())
+            })
+            .await?;
+        let sessions = sessions
+            .into_iter()
+            .map(|(session_id, provider_id, status)| {
+                serde_json::json!({
+                    "session_id": session_id,
+                    "provider_id": provider_id,
+                    "status": status,
+                })
+            })
+            .collect::<Vec<_>>();
+        process
+            .request(
+                planeai_plugin_contract::provider::RECONCILE,
+                serde_json::json!({ "sessions": sessions }),
+            )
+            .await
+            .map(|_| ())
     }
 
     pub async fn disable(&self, plugin_id: &str) -> Result<PluginInventory, String> {
@@ -3615,6 +3703,19 @@ fn parse_json_rpc_callback_request(value: Value) -> Result<JsonRpcCallbackReques
         );
     }
     Ok(JsonRpcCallbackRequest { id, method, params })
+}
+
+/// A notification to a host method this host does not know, as one from a newer host's
+/// contract. Anything else with a method is a callback, which must carry an id.
+fn ignored_notification(frame: &Value) -> Option<&str> {
+    let object = frame.as_object()?;
+    if object.contains_key("id") || object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return None;
+    }
+    object
+        .get("method")?
+        .as_str()
+        .filter(|method| method.starts_with("host."))
 }
 
 fn decode_json_rpc_frame(frame: &str, request_id: u64) -> Result<Value, String> {
@@ -4476,6 +4577,49 @@ mod tests {
     }
 
     #[test]
+    fn unknown_host_notifications_are_ignored_but_callbacks_are_not() {
+        let notification = serde_json::json!({ "jsonrpc": "2.0", "method": "host.future.ping" });
+        assert_eq!(
+            ignored_notification(&notification),
+            Some("host.future.ping")
+        );
+        let callback =
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "host.future.ping" });
+        assert_eq!(ignored_notification(&callback), None);
+        let not_host = serde_json::json!({ "jsonrpc": "2.0", "method": "jira.ping" });
+        assert_eq!(ignored_notification(&not_host), None);
+    }
+
+    #[test]
+    fn host_callback_errors_carry_json_rpc_codes() {
+        assert_eq!(callback_error_code(HOST_METHOD_NOT_FOUND), -32601);
+        assert_eq!(callback_error_code(CAPABILITY_NOT_GRANTED), -32003);
+        assert_eq!(
+            callback_error_code("invalid plugin session advisory: x"),
+            -32602
+        );
+        assert_eq!(callback_error_code("database is locked"), -32603);
+        assert_eq!(
+            plugin_rpc_error_code("plugin RPC error -32010: unknown session"),
+            Some(-32010)
+        );
+        assert_eq!(plugin_rpc_error_code("plugin RPC send timed out"), None);
+    }
+
+    #[test]
+    fn providers_ignore_what_this_host_does_not_know() {
+        let provider: PluginProvider = serde_json::from_value(serde_json::json!({
+            "id": "chat",
+            "label": "Chat",
+            "entrypoint": "ui/chat.js",
+            "icon": "ui/icon.svg",
+            "supports": ["teleport", "handoff"],
+        }))
+        .unwrap();
+        assert_eq!(provider.supports, [ProviderFeature::Handoff]);
+    }
+
+    #[test]
     fn jira_sync_and_lifecycle_use_extended_rpc_timeouts() {
         assert_eq!(request_timeout("jira.syncNow"), JIRA_SYNC_RPC_TIMEOUT);
         assert_eq!(
@@ -4483,6 +4627,10 @@ mod tests {
             JIRA_LIFECYCLE_RPC_TIMEOUT
         );
         assert_eq!(request_timeout("jira.status"), RPC_TIMEOUT);
+        assert_eq!(
+            request_timeout("provider.session.start"),
+            Duration::from_secs(30)
+        );
     }
 
     #[test]

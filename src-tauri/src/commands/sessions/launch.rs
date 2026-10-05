@@ -228,7 +228,7 @@ pub async fn launch_session(
                 session_id: session_id.clone(),
                 provider_key: provider_key.clone(),
                 cwd: working_dir.clone(),
-                yolo: auto_approve,
+                auto_approve,
                 extra_path_dirs: extra_path_dirs.clone(),
             };
             plugin_providers::launch(
@@ -238,6 +238,7 @@ pub async fn launch_session(
             )
             .await
             .map(|launch| provider_launch = Some(launch))
+            .map_err(String::from)
         } else if backend == planeai_rmux::BACKEND {
             spawn_in_rmux(
                 &session_id,

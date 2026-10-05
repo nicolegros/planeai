@@ -13,11 +13,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use planeai_plugin_contract::provider::{
-    self as protocol, is_host_controlled_method, validate_handoff_argv, HandoffResponse,
-    ProviderSessionStatus, SessionEventParams, SessionStatusParams, StopReason, EVENT_NOTIFICATION,
-    STATUS_NOTIFICATION,
+    self as protocol, error_code, is_host_controlled_method, validate_handoff_argv,
+    HandoffResponse, ProviderSessionStatus, SessionEventParams, SessionStatusParams, StopReason,
+    EVENT_NOTIFICATION, STATUS_NOTIFICATION,
 };
-use planeai_plugin_contract::ProviderFeature;
+use planeai_plugin_contract::{known_provider_features, ProviderFeature};
 use serde_json::{json, Map, Value};
 
 #[cfg(test)]
@@ -26,7 +26,6 @@ const MAX_FRAME_BYTES: usize = 64 * 1024;
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const CANCELLATION_ACK_TIMEOUT: Duration = Duration::from_secs(3);
-const PROVIDER_TEST_SESSION: &str = "planeai-cli-plugin-test";
 
 pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>) -> Result<()> {
     let scenario = scenario.map(read_scenario).transpose()?;
@@ -56,6 +55,16 @@ pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>)
     )?;
     let subscriptions = validate_handshake(&handshake, &manifest)?;
     let mut request_id = 2;
+    if capabilities
+        .iter()
+        .any(|capability| capability == "providers")
+    {
+        // A fresh plugin state holds no sessions, so the host lists none.
+        process
+            .call(request_id, protocol::RECONCILE, json!({ "sessions": [] }))
+            .with_context(|| format!("{} failed", protocol::RECONCILE))?;
+        request_id += 1;
+    }
 
     for request in scenario.unwrap_or_default() {
         match request.timeout {
@@ -71,16 +80,19 @@ pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>)
         }
         request_id += 1;
     }
-    if let Some((provider_id, handoff)) = first_provider(&manifest) {
+    let providers = declared_providers(&manifest);
+    if providers.is_empty() && provider_turn.is_some() {
+        bail!("--provider-turn requires a plugin that declares providers");
+    }
+    for (provider_id, handoff) in providers {
         request_id = check_provider(
             &mut process,
             request_id,
             &provider_id,
             handoff,
             provider_turn,
-        )?;
-    } else if provider_turn.is_some() {
-        bail!("--provider-turn requires a plugin that declares providers");
+        )
+        .with_context(|| format!("provider {provider_id}"))?;
     }
     if lifecycle_delivery_is_granted(&capabilities, &subscriptions) {
         process.call(
@@ -97,7 +109,7 @@ pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>)
         request_id += 1;
     }
     if session_lifecycle_delivery_is_granted(&capabilities, &subscriptions) {
-        process.call(request_id, "plugin.sessionLifecycle", json!({ "event": { "type": "status_changed", "session_id": "planeai-cli-plugin-test", "project_id": "plugin-test", "branch": "plugin-test", "linked_task_key": Value::Null, "previous_status": "active", "status": "exited" } }))?;
+        process.call(request_id, "plugin.sessionLifecycle", json!({ "event": { "type": "status_changed", "session_id": uuid::Uuid::new_v4().to_string(), "project_id": "plugin-test", "branch": "plugin-test", "linked_task_key": Value::Null, "previous_status": "active", "status": "exited" } }))?;
         request_id += 1;
     }
     let shutdown_deadline = Instant::now() + SHUTDOWN_TIMEOUT;
@@ -116,17 +128,52 @@ pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>)
     Ok(())
 }
 
-fn first_provider(manifest: &Value) -> Option<(String, bool)> {
-    let provider = manifest.get("providers")?.as_array()?.first()?;
-    let handoff = provider
-        .get("supports")
-        .and_then(|features| serde_json::from_value::<Vec<ProviderFeature>>(features.clone()).ok())
-        .is_some_and(|features| features.contains(&ProviderFeature::Handoff));
-    Some((provider.get("id")?.as_str()?.to_owned(), handoff))
+fn declared_providers(manifest: &Value) -> Vec<(String, bool)> {
+    let providers = manifest.get("providers").and_then(Value::as_array);
+    providers
+        .into_iter()
+        .flatten()
+        .filter_map(|provider| {
+            let supports = provider
+                .get("supports")
+                .and_then(Value::as_array)
+                .map(|features| known_provider_features(features))
+                .unwrap_or_default();
+            Some((
+                provider.get("id")?.as_str()?.to_owned(),
+                supports.contains(&ProviderFeature::Handoff),
+            ))
+        })
+        .collect()
 }
 
-/// Exercise the provider session contract: start, an optional full turn that must
-/// reach `idle`, then stop. Real agent plugins skip the turn so tests stay offline.
+/// Start and resume parameters as the host sends them.
+fn session_params(
+    process: &PluginProcess,
+    session_id: &str,
+    provider_id: &str,
+) -> Map<String, Value> {
+    let socket = process.state.root.join("notify.sock");
+    let params = json!({
+        "session_id": session_id,
+        "provider_id": provider_id,
+        "cwd": process.state.data_dir.display().to_string(),
+        "env": {
+            "PLANEAI_SESSION_ID": session_id,
+            "PLANEAI_SOCKET": socket.display().to_string(),
+            "PATH": std::env::var("PATH").unwrap_or_default(),
+        },
+        "auto_approve": false,
+    });
+    let Value::Object(params) = params else {
+        unreachable!("session params are an object")
+    };
+    params
+}
+
+/// Exercise the provider session contract: start, an optional full turn that must reach
+/// `idle`, the handoff round trip, then the idempotence and unknown-session rules every
+/// provider must follow. Real agent plugins skip the turn so tests stay offline.
 fn check_provider(
     process: &mut PluginProcess,
     mut request_id: u64,
@@ -134,68 +181,115 @@ fn check_provider(
     handoff: bool,
     provider_turn: Option<&str>,
 ) -> Result<u64> {
-    let cwd = process.state.data_dir.display().to_string();
-    process
-        .provider_sessions
-        .insert(PROVIDER_TEST_SESSION.to_owned(), 0);
-    process
-        .call(
-            request_id,
-            protocol::START,
-            json!({
-                "session_id": PROVIDER_TEST_SESSION,
-                "provider_id": provider_id,
-                "cwd": cwd,
-                "env": { "PLANEAI_SESSION_ID": PROVIDER_TEST_SESSION },
-                "yolo": false,
-            }),
-        )
-        .with_context(|| format!("{} failed", protocol::START))?;
-    request_id += 1;
+    let session = uuid::Uuid::new_v4().to_string();
+    let only_session = json!({ "session_id": session });
+    process.provider_sessions.insert(session.clone(), 0);
+    let start = session_params(process, &session, provider_id);
+    call(
+        process,
+        &mut request_id,
+        protocol::START,
+        Value::Object(start),
+    )?;
     if let Some(text) = provider_turn {
         let statuses_before = process.provider_statuses.len();
-        process
-            .call(
-                request_id,
-                protocol::SEND,
-                json!({ "session_id": PROVIDER_TEST_SESSION, "text": text }),
-            )
-            .with_context(|| format!("{} failed", protocol::SEND))?;
-        request_id += 1;
-        process.await_provider_turn(statuses_before, RPC_TIMEOUT)?;
+        call(
+            process,
+            &mut request_id,
+            protocol::SEND,
+            json!({ "session_id": session, "text": text }),
+        )?;
+        process.await_provider_turn(statuses_before, protocol::request_timeout(protocol::SEND))?;
         if process.provider_events_received == 0 {
-            bail!("provider turn completed without emitting a host.session.event");
+            bail!("provider turn completed without emitting a {EVENT_NOTIFICATION}");
         }
     }
     if handoff {
-        let result = process
-            .call(
-                request_id,
+        // Both are idempotent: a repeated handoff returns the command again.
+        for _ in 0..2 {
+            let result = call(
+                process,
+                &mut request_id,
                 protocol::HANDOFF,
-                json!({ "session_id": PROVIDER_TEST_SESSION }),
-            )
-            .with_context(|| format!("{} failed", protocol::HANDOFF))?;
-        request_id += 1;
-        let response: HandoffResponse = serde_json::from_value(result)
-            .with_context(|| format!("{} must return {{ argv }}", protocol::HANDOFF))?;
-        validate_handoff_argv(response.argv).map_err(|error| anyhow!(error))?;
-        process
-            .call(
-                request_id,
+                only_session.clone(),
+            )?;
+            let response: HandoffResponse = serde_json::from_value(result)
+                .with_context(|| format!("{} must return {{ argv }}", protocol::HANDOFF))?;
+            validate_handoff_argv(response.argv).map_err(|error| anyhow!(error))?;
+        }
+        for _ in 0..2 {
+            call(
+                process,
+                &mut request_id,
                 protocol::HANDBACK,
-                json!({ "session_id": PROVIDER_TEST_SESSION }),
-            )
-            .with_context(|| format!("{} failed", protocol::HANDBACK))?;
-        request_id += 1;
+                only_session.clone(),
+            )?;
+        }
     }
-    process
-        .call(
-            request_id,
-            protocol::STOP,
-            json!({ "session_id": PROVIDER_TEST_SESSION, "reason": StopReason::Destroy }),
-        )
-        .with_context(|| format!("{} failed", protocol::STOP))?;
-    Ok(request_id + 1)
+    let stop = json!({ "session_id": session, "reason": StopReason::Destroy });
+    for _ in 0..2 {
+        call(process, &mut request_id, protocol::STOP, stop.clone())
+            .context("stop must be idempotent")?;
+    }
+    let error = call(
+        process,
+        &mut request_id,
+        protocol::INTERRUPT,
+        only_session.clone(),
+    )
+    .err()
+    .ok_or_else(|| anyhow!("{} of a stopped session must fail", protocol::INTERRUPT))?;
+    if !format!("{:#}", error.root_cause()).starts_with(&format!(
+        "plugin RPC error {}:",
+        error_code::SESSION_NOT_FOUND
+    )) {
+        bail!(
+            "{} of a session the plugin does not know must answer error {}, got: {error}",
+            protocol::INTERRUPT,
+            error_code::SESSION_NOT_FOUND
+        );
+    }
+
+    // A session from before a restart, whose state the plugin may have lost.
+    let resumed = uuid::Uuid::new_v4().to_string();
+    process.provider_sessions.insert(resumed.clone(), 0);
+    let mut resume = session_params(process, &resumed, provider_id);
+    resume.insert("handed_off".into(), false.into());
+    call(
+        process,
+        &mut request_id,
+        protocol::RESUME,
+        Value::Object(resume),
+    )
+    .context("resume must accept a session the plugin has not seen")?;
+    call(
+        process,
+        &mut request_id,
+        protocol::STOP,
+        json!({ "session_id": resumed, "reason": StopReason::Archive }),
+    )?;
+    call(
+        process,
+        &mut request_id,
+        protocol::STOP,
+        json!({ "session_id": uuid::Uuid::new_v4().to_string(), "reason": StopReason::Destroy }),
+    )
+    .context("stop must accept a session the plugin does not know")?;
+    Ok(request_id)
+}
+
+/// One provider request, numbered from `request_id`.
+fn call(
+    process: &mut PluginProcess,
+    request_id: &mut u64,
+    method: &str,
+    params: Value,
+) -> Result<Value> {
+    let result = process
+        .call(*request_id, method, params)
+        .with_context(|| format!("{method} failed"));
+    *request_id += 1;
+    result
 }
 
 #[derive(Debug, PartialEq)]
@@ -279,6 +373,7 @@ fn handshake_params(capabilities: &[String], host_api_version: &str) -> Value {
     json!({
         "host_api_version": host_api_version,
         "host_capabilities": capabilities,
+        "host_features": protocol::HOST_FEATURES,
     })
 }
 
@@ -496,7 +591,12 @@ impl PluginProcess {
     }
 
     fn call(&mut self, id: u64, method: &str, params: Value) -> Result<Value> {
-        let deadline = Instant::now() + RPC_TIMEOUT;
+        let timeout = if method.starts_with("provider.") {
+            protocol::request_timeout(method)
+        } else {
+            RPC_TIMEOUT
+        };
+        let deadline = Instant::now() + timeout;
         self.send_before(
             json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
             deadline,
@@ -662,12 +762,9 @@ impl PluginProcess {
             EVENT_NOTIFICATION => {
                 let event: SessionEventParams = serde_json::from_value(params).map_err(invalid)?;
                 let last_seq = self.provider_session_seq(method, &event.session_id)?;
-                if event.seq <= *last_seq {
-                    bail!(
-                        "{method} seq must increase per session: {} after {last_seq}",
-                        event.seq
-                    );
-                }
+                event
+                    .check_seq(*last_seq)
+                    .map_err(|error| anyhow!("{method}: {error}"))?;
                 *last_seq = event.seq;
                 self.provider_events_received += 1;
             }
@@ -677,7 +774,9 @@ impl PluginProcess {
                 self.provider_session_seq(method, &status.session_id)?;
                 self.provider_statuses.push(status.status);
             }
-            _ => bail!("plugin sent undocumented notification {method}"),
+            _ => bail!(
+                "plugin sent undocumented notification {method}; provider sessions report through {EVENT_NOTIFICATION} and {STATUS_NOTIFICATION}"
+            ),
         }
         Ok(())
     }
@@ -1282,6 +1381,7 @@ mod tests {
             json!({
                 "host_api_version": HOST_API_VERSION,
                 "host_capabilities": ["settings", "tasks.read", "task-events"],
+                "host_features": ["provider_sessions.reconcile"],
             })
         );
     }
@@ -1412,12 +1512,12 @@ mod tests {
             _ => panic!("expected request"),
         }
         match parse_frame(
-            r#"{"jsonrpc":"2.0","method":"host.session.status","params":{"session_id":"s","status":"idle"}}"#,
+            r#"{"jsonrpc":"2.0","method":"host.providerSession.status","params":{"session_id":"s","status":"idle"}}"#,
         )
         .unwrap()
         {
             Frame::Notification { method, params } => {
-                assert_eq!(method, "host.session.status");
+                assert_eq!(method, "host.providerSession.status");
                 assert_eq!(params.unwrap()["status"], "idle");
             }
             _ => panic!("expected notification"),

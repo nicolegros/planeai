@@ -19,6 +19,9 @@ pub(crate) struct SessionLifecycleEvent {
     pub linked_task_key: Option<String>,
     pub previous_status: String,
     pub status: String,
+    /// Routes the stop of a provider session no sidecar drives; not sent to plugins.
+    #[serde(skip)]
+    pub provider: Option<String>,
 }
 
 pub(crate) fn session_lifecycle_event(
@@ -33,6 +36,7 @@ pub(crate) fn session_lifecycle_event(
         linked_task_key: session.task_key.clone(),
         previous_status: previous_status.to_string(),
         status: status.to_string(),
+        provider: session.provider.clone(),
     }
 }
 

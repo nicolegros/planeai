@@ -1,6 +1,8 @@
 //! The provider session protocol (ADR-0014), shared by the host and `planeai-cli plugin test`
 //! so a plugin that passes the conformance check is one the host accepts.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -11,9 +13,37 @@ pub const INTERRUPT: &str = "provider.session.interrupt";
 pub const STOP: &str = "provider.session.stop";
 pub const HANDOFF: &str = "provider.session.handoff";
 pub const HANDBACK: &str = "provider.session.handback";
+/// Sent once after the handshake with the sessions the host still runs on the plugin's providers.
+pub const RECONCILE: &str = "provider.sessions.reconcile";
 
-pub const EVENT_NOTIFICATION: &str = "host.session.event";
-pub const STATUS_NOTIFICATION: &str = "host.session.status";
+pub const EVENT_NOTIFICATION: &str = "host.providerSession.event";
+pub const STATUS_NOTIFICATION: &str = "host.providerSession.status";
+
+/// Features the host offers plugins, sent with `plugin.handshake` as `host_features`.
+pub const HOST_FEATURES: &[&str] = &["provider_sessions.reconcile"];
+
+/// JSON-RPC error codes provider methods answer with, which the host acts on.
+pub mod error_code {
+    /// The plugin does not know the session; the host resumes it once and retries.
+    pub const SESSION_NOT_FOUND: i64 = -32010;
+    /// The session is handed off to the agent's terminal UI.
+    pub const HANDED_OFF: i64 = -32011;
+    pub const PROMPT_TOO_LARGE: i64 = -32012;
+    /// The agent cannot run now, as when its CLI is missing or signed out.
+    pub const UNAVAILABLE: i64 = -32013;
+}
+
+/// Highest event `seq`: 2^53 - 1, the largest integer every JSON parser keeps exact.
+pub const MAX_SEQ: u64 = (1 << 53) - 1;
+
+/// How long the host waits for a provider method. Starting, resuming and handing off may
+/// launch the agent, so they get longer than the rest.
+pub fn request_timeout(method: &str) -> Duration {
+    match method {
+        START | RESUME | HANDOFF | HANDBACK => Duration::from_secs(30),
+        _ => Duration::from_secs(5),
+    }
+}
 
 /// The provider notification a JSON-RPC frame carries, if it is one: no `id`, JSON-RPC 2.0,
 /// and a session event or status method. Callbacks and responses carry an `id`.
@@ -65,16 +95,32 @@ pub enum StopReason {
     Exit,
 }
 
+/// Unknown fields are ignored, left for newer hosts.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SessionEventParams {
     pub session_id: String,
     pub seq: u64,
     pub payload: Value,
 }
 
+impl SessionEventParams {
+    /// Checks `seq` is in range and above the session's last one, `0` before any event.
+    /// Gaps are allowed.
+    pub fn check_seq(&self, last: u64) -> Result<(), String> {
+        if self.seq == 0 || self.seq > MAX_SEQ {
+            return Err(format!("event seq {} is outside 1..=2^53-1", self.seq));
+        }
+        if self.seq <= last {
+            return Err(format!(
+                "event seq {} does not follow the session's last seq {last}",
+                self.seq
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SessionStatusParams {
     pub session_id: String,
     pub status: ProviderSessionStatus,
@@ -162,7 +208,30 @@ mod tests {
     }
 
     #[test]
-    fn notifications_validate_strictly() {
+    fn event_seq_increases_within_range() {
+        let event = |seq: u64| SessionEventParams {
+            session_id: "s".into(),
+            seq,
+            payload: Value::Null,
+        };
+        assert!(event(1).check_seq(0).is_ok());
+        assert!(event(5).check_seq(2).is_ok());
+        assert!(event(0).check_seq(0).is_err());
+        assert!(event(2).check_seq(2).is_err());
+        assert!(event(MAX_SEQ).check_seq(0).is_ok());
+        assert!(event(MAX_SEQ + 1).check_seq(0).is_err());
+    }
+
+    #[test]
+    fn launching_methods_wait_longer() {
+        assert_eq!(request_timeout(START), Duration::from_secs(30));
+        assert_eq!(request_timeout(HANDBACK), Duration::from_secs(30));
+        assert_eq!(request_timeout(SEND), Duration::from_secs(5));
+        assert_eq!(request_timeout(RECONCILE), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn notifications_validate_known_fields() {
         let status: SessionStatusParams = serde_json::from_value(
             serde_json::json!({ "session_id": "s", "status": "needs_attention" }),
         )
@@ -175,7 +244,7 @@ mod tests {
         assert!(serde_json::from_value::<SessionEventParams>(
             serde_json::json!({ "session_id": "s", "seq": 1, "payload": {}, "extra": true })
         )
-        .is_err());
+        .is_ok());
         assert!(serde_json::from_value::<SessionEventParams>(
             serde_json::json!({ "session_id": "s", "seq": 1 })
         )

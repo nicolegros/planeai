@@ -19,6 +19,7 @@ import type {
   TabSpec,
 } from "./types";
 import type { AppConfig } from "./settings.svelte";
+import { providerSessionError } from "./provider-session-error";
 
 export interface LaunchSessionParams {
   projectId: string;
@@ -278,14 +279,24 @@ export const plugins = {
   dataChanged: (pluginId: string) => invoke<void>("plugin_data_changed", { pluginId }),
 };
 
+function invokeProviderSession<T>(command: string, args: Record<string, unknown>): Promise<T> {
+  return invoke<T>(command, args).catch((error: unknown) => {
+    throw providerSessionError(error);
+  });
+}
+
 /** Host-routed control of plugin provider sessions (ADR-0014). */
 export const providerSessions = {
-  ensure: (sessionId: string) => invoke<void>("provider_session_ensure", { sessionId }),
+  ensure: (sessionId: string) =>
+    invokeProviderSession<void>("provider_session_ensure", { sessionId }),
   send: (sessionId: string, text: string) =>
-    invoke<void>("provider_session_send", { sessionId, text }),
-  interrupt: (sessionId: string) => invoke<void>("provider_session_interrupt", { sessionId }),
-  handoff: (sessionId: string) => invoke<string[]>("provider_session_handoff", { sessionId }),
-  handback: (sessionId: string) => invoke<void>("provider_session_handback", { sessionId }),
+    invokeProviderSession<void>("provider_session_send", { sessionId, text }),
+  interrupt: (sessionId: string) =>
+    invokeProviderSession<void>("provider_session_interrupt", { sessionId }),
+  handoff: (sessionId: string) =>
+    invokeProviderSession<string[]>("provider_session_handoff", { sessionId }),
+  handback: (sessionId: string) =>
+    invokeProviderSession<void>("provider_session_handback", { sessionId }),
 };
 
 export const preferences = {

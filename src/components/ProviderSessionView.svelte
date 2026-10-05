@@ -36,7 +36,7 @@
     resolved
       ? createProviderSessionBridge({
           pluginId: resolved.plugin.id,
-          providerId: resolved.provider.id,
+          provider: resolved.provider,
           sessionId,
           handoff: canHandoff ? () => onHandoff(sessionId) : undefined,
           handback: canHandoff ? () => onHandback(sessionId) : undefined,
