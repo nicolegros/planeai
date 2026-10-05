@@ -304,7 +304,6 @@ fn main() {
             ));
             // A terminal tab's exit ends it; any other key's is an agent's, which the frontend
             // marks exited.
-            rmux_client::register_daemon_binary(paths::resolve_rmux_daemon_binary(app.handle()));
             let pty_mgr = pty::PtyManager::new({
                 let app = app.handle().clone();
                 let tabs = tabs.clone();
