@@ -50,6 +50,19 @@ where
     runtime.block_on(crate::rmux_client::with_retry(operation))
 }
 
+/// As [`blocking`], without starting a daemon: `None` when none runs, which hosts nothing.
+pub fn blocking_existing<Operation, Fut, T>(operation: Operation) -> Result<Option<T>, String>
+where
+    Operation: Fn(std::sync::Arc<planeai_rmux::RmuxClient>) -> Fut,
+    Fut: std::future::Future<Output = planeai_rmux::Result<T>>,
+{
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
+    runtime.block_on(crate::rmux_client::with_existing(operation))
+}
+
 /// Spawn a resource and record which pane hosts it.
 ///
 /// `env` is borrowed as `&str` pairs because callers build it with
@@ -142,26 +155,34 @@ pub fn find_tab_resource(
     workspace: &WorkspaceName,
     pty_key: &str,
 ) -> Result<Option<ResourceHandle>, String> {
-    blocking(|client| {
+    let pane = blocking_existing(|client| {
         let (workspace, pty_key) = (workspace.clone(), pty_key.to_string());
         async move { client.find_resource(&workspace, &pty_key).await }
-    })
+    })?;
+    Ok(pane.flatten())
 }
 
 /// Close a terminal tab's pane, leaving the agent pane and sibling tabs running. Found by its
 /// window name, its record is forgotten only once it is gone: archiving a session closes the
 /// panes its records name, so a pane must not outlive its record.
 pub fn close_tab_resource(workspace: &WorkspaceName, pty_key: &str) -> Result<(), String> {
-    blocking(|client| {
+    blocking_existing(|client| {
         let (workspace, pty_key) = (workspace.clone(), pty_key.to_string());
-        async move {
-            match client.find_resource(&workspace, &pty_key).await? {
-                Some(handle) => client.close_resource(&workspace, handle).await,
-                None => Ok(()),
-            }
-        }
+        async move { close_named(&client, &workspace, &pty_key).await }
     })?;
     crate::rmux_resources::remove(&db()?, pty_key).map_err(|e| e.to_string())
+}
+
+/// Close the pane named for `pty_key` in the workspace, if one still is.
+async fn close_named(
+    client: &planeai_rmux::RmuxClient,
+    workspace: &WorkspaceName,
+    pty_key: &str,
+) -> planeai_rmux::Result<()> {
+    match client.find_resource(workspace, pty_key).await? {
+        Some(handle) => client.close_resource(workspace, handle).await,
+        None => Ok(()),
+    }
 }
 
 /// Close every resource of a session, leaving its workspace for siblings.
@@ -177,19 +198,25 @@ pub fn close_session_resources(session_id: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    let closures: Vec<(WorkspaceName, ResourceHandle)> = records
+    // Found by window name: a recorded pane id may since name another pane, even in another
+    // workspace. A pane never named is left to the startup orphan sweep.
+    let closures: Vec<(WorkspaceName, String)> = records
         .iter()
-        .filter_map(|record| record.workspace().map(|name| (name, record.handle())))
+        .filter_map(|record| {
+            record
+                .workspace()
+                .map(|name| (name, record.pty_key.clone()))
+        })
         .collect();
 
-    let result = blocking(move |client| {
+    let result = blocking_existing(move |client| {
         let closures = closures.clone();
         async move {
             // Report the first failure but attempt every resource, so one stuck
             // pane cannot strand the rest.
             let mut first_error = None;
-            for (workspace, handle) in closures {
-                if let Err(error) = client.close_resource(&workspace, handle).await {
+            for (workspace, pty_key) in closures {
+                if let Err(error) = close_named(&client, &workspace, &pty_key).await {
                     first_error = first_error.or(Some(error));
                 }
             }
@@ -198,7 +225,8 @@ pub fn close_session_resources(session_id: &str) -> Result<(), String> {
                 None => Ok(()),
             }
         }
-    });
+    })
+    .map(|_| ());
 
     // Forget the rows regardless: a pane left without a row is closed by the startup
     // orphan sweep, whereas a row of an archived session would never be acted on again.

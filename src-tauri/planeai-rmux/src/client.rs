@@ -146,6 +146,30 @@ impl RmuxClient {
         })
     }
 
+    /// Connect to a daemon already running, never starting one: `None` when none listens,
+    /// which hosts nothing. For lookups and teardown, which only need to learn that.
+    pub async fn connect_existing(config: RmuxConfig) -> Result<Option<Self>> {
+        let builder = match config.endpoint() {
+            Endpoint::UnixSocket(path) => Rmux::builder().unix_socket(path.clone()),
+            Endpoint::WindowsPipe(pipe) => Rmux::builder().windows_pipe(pipe.clone()),
+        };
+        match builder.connect().await {
+            Ok(rmux) => Ok(Some(Self { rmux, config })),
+            Err(rmux_sdk::RmuxError::Transport { source, .. })
+                if matches!(
+                    source.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(source) => Err(Error::DaemonUnavailable {
+                endpoint: config.label(),
+                source,
+            }),
+        }
+    }
+
     async fn attempt_connect(
         config: &RmuxConfig,
     ) -> std::result::Result<Rmux, rmux_sdk::RmuxError> {
@@ -716,6 +740,15 @@ fn trim_trailing_blank_lines(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn no_daemon_listening_is_nothing_to_connect_to_not_one_to_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let connected = RmuxClient::connect_existing(RmuxConfig::app_private(dir.path()))
+            .await
+            .unwrap();
+        assert!(connected.is_none());
+    }
 
     #[test]
     fn prompts_are_submitted_with_carriage_return_not_line_feed() {

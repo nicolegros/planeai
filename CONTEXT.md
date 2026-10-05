@@ -365,7 +365,8 @@ A session with no task owns its workspace alone, so it stays isolated and still
 gets cleaned up. The `pty_key` → pane mapping lives in the `rmux_resources`
 table; pane ids are renewable handles valid for one daemon lifetime, so startup
 reconciliation prunes stale rows and marks the affected sessions `exited`.
-Terminal tabs find their pane by its window name, set to the `pty_key` when the window is created: spawning adopts it, and reconnecting and closing never trust a recorded pane id, which may since name another pane.
+Terminal tabs find their pane by its window name, set to the `pty_key` when the window is created: spawning adopts it, and reconnecting, closing and archiving a session never trust a recorded pane id, which may since name another pane.
+Lookups and teardown never start a daemon (`rmux_client::with_existing`): none running hosts nothing.
 A program renaming its window to a tab's key would confuse that lookup.
 
 Reconciliation sweeps both directions, because a pane and the row that owns it
