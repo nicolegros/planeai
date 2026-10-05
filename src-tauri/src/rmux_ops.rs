@@ -291,22 +291,29 @@ pub fn prune_dead_resources(conn: &Connection) -> Result<Vec<String>, String> {
     // The caller owns the connection here because it also reconciles session rows. Records are
     // read first: one written after the listing names a pane the listing could not see.
     let recorded = crate::rmux_resources::list_all(conn).map_err(|error| error.to_string())?;
-    let listed = blocking_existing(|client| async move { client.live_pane_ids().await });
-    let live = live_for_prune(listed, || {
-        blocking_existing(|_| async { Ok(()) }).map(|daemon| daemon.is_some())
-    })?;
+    let list = || blocking_existing(|client| async move { client.live_pane_ids().await });
+    let listed = list();
+    let live = live_for_prune(
+        listed,
+        || blocking_existing(|_| async { Ok(()) }).map(|daemon| daemon.is_some()),
+        list,
+    )?;
     crate::rmux_resources::prune_missing(conn, &recorded, &live).map_err(|error| error.to_string())
 }
 
-/// The panes a prune keeps records for. Only no daemon listening means none is live: a daemon
-/// that could not answer, or dropped the listing while it still runs, prunes nothing.
+/// The panes a prune keeps records for. Only no daemon listening means none is live. A daemon
+/// found listening after all, just started or having dropped the listing, is asked once more;
+/// one that cannot answer prunes nothing.
 fn live_for_prune(
     listed: Result<Option<std::collections::HashSet<u32>>, String>,
     daemon_listens: impl FnOnce() -> Result<bool, String>,
+    list_again: impl FnOnce() -> Result<Option<std::collections::HashSet<u32>>, String>,
 ) -> Result<std::collections::HashSet<u32>, String> {
     match listed? {
         Some(live) => Ok(live),
-        None if daemon_listens()? => Err("the rmux daemon dropped the pane listing".to_string()),
+        None if daemon_listens()? => {
+            list_again()?.ok_or_else(|| "the rmux daemon dropped the pane listing".to_string())
+        }
         None => Ok(Default::default()),
     }
 }
@@ -455,18 +462,26 @@ mod tests {
     #[test]
     fn a_prune_takes_nothing_for_live_only_when_no_daemon_listens() {
         let listed = std::collections::HashSet::from([3, 5]);
+        let no_probe = || -> Result<bool, String> { unreachable!() };
+        let no_list =
+            || -> Result<Option<std::collections::HashSet<u32>>, String> { unreachable!() };
         assert_eq!(
-            live_for_prune(Ok(Some(listed.clone())), || unreachable!()),
-            Ok(listed)
+            live_for_prune(Ok(Some(listed.clone())), no_probe, no_list),
+            Ok(listed.clone())
         );
         assert_eq!(
-            live_for_prune(Ok(None), || Ok(false)),
+            live_for_prune(Ok(None), || Ok(false), no_list),
             Ok(Default::default())
         );
-        // A daemon that could not answer, or dropped the listing while it runs, prunes nothing.
-        assert!(live_for_prune(Err("timed out".into()), || unreachable!()).is_err());
-        assert!(live_for_prune(Ok(None), || Ok(true)).is_err());
-        assert!(live_for_prune(Ok(None), || Err("busy".into())).is_err());
+        // A daemon listening after all, as one just started, is asked again.
+        assert_eq!(
+            live_for_prune(Ok(None), || Ok(true), || Ok(Some(listed.clone()))),
+            Ok(listed)
+        );
+        // One that could not answer, or keeps dropping the listing, prunes nothing.
+        assert!(live_for_prune(Err("timed out".into()), no_probe, no_list).is_err());
+        assert!(live_for_prune(Ok(None), || Ok(true), || Ok(None)).is_err());
+        assert!(live_for_prune(Ok(None), || Err("busy".into()), no_list).is_err());
     }
     use std::cell::Cell;
 

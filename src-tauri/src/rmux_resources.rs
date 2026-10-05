@@ -161,8 +161,8 @@ pub fn list_all(conn: &Connection) -> rusqlite::Result<Vec<ResourceRecord>> {
 
 /// Drop records whose pane is no longer on the daemon.
 ///
-/// Returns the session ids that lost at least one resource, so the caller can
-/// reconcile their status.
+/// Returns the session ids whose agent pane was dropped, so the caller can mark them exited:
+/// a dead shell tab does not end its session.
 pub fn prune_missing(
     conn: &Connection,
     records: &[ResourceRecord],
@@ -174,11 +174,12 @@ pub fn prune_missing(
             continue;
         }
         // Only as read: a resource recorded again meanwhile names a pane of its own.
-        conn.execute(
+        let dropped = conn.execute(
             "DELETE FROM rmux_resources WHERE pty_key = ?1 AND pane_id = ?2",
             params![record.pty_key, record.pane_id],
         )?;
-        if !affected.contains(&record.session_id) {
+        let agent = record.pty_key == record.session_id;
+        if dropped > 0 && agent && !affected.contains(&record.session_id) {
             affected.push(record.session_id.clone());
         }
     }
@@ -476,9 +477,38 @@ mod tests {
 
         let affected = prune_missing(&conn, &recorded, &std::collections::HashSet::new()).unwrap();
 
-        assert_eq!(affected, vec!["session-a".to_string()]);
+        // Nothing was dropped, and only a tab would have been: no session ended.
+        assert!(affected.is_empty());
         assert_eq!(get(&conn, "session-b").unwrap().unwrap().pane_id, 7);
         assert_eq!(get(&conn, "session-a:1").unwrap().unwrap().pane_id, 8);
+    }
+
+    #[test]
+    fn a_dead_shell_tab_does_not_end_its_session() {
+        let conn = setup();
+        put(
+            &conn,
+            "session-a",
+            "session-a",
+            &workspace(),
+            ResourceHandle::from_u32(1),
+        )
+        .unwrap();
+        put(
+            &conn,
+            "session-a:1",
+            "session-a",
+            &workspace(),
+            ResourceHandle::from_u32(2),
+        )
+        .unwrap();
+
+        let live = std::collections::HashSet::from([1u32]);
+        let affected = prune_missing(&conn, &list_all(&conn).unwrap(), &live).unwrap();
+
+        assert!(affected.is_empty());
+        assert!(get(&conn, "session-a:1").unwrap().is_none());
+        assert!(get(&conn, "session-a").unwrap().is_some());
     }
 
     #[test]

@@ -372,8 +372,9 @@ A program renaming its window to a tab's key would confuse that lookup.
 Reconciliation sweeps both directions, because a pane and the row that owns it
 are written one after the other and either can be the survivor:
 
-- **Record without a pane** — `prune_dead_resources` drops rows whose pane the daemon no longer hosts, and marks the affected sessions `exited`.
-  Only no daemon listening means no pane is live: a daemon that cannot be read prunes nothing, and the sweep below is skipped until the next start.
+- **Record without a pane** — `prune_dead_resources` drops rows whose pane the daemon no longer hosts, and marks `exited` the sessions whose agent pane is gone; a dead shell tab does not end its session.
+  It reads the rows before listing the panes, and drops a row only while it names the pane read, so a pane recorded meanwhile is kept.
+  Only no daemon listening means no pane is live: a daemon found listening after all is asked again, and one that cannot be read prunes nothing, the sweep below then skipped until the next start.
 - **Pane without a session** — `sweep_orphan_panes` closes live panes that no session row owns, whether they never got a row (a launch that spawned then failed to persist) or lost it (a session deleted while its pane ran). Panes are matched by `pane_id` here, against the recorded rows. The sweep runs only during startup reconciliation — a pane is legitimately unrecorded between its spawn and its row being committed — and is skipped entirely when the database holds no sessions at all, since an empty database cannot be told apart from a lost one and every live pane would look orphaned.
 
 A launch that cannot record its pane closes it rather than returning an error and
