@@ -1,4 +1,4 @@
-//! Plugin-provided session runtimes (ADR-0013).
+//! Plugin-provided session runtimes (ADR-0014).
 //!
 //! The host owns the session row, worktree, lifecycle and status display; the
 //! provider plugin owns the agent process and its conversation. Provider

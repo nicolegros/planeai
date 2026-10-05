@@ -51,7 +51,7 @@ pub fn restart(
         return Err("can only restart exited or archived sessions".to_string());
     }
 
-    // Provider sessions resume through their plugin when next used (ADR-0013).
+    // Provider sessions resume through their plugin when next used (ADR-0014).
     if session.backend == crate::session_ops::PLUGIN_BACKEND {
         return restore(conn, id, config);
     }

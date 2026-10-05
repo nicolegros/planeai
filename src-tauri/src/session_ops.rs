@@ -531,7 +531,7 @@ fn daemon_send_frames(
     Ok(())
 }
 
-/// `sessions.backend` for sessions whose runtime is a plugin provider (ADR-0013).
+/// `sessions.backend` for sessions whose runtime is a plugin provider (ADR-0014).
 pub const PLUGIN_BACKEND: &str = "plugin";
 
 pub fn send_prompt(

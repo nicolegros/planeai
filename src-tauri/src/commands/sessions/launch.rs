@@ -89,7 +89,7 @@ pub async fn launch_session(
     .await?;
     let workspace_project_id = task_project_id.as_deref().unwrap_or(&project_id);
     tracing::info!(task_prompt = ?task_prompt, auto_approve, provider = ?provider, task_key = ?task_key, "launch_session called");
-    // Plugin providers have no command: their sidecar runs the agent (ADR-0013).
+    // Plugin providers have no command: their sidecar runs the agent (ADR-0014).
     let runtime_provider = match provider.as_deref() {
         Some(key) if plugin_providers::parse_provider_key(key).is_some() => {
             plugin_providers::resolve(&plugin_providers::AppRuntime::new(&app), key).await?;

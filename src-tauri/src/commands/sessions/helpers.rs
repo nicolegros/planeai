@@ -38,7 +38,7 @@ pub(crate) fn fire_task_hook(
 }
 
 /// Register a session for status tracking. Provider sessions take status only from
-/// their plugin, so hooks and silence detection never apply to them (ADR-0013).
+/// their plugin, so hooks and silence detection never apply to them (ADR-0014).
 pub(crate) fn register_notify_session(
     ns: &mut planeai_core::notify::NotifyState,
     session: &db::Session,

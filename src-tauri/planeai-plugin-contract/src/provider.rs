@@ -1,4 +1,4 @@
-//! The provider session protocol (ADR-0013), shared by the host and `planeai-cli plugin test`
+//! The provider session protocol (ADR-0014), shared by the host and `planeai-cli plugin test`
 //! so a plugin that passes the conformance check is one the host accepts.
 
 use serde::{Deserialize, Serialize};

@@ -132,7 +132,7 @@ Task lifecycle delivery is best-effort and isolated from PlaneAI task commits. S
 A plugin can run sessions itself.
 Each entry in `providers` becomes a **runtime-backed provider** that users pick when creating a session, beside the command providers from their config.
 The session is a normal PlaneAI session (worktree, branch, linked task, sidebar status and lifecycle), but the plugin runs the agent and its UI replaces the terminal in the session's agent tab.
-See ADR-0013.
+See ADR-0014.
 
 ```json
 "host_api_version": "planeai.plugin-host.v3",

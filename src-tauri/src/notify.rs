@@ -191,7 +191,7 @@ fn reconcile_provider_sessions(app: &AppHandle) {
     });
 }
 
-/// Provider sessions get busy/idle/attention from their plugin only (ADR-0013);
+/// Provider sessions get busy/idle/attention from their plugin only (ADR-0014);
 /// the user's own agent hooks still fire inside them and must not compete.
 fn ignores_socket_status(msg: &NotifyMessage, state: &SharedNotifyState) -> bool {
     matches!(

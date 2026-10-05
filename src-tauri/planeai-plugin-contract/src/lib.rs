@@ -19,7 +19,7 @@ pub mod provider;
 
 pub const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
 pub const RECIPIENT_HOST_API_VERSION: &str = "planeai.plugin-host.v2";
-/// Unstable until plugin-provided session runtimes ship; see ADR-0013.
+/// Unstable until plugin-provided session runtimes ship; see ADR-0014.
 pub const PROVIDER_HOST_API_VERSION: &str = "planeai.plugin-host.v3";
 
 pub fn supports_host_api_version(version: &str) -> bool {

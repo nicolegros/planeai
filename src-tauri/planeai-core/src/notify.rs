@@ -45,7 +45,7 @@ pub struct NotifyState {
     meta: HashMap<String, SessionMeta>,
     notified: std::collections::HashSet<String>,
     idle_since: HashMap<String, Instant>,
-    /// Sessions whose status comes only from their plugin provider (ADR-0013).
+    /// Sessions whose status comes only from their plugin provider (ADR-0014).
     provider_owned: std::collections::HashSet<String>,
     #[cfg(any(test, feature = "test-support"))]
     time_offset: HashMap<String, Duration>,

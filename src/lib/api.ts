@@ -282,7 +282,7 @@ export const plugins = {
   dataChanged: (pluginId: string) => invoke<void>("plugin_data_changed", { pluginId }),
 };
 
-/** Host-routed control of plugin provider sessions (ADR-0013). */
+/** Host-routed control of plugin provider sessions (ADR-0014). */
 export const providerSessions = {
   ensure: (sessionId: string) => invoke<void>("provider_session_ensure", { sessionId }),
   send: (sessionId: string, text: string) =>
