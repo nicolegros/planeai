@@ -101,14 +101,7 @@ pub fn restart(
     };
 
     let tmux_name = session.tmux_name.as_deref();
-    // Two agents on the same task share one rmux workspace, so the key comes from
-    // the session's task linkage rather than its id.
-    let rmux_workspace = planeai_rmux::WorkspaceKey::for_session(
-        session.task_project_id(),
-        session.task_key.as_deref(),
-        &session.id,
-    )
-    .name();
+    let rmux_workspace = session.rmux_workspace();
     let try_spawn = |cmd: &str| -> Result<(), String> {
         match session.backend.as_str() {
             "tmux" => {

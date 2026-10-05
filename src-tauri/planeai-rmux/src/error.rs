@@ -56,24 +56,20 @@ impl Error {
         move |source| Self::Sdk { operation, source }
     }
 
-    /// Whether the failure means the session no longer exists.
-    ///
-    /// Both a daemon that has exited and a session the daemon has forgotten leave
-    /// nothing to act on, so callers that were removing the session have already
-    /// achieved their goal.
+    /// Whether the session may be taken as gone: the daemon said so, or the connection to it
+    /// died, which may also hide a daemon still running. Only for callers that would rather not
+    /// start a daemon to find out, as killing a workspace's last session stops it mid-reply;
+    /// others use [`Self::confirms_session_absent`].
     pub fn means_session_absent(&self) -> bool {
-        if self.is_daemon_gone() {
-            return true;
-        }
+        self.is_daemon_gone() || self.confirms_session_absent()
+    }
+
+    /// Whether the daemon itself said the session is gone. A dead connection does not count: an
+    /// idle one is closed under a daemon still running, so only a retry can tell.
+    pub fn confirms_session_absent(&self) -> bool {
         match self {
             Self::SessionNotFound { .. } | Self::NoPane { .. } | Self::ResourceGone { .. } => true,
-            Self::Sdk { source, .. } => matches!(
-                source,
-                rmux_sdk::RmuxError::Protocol {
-                    source: rmux_proto::RmuxError::SessionNotFound(_),
-                    ..
-                }
-            ),
+            Self::Sdk { source, .. } => is_session_not_found(source),
             _ => false,
         }
     }
@@ -95,6 +91,21 @@ impl Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+fn is_session_not_found(source: &rmux_sdk::RmuxError) -> bool {
+    matches!(
+        source,
+        rmux_sdk::RmuxError::Protocol {
+            source: rmux_proto::RmuxError::SessionNotFound(_),
+            ..
+        }
+    )
+}
+
+/// Whether an SDK failure means the pane, or the session holding it, no longer exists.
+pub(crate) fn means_pane_gone(source: &rmux_sdk::RmuxError) -> bool {
+    matches!(source, rmux_sdk::RmuxError::PaneNotFound { .. }) || is_session_not_found(source)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +117,29 @@ mod tests {
     #[test]
     fn a_transport_failure_is_retried() {
         assert!(Error::sdk("send_text")(transport()).is_daemon_gone());
+    }
+
+    #[test]
+    fn only_the_daemon_confirms_a_session_is_gone() {
+        let gone = Error::sdk("find_panes")(rmux_sdk::RmuxError::protocol(
+            rmux_proto::RmuxError::SessionNotFound("w".into()),
+        ));
+        assert!(gone.confirms_session_absent());
+        // A closed connection may hide a daemon still running it.
+        let unreachable = Error::sdk("find_panes")(transport());
+        assert!(unreachable.means_session_absent() && !unreachable.confirms_session_absent());
+    }
+
+    #[test]
+    fn a_pane_is_gone_only_when_the_daemon_says_so() {
+        let session = rmux_proto::SessionName::new("w").unwrap();
+        let pane = rmux_proto::RmuxError::pane_not_found(session, rmux_proto::PaneId::new(3));
+        // Built the way `Session::pane_by_id` reports a pane that closed.
+        assert!(means_pane_gone(&rmux_sdk::RmuxError::protocol(pane)));
+        assert!(means_pane_gone(&rmux_sdk::RmuxError::protocol(
+            rmux_proto::RmuxError::SessionNotFound("w".into())
+        )));
+        assert!(!means_pane_gone(&transport()));
     }
 
     #[test]

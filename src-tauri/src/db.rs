@@ -32,6 +32,16 @@ impl Session {
     pub fn task_project_id(&self) -> &str {
         self.task_project_id.as_deref().unwrap_or(&self.project_id)
     }
+
+    /// The rmux workspace hosting it: two agents on the same task share one.
+    pub fn rmux_workspace(&self) -> planeai_rmux::WorkspaceName {
+        planeai_rmux::WorkspaceKey::for_session(
+            self.task_project_id(),
+            self.task_key.as_deref(),
+            &self.id,
+        )
+        .name()
+    }
 }
 
 /// Column list for SELECT statements returning a Session.

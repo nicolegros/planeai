@@ -137,21 +137,30 @@ pub fn read_pane_after(
     planeai_core::capture_cursor::read_after(CURSOR_LABEL, &captured, cursor, max_bytes)
 }
 
+/// The pane of a terminal tab, found by its window name as a spawn adopts it.
+pub fn find_tab_resource(
+    workspace: &WorkspaceName,
+    pty_key: &str,
+) -> Result<Option<ResourceHandle>, String> {
+    blocking(|client| {
+        let (workspace, pty_key) = (workspace.clone(), pty_key.to_string());
+        async move { client.find_resource(&workspace, &pty_key).await }
+    })
+}
+
 /// Close a terminal tab's pane, leaving the agent pane and sibling tabs running. Found by its
-/// window name as a spawn adopts it, its record is forgotten only once it is gone, so a failed
-/// close can be retried.
+/// window name, its record is forgotten only once it is gone: archiving a session closes the
+/// panes its records name, so a pane must not outlive its record.
 pub fn close_tab_resource(workspace: &WorkspaceName, pty_key: &str) -> Result<(), String> {
-    let (name, key) = (workspace.clone(), pty_key.to_string());
-    let pane = blocking(|client| {
-        let (name, key) = (name.clone(), key.clone());
-        async move { client.find_resource(&name, &key).await }
+    blocking(|client| {
+        let (workspace, pty_key) = (workspace.clone(), pty_key.to_string());
+        async move {
+            match client.find_resource(&workspace, &pty_key).await? {
+                Some(handle) => client.close_resource(&workspace, handle).await,
+                None => Ok(()),
+            }
+        }
     })?;
-    if let Some(handle) = pane {
-        blocking(|client| {
-            let name = name.clone();
-            async move { client.close_resource(&name, handle).await }
-        })?;
-    }
     crate::rmux_resources::remove(&db()?, pty_key).map_err(|e| e.to_string())
 }
 
@@ -191,8 +200,8 @@ pub fn close_session_resources(session_id: &str) -> Result<(), String> {
         }
     });
 
-    // Forget the rows regardless: a pane we could not close is not one PlaneAI
-    // can still address, and leaving the row would strand it forever.
+    // Forget the rows regardless: a pane left without a row is closed by the startup
+    // orphan sweep, whereas a row of an archived session would never be acted on again.
     let _ = crate::rmux_resources::remove_for_session(&conn, session_id);
     result
 }

@@ -18,7 +18,7 @@ Review passes on provider handoffs (ADR-0014) found nearly all their late bugs i
 - Each tab goes Reserved → Spawning → Live → Closing → Gone.
   `open(session, spec)` reserves a tab and returns its id, and `attach(tab, channel)` spawns it, or reconnects to a live one without ever starting another process.
   A failed reconnect leaves the tab live while its process runs, and ends it as `exited` otherwise.
-  `close(tab)` fails only when the kill fails, leaving the tab live.
+  `close(tab)` fails only when the kill fails, the tab then staying, live or to be started again.
   A tab that cannot start ends as `failed_to_start`, its error carried by its end rather than by the attach, unless its process may run on in a daemon or rmux the host could not reach, when it stays to be closed or started again.
 - The backend hands out shell indices from a per-session counter persisted in the database, so a pty key is never reused, across reloads or restarts.
   This reverses "the layout is the authority; there is no per-session tab count".

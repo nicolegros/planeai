@@ -1,9 +1,10 @@
 //! Terminal tabs: the lifecycle of every tab a TaskWorkspace layout opens on a PTY, such as a
 //! shell, a terminal editor or a provider handoff's program (ADR-0015).
 //!
-//! Each tab goes Reserved → Spawning → Live → Closing → Gone. Its index comes from a counter
-//! persisted per session, so a pty key is never handed out twice, and every tab reports its
-//! end exactly once as a [`TabEnded`], whoever caused it.
+//! Each tab goes Reserved → Spawning → Live → Closing → Gone. A start or an end that fails
+//! while a daemon or rmux may still run it goes back instead: to Reserved, to start again, or
+//! to Live. Its index comes from a counter persisted per session, so a pty key is never handed
+//! out twice, and every tab reports its end exactly once as a [`TabEnded`], whoever caused it.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -126,13 +127,18 @@ enum Phase {
     Reserved {
         may_run: bool,
     },
-    /// Its process is starting, or a terminal is connecting to it.
+    /// Its process is starting, or a terminal is connecting to it. In this phase and `Closing`,
+    /// `exited` says the tab ends as exited whatever else happens: its exit was reported
+    /// meanwhile, or its process was found gone.
     Spawning {
         exited: bool,
     },
     Live,
+    /// Its process is being ended. A failed end returns it to `Live` when it `started` in this
+    /// run, or to `Reserved { may_run: true }` when it did not.
     Closing {
         exited: bool,
+        started: bool,
     },
 }
 
@@ -329,7 +335,15 @@ impl<H: TabHost> TerminalTabs<H> {
                 (Err(_), false, true) | (Ok(()), false, _) => None,
             };
             entry.phase = match ends {
-                Some(_) => Phase::Closing { exited: true },
+                // A start that failed decides its end before anything tells whether it runs.
+                Some(TabEndReason::FailedToStart) => Phase::Closing {
+                    exited: false,
+                    started: false,
+                },
+                Some(_) => Phase::Closing {
+                    exited: true,
+                    started: true,
+                },
                 None => Phase::Live,
             };
             ends
@@ -338,26 +352,19 @@ impl<H: TabHost> TerminalTabs<H> {
             self.notify();
             return attached.map(|()| Attached::Live);
         };
-        if reason != TabEndReason::FailedToStart {
-            self.end_process(tab).await;
-        } else if self.host.end(tab).await.is_err() {
-            // A daemon or rmux the host could not reach may still run it: kept, to be closed or
-            // started again.
-            if let Some(entry) = self.registry().tabs.get_mut(tab) {
-                entry.phase = Phase::Reserved { may_run: true };
-            }
-            self.notify();
-            return attached.map(|()| Attached::Live);
+        let end_result = self.host.end(tab).await;
+        let error = attached.as_ref().err().cloned();
+        if self.settle(tab, reason, &end_result, error.clone()).await {
+            Ok(Attached::Ended)
+        } else {
+            // The start failed, but a daemon or rmux the host could not reach may still run its
+            // process: the tab stays, to be closed or started again.
+            Err(error.unwrap_or_default())
         }
-        self.registry().mark_ended(tab);
-        let error = attached
-            .err()
-            .filter(|_| reason == TabEndReason::FailedToStart);
-        self.report_end(tab, reason, error).await;
-        Ok(Attached::Ended)
     }
 
-    /// Close a tab whatever its phase. It stays live when ending its process fails.
+    /// Close a tab whatever its phase. When ending its process fails it stays, live or to be
+    /// started again.
     pub async fn close(&self, tab: &TabId) -> Result<(), String> {
         self.end_tab(tab, TabEndReason::Closed).await
     }
@@ -375,7 +382,10 @@ impl<H: TabHost> TerminalTabs<H> {
                             EndStep::Report
                         }
                         Phase::Reserved { may_run: true } | Phase::Live => {
-                            entry.phase = Phase::Closing { exited: false };
+                            entry.phase = Phase::Closing {
+                                exited: false,
+                                started: entry.phase == Phase::Live,
+                            };
                             EndStep::Kill
                         }
                         // A close during a spawn waits for it, then ends what it started.
@@ -392,7 +402,10 @@ impl<H: TabHost> TerminalTabs<H> {
                                 tab.clone(),
                                 Entry {
                                     spec: TabSpec::Shell,
-                                    phase: Phase::Closing { exited: false },
+                                    phase: Phase::Closing {
+                                        exited: false,
+                                        started: false,
+                                    },
                                 },
                             );
                             EndStep::Kill
@@ -421,36 +434,57 @@ impl<H: TabHost> TerminalTabs<H> {
         }
         self.notify();
 
-        let result = self.host.end(tab).await;
+        let end_result = self.host.end(tab).await;
+        if self.settle(tab, reason, &end_result, None).await {
+            Ok(())
+        } else {
+            end_result
+        }
+    }
+
+    /// Settle a closing tab once ending its process returned `end_result`. It ends with `requested`, or
+    /// as exited when ending failed after its exit was reported; otherwise it stays, back to
+    /// `Live` or `Reserved { may_run: true }` as `Closing.started` says. Returns whether it ended.
+    async fn settle(
+        &self,
+        tab: &TabId,
+        requested: TabEndReason,
+        end_result: &Result<(), String>,
+        error: Option<String>,
+    ) -> bool {
         let ends = {
             let mut registry = self.registry();
+            // Only `settle` takes a tab out of `Closing`, so anything else means it ended already.
             let Some(entry) = registry.tabs.get_mut(tab) else {
-                return result;
+                return true;
             };
-            let Phase::Closing { exited, .. } = entry.phase else {
-                return result;
+            let Phase::Closing { exited, started } = entry.phase else {
+                return true;
             };
-            let ends = match (&result, exited) {
-                (Ok(()), _) => Some(reason),
+            let ends = match (end_result, exited) {
+                (Ok(()), _) => Some(requested),
                 (Err(_), true) => Some(TabEndReason::Exited),
                 (Err(_), false) => None,
             };
             match ends {
                 Some(_) => registry.mark_ended(tab),
-                None => entry.phase = Phase::Live,
+                None if started => entry.phase = Phase::Live,
+                None => entry.phase = Phase::Reserved { may_run: true },
             }
             ends
         };
         let Some(reason) = ends else {
             self.notify();
-            return result;
+            return false;
         };
-        if result.is_err() {
+        if let Err(failure) = end_result {
             // Its process is gone anyway, but its terminal is still held.
+            tracing::warn!(pty_key = %tab.key(), %failure, "failed to end a tab's process");
             self.host.release(tab);
         }
-        self.report_end(tab, reason, None).await;
-        Ok(())
+        let error = error.filter(|_| reason == TabEndReason::FailedToStart);
+        self.report_end(tab, reason, error).await;
+        true
     }
 
     /// A tab's process exited by itself.
@@ -462,14 +496,22 @@ impl<H: TabHost> TerminalTabs<H> {
                 let registry = &mut *guard;
                 match registry.tabs.get_mut(tab).map(|entry| &mut entry.phase) {
                     Some(phase @ Phase::Live) => {
-                        *phase = Phase::Closing { exited: true };
+                        *phase = Phase::Closing {
+                            exited: true,
+                            started: true,
+                        };
                         ExitStep::Kill
                     }
-                    Some(Phase::Spawning { exited, .. } | Phase::Closing { exited, .. }) => {
+                    Some(Phase::Spawning { exited } | Phase::Closing { exited, .. }) => {
                         *exited = true;
                         return;
                     }
-                    Some(Phase::Reserved { .. }) => return,
+                    Some(Phase::Reserved { may_run: false }) => return,
+                    // What a failed start may have left running has now ended.
+                    Some(Phase::Reserved { may_run: true }) => {
+                        registry.mark_ended(tab);
+                        ExitStep::Report
+                    }
                     None => match registry.unknown(tab, ended_earlier) {
                         Unknown::Ended => return,
                         Unknown::Unchecked => ExitStep::CheckStore,
@@ -497,9 +539,9 @@ impl<H: TabHost> TerminalTabs<H> {
             }
         }
         self.notify();
-        self.end_process(tab).await;
-        self.registry().mark_ended(tab);
-        self.report_end(tab, TabEndReason::Exited, None).await;
+        let end_result = self.host.end(tab).await;
+        self.settle(tab, TabEndReason::Exited, &end_result, None)
+            .await;
     }
 
     /// A session ended: the programs in its tabs end with it rather than drive its
@@ -570,14 +612,6 @@ impl<H: TabHost> TerminalTabs<H> {
         .await?;
         ended.extend(ended_earlier);
         Ok(ended)
-    }
-
-    /// End a tab's process whose end is already decided, releasing its terminal regardless.
-    async fn end_process(&self, tab: &TabId) {
-        if let Err(error) = self.host.end(tab).await {
-            tracing::warn!(pty_key = %tab.key(), %error, "failed to end a tab's process");
-            self.host.release(tab);
-        }
     }
 
     /// Record and report a tab already marked ended in the registry.
@@ -1049,6 +1083,50 @@ mod tests {
         assert_eq!(h.tabs.attach(&tab, ()).await, Ok(Attached::Live));
         assert_eq!(*h.host.reconnects.lock().unwrap(), [false, false]);
         assert!(h.events().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_close_of_a_tab_that_may_run_keeps_it_startable() {
+        let h = harness();
+        let tab = TabId::new("s1", 4);
+        h.host.fail_attach.store(true, Ordering::SeqCst);
+        h.host.fail_end.store(true, Ordering::SeqCst);
+        assert!(h.tabs.attach(&tab, ()).await.is_err());
+        assert!(h.tabs.close(&tab).await.is_err());
+        h.host.fail_attach.store(false, Ordering::SeqCst);
+        assert_eq!(h.tabs.attach(&tab, ()).await, Ok(Attached::Live));
+        assert_eq!(*h.host.reconnects.lock().unwrap(), [false, false]);
+    }
+
+    #[tokio::test]
+    async fn an_exit_ends_a_tab_that_may_run() {
+        let h = harness();
+        let tab = TabId::new("s1", 4);
+        h.host.fail_attach.store(true, Ordering::SeqCst);
+        h.host.fail_end.store(true, Ordering::SeqCst);
+        assert!(h.tabs.attach(&tab, ()).await.is_err());
+        h.tabs.exited(&tab).await;
+        assert_eq!(h.events(), [ended(&tab, TabEndReason::Exited)]);
+        assert_eq!(h.tabs.attach(&tab, ()).await, Ok(Attached::Ended));
+    }
+
+    #[tokio::test]
+    async fn an_exit_during_a_failed_start_cleanup_ends_the_tab() {
+        let h = harness();
+        let tab = TabId::new("s1", 4);
+        h.host.fail_attach.store(true, Ordering::SeqCst);
+        h.host.fail_end.store(true, Ordering::SeqCst);
+        let hold = h.hold_end();
+        let attach = tokio::spawn({
+            let (tabs, tab) = (h.tabs.clone(), tab.clone());
+            async move { tabs.attach(&tab, ()).await }
+        });
+        settle().await;
+        h.tabs.exited(&tab).await;
+        hold.notify_one();
+        assert_eq!(attach.await.unwrap(), Ok(Attached::Ended));
+        assert_eq!(h.events(), [ended(&tab, TabEndReason::Exited)]);
+        assert_eq!(*h.host.released.lock().unwrap(), [tab]);
     }
 
     #[tokio::test]

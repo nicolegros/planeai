@@ -235,8 +235,7 @@ impl OrphanSweep {
 ///
 /// `known_session_ids` is supplied by the caller rather than read here so this
 /// stays a decision over two sets, testable without the sessions schema. Panes
-/// are matched by `pane_id`: the daemon names windows after the `pty_key`, but
-/// that name is cosmetic and best-effort, so it is not identity.
+/// are matched by `pane_id`, against the recorded rows.
 pub fn orphaned_panes(
     conn: &Connection,
     live: &[planeai_rmux::LivePane],

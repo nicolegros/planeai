@@ -30,14 +30,25 @@ enum TabLaunch {
     },
 }
 
-/// What reconnecting a terminal to a live tab takes; none of it starts a process.
-enum Reconnect {
+/// The backend running a session's terminal tabs.
+enum TabBackend {
     Local,
     Daemon,
-    /// The pane of its session's workspace named for the tab.
     Rmux {
         workspace: planeai_rmux::WorkspaceName,
     },
+}
+
+impl TabBackend {
+    fn of(session: &db::Session) -> Self {
+        match session.backend.as_str() {
+            "daemon" => Self::Daemon,
+            planeai_rmux::BACKEND => Self::Rmux {
+                workspace: session.rmux_workspace(),
+            },
+            _ => Self::Local,
+        }
+    }
 }
 
 struct PreparedTab {
@@ -134,15 +145,17 @@ impl PtyTabHost {
     async fn reconnect(&self, tab: &TabId, channel: Channel<Response>) -> Result<(), String> {
         let connection = self.app.state::<DbState>().0.clone();
         let pty = self.app.state::<PtyState>().0.clone();
-        let plan = crate::commands::blocking({
+        let backend = crate::commands::blocking({
             let tab = tab.clone();
-            move || prepare_tab_reconnect(&tab, connection)
+            move || tab_backend(&tab, connection)
         })
-        .await?;
+        .await?
+        .ok_or("session not found")?;
         let pty_key = tab.key();
-        let target = match plan {
-            Reconnect::Local => return pty.reconnect(&pty_key, channel),
-            Reconnect::Daemon => {
+        // None of these starts a process.
+        let target = match backend {
+            TabBackend::Local => return pty.reconnect(&pty_key, channel),
+            TabBackend::Daemon => {
                 let socket_path = planeai_ipc::daemon_socket_path();
                 if !crate::daemon_client::is_shell_tab_running(&socket_path, &pty_key).await? {
                     return Err(release_gone(&pty, &pty_key));
@@ -153,13 +166,10 @@ impl PtyTabHost {
                 }
             }
             // Found by name, as a spawn adopts it: a recorded pane id may since name another pane.
-            Reconnect::Rmux { workspace } => {
+            TabBackend::Rmux { workspace } => {
                 let (name, key) = (workspace.clone(), pty_key.clone());
                 let pane = crate::commands::blocking(move || {
-                    crate::rmux_ops::blocking(|client| {
-                        let (name, key) = (name.clone(), key.clone());
-                        async move { client.find_resource(&name, &key).await }
-                    })
+                    crate::rmux_ops::find_tab_resource(&name, &key)
                 })
                 .await?;
                 let Some(handle) = pane else {
@@ -268,28 +278,34 @@ impl TabHost for PtyTabHost {
     async fn end(&self, tab: &TabId) -> Result<(), String> {
         let connection = self.app.state::<DbState>().0.clone();
         let pty = self.app.state::<PtyState>().0.clone();
-        let plan = crate::commands::blocking({
+        // A session deleted already (from the CLI, or with its project) leaves only local tabs to
+        // end, such as a handoff's program, which must not outlive it.
+        let backend = crate::commands::blocking({
             let tab = tab.clone();
-            move || prepare_tab_close(&tab, connection)
+            move || tab_backend(&tab, connection)
         })
-        .await?;
-
-        if plan.daemon_backed {
-            crate::daemon_client::kill_shell_tab(&planeai_ipc::daemon_socket_path(), &plan.pty_key)
+        .await?
+        .unwrap_or(TabBackend::Local);
+        let pty_key = tab.key();
+        match backend {
+            TabBackend::Local => {}
+            TabBackend::Daemon => {
+                crate::daemon_client::kill_shell_tab(&planeai_ipc::daemon_socket_path(), &pty_key)
+                    .await?;
+            }
+            // An rmux shell tab is its own window, so closing the tab closes that pane
+            // and leaves the agent and sibling tabs untouched.
+            TabBackend::Rmux { workspace } => {
+                let key = pty_key.clone();
+                crate::commands::blocking(move || {
+                    crate::rmux_ops::close_tab_resource(&workspace, &key)
+                })
                 .await?;
-        }
-        // An rmux shell tab is its own window, so closing the tab closes that pane
-        // and leaves the agent and sibling tabs untouched.
-        if let Some(workspace) = plan.rmux_workspace {
-            let pty_key = plan.pty_key.clone();
-            crate::commands::blocking(move || {
-                crate::rmux_ops::close_tab_resource(&workspace, &pty_key)
-            })
-            .await?;
+            }
         }
         // Detached only once the daemon shell or rmux pane is confirmed gone, so a failed
-        // kill leaves the tab live rather than silently orphaning its shell.
-        pty.detach(&plan.pty_key);
+        // kill keeps the tab rather than silently orphaning its shell.
+        pty.detach(&pty_key);
         Ok(())
     }
 
@@ -309,26 +325,14 @@ fn release_gone(pty: &pty::PtyManager, pty_key: &str) -> String {
     pty::gone_error(pty_key)
 }
 
-fn prepare_tab_reconnect(
+/// The backend of a tab's session; `None` once the session is gone.
+fn tab_backend(
     tab: &TabId,
     connection: Arc<std::sync::Mutex<rusqlite::Connection>>,
-) -> Result<Reconnect, String> {
+) -> Result<Option<TabBackend>, String> {
     let conn = connection.lock().map_err(|e| e.to_string())?;
-    let session = db::get_session(&conn, tab.session_id())
-        .map_err(|e| e.to_string())?
-        .ok_or("session not found")?;
-    Ok(match session.backend.as_str() {
-        "daemon" => Reconnect::Daemon,
-        planeai_rmux::BACKEND => Reconnect::Rmux {
-            workspace: planeai_rmux::WorkspaceKey::for_session(
-                session.task_project_id(),
-                session.task_key.as_deref(),
-                &session.id,
-            )
-            .name(),
-        },
-        _ => Reconnect::Local,
-    })
+    let session = db::get_session(&conn, tab.session_id()).map_err(|e| e.to_string())?;
+    Ok(session.as_ref().map(TabBackend::of))
 }
 
 fn prepare_tab_spawn(
@@ -353,12 +357,6 @@ fn prepare_tab_spawn(
         .as_deref()
         .unwrap_or(project_path)
         .to_string();
-    let rmux_workspace = planeai_rmux::WorkspaceKey::for_session(
-        session.task_project_id(),
-        session.task_key.as_deref(),
-        &session.id,
-    )
-    .name();
     drop(conn);
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| {
@@ -371,13 +369,12 @@ fn prepare_tab_spawn(
 
     let pty_key = tab.key();
 
-    // Build canonical env (augmented PATH, TERM, COLORFGBG, PLANEAI_SOCKET, etc.)
-    // via prepare_session() — same for both backends.
     let shell_cmd = match spec {
         TabSpec::Shell => shell_command(&shell, None),
         TabSpec::Command { command } => shell_command(&shell, Some(command)),
         TabSpec::Program { argv } => argv.join(" "),
     };
+    // The same env (augmented PATH, TERM, COLORFGBG, PLANEAI_SOCKET) for every backend.
     let env = {
         let extra_path_dirs = config.resolved_extra_path_dirs();
         super::helpers::build_local_env(
@@ -405,49 +402,46 @@ fn prepare_tab_spawn(
         )
     };
     let runs_program = matches!(spec, TabSpec::Program { .. });
-    let launch = if session.backend == "daemon" {
-        if runs_program {
+    let launch = match TabBackend::of(&session) {
+        TabBackend::Daemon | TabBackend::Rmux { .. } if runs_program => {
             return Err(no_program_here());
         }
-        #[cfg(not(windows))]
-        let (command, args): (String, Vec<String>) = match spec {
-            TabSpec::Command { .. } => (
-                "/bin/sh".to_string(),
-                vec!["-c".to_string(), shell_cmd.clone()],
-            ),
-            _ => (
-                shell.clone(),
-                shell_args().iter().map(|arg| (*arg).to_string()).collect(),
-            ),
-        };
-        #[cfg(windows)]
-        let (command, args): (String, Vec<String>) = {
-            let command_shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
-            match spec {
-                TabSpec::Command { command } => {
-                    (command_shell, vec!["/K".to_string(), command.clone()])
+        TabBackend::Daemon => {
+            #[cfg(not(windows))]
+            let (command, args): (String, Vec<String>) = match spec {
+                TabSpec::Command { .. } => (
+                    "/bin/sh".to_string(),
+                    vec!["-c".to_string(), shell_cmd.clone()],
+                ),
+                _ => (
+                    shell.clone(),
+                    shell_args().iter().map(|arg| (*arg).to_string()).collect(),
+                ),
+            };
+            #[cfg(windows)]
+            let (command, args): (String, Vec<String>) = {
+                let command_shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
+                match spec {
+                    TabSpec::Command { command } => {
+                        (command_shell, vec!["/K".to_string(), command.clone()])
+                    }
+                    _ => (shell.clone(), Vec::new()),
                 }
-                _ => (shell.clone(), Vec::new()),
-            }
-        };
-        TabLaunch::Daemon(DaemonShellTabSpawn {
-            command,
-            args,
-            cwd,
-            env: env.iter().cloned().collect(),
-        })
-    } else if session.backend == planeai_rmux::BACKEND {
-        if runs_program {
-            return Err(no_program_here());
+            };
+            TabLaunch::Daemon(DaemonShellTabSpawn {
+                command,
+                args,
+                cwd,
+                env: env.iter().cloned().collect(),
+            })
         }
-        TabLaunch::Rmux {
+        TabBackend::Rmux { workspace } => TabLaunch::Rmux {
             session_id: session.id.clone(),
-            workspace: rmux_workspace,
+            workspace,
             command: shell_cmd,
             cwd,
-        }
-    } else {
-        TabLaunch::Local(match spec {
+        },
+        TabBackend::Local => TabLaunch::Local(match spec {
             TabSpec::Program { argv } => {
                 let mut argv = argv.clone();
                 resolve_program(&mut argv, &env);
@@ -457,7 +451,7 @@ fn prepare_tab_spawn(
                 command: shell_cmd,
                 cwd,
             },
-        })
+        }),
     };
 
     Ok(PreparedTab {
@@ -483,14 +477,7 @@ fn resolve_program(argv: &mut [String], env: &[(String, String)]) {
     }
 }
 
-struct TabClosePlan {
-    pty_key: String,
-    daemon_backed: bool,
-    /// The rmux workspace hosting its pane.
-    rmux_workspace: Option<planeai_rmux::WorkspaceName>,
-}
-
-/// Close a terminal tab; it stays live when its process could not be ended.
+/// Close a terminal tab; it stays when its process could not be ended.
 #[tauri::command]
 pub async fn close_tab(
     session_id: String,
@@ -512,34 +499,6 @@ pub async fn ended_tabs(
         .collect();
     let ended = tabs.0.ended_among(candidates).await?;
     Ok(ended.iter().map(TabId::key).collect())
-}
-
-fn prepare_tab_close(
-    tab: &TabId,
-    connection: Arc<std::sync::Mutex<rusqlite::Connection>>,
-) -> Result<TabClosePlan, String> {
-    let conn = connection.lock().map_err(|e| e.to_string())?;
-    // A session deleted already (from the CLI, or with its project) leaves only local tabs to
-    // end, such as a handoff's program, which must not outlive it.
-    let session = db::get_session(&conn, tab.session_id()).map_err(|e| e.to_string())?;
-    let backend = session.as_ref().map(|session| session.backend.as_str());
-    let rmux_workspace = session
-        .as_ref()
-        .filter(|session| session.backend == planeai_rmux::BACKEND)
-        .map(|session| {
-            planeai_rmux::WorkspaceKey::for_session(
-                session.task_project_id(),
-                session.task_key.as_deref(),
-                &session.id,
-            )
-            .name()
-        });
-
-    Ok(TabClosePlan {
-        pty_key: tab.key(),
-        daemon_backed: backend == Some("daemon"),
-        rmux_workspace,
-    })
 }
 
 /// Whether the tab still runs its program, so a reloaded webview can tell a live provider
@@ -647,33 +606,21 @@ mod tests {
     }
 
     #[test]
-    fn a_close_addresses_the_backend_hosting_the_tab() {
+    fn a_tab_is_reached_through_its_sessions_backend() {
         let tab = TabId::new("s1", 2);
-        let daemon = prepare_tab_close(&tab, session_db("daemon")).unwrap();
-        assert!(daemon.daemon_backed && daemon.rmux_workspace.is_none());
-        let rmux = prepare_tab_close(&tab, session_db(planeai_rmux::BACKEND)).unwrap();
-        assert!(!rmux.daemon_backed && rmux.rmux_workspace.is_some());
-        let local = prepare_tab_close(&tab, session_db("plugin")).unwrap();
-        assert!(!local.daemon_backed && local.rmux_workspace.is_none());
-    }
-
-    #[test]
-    fn a_reconnect_never_plans_a_new_process() {
-        let tab = TabId::new("s1", 2);
+        let backend = |name: &str| tab_backend(&tab, session_db(name)).unwrap();
+        assert!(matches!(backend("plugin"), Some(TabBackend::Local)));
+        assert!(matches!(backend("daemon"), Some(TabBackend::Daemon)));
         assert!(matches!(
-            prepare_tab_reconnect(&tab, session_db("plugin")),
-            Ok(Reconnect::Local)
+            backend(planeai_rmux::BACKEND),
+            Some(TabBackend::Rmux { .. })
         ));
-        assert!(matches!(
-            prepare_tab_reconnect(&tab, session_db("daemon")),
-            Ok(Reconnect::Daemon)
-        ));
-
-        // Its pane is looked up by name when reconnecting, never by a recorded id.
-        assert!(matches!(
-            prepare_tab_reconnect(&tab, session_db(planeai_rmux::BACKEND)),
-            Ok(Reconnect::Rmux { .. })
-        ));
+        let gone = session_db("plugin");
+        gone.lock()
+            .unwrap()
+            .execute("DELETE FROM sessions WHERE id = 's1'", [])
+            .unwrap();
+        assert!(tab_backend(&tab, gone).unwrap().is_none());
     }
 
     #[test]
