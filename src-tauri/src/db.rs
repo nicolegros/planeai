@@ -102,6 +102,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     planeai_core::prompt_lock::migrate(conn)?;
     planeai_core::loop_service::LoopService::migrate(conn)?;
     crate::rmux_resources::migrate(conn)?;
+    crate::terminal_tabs::migrate(conn)?;
 
     // Settings table is Tauri-specific (not needed by Iced)
     conn.execute_batch(

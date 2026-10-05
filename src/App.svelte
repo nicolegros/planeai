@@ -4,6 +4,7 @@
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { emitTo, listen } from "@tauri-apps/api/event";
   import { sessions as sessionsApi, pty, notify, sessionLogs, editor as editorApi, updater } from "./lib/api";
+  import { TabEndedError } from "./lib/terminal-pty";
   import { sessionTaskProjectId, type Session, type Project, type TaskItem } from "./lib/types";
   import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
   import { isTerminalPaneFocused, releaseTerminalDomFocus } from "./lib/terminal-focus";
@@ -49,7 +50,7 @@
   import ProviderSessionView from "./components/ProviderSessionView.svelte";
   import { isPluginSession, runtimeProviders } from "./lib/plugin-providers";
   import { sendToAgent } from "./lib/agent-input";
-  import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution } from "./lib/types";
+  import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution, TabEnded } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
@@ -396,8 +397,8 @@
 
   function handleSplitAction(actionType: string): void {
     if (!canSplit) return;
-    if (actionType === "split_vertical") return splitPane("vertical");
-    if (actionType === "split_horizontal") return splitPane("horizontal");
+    if (actionType === "split_vertical") return void splitPane("vertical");
+    if (actionType === "split_horizontal") return void splitPane("horizontal");
     if (actionType === "close_split") workspaceLayout.closePane();
     else if (actionType.startsWith("focus_split_")) workspaceLayout.focusDirection(SPLIT_DIRECTIONS[actionType]);
     else if (actionType.startsWith("move_tab_")) workspaceLayout.moveFocusedTab(SPLIT_DIRECTIONS[actionType]);
@@ -405,18 +406,28 @@
   }
 
   /** Split the focused pane and open a login shell for the focused agent in the new pane. */
-  function splitPane(direction: SplitDirection): void {
+  async function splitPane(direction: SplitDirection): Promise<void> {
     if (!activeSessionId) return;
-    if (!workspaceLayout.openShell(activeSessionId, { split: direction })) return;
+    if (!(await openShell(activeSessionId, { split: direction }))) return;
     // Wait for Terminal to mount + open before refocusing
     tick().then(() => requestAnimationFrame(() => refocusTerminal()));
   }
 
   /** Open a shell tab for the focused agent in a pane (the focused one by default). */
-  function openShellTab(paneId?: string): void {
+  async function openShellTab(paneId?: string): Promise<void> {
     if (!activeSessionId) return;
-    if (!workspaceLayout.openShell(activeSessionId, { paneId })) return;
+    if (!(await openShell(activeSessionId, { paneId }))) return;
+    await tick();
     refocusTerminal();
+  }
+
+  async function openShell(sessionId: string, where: Parameters<typeof workspaceLayout.openShell>[1]): Promise<string | null> {
+    try {
+      return await workspaceLayout.openShell(sessionId, where);
+    } catch (error) {
+      showSnackbar(`Failed to open shell: ${error instanceof Error ? error.message : String(error)}`, "error");
+      return null;
+    }
   }
 
   /**
@@ -431,9 +442,7 @@
       showSnackbar(`Failed to close shell tab: ${error instanceof Error ? error.message : String(error)}`, "error");
       return;
     }
-    if (outcome === "starting") {
-      showSnackbar("Terminal editor is still starting", "error");
-    } else if (outcome === "agent") {
+    if (outcome === "agent") {
       const session = sessions.find((candidate) => candidate.id === ptyKeySessionId(ptyKey));
       if (!session) return;
       try {
@@ -483,20 +492,6 @@
       }
     } catch (error) {
       showSnackbar(`Failed to open terminal editor: ${error}`, "error");
-    }
-  }
-
-  async function handleShellAttachError(ptyKey: string, error: unknown): Promise<void> {
-    // A shell that never started would otherwise linger as a dead pane; this
-    // close is not the user's, so it must not steal focus.
-    const message = providerHandoff.isHandoffTab(ptyKey)
-      ? "Failed to start the agent's terminal"
-      : workspaceLayout.isStarting(ptyKey) ? "Failed to open terminal editor" : "Failed to start shell";
-    showSnackbar(`${message}: ${error}`, "error");
-    try {
-      await workspaceLayout.shellFailedToStart(ptyKey);
-    } catch (closeError) {
-      console.warn("Failed to clean up shell tab", ptyKey, closeError);
     }
   }
 
@@ -915,10 +910,9 @@
     const cleanupTaskListener = taskStore.startTaskEventListener(() => projectStore.getProjects().map((p) => p.path));
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
-    const unlistenShellPtyExit = listen<{ pty_key: string }>("pty-exited", (event) => {
-      void workspaceLayout.shellExited(event.payload.pty_key).catch((error) => {
-        showSnackbar(`Failed to finalize shell tab close: ${error instanceof Error ? error.message : String(error)}`, "error");
-      });
+    const unlistenTabEnded = listen<TabEnded>("tab-ended", (event) => {
+      const { pty_key, reason, error } = event.payload;
+      void workspaceLayout.tabEnded(pty_key, reason, error);
     });
     const unlistenPluginRuntime = listen<import("./lib/types").PluginInventory>("plugin-runtime-changed", (event) => {
       pluginSessionActionsRevision += 1;
@@ -1029,7 +1023,7 @@
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; commandMenuRenameId = null; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
-        else if (action.type === "new_tab") { openShellTab(); }
+        else if (action.type === "new_tab") { void openShellTab(); }
         else if (action.type === "close_tab") { closeFocusedTab(); }
         else if (action.type === "next_tab") { cycleTab(1); }
         else if (action.type === "prev_tab") { cycleTab(-1); }
@@ -1144,7 +1138,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); unlistenFileDrop.then((fn) => fn()); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); cleanupTaskListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenShellPtyExit.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); unlistenFileDrop.then((fn) => fn()); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); cleanupTaskListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenTabEnded.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -1394,14 +1388,13 @@
                   focused={paneFocused}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
-                  initialCommand={tabEntry.type === "shell" ? workspaceLayout.pendingCommand(tabEntry.ptyKey) : undefined}
                   onAttached={() => {
-                    if (tabEntry.type !== "shell") return;
-                    workspaceLayout.shellStarted(tabEntry.ptyKey);
-                    if (leaf.id === workspaceLayout.layout?.focusedLeafId) refocusTerminal();
+                    if (tabEntry.type === "shell" && leaf.id === workspaceLayout.layout?.focusedLeafId) refocusTerminal();
                   }}
                   onAttachError={(error) => {
-                    if (tabEntry.type === "shell") void handleShellAttachError(tabEntry.ptyKey, error);
+                    // A tab that ended reports it through its end; one that stays failed to start or reconnect.
+                    if (error instanceof TabEndedError) workspaceLayout.dropEnded(error.ptyKey);
+                    else if (tabEntry.type === "shell") showSnackbar(`Failed to open terminal: ${error}`, "error");
                     else showSnackbar(String(error));
                   }}
                   onFocused={(event) => {

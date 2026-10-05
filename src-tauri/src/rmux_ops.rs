@@ -137,27 +137,22 @@ pub fn read_pane_after(
     planeai_core::capture_cursor::read_after(CURSOR_LABEL, &captured, cursor, max_bytes)
 }
 
-/// Close a single resource, such as one shell tab.
-///
-/// The agent pane and sibling tabs keep running: each resource is its own window.
-pub fn close_resource(pty_key: &str) -> Result<(), String> {
-    let conn = db()?;
-    let Some(record) = crate::rmux_resources::get(&conn, pty_key).map_err(|e| e.to_string())?
-    else {
-        return Ok(());
-    };
-    let Some(workspace) = record.workspace() else {
-        return Ok(());
-    };
-    let handle = record.handle();
-    let result = blocking(move |client| {
-        let workspace = workspace.clone();
-        async move { client.close_resource(&workspace, handle).await }
-    });
-    // Forget the row either way: a pane PlaneAI cannot close is one it can no
-    // longer address, and keeping the row would strand it.
-    let _ = crate::rmux_resources::remove(&conn, pty_key);
-    result
+/// Close a terminal tab's pane, leaving the agent pane and sibling tabs running. Found by its
+/// window name as a spawn adopts it, its record is forgotten only once it is gone, so a failed
+/// close can be retried.
+pub fn close_tab_resource(workspace: &WorkspaceName, pty_key: &str) -> Result<(), String> {
+    let (name, key) = (workspace.clone(), pty_key.to_string());
+    let pane = blocking(|client| {
+        let (name, key) = (name.clone(), key.clone());
+        async move { client.find_resource(&name, &key).await }
+    })?;
+    if let Some(handle) = pane {
+        blocking(|client| {
+            let name = name.clone();
+            async move { client.close_resource(&name, handle).await }
+        })?;
+    }
+    crate::rmux_resources::remove(&db()?, pty_key).map_err(|e| e.to_string())
 }
 
 /// Close every resource of a session, leaving its workspace for siblings.

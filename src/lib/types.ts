@@ -101,6 +101,22 @@ export interface PluginUiContribution {
 
 export type ProviderFeature = "yolo" | "handoff";
 
+/** What a terminal tab runs when it starts; a program runs without a shell to parse it. */
+export type TabSpec =
+  | { kind: "shell" }
+  | { kind: "command"; command: string }
+  | { kind: "program"; argv: readonly string[] };
+
+/** Why a terminal tab ended, as its one `tab-ended` event reports it (ADR-0015). */
+export type TabEndReason = "closed" | "exited" | "failed_to_start" | "session_ended";
+
+export interface TabEnded {
+  pty_key: string;
+  reason: TabEndReason;
+  /** Why it failed to start. */
+  error?: string;
+}
+
 /** A session runtime declared by a plugin; its UI replaces the agent terminal (ADR-0014). */
 export interface PluginProvider {
   id: string;

@@ -164,11 +164,10 @@ function newContainer(): HTMLElement {
   return el;
 }
 
-function createView(kind: "agent" | "shell" = "agent", initialCommand?: string): TerminalView {
+function createView(kind: "agent" | "shell" = "agent"): TerminalView {
   return createTerminalView({
     ptyKey: "s1",
     kind,
-    initialCommand,
     pty,
     geometryHint: hint,
     createSurface: (handlers) => (surface = new FakeSurface(handlers)),
@@ -324,12 +323,12 @@ describe("terminal view: first mount", () => {
     expect(pty.connects).toHaveLength(1);
   });
 
-  it("passes kind and initial command to the connection", async () => {
+  it("passes its kind to the connection", async () => {
     view.dispose();
-    view = createView("shell", "vim file.ts");
+    view = createView("shell");
     await liveView();
 
-    expect(pty.connects[0]).toEqual({ ptyKey: "s1", kind: "shell", initialCommand: "vim file.ts" });
+    expect(pty.connects[0]).toEqual({ ptyKey: "s1", kind: "shell" });
   });
 
   it("reports a connection failure once and does not retry on resize, focus or show", async () => {

@@ -2874,11 +2874,12 @@ impl PluginRuntimeSupervisor {
             if let Some(reason) = crate::plugin_providers::stop_reason(&event.status) {
                 // Every path that ends a session in the GUI dispatches this, so its handoff
                 // programs end here, whichever path it was.
-                supervisor
+                let tabs = supervisor
                     .app
-                    .state::<crate::state::PtyState>()
+                    .state::<crate::state::TerminalTabsState>()
                     .0
-                    .end_programs(&event.session_id);
+                    .clone();
+                tabs.session_ended(&event.session_id).await;
                 let runtime = crate::plugin_providers::AppRuntime::new(&supervisor.app);
                 crate::plugin_providers::stop(&runtime, &event.session_id, reason).await;
             }

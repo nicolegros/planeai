@@ -1,7 +1,7 @@
 //! Tauri adapter for planeai-pty.
 //!
-//! Implements `PtyEventSink` to forward PTY output/exit/error events through
-//! the existing Tauri `Channel<Response>` and `AppHandle` event paths, so
+//! Implements `PtyEventSink` to forward PTY output through the Tauri
+//! `Channel<Response>` and exits through the PTY manager's exit sink, so
 //! the frontend does not know whether planeai-pty or the legacy backend is active.
 
 use std::fs::{self, File, OpenOptions};
@@ -13,9 +13,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use chrono::Utc;
 use planeai_pty::{LocalPtyConfig, LocalPtySession, PtyEvent, PtyEventSink};
 use tauri::ipc::{Channel, Response};
-use tauri::{AppHandle, Emitter};
 
 use crate::output_observer::OutputObserver;
+use crate::pty::ExitSink;
 use crate::session_backend::{SessionBackend, WriteAck};
 
 /// What a local PTY runs: a command line for the platform shell, or a program and its arguments.
@@ -38,7 +38,7 @@ impl SpawnCommand {
 pub struct TauriPtySink {
     session_id: String,
     on_data: Arc<RwLock<Option<Channel<Response>>>>,
-    app: AppHandle,
+    exits: ExitSink,
     cancelled: Arc<AtomicBool>,
     observer: Arc<dyn OutputObserver>,
 }
@@ -47,14 +47,14 @@ impl TauriPtySink {
     pub fn new(
         session_id: String,
         on_data: Channel<Response>,
-        app: AppHandle,
+        exits: ExitSink,
         cancelled: Arc<AtomicBool>,
         observer: Arc<dyn OutputObserver>,
     ) -> Self {
         Self {
             session_id,
             on_data: Arc::new(RwLock::new(Some(on_data))),
-            app,
+            exits,
             cancelled,
             observer,
         }
@@ -76,10 +76,7 @@ impl PtyEventSink for TauriPtySink {
             }
             PtyEvent::Exit { .. } => {
                 if !self.cancelled.load(Ordering::Acquire) {
-                    let _ = self.app.emit(
-                        "pty-exited",
-                        serde_json::json!({ "pty_key": self.session_id }),
-                    );
+                    (self.exits)(&self.session_id);
                 }
             }
             PtyEvent::Error { message, .. } => {
@@ -108,7 +105,7 @@ impl PlaneaiPtyBackend {
         command: SpawnCommand,
         cwd: &str,
         env: Vec<(String, String)>,
-        app: AppHandle,
+        exits: ExitSink,
         on_data: Channel<Response>,
         cancelled: Arc<AtomicBool>,
         observer: Arc<dyn OutputObserver>,
@@ -118,7 +115,7 @@ impl PlaneaiPtyBackend {
         let tauri_sink = Arc::new(TauriPtySink::new(
             session_id.to_string(),
             on_data,
-            app,
+            exits,
             cancelled,
             observer,
         ));

@@ -192,6 +192,14 @@ pub async fn spawn_shell_tab(
     .await
 }
 
+/// Whether the daemon runs this shell tab.
+pub async fn is_shell_tab_running(socket_path: &Path, session_id: &str) -> Result<bool, String> {
+    let daemon = tokio::time::timeout(CONTROL_TIMEOUT, list_daemon_sessions(socket_path))
+        .await
+        .map_err(|_| "daemon shell-tab lookup timed out".to_string())??;
+    Ok(daemon.running.contains(session_id))
+}
+
 async fn spawn_shell_tab_with_timeout(
     socket_path: &Path,
     session_id: &str,

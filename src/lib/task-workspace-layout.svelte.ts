@@ -1,10 +1,10 @@
 /**
  * TaskWorkspace layout: the tabs and splits of the loaded TaskWorkspace.
  *
- * Owns the layout tree (see ./layout-tree), which workspace it belongs to, its
- * persistence, shell tab index allocation, terminal-editor command reservations,
- * and closing tabs against the backend. The persisted layout is the authority on
- * which shell tabs exist: there is no separate per-session tab record.
+ * Owns the layout tree (see ./layout-tree), which workspace it belongs to, and its
+ * persistence. Terminal tabs (shells, terminal editors, handoffs) are the backend's
+ * (ADR-0015): it hands out their indices and reports their end once, and the layout
+ * only places them and drops them.
  *
  * Callers own the UI follow-up (focus, snackbars, session selection); every
  * operation reports what happened so they can react.
@@ -21,11 +21,10 @@ import {
 } from "./pty-key";
 import { editor as editorApi, providerSessions, pty, sessions as sessionsApi } from "./api";
 import { toTaskWorkspaceId } from "./sidebar-session-order";
-import { sessionTaskProjectId, type Session } from "./types";
+import { sessionTaskProjectId, type Session, type TabEndReason, type TabSpec } from "./types";
 import { disposeTerminalView } from "./terminal-views";
 import { createProviderHandoff } from "./provider-handoff";
 import { showSnackbar } from "./snackbar.svelte";
-import type { TabCommand } from "./terminal-view";
 
 export type WorkspaceIdentity =
   | { kind: "task"; key: string; projectId: string; taskKey: string }
@@ -56,12 +55,21 @@ export interface LayoutStore {
   save: (workspace: WorkspaceIdentity, layoutJson: string) => Promise<unknown>;
 }
 
+/** The backend's terminal tabs. */
+export interface TerminalTabs {
+  /** Reserve a tab running `spec`; resolves an index the session never had. */
+  open: (sessionId: string, spec: TabSpec) => Promise<number>;
+  /** Rejects, leaving the tab live, when its process could not be ended. */
+  close: (sessionId: string, index: number) => Promise<unknown>;
+  /** The tabs among `ptyKeys` that ended. */
+  endedAmong: (ptyKeys: string[]) => Promise<string[]>;
+}
+
 export interface TaskWorkspaceLayoutDeps {
   store: LayoutStore;
-  /** Kill a shell tab's backend process. Rejects when it may still be running. */
-  closeShell: (sessionId: string, index: number) => Promise<unknown>;
-  /** A shell tab left the layout, closed or exited by itself (`exited`); it never rejects. */
-  shellClosed?: (ptyKey: string, exited: boolean) => Promise<void>;
+  tabs: TerminalTabs;
+  /** A terminal tab ended, as the backend reports once per tab; it never rejects. */
+  tabEnded?: (ptyKey: string, reason: TabEndReason, error?: string) => Promise<void>;
   /** A loaded layout holds a provider handoff's terminal, so its close must still hand back. */
   handoffRestored?: (ptyKey: string) => void;
   getTerminalCommand: (sessionId: string, filePath: string) => Promise<string>;
@@ -91,11 +99,8 @@ export interface ShowResult {
 /** Outcome of opening a resource that may already be in the layout. */
 export type ResourceOpen = "opened" | "focused" | "closed" | "unavailable";
 
-/**
- * Outcome of closing a tab. `agent` tabs are durable sessions the caller parks;
- * `starting` is a terminal editor whose shell has not attached yet.
- */
-export type TabClose = "closed" | "agent" | "starting" | "missing";
+/** Outcome of closing a tab. `agent` tabs are durable sessions the caller parks. */
+export type TabClose = "closed" | "agent" | "missing";
 
 /** A tab as a tab strip renders it; `id` is its pty key. */
 export interface PaneTab {
@@ -119,24 +124,8 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
   let focusedSessionId: string | null = null;
   let generation = 0;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Editor commands for shell tabs that have not attached yet, by pty key. */
-  const pendingCommands = new Map<string, TabCommand>();
-  /**
-   * Highest shell index handed out per session in this app run. Indices are not
-   * reused within a run, so a late `pty-exited` for a closed shell can never hit
-   * a new tab that took its key.
-   */
-  const highestShellIndex = new Map<string, number>();
-  /**
-   * Shells closed or exited in this run. A layout saved while one was still open
-   * (another workspace was loaded when it went) must not bring it back.
-   */
-  const goneShells = new Set<string>();
-  /**
-   * Shells whose explicit close is in flight: whether their process exited meanwhile, as their
-   * close's own doing, and the close itself, which a second close of the tab waits for.
-   */
-  const closingShells = new Map<string, { exited: boolean; done: Promise<void> }>();
+  /** Terminal tabs that ended while a layout loaded, which it may still hold. */
+  const endedWhileLoading = new Set<string>();
 
   function commit(next: Layout | null): void {
     if (next === layout) return;
@@ -179,46 +168,89 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     );
   }
 
-  function allocateShellIndex(sessionId: string): number {
-    let highest = highestShellIndex.get(sessionId) ?? 0;
-    const keys = [...tree.tabsOf(layout).map((tab) => tab.ptyKey), ...pendingCommands.keys()];
-    for (const key of keys) {
-      const parts = parsePtyKey(key);
-      if (parts?.kind === "shell" && parts.sessionId === sessionId)
-        highest = Math.max(highest, parts.index);
+  /**
+   * Reserve a terminal tab on the backend and put it in the layout with `place`. Null when
+   * the layout changed so that it has no place anymore; its reservation then ends.
+   */
+  async function openTerminalTab(
+    sessionId: string,
+    spec: TabSpec,
+    place: (base: Layout, ptyKey: string) => Layout | null,
+  ): Promise<string | null> {
+    if (!layout || loading) return null;
+    const shown = workspace;
+    const index = await deps.tabs.open(sessionId, spec);
+    const ptyKey = shellPtyKey(sessionId, index);
+    const next = layout && !loading && workspace === shown ? place(layout, ptyKey) : null;
+    if (!next) {
+      deps.tabs
+        .close(sessionId, index)
+        .catch((error) => console.warn("Failed to end an unplaced terminal tab", ptyKey, error));
+      return null;
     }
-    highestShellIndex.set(sessionId, highest + 1);
-    return highest + 1;
+    commit(next);
+    saveNow();
+    return ptyKey;
   }
 
-  /** Reserve a shell tab whose PTY runs `command`, so the terminal that mounts for it starts it. */
+  /** Reserve a terminal tab running `spec` in a pane, so the terminal that mounts for it starts it. */
   function openCommandTab(
     sessionId: string,
     paneId: string,
-    command: TabCommand,
+    spec: TabSpec,
     label: string,
     focus = false,
     handoff = false,
-  ): string | null {
-    if (!layout || loading || !tree.findLeaf(layout, paneId)) return null;
-    const ptyKey = shellPtyKey(sessionId, allocateShellIndex(sessionId));
-    pendingCommands.set(ptyKey, command);
-    const tab = { ...shellTab(ptyKey, label), ...(handoff ? { handoff: true } : {}) };
-    const next = tree.addTab(layout, paneId, tab);
-    commit(focus ? tree.focusLeaf(next, paneId) : next);
-    saveNow();
-    return ptyKey;
+  ): Promise<string | null> {
+    if (!layout || !tree.findLeaf(layout, paneId)) return Promise.resolve(null);
+    return openTerminalTab(sessionId, spec, (base, ptyKey) => {
+      if (!tree.findLeaf(base, paneId)) return null;
+      const tab = { ...shellTab(ptyKey, label), ...(handoff ? { handoff: true } : {}) };
+      const next = tree.addTab(base, paneId, tab);
+      return focus ? tree.focusLeaf(next, paneId) : next;
+    });
   }
 
   function shellTab(ptyKey: string, label: string): TabEntry {
     return { ptyKey, label, icon: "terminal", type: "shell" };
   }
 
-  function removeShell(ptyKey: string): void {
-    goneShells.add(ptyKey);
-    if (layout) commit(tree.removeTab(layout, ptyKey));
+  /** A terminal tab ended: it leaves the layout, and the backend is never asked about it again. */
+  function dropTerminal(ptyKey: string): void {
+    if (loading) endedWhileLoading.add(ptyKey);
+    if (layout && tree.findTab(layout, ptyKey)) {
+      commit(tree.removeTab(layout, ptyKey));
+      saveNow();
+    }
     deps.disposeView(ptyKey);
-    saveNow();
+  }
+
+  /**
+   * Close a terminal tab, dropping it as soon as the backend ends it. What its end means to
+   * others waits for its `tab-ended`, which tells why it ended.
+   */
+  async function closeTerminal(ptyKey: string): Promise<void> {
+    const parts = parsePtyKey(ptyKey);
+    if (parts?.kind !== "shell") return;
+    await deps.tabs.close(parts.sessionId, parts.index);
+    dropTerminal(ptyKey);
+  }
+
+  /** The terminal tabs of a saved layout that ended while it was not shown. */
+  async function endedTabsOf(restored: Layout): Promise<string[]> {
+    const keys = tree
+      .tabsOf(restored)
+      .filter((tab) => tab.type === "shell")
+      .map((tab) => tab.ptyKey);
+    return keys.length > 0 ? deps.tabs.endedAmong(keys) : [];
+  }
+
+  function pruneEnded(restored: Layout, ended: readonly string[]): Layout | null {
+    let result: Layout | null = restored;
+    for (const ptyKey of [...ended, ...endedWhileLoading]) {
+      if (result) result = tree.removeTab(result, ptyKey);
+    }
+    return result;
   }
 
   function openDiff(sessionId: string): ResourceOpen {
@@ -237,64 +269,6 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       }),
     );
     return "opened";
-  }
-
-  function pruneGoneShells(restored: Layout): Layout | null {
-    let result: Layout | null = restored;
-    for (const ptyKey of goneShells) if (result) result = tree.removeTab(result, ptyKey);
-    return result;
-  }
-
-  /**
-   * Removes a shell whose process is gone or never started; the backend close after it
-   * only finalizes it, and may reject.
-   */
-  async function dropShell(ptyKey: string, exited: boolean): Promise<void> {
-    const parts = parsePtyKey(ptyKey);
-    // An explicit close already finalized it, or will: closing again would be redundant.
-    if (parts?.kind !== "shell" || goneShells.has(ptyKey)) return;
-    const closing = closingShells.get(ptyKey);
-    if (closing) {
-      closing.exited = true;
-      return;
-    }
-    pendingCommands.delete(ptyKey);
-    removeShell(ptyKey);
-    await deps.shellClosed?.(ptyKey, exited);
-    await deps.closeShell(parts.sessionId, parts.index);
-  }
-
-  async function closeShell(ptyKey: string): Promise<void> {
-    const parts = parsePtyKey(ptyKey);
-    if (parts?.kind !== "shell") return;
-    const inFlight = closingShells.get(ptyKey);
-    if (inFlight) return inFlight.done;
-    // Registered before any work, so even a close failing at once is tracked, then forgotten.
-    const closing = { exited: false, done: Promise.resolve() };
-    closingShells.set(ptyKey, closing);
-    closing.done = finishClose(ptyKey, parts.sessionId, parts.index, closing);
-    return closing.done;
-  }
-
-  async function finishClose(
-    ptyKey: string,
-    sessionId: string,
-    index: number,
-    closing: { exited: boolean },
-  ): Promise<void> {
-    // Keep the tab until the backend confirms, so a failed kill does not leave a
-    // shell running with no UI to reach it.
-    try {
-      await deps.closeShell(sessionId, index);
-    } catch (error) {
-      closingShells.delete(ptyKey);
-      // Its process is gone anyway, so its tab goes as for any exit.
-      if (closing.exited) await dropShell(ptyKey, true);
-      throw error;
-    }
-    closingShells.delete(ptyKey);
-    removeShell(ptyKey);
-    await deps.shellClosed?.(ptyKey, false);
   }
 
   return {
@@ -346,10 +320,13 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       saveNow();
       const loadGeneration = ++generation;
       loading = true;
+      endedWhileLoading.clear();
       let restored: Layout | null = null;
+      let ended: string[] = [];
       try {
         const json = await deps.store.load(target);
         restored = json ? tree.restoreLayout(json) : null;
+        if (restored) ended = await endedTabsOf(restored);
       } catch (error) {
         console.warn("Failed to load workspace layout", target.key, error);
       }
@@ -374,7 +351,7 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
         }
         if (selection.kind === "adopt_restored_session") adoptedSessionId = selection.sessionId;
       }
-      const pruned = restored && pruneGoneShells(restored);
+      const pruned = restored && pruneEnded(restored, ended);
       layout = pruned || tree.createLayout(agentTabs(), selectedTab);
       workspace = target;
       focusedSessionId = adoptedSessionId ?? options.selectedSessionId;
@@ -413,22 +390,20 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     openShell(
       sessionId: string,
       where: { paneId?: string; split?: SplitDirection } = {},
-    ): string | null {
+    ): Promise<string | null> {
       // While another workspace loads, the shown layout is about to be replaced.
-      if (!layout || loading) return null;
-      let base = layout;
-      let paneId = where.paneId ?? layout.focusedLeafId;
-      if (where.split) {
-        const split = tree.splitFocused(layout, where.split);
-        if (!split) return null;
-        base = split.layout;
-        paneId = split.leafId;
-      }
-      if (!tree.findLeaf(base, paneId)) return null;
-      const ptyKey = shellPtyKey(sessionId, allocateShellIndex(sessionId));
-      commit(tree.focusLeaf(tree.addTab(base, paneId, shellTab(ptyKey, "Shell")), paneId));
-      saveNow();
-      return ptyKey;
+      return openTerminalTab(sessionId, { kind: "shell" }, (current, ptyKey) => {
+        let base = current;
+        let paneId = where.paneId ?? current.focusedLeafId;
+        if (where.split) {
+          const split = tree.splitFocused(current, where.split);
+          if (!split) return null;
+          base = split.layout;
+          paneId = split.leafId;
+        }
+        if (!tree.findLeaf(base, paneId)) return null;
+        return tree.focusLeaf(tree.addTab(base, paneId, shellTab(ptyKey, "Shell")), paneId);
+      });
     },
 
     /**
@@ -442,29 +417,20 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
       const paneId = loading ? null : layout?.focusedLeafId;
       if (!paneId) return null;
       const command = await deps.getTerminalCommand(sessionId, filePath);
-      return openCommandTab(sessionId, paneId, command, fileName(filePath));
+      return openCommandTab(sessionId, paneId, { kind: "command", command }, fileName(filePath));
     },
 
-    /** Open a shell tab in the focused pane that runs `command` when its PTY spawns, and focus it. */
+    /** Open a terminal tab in the focused pane that runs `spec` when it starts, and focus it. */
     openCommand(
       sessionId: string,
-      command: TabCommand,
+      spec: TabSpec,
       label: string,
       options: { handoff?: boolean } = {},
-    ): string | null {
-      const paneId = loading ? null : layout?.focusedLeafId;
+    ): Promise<string | null> {
+      const paneId = layout?.focusedLeafId;
       return paneId
-        ? openCommandTab(sessionId, paneId, command, label, true, options.handoff)
-        : null;
-    },
-
-    /** What a shell tab runs first when its PTY spawns: a terminal editor, or a provider's handoff. */
-    pendingCommand: (ptyKey: string): TabCommand | undefined => pendingCommands.get(ptyKey),
-    isStarting: (ptyKey: string): boolean => pendingCommands.has(ptyKey),
-
-    /** A shell tab's PTY spawned; its pending command has been consumed. */
-    shellStarted(ptyKey: string): void {
-      pendingCommands.delete(ptyKey);
+        ? openCommandTab(sessionId, paneId, spec, label, true, options.handoff)
+        : Promise.resolve(null);
     },
 
     /** Open the session's diff in the focused pane, or focus it. Never closes it. */
@@ -503,7 +469,7 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
     // ─── Closing ──────────────────────────────────────────────────────────────
 
     /**
-     * Close a tab. A shell is killed on the backend first and stays in the layout
+     * Close a tab. A terminal tab is ended on the backend first and stays in the layout
      * if that rejects (the rejection propagates). Agent tabs are left to the
      * caller, which parks their session.
      */
@@ -518,33 +484,28 @@ export function createTaskWorkspaceLayout(deps: TaskWorkspaceLayoutDeps) {
           commit(tree.removeTab(layout, ptyKey));
           return "closed";
         case "shell":
-          if (pendingCommands.has(ptyKey)) return "starting";
-          await closeShell(ptyKey);
+          await closeTerminal(ptyKey);
           return "closed";
       }
     },
 
-    /**
-     * A shell's process exited by itself.
-     */
-    async shellExited(ptyKey: string): Promise<void> {
-      await dropShell(ptyKey, true);
+    /** The backend reported a terminal tab's end (`tab-ended`). */
+    async tabEnded(ptyKey: string, reason: TabEndReason, error?: string): Promise<void> {
+      dropTerminal(ptyKey);
+      await deps.tabEnded?.(ptyKey, reason, error);
     },
 
+    /** A terminal tab found ended when its terminal attached; its end was reported already. */
+    dropEnded: dropTerminal,
+
     /**
-     * Close a shell tab whatever its state, for a session leaving the app. False when the
+     * Close a terminal tab whatever its state, for a session leaving the app. False when the
      * shown layout does not hold it; the caller then ends its process directly.
      */
-    async discardShell(ptyKey: string): Promise<boolean> {
+    async discardTerminal(ptyKey: string): Promise<boolean> {
       if (!layout || tree.findTab(layout, ptyKey)?.tab.type !== "shell") return false;
-      pendingCommands.delete(ptyKey);
-      await closeShell(ptyKey);
+      await closeTerminal(ptyKey);
       return true;
-    },
-
-    /** A shell tab's PTY failed to spawn: nothing runs, so its tab goes even if the backend close rejects. */
-    async shellFailedToStart(ptyKey: string): Promise<void> {
-      await dropShell(ptyKey, false);
     },
 
     // ─── Navigation and arrangement ───────────────────────────────────────────
@@ -654,7 +615,7 @@ export function resolveRestoredLayoutSelection(input: {
   return { kind: "adopt_restored_session", sessionId: input.liveRestoredSessionId };
 }
 
-const closeShellPty = (sessionId: string, index: number) => pty.closeTab(sessionId, index);
+const closeTerminalPty = (sessionId: string, index: number) => pty.closeTab(sessionId, index);
 
 /** The app's TaskWorkspace layout. */
 export const taskWorkspaceLayout = createTaskWorkspaceLayout({
@@ -668,8 +629,17 @@ export const taskWorkspaceLayout = createTaskWorkspaceLayout({
         ? sessionsApi.saveTaskWorkspaceLayout(workspace.projectId, workspace.taskKey, layoutJson)
         : sessionsApi.saveLayout(workspace.sessionId, layoutJson),
   },
-  closeShell: closeShellPty,
-  shellClosed: (ptyKey, exited) => providerHandoff.shellClosed(ptyKey, exited),
+  tabs: {
+    open: (sessionId, spec) => pty.openTab(sessionId, spec),
+    close: closeTerminalPty,
+    endedAmong: (ptyKeys) => pty.endedTabs(ptyKeys),
+  },
+  tabEnded: async (ptyKey, reason, error) => {
+    const explained = await providerHandoff.tabEnded(ptyKey, reason, error);
+    if (reason === "failed_to_start" && !explained) {
+      showSnackbar(`Failed to start terminal${error ? `: ${error}` : ""}`, "error");
+    }
+  },
   handoffRestored: (ptyKey) => {
     void providerHandoff
       .adopt(ptyKey)
@@ -687,10 +657,10 @@ export const providerHandoff = createProviderHandoff({
     handoff: (sessionId) => providerSessions.handoff(sessionId),
     handback: (sessionId) => providerSessions.handback(sessionId),
   },
-  discardTab: (ptyKey) => taskWorkspaceLayout.discardShell(ptyKey),
+  discardTab: (ptyKey) => taskWorkspaceLayout.discardTerminal(ptyKey),
   closeTerminal: async (ptyKey) => {
     const parts = parsePtyKey(ptyKey);
-    if (parts?.kind === "shell") await closeShellPty(parts.sessionId, parts.index);
+    if (parts?.kind === "shell") await closeTerminalPty(parts.sessionId, parts.index);
   },
   isProgramRunning: (ptyKey) => pty.isProgramRunning(ptyKey),
   notify: (message) => showSnackbar(message),
