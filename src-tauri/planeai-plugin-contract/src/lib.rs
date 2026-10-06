@@ -88,6 +88,7 @@ const LOCAL_CAPABILITIES: &[&str] = &[
     "sessions.actions",
     "sessions.advisories",
     "sessions.complete",
+    "sessions.start",
     "tasks.read",
     "tasks.create",
     "tasks.transition",
@@ -418,6 +419,7 @@ mod tests {
                 "sessions.actions",
                 "sessions.advisories",
                 "sessions.complete",
+                "sessions.start",
                 "tasks.transition"
             ],
             "ui_contributions": [{

@@ -1,7 +1,8 @@
 //! Starting a session for a task, the one owner of what "Start session immediately" means:
 //! the desktop task form and plugin-created routine tasks both go through here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use planeai_tasks::model::{Status, Task};
 use planeai_tasks::provider::TaskProvider;
@@ -78,7 +79,7 @@ impl ProviderCatalog {
 }
 
 /// What the caller chose; everything else comes from the task and the configured templates.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartOptions {
     /// `None` starts on the configured default provider.
     pub provider: Option<String>,
@@ -246,6 +247,134 @@ pub async fn start(
         }
     }
     Ok(result)
+}
+
+/// A created task whose session a plugin asked for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingTaskStart {
+    pub project_id: String,
+    pub task_key: String,
+    pub options: StartOptions,
+}
+
+/// Where a plugin's session start stands when the plugin is answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionStart {
+    Starting,
+    Exists,
+}
+
+/// Task keys whose session is starting in the background.
+#[derive(Debug, Clone, Default)]
+pub struct StartClaims(Arc<Mutex<HashSet<String>>>);
+
+/// A task whose session is starting; dropping it lets the task be started again.
+#[derive(Debug)]
+pub struct StartClaim {
+    claims: StartClaims,
+    task_key: String,
+}
+
+impl Drop for StartClaim {
+    fn drop(&mut self) {
+        self.claims
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.task_key);
+    }
+}
+
+#[derive(Debug)]
+pub enum Admission {
+    Exists,
+    Starting,
+    Start(StartClaim),
+}
+
+impl StartClaims {
+    /// Claim the task's start unless one is in flight or the task already has a session.
+    pub fn admit(
+        &self,
+        task_key: &str,
+        has_session: impl FnOnce() -> Result<bool, String>,
+    ) -> Result<Admission, String> {
+        let claimed = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(task_key.to_string());
+        if !claimed {
+            return Ok(Admission::Starting);
+        }
+        let claim = StartClaim {
+            claims: self.clone(),
+            task_key: task_key.to_string(),
+        };
+        Ok(if has_session()? {
+            Admission::Exists
+        } else {
+            Admission::Start(claim)
+        })
+    }
+}
+
+static IN_FLIGHT: LazyLock<StartClaims> = LazyLock::new(StartClaims::default);
+
+/// Start the task's session unless it has one or one is starting, without waiting for it, so
+/// a retried request converges on one session. A failure reaches the user as `app-error`.
+pub async fn start_in_background(
+    app: &AppHandle,
+    pending: PendingTaskStart,
+) -> Result<SessionStart, String> {
+    let db = app.state::<crate::state::DbState>().0.clone();
+    let task_key = pending.task_key.clone();
+    let admission = crate::commands::blocking(move || {
+        IN_FLIGHT.admit(&task_key, || {
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            has_session(&conn, &task_key)
+        })
+    })
+    .await?;
+    let claim = match admission {
+        Admission::Exists => return Ok(SessionStart::Exists),
+        Admission::Starting => return Ok(SessionStart::Starting),
+        Admission::Start(claim) => claim,
+    };
+    spawn_start(app.clone(), pending, claim);
+    Ok(SessionStart::Starting)
+}
+
+// Not async: `start` reaches plugin RPC, which serves the callbacks that call
+// `start_in_background`, so its future type must not contain this one.
+fn spawn_start(app: AppHandle, pending: PendingTaskStart, claim: StartClaim) {
+    tauri::async_runtime::spawn(async move {
+        let PendingTaskStart {
+            project_id,
+            task_key,
+            options,
+        } = pending;
+        if let Err(error) = start(&app, &project_id, &task_key, options).await {
+            tracing::warn!(task_key, %error, "background task session start failed");
+            let message =
+                format!("Routine task {task_key} was created but its session failed: {error}");
+            if let Err(error) = app.emit("app-error", message) {
+                tracing::warn!(%error, "failed to report a failed task session start");
+            }
+        }
+        drop(claim);
+    });
+}
+
+/// Whether any session, whatever its status, was ever started for the task.
+fn has_session(conn: &rusqlite::Connection, task_key: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE task_key = ?1)",
+        [task_key],
+        |row| row.get(0),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// The providers `start` accepts, as the session and task forms list them.
@@ -520,6 +649,65 @@ mod tests {
         };
         let error = plan_task_session(None, &catalog, &task(""), &[], &StartOptions::default());
         assert_eq!(error, Err(NO_PROVIDER.to_string()));
+    }
+
+    #[test]
+    fn a_task_starts_once_while_its_start_is_in_flight() {
+        let claims = StartClaims::default();
+        let Admission::Start(claim) = claims.admit("PLA-1", || Ok(false)).unwrap() else {
+            panic!("a task without a session starts");
+        };
+        let retried = claims.admit("PLA-1", || {
+            panic!("an in-flight start is not checked again")
+        });
+        assert!(matches!(retried, Ok(Admission::Starting)));
+        assert!(matches!(
+            claims.admit("PLA-2", || Ok(false)),
+            Ok(Admission::Start(_))
+        ));
+
+        drop(claim);
+        assert!(matches!(
+            claims.admit("PLA-1", || Ok(true)),
+            Ok(Admission::Exists)
+        ));
+        assert!(
+            matches!(claims.admit("PLA-1", || Ok(false)), Ok(Admission::Start(_))),
+            "finding a session releases the claim"
+        );
+        assert!(
+            claims.admit("PLA-3", || Err("db down".into())).is_err()
+                && matches!(claims.admit("PLA-3", || Ok(false)), Ok(Admission::Start(_))),
+            "a failed check releases the claim"
+        );
+    }
+
+    #[test]
+    fn any_session_row_of_the_task_counts_as_its_session() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate(&conn).unwrap();
+        let project = crate::db::create_project(&conn, "Demo", "/tmp/demo").unwrap();
+        crate::db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "PLA-1: Retro",
+            None,
+            "pla-1/retro",
+            None,
+            None,
+            "local",
+            true,
+            Some("PLA-1"),
+            None,
+            None,
+        )
+        .unwrap();
+        conn.execute("UPDATE sessions SET status = 'archived'", [])
+            .unwrap();
+
+        assert!(has_session(&conn, "PLA-1").unwrap());
+        assert!(!has_session(&conn, "PLA-2").unwrap());
     }
 
     fn plugin(id: &str, state: PluginRuntimeState, providers: bool) -> PluginInventory {

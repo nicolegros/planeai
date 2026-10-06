@@ -74,7 +74,7 @@ The platform key is the current OS and architecture: `macos-arm64`, `macos-x64`,
 
 ### Capabilities
 
-Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `tasks.read`, `tasks.create`, `tasks.transition`, `task-events`, and `providers`; duplicates and all other local capabilities are rejected.
+Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `sessions.start`, `tasks.read`, `tasks.create`, `tasks.transition`, `task-events`, and `providers`; duplicates and all other local capabilities are rejected.
 
 - `settings` permits sidecar callbacks `host.settings.get` and `host.settings.replace`.
 - `projects.read` permits `host.projects.list`, returning non-hidden active projects.
@@ -91,6 +91,15 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
   PlaneAI rejects hidden or unknown projects, returns the originally created task when the same operation is retried, and refreshes the task list.
   `host.tasks.createChild` requires `projectPath`, `parentKey`, `title`, `description`, and a plugin-scoped `operationId`; PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
   Both return `{ "task": ... }`.
+- `sessions.start` lets `host.tasks.create` start the new task's session, as the task form's "Start session immediately" does.
+  Add `start: { "provider"?: string | null, "use_worktree"?: boolean, "auto_approve"?: boolean }` to the request; omitted fields default to the configured default provider, a worktree, and auto-approve.
+  A request with `start` but without `sessions.start` fails as not granted, and `host.tasks.createChild` rejects `start`.
+  PlaneAI renders the branch, session name, and prompt from the configured task templates (or their defaults), launches the session, and moves the task to `in_progress`.
+  Auto-approve is turned off for a plugin provider that does not support it.
+  The reply does not wait for the launch: it is `{ "task": ..., "session": "starting" }`, or `"exists"` when the task already has a session.
+  Retrying the same `operationId` never starts a second session: PlaneAI starts one only when the task has no session and no start is in flight, so a retry after a crash starts the missing session once.
+  A failed start is logged and shown to the user as "Routine task KEY was created but its session failed: ...".
+  With the `local` session backend the agent spawns only when a terminal view attaches, so a session started this way waits until the user opens it.
 - `tasks.transition` permits `host.sessions.transitionLinkedTask` with `{ "session_id", "status" }`. PlaneAI resolves the task strictly from that session's linked task key, changes its lifecycle status, and emits the normal task lifecycle batch (including automatic parent completion).
 - `task-events` permits event delivery only when the handshake also subscribes to `task.lifecycle`.
 - `providers` permits declaring `providers` (host API v3 only) and the provider session contract described in [Providers](#providers). It is required exactly when `providers` is declared.
