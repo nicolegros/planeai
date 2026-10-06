@@ -98,6 +98,14 @@ async fn stop_reaches_the_plugin_even_when_no_sidecar_drives_the_session() {
 }
 
 #[tokio::test]
+async fn handing_back_an_ended_session_leaves_nothing_behind() {
+    let runtime = FakeRuntime::running(&[("done", "archived")]);
+    handback(&runtime, "done").await.unwrap();
+    assert!(runtime.sessions.sessions.lock().unwrap().is_empty());
+    assert!(runtime.sent().is_empty());
+}
+
+#[tokio::test]
 async fn a_stop_forgets_everything_about_its_session_at_once() {
     let runtime = FakeRuntime::running(&[("s1", "active")]);
     handoff(&runtime, "s1").await.unwrap();
@@ -187,6 +195,14 @@ async fn failures_say_why_to_the_session_ui() {
     assert_eq!(
         ProviderError::from(PluginRpcError::NotSent("queue timed out".into())).code,
         ProviderErrorCode::PluginError
+    );
+    // The plugin stopped between resolving the session and the request.
+    assert_eq!(
+        ProviderError::from(PluginRpcError::NotRunning(
+            "plugin chat is not running".into()
+        ))
+        .code,
+        ProviderErrorCode::NotRunning
     );
     assert_eq!(
         serde_json::to_value(ProviderError::new(ProviderErrorCode::NotRunning, "gone")).unwrap(),

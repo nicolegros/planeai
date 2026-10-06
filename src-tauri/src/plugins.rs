@@ -1171,6 +1171,19 @@ struct PluginSessionPrompt {
     text: String,
 }
 
+/// A callback's params read as `T` and checked by `validate`. A bad payload is the plugin's
+/// mistake: it answers -32602 and leaves the runtime running.
+fn callback_params<T: serde::de::DeserializeOwned, U>(
+    params: Value,
+    subject: &str,
+    validate: impl FnOnce(T) -> Result<U, String>,
+) -> Result<U, CallbackError> {
+    serde_json::from_value(params)
+        .map_err(|error| format!("invalid {subject}: {error}"))
+        .and_then(validate)
+        .map_err(CallbackError::InvalidParams)
+}
+
 fn validate_plugin_session_actions(
     request: SessionActionsRequest,
 ) -> Result<Vec<PluginSessionAction>, String> {
@@ -1244,10 +1257,11 @@ fn dispatch_plugin_session_prompt(
     if !capabilities.contains(&PluginHostCapability::SessionsPrompt) {
         return Err(CallbackError::NotGranted);
     }
-    let prompt = serde_json::from_value(params)
-        .map_err(|error| format!("invalid plugin session prompt: {error}"))
-        .and_then(validate_plugin_session_prompt)
-        .map_err(CallbackError::InvalidParams)?;
+    let prompt = callback_params(
+        params,
+        "plugin session prompt",
+        validate_plugin_session_prompt,
+    )?;
     send(&prompt.session_id, &prompt.text)?;
     Ok(serde_json::json!({ "delivered": true }))
 }
@@ -1419,10 +1433,11 @@ impl RuntimeProcess {
                 {
                     Err(CallbackError::NotGranted)
                 } else {
-                    let actions = serde_json::from_value(params)
-                        .map_err(|error| format!("invalid plugin session actions: {error}"))
-                        .and_then(validate_plugin_session_actions)
-                        .map_err(CallbackError::InvalidParams)?;
+                    let actions = callback_params(
+                        params,
+                        "plugin session actions",
+                        validate_plugin_session_actions,
+                    )?;
                     *self.session_actions.lock().await = actions.clone();
                     self.app
                         .emit(
@@ -1442,10 +1457,11 @@ impl RuntimeProcess {
                 {
                     Err(CallbackError::NotGranted)
                 } else {
-                    let advisory = serde_json::from_value(params)
-                        .map_err(|error| format!("invalid plugin session advisory: {error}"))
-                        .and_then(validate_plugin_session_advisory)
-                        .map_err(CallbackError::InvalidParams)?;
+                    let advisory = callback_params(
+                        params,
+                        "plugin session advisory",
+                        validate_plugin_session_advisory,
+                    )?;
                     self.app
                         .emit(
                             "plugin-session-advisory",
@@ -1482,10 +1498,11 @@ impl RuntimeProcess {
                 {
                     Err(CallbackError::NotGranted)
                 } else {
-                    let completion = serde_json::from_value(params)
-                        .map_err(|error| format!("invalid plugin session completion: {error}"))
-                        .and_then(validate_plugin_session_completion)
-                        .map_err(CallbackError::InvalidParams)?;
+                    let completion = callback_params(
+                        params,
+                        "plugin session completion",
+                        validate_plugin_session_completion,
+                    )?;
                     self.app
                         .emit(
                             "plugin-session-completed",
@@ -1795,19 +1812,32 @@ async fn execute_host_task(
     {
         return Err(CallbackError::NotGranted);
     }
-    run_host_task(plugin_id, data_dir, method, params)
+    run_host_task(plugin_id, data_dir, method, params).await
+}
+
+fn invalid_params(message: &str) -> CallbackError {
+    CallbackError::InvalidParams(message.to_string())
+}
+
+/// Runs a host task's storage work off the async runtime; its failures are internal.
+async fn blocking_host_task<F>(work: F) -> Result<Value, CallbackError>
+where
+    F: FnOnce() -> Result<Value, String> + Send + 'static,
+{
+    commands::blocking(work)
         .await
         .map_err(CallbackError::Internal)
 }
 
+/// Runs a host task whose params are checked first, so a bad request answers -32602.
 async fn run_host_task(
     plugin_id: &str,
     data_dir: &Path,
     method: &str,
     params: Value,
-) -> Result<Value, String> {
+) -> Result<Value, CallbackError> {
     if method == "host.projects.list" {
-        return commands::blocking(|| {
+        return blocking_host_task(|| {
             let path = planeai_paths::db_path();
             let conn = Connection::open(path).map_err(|error| error.to_string())?;
             let projects = crate::db::list_projects(&conn)
@@ -1829,7 +1859,7 @@ async fn run_host_task(
     }
 
     if method == "host.sessions.list" {
-        return commands::blocking(|| {
+        return blocking_host_task(|| {
             let path = planeai_paths::db_path();
             let conn = Connection::open(path).map_err(|error| error.to_string())?;
             let sessions = crate::db::list_sessions(&conn)
@@ -1860,9 +1890,9 @@ async fn run_host_task(
             .or_else(|| params.get("sessionId"))
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
-            .ok_or("repository context requires session_id")?
+            .ok_or_else(|| invalid_params("repository context requires session_id"))?
             .to_string();
-        return commands::blocking(move || {
+        return blocking_host_task(move || {
             let path = planeai_paths::db_path();
             let conn = Connection::open(path).map_err(|error| error.to_string())?;
             let session = crate::db::get_session(&conn, &session_id)
@@ -1897,20 +1927,21 @@ async fn run_host_task(
             .or_else(|| params.get("sessionId"))
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
-            .ok_or("linked task transition requires session_id")?
+            .ok_or_else(|| invalid_params("linked task transition requires session_id"))?
             .to_string();
         let status = params
             .get("status")
             .and_then(Value::as_str)
             .and_then(Status::parse)
-            .ok_or("linked task transition requires a valid status")?;
-        return commands::blocking(move || transition_linked_plugin_task(&session_id, status))
+            .ok_or_else(|| invalid_params("linked task transition requires a valid status"))?;
+        return blocking_host_task(move || transition_linked_plugin_task(&session_id, status))
             .await;
     }
 
     if method == "host.tasks.createChild" {
         let plugin_id = plugin_id.to_string();
-        return commands::blocking(move || create_plugin_child_task(&plugin_id, params)).await;
+        let child = ChildTask::from_params(&params).map_err(CallbackError::InvalidParams)?;
+        return blocking_host_task(move || create_plugin_child_task(&plugin_id, child)).await;
     }
 
     if matches!(
@@ -1919,27 +1950,30 @@ async fn run_host_task(
     ) {
         let data_dir = data_dir.to_path_buf();
         let method = method.to_string();
-        return commands::blocking(move || match method.as_str() {
-            "host.settings.get" => {
-                let path = settings_path(&params)?;
-                read_plugin_settings(&data_dir).map(|settings| {
-                    let settings = path
-                        .as_deref()
-                        .map(|path| plugin_settings_at_path(&settings, path))
-                        .unwrap_or(settings);
-                    serde_json::json!({ "settings": settings })
-                })
-            }
-            "host.settings.replace" => {
-                let settings = params.get("settings").cloned().unwrap_or(params);
-                replace_plugin_settings(&data_dir, settings)
-                    .map(|settings| serde_json::json!({ "settings": settings }))
-            }
-            "host.settings.patch" => {
-                let patch = params.get("patch").cloned().unwrap_or(params);
-                patch_plugin_settings(&data_dir, patch)
-                    .map(|()| serde_json::json!({ "updated": true }))
-            }
+        let path = match method.as_str() {
+            "host.settings.get" => settings_path(&params).map_err(CallbackError::InvalidParams)?,
+            _ => None,
+        };
+        let document = match method.as_str() {
+            "host.settings.replace" => params.get("settings").cloned().unwrap_or(params),
+            "host.settings.patch" => params.get("patch").cloned().unwrap_or(params),
+            _ => Value::Null,
+        };
+        if method != "host.settings.get" && !document.is_object() {
+            return Err(invalid_params("plugin settings must be a JSON object"));
+        }
+        return blocking_host_task(move || match method.as_str() {
+            "host.settings.get" => read_plugin_settings(&data_dir).map(|settings| {
+                let settings = path
+                    .as_deref()
+                    .map(|path| plugin_settings_at_path(&settings, path))
+                    .unwrap_or(settings);
+                serde_json::json!({ "settings": settings })
+            }),
+            "host.settings.replace" => replace_plugin_settings(&data_dir, document)
+                .map(|settings| serde_json::json!({ "settings": settings })),
+            "host.settings.patch" => patch_plugin_settings(&data_dir, document)
+                .map(|()| serde_json::json!({ "updated": true })),
             _ => unreachable!(),
         })
         .await;
@@ -1949,14 +1983,14 @@ async fn run_host_task(
             .get("key")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
-            .ok_or("legacy Jira issue lookup requires key")?
+            .ok_or_else(|| invalid_params("legacy Jira issue lookup requires key"))?
             .to_string();
         let summary = params
             .get("summary")
             .and_then(Value::as_str)
-            .ok_or("legacy Jira issue lookup requires summary")?
+            .ok_or_else(|| invalid_params("legacy Jira issue lookup requires summary"))?
             .to_string();
-        return commands::blocking(move || {
+        return blocking_host_task(move || {
             let path = planeai_paths::db_path();
             let conn = Connection::open(path).map_err(|error| error.to_string())?;
             legacy_jira_issue_matches(&conn, &key, &summary)
@@ -1969,9 +2003,9 @@ async fn run_host_task(
         let key = params
             .get("key")
             .and_then(Value::as_str)
-            .ok_or("task read requires key")?
+            .ok_or_else(|| invalid_params("task read requires key"))?
             .to_string();
-        return commands::blocking(move || {
+        return blocking_host_task(move || {
             let path = planeai_paths::db_path();
             let repo = SqliteRepository::open_read_only(
                 path.to_str().ok_or("invalid PlaneAI task database path")?,
@@ -1987,9 +2021,16 @@ async fn run_host_task(
         })
         .await;
     }
+    let write = match method {
+        "host.task.create" => TaskWrite::Create(task_create_params(&params)?),
+        "host.task.update" => {
+            let (key, update) = task_update_params(&params)?;
+            TaskWrite::Update(key, update)
+        }
+        _ => return Err(CallbackError::NotFound),
+    };
     let data_dir = data_dir.to_path_buf();
-    let method = method.to_string();
-    commands::blocking(move || {
+    blocking_host_task(move || {
         let settings: Value = serde_json::from_reader(
             std::fs::File::open(data_dir.join("settings.json")).map_err(|error| {
                 format!("failed to read plugin settings for task capability: {error}")
@@ -2014,87 +2055,101 @@ async fn run_host_task(
             &prefix,
         )
         .map_err(|error| error.to_string())?;
-        match method.as_str() {
-            "host.task.create" => {
-                let status = params
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .map(|value| Status::parse(value).ok_or("invalid task status"))
-                    .transpose()?;
-                let task = repo
-                    .create(CreateParams {
-                        key: params
-                            .get("key")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                        title: params
-                            .get("title")
-                            .and_then(Value::as_str)
-                            .ok_or("task create requires title")?
-                            .to_string(),
-                        description: params
-                            .get("description")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                        status,
-                        priority: params.get("priority").and_then(Value::as_i64).unwrap_or(0)
-                            as i32,
-                        tags: params
-                            .get("tags")
-                            .cloned()
-                            .map(serde_json::from_value)
-                            .transpose()
-                            .map_err(|error| format!("invalid task tags: {error}"))?
-                            .unwrap_or_default(),
-                        ..Default::default()
-                    })
-                    .map_err(|error| error.to_string())?;
-                serde_json::to_value(task).map_err(|error| error.to_string())
-            }
-            "host.task.update" => {
-                let key = params
-                    .get("key")
-                    .and_then(Value::as_str)
-                    .ok_or("task update requires key")?;
-                let status = params
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .map(|value| Status::parse(value).ok_or("invalid task status"))
-                    .transpose()?;
-                let task = repo
-                    .update(
-                        key,
-                        UpdateParams {
-                            title: params
-                                .get("title")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                            description: params
-                                .get("description")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                            status,
-                            priority: params
-                                .get("priority")
-                                .and_then(Value::as_i64)
-                                .map(|value| value as i32),
-                            tags: params
-                                .get("tags")
-                                .cloned()
-                                .map(serde_json::from_value)
-                                .transpose()
-                                .map_err(|error| format!("invalid task tags: {error}"))?,
-                            ..Default::default()
-                        },
-                    )
-                    .map_err(|error| error.to_string())?;
-                serde_json::to_value(task).map_err(|error| error.to_string())
-            }
-            _ => Err("host method not found".to_string()),
+        let task = match write {
+            TaskWrite::Create(create) => repo.create(create),
+            TaskWrite::Update(key, update) => repo.update(&key, update),
         }
+        .map_err(|error| error.to_string())?;
+        serde_json::to_value(task).map_err(|error| error.to_string())
     })
     .await
+}
+
+enum TaskWrite {
+    Create(CreateParams),
+    Update(String, UpdateParams),
+}
+
+fn task_status_param(params: &Value) -> Result<Option<Status>, CallbackError> {
+    params
+        .get("status")
+        .and_then(Value::as_str)
+        .map(|value| Status::parse(value).ok_or_else(|| invalid_params("invalid task status")))
+        .transpose()
+}
+
+fn task_tags_param(params: &Value) -> Result<Option<Vec<String>>, CallbackError> {
+    params
+        .get("tags")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| CallbackError::InvalidParams(format!("invalid task tags: {error}")))
+}
+
+fn task_create_params(params: &Value) -> Result<CreateParams, CallbackError> {
+    Ok(CreateParams {
+        key: params
+            .get("key")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        title: params
+            .get("title")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid_params("task create requires title"))?
+            .to_string(),
+        description: params
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        status: task_status_param(params)?,
+        priority: params.get("priority").and_then(Value::as_i64).unwrap_or(0) as i32,
+        tags: task_tags_param(params)?.unwrap_or_default(),
+        ..Default::default()
+    })
+}
+
+fn task_update_params(params: &Value) -> Result<(String, UpdateParams), CallbackError> {
+    let key = params
+        .get("key")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_params("task update requires key"))?
+        .to_string();
+    let update = UpdateParams {
+        title: params
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        description: params
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        status: task_status_param(params)?,
+        priority: params
+            .get("priority")
+            .and_then(Value::as_i64)
+            .map(|value| value as i32),
+        tags: task_tags_param(params)?,
+        ..Default::default()
+    };
+    Ok((key, update))
+}
+
+/// Whether a plugin starts after its reconciliation: only a broken runtime fails the start;
+/// a plugin that refused it still runs, its stale data kept until the next start.
+fn startup_reconciliation(
+    plugin_id: &str,
+    result: Result<(), PluginRpcError>,
+) -> Result<(), String> {
+    match result {
+        Err(error) if error.is_fatal() => Err(error.into()),
+        Err(error) => {
+            tracing::warn!(plugin_id, %error, "provider session reconciliation failed");
+            Ok(())
+        }
+        Ok(()) => Ok(()),
+    }
 }
 
 fn transition_linked_plugin_task(session_id: &str, status: Status) -> Result<Value, String> {
@@ -2139,34 +2194,49 @@ fn transition_linked_plugin_task(session_id: &str, status: Status) -> Result<Val
         .map_err(|error| error.to_string())
 }
 
-fn create_plugin_child_task(plugin_id: &str, params: Value) -> Result<Value, String> {
-    let project_path = params
-        .get("project_path")
-        .or_else(|| params.get("projectPath"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("child task create requires project_path")?;
-    let parent_key = params
-        .get("parent_key")
-        .or_else(|| params.get("parentKey"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("child task create requires parent_key")?;
-    let operation_id = params
-        .get("operation_id")
-        .or_else(|| params.get("operationId"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("child task create requires operation_id")?;
-    let title = params
-        .get("title")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("child task create requires title")?;
-    let description = params
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+/// A child task request's params, checked before anything is written.
+#[derive(Debug)]
+struct ChildTask {
+    project_path: String,
+    parent_key: String,
+    operation_id: String,
+    title: String,
+    description: String,
+}
+
+impl ChildTask {
+    fn from_params(params: &Value) -> Result<Self, String> {
+        let required = |names: &[&str], what: &str| {
+            names
+                .iter()
+                .find_map(|name| params.get(*name))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| format!("child task create requires {what}"))
+        };
+        Ok(Self {
+            project_path: required(&["project_path", "projectPath"], "project_path")?,
+            parent_key: required(&["parent_key", "parentKey"], "parent_key")?,
+            operation_id: required(&["operation_id", "operationId"], "operation_id")?,
+            title: required(&["title"], "title")?,
+            description: params
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        })
+    }
+}
+
+fn create_plugin_child_task(plugin_id: &str, child: ChildTask) -> Result<Value, String> {
+    let ChildTask {
+        project_path,
+        parent_key,
+        operation_id,
+        title,
+        description,
+    } = child;
     let path = planeai_paths::db_path();
     let mut conn = Connection::open(path).map_err(|error| error.to_string())?;
     let project = crate::db::list_projects(&conn)
@@ -2612,17 +2682,19 @@ impl PluginRuntimeSupervisor {
         }
         let process = {
             let _lifecycle = self.lifecycle.lock().await;
-            let inventory = self
-                .inventory(plugin_id)
-                .await?
-                .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
+            let inventory = self.inventory(plugin_id).await?.ok_or_else(|| {
+                PluginRpcError::NotRunning(format!("plugin inventory entry not found: {plugin_id}"))
+            })?;
             if inventory.state != PluginRuntimeState::Running {
-                return Err(format!("plugin {plugin_id} is not running").into());
+                return Err(PluginRpcError::NotRunning(format!(
+                    "plugin {plugin_id} is not running"
+                )));
             }
             self.processes.lock().await.get(plugin_id).cloned()
         };
-        let process =
-            process.ok_or_else(|| format!("plugin runtime was not available: {plugin_id}"))?;
+        let process = process.ok_or_else(|| {
+            PluginRpcError::NotRunning(format!("plugin runtime was not available: {plugin_id}"))
+        })?;
         let result = process.request(method, params).await;
         let Err(error) = result else {
             return result;
@@ -3221,16 +3293,10 @@ impl PluginRuntimeSupervisor {
             .capabilities
             .contains(&PluginHostCapability::Providers)
         {
-            match self
+            let reconciled = self
                 .reconcile_provider_sessions(&inventory.id, process)
-                .await
-            {
-                Err(error) if error.is_fatal() => return Err(error.into()),
-                Err(error) => {
-                    tracing::warn!(plugin_id = %inventory.id, %error, "provider session reconciliation failed")
-                }
-                Ok(()) => {}
-            }
+                .await;
+            startup_reconciliation(&inventory.id, reconciled)?;
         }
         Ok(())
     }
@@ -3630,14 +3696,25 @@ async fn read_stdout_frames(
 ) {
     loop {
         let frame = read_stdout_frame(&mut stdout).await;
-        if let Some((method, params)) = frame.as_deref().ok().and_then(host_notification) {
-            match &notifications {
-                Some(sink) if sink.handles(&method) => sink.route(&method, params),
-                _ => {
-                    tracing::warn!(%plugin_id, %method, "ignored a host notification this host does not know")
+        let handles = |method: &str| {
+            notifications
+                .as_ref()
+                .is_some_and(|sink| sink.handles(method))
+        };
+        match frame.as_deref().map_or(StdoutFrame::Queue, |frame| {
+            classify_stdout_frame(frame, handles)
+        }) {
+            StdoutFrame::Route(method, params) => {
+                if let Some(sink) = &notifications {
+                    sink.route(&method, params);
                 }
+                continue;
             }
-            continue;
+            StdoutFrame::Drop(method) => {
+                tracing::warn!(%plugin_id, %method, "ignored a host notification this host does not know");
+                continue;
+            }
+            StdoutFrame::Queue => {}
         }
         if let Err(error) = &frame {
             let _ = failure.set(error.clone());
@@ -4503,6 +4580,123 @@ mod tests {
         assert!(read_plugin_settings(data.path())
             .unwrap_err()
             .contains("JSON object"));
+    }
+
+    #[test]
+    fn a_bad_callback_payload_is_the_plugins_mistake_not_a_broken_runtime() {
+        let error = callback_params(
+            serde_json::json!({ "actions": "not a list" }),
+            "plugin session actions",
+            validate_plugin_session_actions,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, CallbackError::InvalidParams(message) if message.starts_with("invalid plugin session actions"))
+        );
+        let duplicate = serde_json::json!({ "actions": [
+            { "id": "a", "label": "One" },
+            { "id": "a", "label": "Two" },
+        ] });
+        assert!(matches!(
+            callback_params(
+                duplicate,
+                "plugin session actions",
+                validate_plugin_session_actions
+            ),
+            Err(CallbackError::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn only_a_broken_runtime_fails_a_start_over_reconciliation() {
+        assert!(startup_reconciliation("chat", Ok(())).is_ok());
+        let refused = PluginRpcError::Rpc {
+            code: -32601,
+            message: "method not found".into(),
+        };
+        assert!(startup_reconciliation("chat", Err(refused)).is_ok());
+        let broken =
+            PluginRpcError::Broken("plugin RPC provider.sessions.reconcile timed out".into());
+        assert_eq!(
+            startup_reconciliation("chat", Err(broken)).unwrap_err(),
+            "plugin RPC provider.sessions.reconcile timed out"
+        );
+    }
+
+    #[tokio::test]
+    async fn host_tasks_answer_bad_params_as_invalid_params() {
+        let data = tempfile::TempDir::new().unwrap();
+        let settings = HashSet::from([PluginHostCapability::Settings]);
+        let tasks = HashSet::from([
+            PluginHostCapability::TasksCreate,
+            PluginHostCapability::TasksUpdate,
+            PluginHostCapability::TasksTransition,
+        ]);
+        let run = |capabilities: &HashSet<PluginHostCapability>,
+                   plugin: &'static str,
+                   method: &'static str,
+                   params: Value| {
+            let capabilities = capabilities.clone();
+            let data = data.path().to_path_buf();
+            async move { execute_host_task(plugin, &capabilities, &data, method, params).await }
+        };
+        for (capabilities, plugin, method, params) in [
+            (
+                &settings,
+                "local-test",
+                "host.settings.replace",
+                serde_json::json!({ "settings": 3 }),
+            ),
+            (
+                &settings,
+                "local-test",
+                "host.settings.patch",
+                serde_json::json!({ "patch": [] }),
+            ),
+            (
+                &settings,
+                "local-test",
+                "host.settings.get",
+                serde_json::json!({ "path": [] }),
+            ),
+            (
+                &tasks,
+                JIRA_PLUGIN_ID,
+                "host.task.create",
+                serde_json::json!({}),
+            ),
+            (
+                &tasks,
+                JIRA_PLUGIN_ID,
+                "host.task.create",
+                serde_json::json!({ "title": "t", "tags": 1 }),
+            ),
+            (
+                &tasks,
+                JIRA_PLUGIN_ID,
+                "host.task.update",
+                serde_json::json!({ "status": "x" }),
+            ),
+            (
+                &tasks,
+                "local-test",
+                "host.sessions.transitionLinkedTask",
+                serde_json::json!({ "session_id": "s" }),
+            ),
+        ] {
+            let error = run(capabilities, plugin, method, params.clone())
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, CallbackError::InvalidParams(_)),
+                "{method} {params}: {error:?}"
+            );
+        }
+        assert!(ChildTask::from_params(
+            &serde_json::json!({ "projectPath": "/p", "parentKey": "K-1", "operationId": "o" })
+        )
+        .unwrap_err()
+        .contains("title"));
     }
 
     #[tokio::test]

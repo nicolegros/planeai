@@ -9,7 +9,7 @@
   import * as taskStore from "../lib/task-store.svelte";
   import { getAllTasks } from "../lib/task-store.svelte";
   import { openPluginModal, openProjectForm } from "../lib/plugin-modal-manager";
-  import type { PluginUiDisposer, PluginUiEntrypoint, PluginUiHost, PluginSessionContext } from "../lib/plugin-sdk";
+  import type { PluginProviderContext, PluginUiDisposer, PluginUiEntrypoint, PluginUiHost, PluginSessionContext } from "../lib/plugin-sdk";
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import { focusSidebar } from "../lib/focus.svelte";
   import { PROVIDER_FRAME_ATTRIBUTE } from "../lib/terminal-focus";
@@ -192,6 +192,11 @@
     button.addEventListener("click", retry);
     root.replaceChildren(message, button);
     if (contribution.placement.startsWith("sidebar.")) onFailure(error);
+  }
+
+  /** The provider as its session UI sees it; the bundle's entrypoint is the host's business. */
+  function providerContextOf({ id, label, supports }: PluginProvider): PluginProviderContext {
+    return { id, label, supports: [...supports] };
   }
 
   function createLocalPluginFrame(root: ShadowRoot, sessionContext?: PluginSessionContext): PluginUiDisposer {
@@ -603,7 +608,7 @@
             session?: PluginSessionContext;
           };
           const providerContext = bridge
-            ? { provider: JSON.parse(JSON.stringify(bridge.provider)) as PluginProvider, sessionControls: { handoff: Boolean(bridge.handoff) } }
+            ? { provider: providerContextOf(bridge.provider), sessionControls: { handoff: Boolean(bridge.handoff) } }
             : {};
           frame.contentWindow?.postMessage({ type: "init", source, ...context, ...providerContext }, "*");
         })

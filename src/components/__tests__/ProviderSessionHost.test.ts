@@ -195,7 +195,11 @@ describe("PluginContributionHost provider sessions", () => {
       providerContribution(provider),
       bridge(async () => {}),
     );
-    expect(chat.provider).toEqual(provider);
+    expect(chat.provider).toEqual({
+      id: provider.id,
+      label: provider.label,
+      supports: provider.supports,
+    });
     expect(chat.sessionControls).toEqual({ handoff: true });
     expect((await init(providerContribution(provider), bridge())).sessionControls).toEqual({
       handoff: false,

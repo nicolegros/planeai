@@ -48,9 +48,13 @@ impl From<ProviderError> for String {
 
 impl From<PluginRpcError> for ProviderError {
     fn from(error: PluginRpcError) -> Self {
-        let code = error
-            .code()
-            .map_or(ProviderErrorCode::PluginError, ProviderErrorCode::from_rpc);
+        let code = match &error {
+            PluginRpcError::Rpc { code, .. } => ProviderErrorCode::from_rpc(*code),
+            PluginRpcError::NotRunning(_) => ProviderErrorCode::NotRunning,
+            PluginRpcError::NotSent(_) | PluginRpcError::Broken(_) => {
+                ProviderErrorCode::PluginError
+            }
+        };
         Self::new(code, error.to_string())
     }
 }

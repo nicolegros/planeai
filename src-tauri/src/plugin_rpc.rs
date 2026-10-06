@@ -14,6 +14,8 @@ pub enum PluginRpcError {
     Rpc { code: i64, message: String },
     /// The request never reached the sidecar, which stays untouched.
     NotSent(String),
+    /// The plugin is not running, so nothing was sent.
+    NotRunning(String),
     /// Stdout or the request protocol can no longer be trusted, so the runtime is retired
     /// before another request can consume a stale or malformed frame.
     Broken(String),
@@ -36,7 +38,9 @@ impl std::fmt::Display for PluginRpcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Rpc { code, message } => write!(f, "plugin RPC error {code}: {message}"),
-            Self::NotSent(message) | Self::Broken(message) => f.write_str(message),
+            Self::NotSent(message) | Self::NotRunning(message) | Self::Broken(message) => {
+                f.write_str(message)
+            }
         }
     }
 }
@@ -351,6 +355,25 @@ pub(crate) fn parse_json_rpc_callback_request(
     Ok(JsonRpcCallbackRequest { id, method, params })
 }
 
+/// What the stdout reader does with a frame.
+#[derive(Debug, PartialEq)]
+pub(crate) enum StdoutFrame {
+    /// A notification the reader routes itself.
+    Route(String, Value),
+    /// A `host.*` notification nothing here handles, as one from a newer host's contract.
+    Drop(String),
+    /// Anything else, for the request path.
+    Queue,
+}
+
+pub(crate) fn classify_stdout_frame(frame: &str, routes: impl Fn(&str) -> bool) -> StdoutFrame {
+    match host_notification(frame) {
+        Some((method, params)) if routes(&method) => StdoutFrame::Route(method, params),
+        Some((method, _)) => StdoutFrame::Drop(method),
+        None => StdoutFrame::Queue,
+    }
+}
+
 /// A notification to a host method: no `id`, JSON-RPC 2.0, and a `host.*` method.
 /// Anything else with a method is a callback, which must carry an id.
 pub(crate) fn host_notification(frame: &str) -> Option<(String, Value)> {
@@ -415,6 +438,41 @@ mod tests {
             CallbackError::NotGranted.to_string(),
             "plugin capability is not granted"
         );
+    }
+
+    #[test]
+    fn the_stdout_reader_routes_known_notifications_and_drops_other_host_ones() {
+        let routes = |method: &str| method == "host.providerSession.status";
+        let status = r#"{"jsonrpc":"2.0","method":"host.providerSession.status","params":{"s":1}}"#;
+        assert_eq!(
+            classify_stdout_frame(status, routes),
+            StdoutFrame::Route(
+                "host.providerSession.status".into(),
+                serde_json::json!({ "s": 1 })
+            )
+        );
+        // Without a sink, as for a plugin without the providers capability, it is dropped.
+        assert_eq!(
+            classify_stdout_frame(status, |_| false),
+            StdoutFrame::Drop("host.providerSession.status".into())
+        );
+        let future = r#"{"jsonrpc":"2.0","method":"host.future.ping"}"#;
+        assert_eq!(
+            classify_stdout_frame(future, routes),
+            StdoutFrame::Drop("host.future.ping".into())
+        );
+        for queued in [
+            r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"host.settings.get"}"#,
+            r#"{"jsonrpc":"2.0","method":"jira.ping"}"#,
+            "not json",
+        ] {
+            assert_eq!(
+                classify_stdout_frame(queued, routes),
+                StdoutFrame::Queue,
+                "{queued}"
+            );
+        }
     }
 
     #[test]

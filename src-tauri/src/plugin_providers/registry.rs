@@ -84,8 +84,13 @@ impl ProviderSessions {
             .flatten()
     }
 
+    /// Clearing it leaves sessions the host does not track, such as ended ones, untracked.
     pub(super) fn set_handed_off(&self, session_id: &str, handed_off: bool) {
-        self.update(session_id, |session| session.handed_off = handed_off);
+        if handed_off {
+            self.update(session_id, |session| session.handed_off = true);
+        } else if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
+            session.handed_off = false;
+        }
     }
 
     pub(super) fn is_handed_off(&self, session_id: &str) -> bool {

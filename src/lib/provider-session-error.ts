@@ -1,14 +1,5 @@
 import { errorMessage } from "./errors";
-import type { PluginSessionErrorCode } from "./plugin-sdk";
-
-const PROVIDER_ERROR_CODES: readonly PluginSessionErrorCode[] = [
-  "handed_off",
-  "prompt_too_large",
-  "not_running",
-  "unsupported",
-  "unavailable",
-  "plugin_error",
-];
+import { PLUGIN_SESSION_ERROR_CODES, type PluginSessionErrorCode } from "./plugin-sdk";
 
 /** A failed provider session request, with why it failed. */
 export class ProviderSessionError extends Error {
@@ -25,7 +16,7 @@ export class ProviderSessionError extends Error {
 export function toProviderSessionError(error: unknown): unknown {
   if (typeof error !== "object" || error === null) return error;
   const { code, message } = error as Record<string, unknown>;
-  const known = PROVIDER_ERROR_CODES.find((candidate) => candidate === code);
+  const known = PLUGIN_SESSION_ERROR_CODES.find((candidate) => candidate === code);
   return known && typeof message === "string" ? new ProviderSessionError(known, message) : error;
 }
 

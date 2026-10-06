@@ -100,14 +100,20 @@ export interface PluginUiHost {
   };
 }
 
-/** Why a session request failed. */
-export type PluginSessionErrorCode =
-  | "handed_off"
-  | "prompt_too_large"
-  | "not_running"
-  | "unsupported"
-  | "unavailable"
-  | "plugin_error";
+/** Why a session request failed, as the host's `ProviderErrorCode` names it. */
+export const PLUGIN_SESSION_ERROR_CODES = [
+  "handed_off",
+  "prompt_too_large",
+  "not_running",
+  "unsupported",
+  "unavailable",
+  "plugin_error",
+] as const;
+
+export type PluginSessionErrorCode = (typeof PLUGIN_SESSION_ERROR_CODES)[number];
+
+/** What a provider's session UI receives in `context.provider`. */
+export type PluginProviderContext = Pick<PluginProvider, "id" | "label" | "supports">;
 
 export interface PluginSessionEvent {
   seq: number;
@@ -130,7 +136,7 @@ export interface PluginUiContext {
   /** Present for session.main (a provider's session UI), session.panel, session.indicator, and titlebar contributions. */
   session?: PluginSessionContext;
   /** Present for a provider's session UI: the provider the session runs on. */
-  provider?: PluginProvider;
+  provider?: PluginProviderContext;
   host: PluginUiHost;
 }
 
