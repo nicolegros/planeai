@@ -2224,6 +2224,8 @@ struct PluginTaskRequest {
     operation_id: String,
     title: String,
     description: String,
+    priority: i32,
+    tags: Vec<String>,
 }
 
 impl PluginTaskRequest {
@@ -2249,8 +2251,32 @@ impl PluginTaskRequest {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            priority: match params.get("priority") {
+                None | Some(Value::Null) => 0,
+                Some(value) => value
+                    .as_i64()
+                    .and_then(|value| i32::try_from(value).ok())
+                    .ok_or("plugin task priority must be an integer")?,
+            },
+            tags: match params.get("tags") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(value) => plugin_task_tags(value)?,
+            },
         })
     }
+}
+
+/// Trimmed, non-empty and unique, in the order given.
+fn plugin_task_tags(value: &Value) -> Result<Vec<String>, String> {
+    let malformed = || "plugin task tags must be an array of strings".to_string();
+    let mut tags = Vec::new();
+    for tag in value.as_array().ok_or_else(malformed)? {
+        let tag = tag.as_str().ok_or_else(malformed)?.trim();
+        if !tag.is_empty() && !tags.iter().any(|known| known == tag) {
+            tags.push(tag.to_string());
+        }
+    }
+    Ok(tags)
 }
 
 #[derive(Debug)]
@@ -2282,6 +2308,8 @@ fn insert_plugin_task(
         operation_id,
         title,
         description,
+        priority,
+        tags,
     } = request;
     let project = crate::db::list_projects(conn)
         .map_err(|error| error.to_string())?
@@ -2369,10 +2397,18 @@ fn insert_plugin_task(
     let now = chrono::Utc::now().to_rfc3339();
     transaction
         .execute(
-            "INSERT INTO tasks (key, project_prefix, title, description, status, priority, parent_key, base_branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'todo', 0, ?5, 'main', ?6, ?6)",
-            rusqlite::params![task_key, project.prefix, title, description, parent_key, now],
+            "INSERT INTO tasks (key, project_prefix, title, description, status, priority, parent_key, base_branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'todo', ?5, ?6, 'main', ?7, ?7)",
+            rusqlite::params![task_key, project.prefix, title, description, priority, parent_key, now],
         )
         .map_err(|error| error.to_string())?;
+    for tag in &tags {
+        transaction
+            .execute(
+                "INSERT INTO task_tags (task_key, tag) VALUES (?1, ?2)",
+                rusqlite::params![task_key, tag],
+            )
+            .map_err(|error| error.to_string())?;
+    }
     transaction
         .execute(
             "UPDATE plugin_task_operations SET task_key = ?3 WHERE plugin_id = ?1 AND operation_id = ?2",
@@ -2401,7 +2437,7 @@ fn insert_plugin_task(
 }
 
 fn plugin_task_value(conn: &Connection, task_key: &str) -> Result<Value, String> {
-    let task = conn
+    let mut task = conn
         .query_row(
             "SELECT key, title, description, status, priority, parent_key, COALESCE(base_branch, 'main') FROM tasks WHERE key = ?1",
             rusqlite::params![task_key],
@@ -2415,12 +2451,20 @@ fn plugin_task_value(conn: &Connection, task_key: &str) -> Result<Value, String>
                 "url": Value::Null,
                 "base_branch": row.get::<_, String>(6)?,
                 "blocked_by": Vec::<String>::new(),
-                "tags": Vec::<String>::new(),
             })),
         )
         .optional()
         .map_err(|error| error.to_string())?
         .ok_or("idempotent plugin task result was not found")?;
+    let tags = conn
+        .prepare("SELECT tag FROM task_tags WHERE task_key = ?1 ORDER BY tag")
+        .and_then(|mut statement| {
+            statement
+                .query_map(rusqlite::params![task_key], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| error.to_string())?;
+    task["tags"] = serde_json::json!(tags);
     Ok(serde_json::json!({ "task": task }))
 }
 
@@ -4861,6 +4905,50 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, (project.prefix.clone(), None));
+    }
+
+    #[test]
+    fn a_plugin_task_carries_its_priority_and_tags() {
+        let (mut conn, _checkout, project) = task_database();
+        let request = PluginTaskRequest::from_params(&serde_json::json!({
+            "project_path": project.path,
+            "operation_id": "routine:r1:2026-10-05T13:00:00Z",
+            "title": "Retro",
+            "priority": 2,
+            "tags": ["ritual", " team ", "ritual", ""],
+        }))
+        .unwrap();
+
+        let created = insert_plugin_task(&mut conn, "routines", request).unwrap();
+
+        assert_eq!(created.task["task"]["priority"], 2);
+        assert_eq!(
+            created.task["task"]["tags"],
+            serde_json::json!(["ritual", "team"])
+        );
+    }
+
+    #[test]
+    fn plugin_task_params_reject_malformed_priority_and_tags() {
+        let base = serde_json::json!({
+            "project_path": "/p",
+            "operation_id": "op",
+            "title": "Retro",
+        });
+        let with = |field: &str, value: Value| {
+            let mut params = base.clone();
+            params[field] = value;
+            PluginTaskRequest::from_params(&params).unwrap_err()
+        };
+
+        assert_eq!(
+            with("priority", serde_json::json!("high")),
+            "plugin task priority must be an integer"
+        );
+        assert_eq!(
+            with("tags", serde_json::json!(["ok", 3])),
+            "plugin task tags must be an array of strings"
+        );
     }
 
     #[test]
