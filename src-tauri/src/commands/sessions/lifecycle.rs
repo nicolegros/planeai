@@ -178,7 +178,7 @@ pub async fn destroy_session(
         let msg = result.cleanup_errors.join("; ");
         let app = app_handle.clone();
         std::thread::spawn(move || {
-            let _ = app.emit("cleanup-error", msg);
+            let _ = app.emit("app-error", msg);
         });
     }
 
