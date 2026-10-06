@@ -1521,6 +1521,7 @@ impl RuntimeProcess {
                     params,
                 )
                 .await;
+                announce_created_task(&self.app, method, &result);
                 if method == "host.sessions.transitionLinkedTask" {
                     if let Ok(value) = &result {
                         if let Some(sessions) =
@@ -1799,7 +1800,7 @@ async fn execute_host_task(
         "host.tasks.read" | "host.task.get" | "host.jira.legacyIssue.matches" => {
             PluginHostCapability::TasksRead
         }
-        "host.tasks.createChild" => PluginHostCapability::TasksCreate,
+        "host.tasks.create" | "host.tasks.createChild" => PluginHostCapability::TasksCreate,
         "host.task.create" => PluginHostCapability::TasksCreate,
         "host.task.update" => PluginHostCapability::TasksUpdate,
         _ => return Err(CallbackError::NotFound),
@@ -1813,6 +1814,15 @@ async fn execute_host_task(
         return Err(CallbackError::NotGranted);
     }
     run_host_task(plugin_id, data_dir, method, params).await
+}
+
+/// A top-level task emits no lifecycle event, so the task list hears of it directly.
+fn announce_created_task(app: &AppHandle, method: &str, result: &Result<Value, CallbackError>) {
+    if method == "host.tasks.create" && result.is_ok() {
+        if let Err(error) = app.emit("tasks-changed", ()) {
+            tracing::warn!(%error, "failed to announce a plugin-created task");
+        }
+    }
 }
 
 fn invalid_params(message: &str) -> CallbackError {
@@ -1938,10 +1948,22 @@ async fn run_host_task(
             .await;
     }
 
-    if method == "host.tasks.createChild" {
+    if matches!(method, "host.tasks.create" | "host.tasks.createChild") {
         let plugin_id = plugin_id.to_string();
-        let child = ChildTask::from_params(&params).map_err(CallbackError::InvalidParams)?;
-        return blocking_host_task(move || create_plugin_child_task(&plugin_id, child)).await;
+        let request =
+            PluginTaskRequest::from_params(&params).map_err(CallbackError::InvalidParams)?;
+        match (method, &request.parent_key) {
+            ("host.tasks.createChild", None) => {
+                return Err(invalid_params("child task create requires parent_key"))
+            }
+            ("host.tasks.create", Some(_)) => {
+                return Err(invalid_params(
+                    "host.tasks.create creates a top-level task; use host.tasks.createChild for a child",
+                ))
+            }
+            _ => {}
+        }
+        return blocking_host_task(move || create_plugin_task(&plugin_id, request)).await;
     }
 
     if matches!(
@@ -2194,30 +2216,32 @@ fn transition_linked_plugin_task(session_id: &str, status: Status) -> Result<Val
         .map_err(|error| error.to_string())
 }
 
-/// A child task request's params, checked before anything is written.
+/// A plugin task request's params, checked before anything is written.
 #[derive(Debug)]
-struct ChildTask {
+struct PluginTaskRequest {
     project_path: String,
-    parent_key: String,
+    parent_key: Option<String>,
     operation_id: String,
     title: String,
     description: String,
 }
 
-impl ChildTask {
+impl PluginTaskRequest {
     fn from_params(params: &Value) -> Result<Self, String> {
-        let required = |names: &[&str], what: &str| {
+        let text = |names: &[&str]| {
             names
                 .iter()
                 .find_map(|name| params.get(*name))
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
                 .map(str::to_string)
-                .ok_or_else(|| format!("child task create requires {what}"))
+        };
+        let required = |names: &[&str], what: &str| {
+            text(names).ok_or_else(|| format!("plugin task create requires {what}"))
         };
         Ok(Self {
             project_path: required(&["project_path", "projectPath"], "project_path")?,
-            parent_key: required(&["parent_key", "parentKey"], "parent_key")?,
+            parent_key: text(&["parent_key", "parentKey"]),
             operation_id: required(&["operation_id", "operationId"], "operation_id")?,
             title: required(&["title"], "title")?,
             description: params
@@ -2229,21 +2253,47 @@ impl ChildTask {
     }
 }
 
-fn create_plugin_child_task(plugin_id: &str, child: ChildTask) -> Result<Value, String> {
-    let ChildTask {
+#[derive(Debug)]
+struct InsertedPluginTask {
+    task: Value,
+    /// Present only when this call created a child task.
+    lifecycle: Option<TaskLifecycleBatch>,
+}
+
+fn create_plugin_task(plugin_id: &str, request: PluginTaskRequest) -> Result<Value, String> {
+    let mut conn = Connection::open(planeai_paths::db_path()).map_err(|error| error.to_string())?;
+    let inserted = insert_plugin_task(&mut conn, plugin_id, request)?;
+    if let Some(batch) = &inserted.lifecycle {
+        planeai::task_cli::notify_task_lifecycle(batch);
+    }
+    Ok(inserted.task)
+}
+
+/// Creates a task at most once per (plugin, operation id), so a retried request returns the
+/// task the first attempt created.
+fn insert_plugin_task(
+    conn: &mut Connection,
+    plugin_id: &str,
+    request: PluginTaskRequest,
+) -> Result<InsertedPluginTask, String> {
+    let PluginTaskRequest {
         project_path,
         parent_key,
         operation_id,
         title,
         description,
-    } = child;
-    let path = planeai_paths::db_path();
-    let mut conn = Connection::open(path).map_err(|error| error.to_string())?;
-    let project = crate::db::list_projects(&conn)
+    } = request;
+    let project = crate::db::list_projects(conn)
         .map_err(|error| error.to_string())?
         .into_iter()
         .find(|project| project.path == project_path && !project.hidden)
         .ok_or("project was not found or is hidden")?;
+    let existing = |task_key: String, conn: &Connection| {
+        plugin_task_value(conn, &task_key).map(|task| InsertedPluginTask {
+            task,
+            lifecycle: None,
+        })
+    };
     let transaction = conn.transaction().map_err(|error| error.to_string())?;
     if let Some(task_key) = transaction
         .query_row(
@@ -2256,7 +2306,7 @@ fn create_plugin_child_task(plugin_id: &str, child: ChildTask) -> Result<Value, 
         .flatten()
     {
         transaction.commit().map_err(|error| error.to_string())?;
-        return plugin_task_value(&conn, &task_key);
+        return existing(task_key, conn);
     }
     let reserved = transaction
         .execute(
@@ -2273,20 +2323,22 @@ fn create_plugin_child_task(plugin_id: &str, child: ChildTask) -> Result<Value, 
                 |row| row.get::<_, Option<String>>(0),
             )
             .map_err(|error| error.to_string())?
-            .ok_or("child task operation is still in progress")?;
-        return plugin_task_value(&conn, &task_key);
+            .ok_or("plugin task operation is still in progress")?;
+        return existing(task_key, conn);
     }
-    let parent_prefix = transaction
-        .query_row(
-            "SELECT project_prefix FROM tasks WHERE key = ?1",
-            rusqlite::params![parent_key],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?
-        .ok_or("parent task was not found")?;
-    if parent_prefix != project.prefix {
-        return Err("parent task does not belong to the selected project".to_string());
+    if let Some(parent_key) = &parent_key {
+        let parent_prefix = transaction
+            .query_row(
+                "SELECT project_prefix FROM tasks WHERE key = ?1",
+                rusqlite::params![parent_key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .ok_or("parent task was not found")?;
+        if parent_prefix != project.prefix {
+            return Err("parent task does not belong to the selected project".to_string());
+        }
     }
     transaction
         .execute(
@@ -2302,13 +2354,18 @@ fn create_plugin_child_task(plugin_id: &str, child: ChildTask) -> Result<Value, 
         )
         .map_err(|error| error.to_string())?;
     let task_key = format!("{}-{sequence}", project.prefix);
-    let first_child = !transaction
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM tasks WHERE parent_key = ?1)",
-            rusqlite::params![parent_key],
-            |row| row.get::<_, bool>(0),
-        )
-        .map_err(|error| error.to_string())?;
+    let first_child = match &parent_key {
+        Some(parent_key) => Some(
+            !transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tasks WHERE parent_key = ?1)",
+                    rusqlite::params![parent_key],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|error| error.to_string())?,
+        ),
+        None => None,
+    };
     let now = chrono::Utc::now().to_rfc3339();
     transaction
         .execute(
@@ -2323,17 +2380,24 @@ fn create_plugin_child_task(plugin_id: &str, child: ChildTask) -> Result<Value, 
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())?;
-    planeai::task_cli::notify_task_lifecycle(&TaskLifecycleBatch::new(
-        crate::task_lifecycle::TaskLifecycleOrigin::Ui,
-        project.id,
-        project.prefix,
-        vec![crate::task_lifecycle::TaskLifecycleEvent::ChildAssigned {
-            child_key: task_key.clone(),
-            parent_key: parent_key.to_string(),
-            is_first_child_assignment: first_child,
-        }],
-    ));
-    plugin_task_value(&conn, &task_key)
+    let lifecycle = parent_key
+        .zip(first_child)
+        .map(|(parent_key, first_child)| {
+            TaskLifecycleBatch::new(
+                crate::task_lifecycle::TaskLifecycleOrigin::Ui,
+                project.id,
+                project.prefix,
+                vec![crate::task_lifecycle::TaskLifecycleEvent::ChildAssigned {
+                    child_key: task_key.clone(),
+                    parent_key,
+                    is_first_child_assignment: first_child,
+                }],
+            )
+        });
+    Ok(InsertedPluginTask {
+        task: plugin_task_value(conn, &task_key)?,
+        lifecycle,
+    })
 }
 
 fn plugin_task_value(conn: &Connection, task_key: &str) -> Result<Value, String> {
@@ -2356,7 +2420,7 @@ fn plugin_task_value(conn: &Connection, task_key: &str) -> Result<Value, String>
         )
         .optional()
         .map_err(|error| error.to_string())?
-        .ok_or("idempotent child task result was not found")?;
+        .ok_or("idempotent plugin task result was not found")?;
     Ok(serde_json::json!({ "task": task }))
 }
 
@@ -2516,15 +2580,16 @@ impl PluginRuntimeSupervisor {
             .copied()
             .collect::<HashSet<_>>();
         let callback_method = format!("host.{method}");
-        execute_host_task(
+        let result = execute_host_task(
             plugin_id,
             &capabilities,
             &root.join("data"),
             &callback_method,
             params,
         )
-        .await
-        .map_err(|error| error.to_string())
+        .await;
+        announce_created_task(&self.app, &callback_method, &result);
+        result.map_err(|error| error.to_string())
     }
 
     pub fn begin_shutdown(&self) -> bool {
@@ -4692,11 +4757,209 @@ mod tests {
                 "{method} {params}: {error:?}"
             );
         }
-        assert!(ChildTask::from_params(
+        assert!(PluginTaskRequest::from_params(
             &serde_json::json!({ "projectPath": "/p", "parentKey": "K-1", "operationId": "o" })
         )
         .unwrap_err()
         .contains("title"));
+        let top_level =
+            serde_json::json!({ "project_path": "/p", "operation_id": "o", "title": "t" });
+        let error = run(
+            &tasks,
+            "routines",
+            "host.tasks.createChild",
+            top_level.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error,
+            CallbackError::InvalidParams("child task create requires parent_key".into())
+        );
+        let mut with_parent = top_level;
+        with_parent["parent_key"] = "K-1".into();
+        let error = run(&tasks, "routines", "host.tasks.create", with_parent)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            CallbackError::InvalidParams(
+                "host.tasks.create creates a top-level task; use host.tasks.createChild for a child"
+                    .into()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn top_level_task_create_requires_the_tasks_create_capability() {
+        let data = tempfile::TempDir::new().unwrap();
+        let error = execute_host_task(
+            "routines",
+            &HashSet::from([PluginHostCapability::Settings]),
+            data.path(),
+            "host.tasks.create",
+            serde_json::json!({ "project_path": "/p", "operation_id": "o", "title": "t" }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, CallbackError::NotGranted);
+    }
+
+    fn task_database() -> (Connection, tempfile::TempDir, crate::db::Project) {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+        let checkout = tempfile::TempDir::new().unwrap();
+        let path = checkout.path().to_string_lossy().to_string();
+        let project = crate::db::create_project(&conn, "Demo", &path).unwrap();
+        (conn, checkout, project)
+    }
+
+    fn top_level_request(project_path: &str, operation_id: &str) -> PluginTaskRequest {
+        PluginTaskRequest::from_params(&serde_json::json!({
+            "project_path": project_path,
+            "operation_id": operation_id,
+            "title": "Weekly retro 2026-10-05",
+            "description": "Notes for Monday",
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_top_level_plugin_task_is_a_todo_task_in_the_project() {
+        let (mut conn, _checkout, project) = task_database();
+        let created = insert_plugin_task(
+            &mut conn,
+            "routines",
+            top_level_request(&project.path, "routine:r1:2026-10-05T13:00:00Z"),
+        )
+        .unwrap();
+
+        let key = format!("{}-1", project.prefix);
+        assert!(created.lifecycle.is_none());
+        assert_eq!(
+            created.task,
+            serde_json::json!({ "task": {
+                "key": key,
+                "title": "Weekly retro 2026-10-05",
+                "description": "Notes for Monday",
+                "status": "todo",
+                "priority": 0,
+                "parent_key": null,
+                "url": null,
+                "base_branch": "main",
+                "blocked_by": [],
+                "tags": [],
+            } })
+        );
+        let stored: (String, Option<String>) = conn
+            .query_row(
+                "SELECT project_prefix, parent_key FROM tasks WHERE key = ?1",
+                [&key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored, (project.prefix.clone(), None));
+    }
+
+    #[test]
+    fn a_repeated_operation_id_returns_the_same_top_level_task() {
+        let (mut conn, _checkout, project) = task_database();
+        let operation = "routine:r1:2026-10-05T13:00:00Z";
+        let first = insert_plugin_task(
+            &mut conn,
+            "routines",
+            top_level_request(&project.path, operation),
+        )
+        .unwrap();
+        let second = insert_plugin_task(
+            &mut conn,
+            "routines",
+            top_level_request(&project.path, operation),
+        )
+        .unwrap();
+        let other_plugin = insert_plugin_task(
+            &mut conn,
+            "other",
+            top_level_request(&project.path, operation),
+        )
+        .unwrap();
+
+        let key = format!("{}-1", project.prefix);
+        assert_eq!(first.task["task"]["key"], key.as_str());
+        assert_eq!(second.task["task"]["key"], key.as_str());
+        assert_eq!(
+            other_plugin.task["task"]["key"],
+            format!("{}-2", project.prefix).as_str()
+        );
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn a_top_level_plugin_task_needs_a_visible_known_project() {
+        let (mut conn, _checkout, project) = task_database();
+        let unknown = insert_plugin_task(&mut conn, "routines", top_level_request("/nowhere", "a"))
+            .unwrap_err();
+        assert_eq!(unknown, "project was not found or is hidden");
+
+        crate::db::hide_project(&conn, &project.id).unwrap();
+        let hidden =
+            insert_plugin_task(&mut conn, "routines", top_level_request(&project.path, "b"))
+                .unwrap_err();
+        assert_eq!(hidden, "project was not found or is hidden");
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn a_child_plugin_task_reports_its_first_child_assignment() {
+        let (mut conn, _checkout, project) = task_database();
+        let parent =
+            insert_plugin_task(&mut conn, "routines", top_level_request(&project.path, "p"))
+                .unwrap();
+        let parent_key = parent.task["task"]["key"].as_str().unwrap().to_string();
+        let mut params = serde_json::json!({
+            "project_path": project.path,
+            "operation_id": "c",
+            "title": "Child",
+            "parent_key": parent_key,
+        });
+        let child = insert_plugin_task(
+            &mut conn,
+            "routines",
+            PluginTaskRequest::from_params(&params).unwrap(),
+        )
+        .unwrap();
+        let child_key = format!("{}-2", project.prefix);
+        assert_eq!(child.task["task"]["parent_key"], parent_key.as_str());
+        assert_eq!(
+            child.lifecycle.unwrap().events,
+            vec![crate::task_lifecycle::TaskLifecycleEvent::ChildAssigned {
+                child_key,
+                parent_key: parent_key.clone(),
+                is_first_child_assignment: true,
+            }]
+        );
+        params["operation_id"] = "c2".into();
+        let second = insert_plugin_task(
+            &mut conn,
+            "routines",
+            PluginTaskRequest::from_params(&params).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            second.lifecycle.unwrap().events.as_slice(),
+            [crate::task_lifecycle::TaskLifecycleEvent::ChildAssigned {
+                is_first_child_assignment: false,
+                ..
+            }]
+        ));
     }
 
     #[tokio::test]
