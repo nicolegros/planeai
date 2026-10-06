@@ -1,7 +1,7 @@
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::commands::sessions::lifecycle::session_lifecycle_event;
+use crate::commands::sessions::lifecycle::session_transition;
 use crate::config;
 use crate::db;
 use crate::plugins::PluginRuntimeHandle;
@@ -101,7 +101,7 @@ pub async fn attach_session(
     if was_exited {
         runtime
             .0
-            .dispatch_session_lifecycle(session_lifecycle_event(&session, "exited", "active"));
+            .dispatch_session_lifecycle(session_transition(&session, "exited", "active"));
     }
 
     Ok(())

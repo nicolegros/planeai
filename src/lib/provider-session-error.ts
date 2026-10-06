@@ -1,6 +1,16 @@
+import { errorMessage } from "./errors";
 import type { PluginSessionErrorCode } from "./plugin-sdk";
 
-/** A failed provider session request; it reads as its message, as the host's string errors do. */
+const PROVIDER_ERROR_CODES: readonly PluginSessionErrorCode[] = [
+  "handed_off",
+  "prompt_too_large",
+  "not_running",
+  "unsupported",
+  "unavailable",
+  "plugin_error",
+];
+
+/** A failed provider session request, with why it failed. */
 export class ProviderSessionError extends Error {
   readonly code: PluginSessionErrorCode;
 
@@ -9,16 +19,19 @@ export class ProviderSessionError extends Error {
     this.name = "ProviderSessionError";
     this.code = code;
   }
-
-  override toString(): string {
-    return this.message;
-  }
 }
 
 /** The host's `{ code, message }` rejection as a {@link ProviderSessionError}; anything else as is. */
-export function providerSessionError(error: unknown): unknown {
-  const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
-  return typeof code === "string" && typeof message === "string"
-    ? new ProviderSessionError(code as PluginSessionErrorCode, message)
-    : error;
+export function toProviderSessionError(error: unknown): unknown {
+  if (typeof error !== "object" || error === null) return error;
+  const { code, message } = error as Record<string, unknown>;
+  const known = PROVIDER_ERROR_CODES.find((candidate) => candidate === code);
+  return known && typeof message === "string" ? new ProviderSessionError(known, message) : error;
+}
+
+/** How a failed request reaches a plugin frame: its message, and its code when it has one. */
+export function frameFailure(error: unknown): { error: string; code?: PluginSessionErrorCode } {
+  return error instanceof ProviderSessionError
+    ? { error: error.message, code: error.code }
+    : { error: errorMessage(error) };
 }

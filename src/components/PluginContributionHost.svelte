@@ -4,7 +4,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { jiraDepartedInteractionEntrypoint, jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
   import { plugins, projects as projectsApi, tasks as tasksApi } from "../lib/api";
-  import { ProviderSessionError } from "../lib/provider-session-error";
+  import { frameFailure } from "../lib/provider-session-error";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import { getAllTasks } from "../lib/task-store.svelte";
@@ -481,10 +481,8 @@
     };
     const respond = (requestId: number | undefined, ok: boolean, value?: unknown): void => {
       if (requestId === undefined) return;
-      // Provider session failures say why, so the UI can act on it.
-      const code = value instanceof ProviderSessionError ? value.code : undefined;
       frame.contentWindow?.postMessage(
-        ok ? { type: "response", requestId, ok: true, value } : { type: "response", requestId, ok: false, error: String(value), ...(code ? { code } : {}) },
+        ok ? { type: "response", requestId, ok: true, value } : { type: "response", requestId, ok: false, ...frameFailure(value) },
         "*",
       );
     };

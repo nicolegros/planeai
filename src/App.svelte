@@ -24,6 +24,7 @@
   import Onboarding from "./components/Onboarding.svelte";
   import { openFileWithConfiguredEditor } from "./lib/file-editor";
   import { loadTheme } from "./lib/theme-loader";
+  import { errorMessage } from "./lib/errors";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
@@ -365,7 +366,7 @@
       }
       orchestrator.recordUserInput(ptyKeySessionId(tab.ptyKey));
     } catch (error) {
-      showSnackbar(`Failed to type dropped path: ${error instanceof Error ? error.message : String(error)}`, "error");
+      showSnackbar(`Failed to type dropped path: ${errorMessage(error)}`, "error");
     }
   }
 
@@ -425,7 +426,7 @@
     try {
       return await workspaceLayout.openShell(sessionId, where);
     } catch (error) {
-      showSnackbar(`Failed to open shell: ${error instanceof Error ? error.message : String(error)}`, "error");
+      showSnackbar(`Failed to open shell: ${errorMessage(error)}`, "error");
       return null;
     }
   }
@@ -439,7 +440,7 @@
     try {
       outcome = await workspaceLayout.closeTab(ptyKey);
     } catch (error) {
-      showSnackbar(`Failed to close shell tab: ${error instanceof Error ? error.message : String(error)}`, "error");
+      showSnackbar(`Failed to close shell tab: ${errorMessage(error)}`, "error");
       return;
     }
     if (outcome === "agent") {
@@ -448,7 +449,7 @@
       try {
         await orchestrator.parkSession(session);
       } catch (error) {
-        showSnackbar(`Failed to close session: ${error instanceof Error ? error.message : String(error)}`, "error");
+        showSnackbar(`Failed to close session: ${errorMessage(error)}`, "error");
       }
     } else if (outcome === "closed") {
       await tick();

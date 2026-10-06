@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::cleanup;
-use crate::commands::sessions::lifecycle::session_lifecycle_event;
+use crate::commands::sessions::lifecycle::session_transition;
 use crate::db;
 use crate::git;
 use crate::plugins::PluginRuntimeHandle;
@@ -100,7 +100,7 @@ pub fn archive_project(
         sessions
             .into_iter()
             .filter(|session| session.status != "archived")
-            .map(|session| session_lifecycle_event(&session, &session.status, "archived"))
+            .map(|session| session_transition(&session, &session.status, "archived"))
             .collect::<Vec<_>>()
     };
     for event in lifecycle_events {
@@ -250,7 +250,7 @@ pub async fn delete_project(
         sessions
             .iter()
             .filter(|session| session.status != "destroyed")
-            .map(|session| session_lifecycle_event(session, &session.status, "destroyed"))
+            .map(|session| session_transition(session, &session.status, "destroyed"))
             .collect::<Vec<_>>()
     };
     for event in lifecycle_events {

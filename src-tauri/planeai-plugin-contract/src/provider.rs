@@ -36,28 +36,47 @@ pub mod error_code {
 /// Highest event `seq`: 2^53 - 1, the largest integer every JSON parser keeps exact.
 pub const MAX_SEQ: u64 = (1 << 53) - 1;
 
-/// How long the host waits for a provider method. Starting, resuming and handing off may
-/// launch the agent, so they get longer than the rest.
-pub fn request_timeout(method: &str) -> Duration {
-    match method {
-        START | RESUME | HANDOFF | HANDBACK => Duration::from_secs(30),
-        _ => Duration::from_secs(5),
+/// Why a provider session request failed, as the session UI receives it.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderErrorCode {
+    /// The session continues in a terminal.
+    HandedOff,
+    PromptTooLarge,
+    /// The session or its plugin is not running.
+    NotRunning,
+    /// The provider does not offer this.
+    Unsupported,
+    /// The provider's agent cannot run now.
+    Unavailable,
+    PluginError,
+}
+
+impl ProviderErrorCode {
+    /// What a provider method's JSON-RPC error code means for the session UI.
+    pub fn from_rpc(code: i64) -> Self {
+        match code {
+            error_code::HANDED_OFF => Self::HandedOff,
+            error_code::PROMPT_TOO_LARGE => Self::PromptTooLarge,
+            error_code::UNAVAILABLE => Self::Unavailable,
+            _ => Self::PluginError,
+        }
     }
 }
 
-/// The provider notification a JSON-RPC frame carries, if it is one: no `id`, JSON-RPC 2.0,
-/// and a session event or status method. Callbacks and responses carry an `id`.
-pub fn provider_notification_method(
-    frame: &serde_json::Map<String, Value>,
-) -> Option<&'static str> {
-    if frame.contains_key("id") || frame.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-        return None;
-    }
-    match frame.get("method")?.as_str()? {
-        EVENT_NOTIFICATION => Some(EVENT_NOTIFICATION),
-        STATUS_NOTIFICATION => Some(STATUS_NOTIFICATION),
+/// How long the host waits for a provider method, `None` for other methods. Starting,
+/// resuming and handing off may launch the agent, so they get longer than the rest.
+pub fn request_timeout(method: &str) -> Option<Duration> {
+    match method {
+        START | RESUME | HANDOFF | HANDBACK => Some(Duration::from_secs(30)),
+        method if method.starts_with("provider.") => Some(Duration::from_secs(5)),
         _ => None,
     }
+}
+
+/// Whether a notification method is one provider sessions report through.
+pub fn is_provider_notification(method: &str) -> bool {
+    matches!(method, EVENT_NOTIFICATION | STATUS_NOTIFICATION)
 }
 
 /// Plugin provider keys are `<plugin id>:<provider id>`; plugin and provider ids never contain `:`.
@@ -224,10 +243,48 @@ mod tests {
 
     #[test]
     fn launching_methods_wait_longer() {
-        assert_eq!(request_timeout(START), Duration::from_secs(30));
-        assert_eq!(request_timeout(HANDBACK), Duration::from_secs(30));
-        assert_eq!(request_timeout(SEND), Duration::from_secs(5));
-        assert_eq!(request_timeout(RECONCILE), Duration::from_secs(5));
+        assert_eq!(request_timeout(START), Some(Duration::from_secs(30)));
+        assert_eq!(request_timeout(HANDBACK), Some(Duration::from_secs(30)));
+        assert_eq!(request_timeout(SEND), Some(Duration::from_secs(5)));
+        assert_eq!(request_timeout(RECONCILE), Some(Duration::from_secs(5)));
+        assert_eq!(request_timeout("jira.status"), None);
+    }
+
+    #[test]
+    fn provider_error_codes_tell_the_session_ui_why() {
+        assert_eq!(
+            ProviderErrorCode::from_rpc(error_code::HANDED_OFF),
+            ProviderErrorCode::HandedOff
+        );
+        assert_eq!(
+            ProviderErrorCode::from_rpc(error_code::UNAVAILABLE),
+            ProviderErrorCode::Unavailable
+        );
+        assert_eq!(
+            ProviderErrorCode::from_rpc(-32000),
+            ProviderErrorCode::PluginError
+        );
+        // The session UI matches on these names.
+        let names = [
+            ProviderErrorCode::HandedOff,
+            ProviderErrorCode::PromptTooLarge,
+            ProviderErrorCode::NotRunning,
+            ProviderErrorCode::Unsupported,
+            ProviderErrorCode::Unavailable,
+            ProviderErrorCode::PluginError,
+        ]
+        .map(|code| serde_json::to_value(code).unwrap());
+        assert_eq!(
+            names,
+            [
+                "handed_off",
+                "prompt_too_large",
+                "not_running",
+                "unsupported",
+                "unavailable",
+                "plugin_error"
+            ]
+        );
     }
 
     #[test]

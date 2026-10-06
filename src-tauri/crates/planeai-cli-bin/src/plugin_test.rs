@@ -49,54 +49,38 @@ pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>)
 
     let mut process = PluginProcess::spawn(&executable, &package, &capabilities)?;
     let handshake = process.call(
-        1,
         "plugin.handshake",
         handshake_params(&capabilities, host_api_version),
     )?;
     let subscriptions = validate_handshake(&handshake, &manifest)?;
-    let mut request_id = 2;
     if capabilities
         .iter()
         .any(|capability| capability == "providers")
     {
         // A fresh plugin state holds no sessions, so the host lists none.
-        process
-            .call(request_id, protocol::RECONCILE, json!({ "sessions": [] }))
-            .with_context(|| format!("{} failed", protocol::RECONCILE))?;
-        request_id += 1;
+        process.call(protocol::RECONCILE, json!({ "sessions": [] }))?;
     }
 
     for request in scenario.unwrap_or_default() {
         match request.timeout {
-            Some(timeout) => process.call_until_cancelled(
-                request_id,
-                &request.method,
-                request.params,
-                timeout,
-            )?,
+            Some(timeout) => {
+                process.call_until_cancelled(&request.method, request.params, timeout)?
+            }
             None => {
-                process.call(request_id, &request.method, request.params)?;
+                process.call(&request.method, request.params)?;
             }
         }
-        request_id += 1;
     }
     let providers = declared_providers(&manifest);
     if providers.is_empty() && provider_turn.is_some() {
         bail!("--provider-turn requires a plugin that declares providers");
     }
     for (provider_id, handoff) in providers {
-        request_id = check_provider(
-            &mut process,
-            request_id,
-            &provider_id,
-            handoff,
-            provider_turn,
-        )
-        .with_context(|| format!("provider {provider_id}"))?;
+        check_provider(&mut process, &provider_id, handoff, provider_turn)
+            .with_context(|| format!("provider {provider_id}"))?;
     }
     if lifecycle_delivery_is_granted(&capabilities, &subscriptions) {
         process.call(
-            request_id,
             "plugin.taskLifecycle",
             json!({
                 "batch": {
@@ -106,19 +90,12 @@ pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>)
                 }
             }),
         )?;
-        request_id += 1;
     }
     if session_lifecycle_delivery_is_granted(&capabilities, &subscriptions) {
-        process.call(request_id, "plugin.sessionLifecycle", json!({ "event": { "type": "status_changed", "session_id": uuid::Uuid::new_v4().to_string(), "project_id": "plugin-test", "branch": "plugin-test", "linked_task_key": Value::Null, "previous_status": "active", "status": "exited" } }))?;
-        request_id += 1;
+        process.call("plugin.sessionLifecycle", json!({ "event": { "type": "status_changed", "session_id": uuid::Uuid::new_v4().to_string(), "project_id": "plugin-test", "branch": "plugin-test", "linked_task_key": Value::Null, "previous_status": "active", "status": "exited" } }))?;
     }
     let shutdown_deadline = Instant::now() + SHUTDOWN_TIMEOUT;
-    process.call_before_deadline(
-        request_id,
-        "plugin.shutdown",
-        Value::Null,
-        shutdown_deadline,
-    )?;
+    process.call_before_deadline("plugin.shutdown", Value::Null, shutdown_deadline)?;
     process.wait_for_exit_before(shutdown_deadline)?;
 
     println!(
@@ -176,30 +153,22 @@ fn session_params(
 /// provider must follow. Real agent plugins skip the turn so tests stay offline.
 fn check_provider(
     process: &mut PluginProcess,
-    mut request_id: u64,
     provider_id: &str,
     handoff: bool,
     provider_turn: Option<&str>,
-) -> Result<u64> {
+) -> Result<()> {
     let session = uuid::Uuid::new_v4().to_string();
     let only_session = json!({ "session_id": session });
     process.provider_sessions.insert(session.clone(), 0);
     let start = session_params(process, &session, provider_id);
-    call(
-        process,
-        &mut request_id,
-        protocol::START,
-        Value::Object(start),
-    )?;
+    process.call(protocol::START, Value::Object(start))?;
     if let Some(text) = provider_turn {
         let statuses_before = process.provider_statuses.len();
-        call(
-            process,
-            &mut request_id,
+        process.call(
             protocol::SEND,
             json!({ "session_id": session, "text": text }),
         )?;
-        process.await_provider_turn(statuses_before, protocol::request_timeout(protocol::SEND))?;
+        process.await_provider_turn(statuses_before, RPC_TIMEOUT)?;
         if process.provider_events_received == 0 {
             bail!("provider turn completed without emitting a {EVENT_NOTIFICATION}");
         }
@@ -207,42 +176,31 @@ fn check_provider(
     if handoff {
         // Both are idempotent: a repeated handoff returns the command again.
         for _ in 0..2 {
-            let result = call(
-                process,
-                &mut request_id,
-                protocol::HANDOFF,
-                only_session.clone(),
-            )?;
+            let result = process.call(protocol::HANDOFF, only_session.clone())?;
             let response: HandoffResponse = serde_json::from_value(result)
                 .with_context(|| format!("{} must return {{ argv }}", protocol::HANDOFF))?;
             validate_handoff_argv(response.argv).map_err(|error| anyhow!(error))?;
         }
         for _ in 0..2 {
-            call(
-                process,
-                &mut request_id,
-                protocol::HANDBACK,
-                only_session.clone(),
-            )?;
+            process.call(protocol::HANDBACK, only_session.clone())?;
         }
     }
     let stop = json!({ "session_id": session, "reason": StopReason::Destroy });
     for _ in 0..2 {
-        call(process, &mut request_id, protocol::STOP, stop.clone())
+        process
+            .call(protocol::STOP, stop.clone())
             .context("stop must be idempotent")?;
     }
-    let error = call(
-        process,
-        &mut request_id,
-        protocol::INTERRUPT,
-        only_session.clone(),
-    )
-    .err()
-    .ok_or_else(|| anyhow!("{} of a stopped session must fail", protocol::INTERRUPT))?;
-    if !format!("{:#}", error.root_cause()).starts_with(&format!(
-        "plugin RPC error {}:",
-        error_code::SESSION_NOT_FOUND
-    )) {
+    let error = process
+        .call(protocol::INTERRUPT, only_session.clone())
+        .err()
+        .ok_or_else(|| anyhow!("{} of a stopped session must fail", protocol::INTERRUPT))?;
+    if error
+        .root_cause()
+        .downcast_ref::<RpcError>()
+        .map(|error| error.code)
+        != Some(error_code::SESSION_NOT_FOUND)
+    {
         bail!(
             "{} of a session the plugin does not know must answer error {}, got: {error}",
             protocol::INTERRUPT,
@@ -255,41 +213,18 @@ fn check_provider(
     process.provider_sessions.insert(resumed.clone(), 0);
     let mut resume = session_params(process, &resumed, provider_id);
     resume.insert("handed_off".into(), false.into());
-    call(
-        process,
-        &mut request_id,
-        protocol::RESUME,
-        Value::Object(resume),
-    )
-    .context("resume must accept a session the plugin has not seen")?;
-    call(
-        process,
-        &mut request_id,
+    process
+        .call(protocol::RESUME, Value::Object(resume))
+        .context("resume must accept a session the plugin has not seen")?;
+    process.call(
         protocol::STOP,
         json!({ "session_id": resumed, "reason": StopReason::Archive }),
     )?;
-    call(
-        process,
-        &mut request_id,
-        protocol::STOP,
+    process.call(protocol::STOP,
         json!({ "session_id": uuid::Uuid::new_v4().to_string(), "reason": StopReason::Destroy }),
     )
     .context("stop must accept a session the plugin does not know")?;
-    Ok(request_id)
-}
-
-/// One provider request, numbered from `request_id`.
-fn call(
-    process: &mut PluginProcess,
-    request_id: &mut u64,
-    method: &str,
-    params: Value,
-) -> Result<Value> {
-    let result = process
-        .call(*request_id, method, params)
-        .with_context(|| format!("{method} failed"));
-    *request_id += 1;
-    result
+    Ok(())
 }
 
 #[derive(Debug, PartialEq)]
@@ -548,6 +483,8 @@ struct PluginProcess {
     provider_sessions: HashMap<String, u64>,
     provider_statuses: Vec<ProviderSessionStatus>,
     provider_events_received: usize,
+    /// The last request id sent.
+    request_id: u64,
     state: TemporaryPluginState,
 }
 
@@ -586,61 +523,60 @@ impl PluginProcess {
             provider_sessions: HashMap::new(),
             provider_statuses: Vec::new(),
             provider_events_received: 0,
+            request_id: 0,
             state,
         })
     }
 
-    fn call(&mut self, id: u64, method: &str, params: Value) -> Result<Value> {
-        let timeout = if method.starts_with("provider.") {
-            protocol::request_timeout(method)
-        } else {
-            RPC_TIMEOUT
-        };
-        let deadline = Instant::now() + timeout;
+    /// Sends the next request and returns its id.
+    fn send_request(&mut self, method: &str, params: Value, deadline: Instant) -> Result<u64> {
+        self.request_id += 1;
+        let id = self.request_id;
         self.send_before(
             json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
             deadline,
         )?;
+        Ok(id)
+    }
+
+    /// A request within the host's deadline for it. A plugin's JSON-RPC error is an
+    /// [`RpcError`] at the root of the returned error.
+    fn call(&mut self, method: &str, params: Value) -> Result<Value> {
+        let timeout = protocol::request_timeout(method).unwrap_or(RPC_TIMEOUT);
+        let deadline = Instant::now() + timeout;
+        let id = self.send_request(method, params, deadline)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        match self.await_response(id, remaining)? {
-            Some(Ok(result)) => Ok(result),
-            Some(Err(error)) => bail!("plugin RPC error {}: {}", error.code, error.message),
+        let result = match self.await_response(id, remaining)? {
+            Some(result) => result.map_err(anyhow::Error::from),
             None => {
                 self.verify_cancellation(id)?;
-                bail!("timed out waiting for plugin JSON-RPC output")
+                Err(anyhow!("timed out waiting for plugin JSON-RPC output"))
             }
-        }
+        };
+        result.with_context(|| format!("{method} failed"))
     }
 
     fn call_before_deadline(
         &mut self,
-        id: u64,
         method: &str,
         params: Value,
         deadline: Instant,
     ) -> Result<Value> {
-        self.send_before(
-            json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
-            deadline,
-        )?;
+        let id = self.send_request(method, params, deadline)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        self.await_response(id, remaining)?
-            .ok_or_else(|| anyhow!("timed out waiting for plugin JSON-RPC output"))?
-            .map_err(|error| anyhow!("plugin RPC error {}: {}", error.code, error.message))
+        Ok(self
+            .await_response(id, remaining)?
+            .ok_or_else(|| anyhow!("timed out waiting for plugin JSON-RPC output"))??)
     }
 
     fn call_until_cancelled(
         &mut self,
-        id: u64,
         method: &str,
         params: Value,
         timeout: Duration,
     ) -> Result<()> {
         let deadline = Instant::now() + timeout;
-        self.send_before(
-            json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
-            deadline,
-        )?;
+        let id = self.send_request(method, params, deadline)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if let Some(response) = self.await_response(id, remaining)? {
             match response {
@@ -1045,6 +981,14 @@ struct RpcError {
     message: String,
 }
 
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "plugin RPC error {}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for RpcError {}
+
 enum Frame {
     Request {
         id: Value,
@@ -1070,7 +1014,11 @@ fn parse_frame(line: &str) -> Result<Frame> {
     if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
         bail!("malformed JSON-RPC output: expected jsonrpc 2.0");
     }
-    if let Some(method) = protocol::provider_notification_method(object) {
+    // Notifications carry no id; the checker tells documented ones from the rest.
+    if let (false, Some(method)) = (
+        object.contains_key("id"),
+        object.get("method").and_then(Value::as_str),
+    ) {
         return Ok(Frame::Notification {
             method: method.to_owned(),
             params: object.get("params").cloned(),
@@ -1528,7 +1476,12 @@ mod tests {
     fn frame_validation_rejects_invalid_or_ambiguous_output() {
         assert!(parse_frame(r#"{"jsonrpc":"1.0","id":1,"result":{}}"#).is_err());
         assert!(parse_frame(r#"{"jsonrpc":"2.0","id":1,"result":{},"error":{}}"#).is_err());
-        assert!(parse_frame(r#"{"jsonrpc":"2.0","method":"host.settings.get"}"#).is_err());
+        // A callback without an id reads as a notification, which the checker then rejects
+        // as undocumented.
+        assert!(matches!(
+            parse_frame(r#"{"jsonrpc":"2.0","method":"host.settings.get"}"#).unwrap(),
+            Frame::Notification { .. }
+        ));
         assert!(parse_frame(
             r#"{"jsonrpc":"2.0","id":1,"method":"host.tasks.read","params":true}"#,
         )

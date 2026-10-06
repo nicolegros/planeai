@@ -19,32 +19,42 @@ pub(crate) struct SessionLifecycleEvent {
     pub linked_task_key: Option<String>,
     pub previous_status: String,
     pub status: String,
-    /// Routes the stop of a provider session no sidecar drives; not sent to plugins.
-    #[serde(skip)]
-    pub provider: Option<String>,
 }
 
-pub(crate) fn session_lifecycle_event(
+/// A committed session status transition: the event plugins receive, and the provider
+/// session to stop when the transition ends a plugin provider's session.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SessionTransition {
+    pub event: SessionLifecycleEvent,
+    pub provider_session: Option<crate::plugin_providers::StopTarget>,
+}
+
+pub(crate) fn session_transition(
     session: &db::Session,
     previous_status: &str,
     status: &str,
-) -> SessionLifecycleEvent {
-    SessionLifecycleEvent {
-        session_id: session.id.clone(),
-        project_id: session.project_id.clone(),
-        branch: session.branch.clone(),
-        linked_task_key: session.task_key.clone(),
-        previous_status: previous_status.to_string(),
-        status: status.to_string(),
-        provider: session.provider.clone(),
+) -> SessionTransition {
+    SessionTransition {
+        event: SessionLifecycleEvent {
+            session_id: session.id.clone(),
+            project_id: session.project_id.clone(),
+            branch: session.branch.clone(),
+            linked_task_key: session.task_key.clone(),
+            previous_status: previous_status.to_string(),
+            status: status.to_string(),
+        },
+        provider_session: session
+            .provider
+            .as_deref()
+            .and_then(|key| crate::plugin_providers::StopTarget::of(&session.id, key)),
     }
 }
 
-/// Marks an active session exited, returning the event to dispatch; `None` when it was not active.
+/// Marks an active session exited, returning the transition to dispatch; `None` when it was not active.
 pub(crate) fn exit_active_session(
     conn: &Connection,
     session_id: &str,
-) -> Result<Option<SessionLifecycleEvent>, String> {
+) -> Result<Option<SessionTransition>, String> {
     let Some(session) = db::get_session(conn, session_id).map_err(|e| e.to_string())? else {
         return Ok(None);
     };
@@ -52,7 +62,7 @@ pub(crate) fn exit_active_session(
         return Ok(None);
     }
     db::mark_session_exited(conn, session_id).map_err(|e| e.to_string())?;
-    Ok(Some(session_lifecycle_event(&session, "active", "exited")))
+    Ok(Some(session_transition(&session, "active", "exited")))
 }
 
 #[tauri::command]
@@ -72,11 +82,7 @@ pub fn restart_session(
     let session = crate::session_restart::restart(&conn, &session_id, &cfg, &ops)?;
     runtime
         .0
-        .dispatch_session_lifecycle(session_lifecycle_event(
-            &session,
-            &previous.status,
-            "active",
-        ));
+        .dispatch_session_lifecycle(session_transition(&session, &previous.status, "active"));
     // Emit event so frontend re-attaches the PTY to the restarted session
     let _ = app.emit(
         "session-restarted",
@@ -125,7 +131,7 @@ async fn archive_off_main_thread(
             .ok_or("session not found")?;
         crate::session_ops::archive(&conn, &id, &cfg, &cleanup::real_kill_ops())?;
         if session.status != "archived" {
-            runtime.dispatch_session_lifecycle(session_lifecycle_event(
+            runtime.dispatch_session_lifecycle(session_transition(
                 &session,
                 &session.status,
                 "archived",
@@ -158,7 +164,7 @@ pub async fn destroy_session(
             .ok_or("session not found")?;
         let result = crate::session_ops::destroy(&conn, &id, &Some(cfg), &cleanup::real_ops())?;
         if session.status != "destroyed" {
-            runtime.dispatch_session_lifecycle(session_lifecycle_event(
+            runtime.dispatch_session_lifecycle(session_transition(
                 &session,
                 &session.status,
                 "destroyed",
@@ -210,7 +216,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         let session = session(&conn);
         let event =
-            serde_json::to_value(session_lifecycle_event(&session, "active", "archived")).unwrap();
+            serde_json::to_value(session_transition(&session, "active", "archived").event).unwrap();
         assert_eq!(
             event,
             serde_json::json!({
@@ -229,7 +235,7 @@ mod tests {
     fn only_an_active_session_exits() {
         let conn = Connection::open_in_memory().unwrap();
         session(&conn);
-        let event = exit_active_session(&conn, "s1").unwrap().unwrap();
+        let event = exit_active_session(&conn, "s1").unwrap().unwrap().event;
         assert_eq!(
             (event.previous_status.as_str(), event.status.as_str()),
             ("active", "exited")

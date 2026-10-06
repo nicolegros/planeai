@@ -19,7 +19,7 @@ import type {
   TabSpec,
 } from "./types";
 import type { AppConfig } from "./settings.svelte";
-import { providerSessionError } from "./provider-session-error";
+import { toProviderSessionError } from "./provider-session-error";
 
 export interface LaunchSessionParams {
   projectId: string;
@@ -281,7 +281,7 @@ export const plugins = {
 
 function invokeProviderSession<T>(command: string, args: Record<string, unknown>): Promise<T> {
   return invoke<T>(command, args).catch((error: unknown) => {
-    throw providerSessionError(error);
+    throw toProviderSessionError(error);
   });
 }
 
