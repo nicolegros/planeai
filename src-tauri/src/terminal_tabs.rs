@@ -795,8 +795,31 @@ mod tests {
         reconnects: Mutex<Vec<bool>>,
         fail_attach: AtomicBool,
         fail_end: AtomicBool,
-        hold_attach: Mutex<Option<Arc<Notify>>>,
-        hold_end: Mutex<Option<Arc<Notify>>>,
+        hold_attach: Mutex<Option<Hold>>,
+        hold_end: Mutex<Option<Hold>>,
+    }
+
+    /// Holds a host call open until released, and tells when a call got there, so a test
+    /// lands its next operation while the call is in flight rather than guessing when.
+    #[derive(Clone, Default)]
+    struct Hold {
+        reached: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    impl Hold {
+        async fn wait(&self) {
+            self.reached.notify_one();
+            self.release.notified().await;
+        }
+
+        async fn reached(&self) {
+            self.reached.notified().await;
+        }
+
+        fn release(&self) {
+            self.release.notify_one();
+        }
     }
 
     impl TabHost for Arc<FakeHost> {
@@ -812,7 +835,7 @@ mod tests {
             self.reconnects.lock().unwrap().push(reconnect);
             let hold = self.hold_attach.lock().unwrap().clone();
             if let Some(hold) = hold {
-                hold.notified().await;
+                hold.wait().await;
             }
             if self.fail_attach.load(Ordering::SeqCst) {
                 return Err("spawn failed".to_string());
@@ -828,7 +851,7 @@ mod tests {
         async fn end(&self, tab: &TabId) -> Result<(), String> {
             let hold = self.hold_end.lock().unwrap().clone();
             if let Some(hold) = hold {
-                hold.notified().await;
+                hold.wait().await;
             }
             if self.fail_end.load(Ordering::SeqCst) {
                 return Err("kill failed".to_string());
@@ -880,14 +903,14 @@ mod tests {
             self.events.lock().unwrap().clone()
         }
 
-        fn hold_attach(&self) -> Arc<Notify> {
-            let hold = Arc::new(Notify::new());
+        fn hold_attach(&self) -> Hold {
+            let hold = Hold::default();
             *self.host.hold_attach.lock().unwrap() = Some(hold.clone());
             hold
         }
 
-        fn hold_end(&self) -> Arc<Notify> {
-            let hold = Arc::new(Notify::new());
+        fn hold_end(&self) -> Hold {
+            let hold = Hold::default();
             *self.host.hold_end.lock().unwrap() = Some(hold.clone());
             hold
         }
@@ -1036,9 +1059,9 @@ mod tests {
             let (tabs, tab) = (h.tabs.clone(), tab.clone());
             async move { tabs.close(&tab).await }
         });
-        settle().await;
+        hold.reached().await;
         h.tabs.exited(&tab).await;
-        hold.notify_one();
+        hold.release();
         close.await.unwrap().unwrap();
         assert_eq!(h.events(), [ended(&tab, TabEndReason::Exited)]);
     }
@@ -1121,9 +1144,9 @@ mod tests {
             let (tabs, tab) = (h.tabs.clone(), tab.clone());
             async move { tabs.attach(&tab, ()).await }
         });
-        settle().await;
+        hold.reached().await;
         h.tabs.exited(&tab).await;
-        hold.notify_one();
+        hold.release();
         assert_eq!(attach.await.unwrap(), Ok(Attached::Ended));
         assert_eq!(h.events(), [ended(&tab, TabEndReason::Exited)]);
         assert_eq!(*h.host.released.lock().unwrap(), [tab]);
@@ -1202,9 +1225,9 @@ mod tests {
             let (tabs, tab) = (h.tabs.clone(), tab.clone());
             async move { tabs.attach(&tab, ()).await }
         });
-        settle().await;
+        hold.reached().await;
         h.tabs.exited(&tab).await;
-        hold.notify_one();
+        hold.release();
         attach.await.unwrap().unwrap();
         assert_eq!(h.events(), [ended(&tab, TabEndReason::Exited)]);
         assert!(!h.tabs.is_program_running(&tab));
@@ -1219,7 +1242,7 @@ mod tests {
             let (tabs, tab) = (h.tabs.clone(), tab.clone());
             async move { tabs.attach(&tab, ()).await }
         });
-        settle().await;
+        hold.reached().await;
         let close = tokio::spawn({
             let (tabs, tab) = (h.tabs.clone(), tab.clone());
             async move { tabs.close(&tab).await }
@@ -1227,7 +1250,7 @@ mod tests {
         settle().await;
         assert!(h.events().is_empty());
         h.release_holds();
-        hold.notify_one();
+        hold.release();
         attach.await.unwrap().unwrap();
         close.await.unwrap().unwrap();
         assert_eq!(h.events(), [ended(&tab, TabEndReason::Closed)]);
@@ -1244,14 +1267,14 @@ mod tests {
             let (tabs, tab) = (h.tabs.clone(), tab.clone());
             async move { tabs.attach(&tab, ()).await }
         });
-        settle().await;
+        hold.reached().await;
         let close = tokio::spawn({
             let (tabs, tab) = (h.tabs.clone(), tab.clone());
             async move { tabs.close(&tab).await }
         });
         settle().await;
         h.release_holds();
-        hold.notify_one();
+        hold.release();
         attach.await.unwrap().unwrap();
         close.await.unwrap().unwrap();
         assert_eq!(h.events(), [failed_to_start(&tab)]);
@@ -1269,9 +1292,9 @@ mod tests {
                 tokio::spawn(async move { tabs.close(&tab).await })
             })
             .collect();
-        settle().await;
+        hold.reached().await;
         h.release_holds();
-        hold.notify_one();
+        hold.release();
         for close in closes {
             close.await.unwrap().unwrap();
         }
@@ -1289,13 +1312,13 @@ mod tests {
             let (tabs, tab) = (h.tabs.clone(), tab.clone());
             async move { tabs.close(&tab).await }
         });
-        settle().await;
+        hold.reached().await;
         let attach = tokio::spawn({
             let (tabs, tab) = (h.tabs.clone(), tab.clone());
             async move { tabs.attach(&tab, ()).await }
         });
         settle().await;
-        hold.notify_one();
+        hold.release();
         close.await.unwrap().unwrap();
         assert_eq!(attach.await.unwrap(), Ok(Attached::Ended));
         assert_eq!(h.host.spawned.lock().unwrap().len(), 1);
