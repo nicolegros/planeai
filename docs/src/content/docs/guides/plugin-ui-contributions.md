@@ -85,13 +85,18 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
 - `sessions.advisories` permits `host.sessions.advisory` with `{ "session_id", "message", "severity" }`, where severity is `info`, `warning`, or `error`. PlaneAI renders the advisory; sidecars never inject UI directly.
 - `sessions.complete` permits `host.sessions.complete` with `{ "session_id", "message"? }`. PlaneAI presents its standard Archive/Destroy/Keep prompt, or Done/Nothing when the selected session has a linked task. Thus completion requests reuse the host's session cleanup and linked-task behavior rather than asking plugins to control sessions.
 - `tasks.read` permits the keyed single-task lookup aliases `host.tasks.read` and `host.task.get`. Each accepts `{ "key": "TASK-123" }` and returns `{ "task": ... }` (or `{ "task": null }` when no task matches).
-- `tasks.create` permits `host.tasks.createChild`. It requires `projectPath`, `parentKey`, `title`, `description`, and a plugin-scoped `operationId`; PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
+- `tasks.create` permits `host.tasks.create` and `host.tasks.createChild`.
+  `host.tasks.create` creates a top-level `todo` task.
+  It requires `projectPath`, `title`, and a plugin-scoped `operationId`, accepts an optional `description`, and rejects `parentKey`.
+  PlaneAI rejects hidden or unknown projects, returns the originally created task when the same operation is retried, and refreshes the task list.
+  `host.tasks.createChild` requires `projectPath`, `parentKey`, `title`, `description`, and a plugin-scoped `operationId`; PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
+  Both return `{ "task": ... }`.
 - `tasks.transition` permits `host.sessions.transitionLinkedTask` with `{ "session_id", "status" }`. PlaneAI resolves the task strictly from that session's linked task key, changes its lifecycle status, and emits the normal task lifecycle batch (including automatic parent completion).
 - `task-events` permits event delivery only when the handshake also subscribes to `task.lifecycle`.
 - `providers` permits declaring `providers` (host API v3 only) and the provider session contract described in [Providers](#providers). It is required exactly when `providers` is declared.
 - `session-events` permits best-effort `plugin.sessionLifecycle` delivery only when the handshake also subscribes to `session.lifecycle`. Events describe committed host session status changes and include the session/project identity, branch, linked task key, previous status, and new status.
 
-The sandbox UI can use the same read/create operations directly through `context.host.rpc.call("projects.list")`, `context.host.rpc.call("sessions.list")`, `context.host.rpc.call("task.get", { key })`, and `context.host.rpc.call("tasks.createChild", params)`. The sidecar uses matching nested callbacks with the `host.` prefix. PlaneAI derives the owning plugin identity for both transports and applies identical manifest capability checks.
+The sandbox UI can use the same read/create operations directly through `context.host.rpc.call("projects.list")`, `context.host.rpc.call("sessions.list")`, `context.host.rpc.call("task.get", { key })`, `context.host.rpc.call("tasks.create", params)`, and `context.host.rpc.call("tasks.createChild", params)`. The sidecar uses matching nested callbacks with the `host.` prefix. PlaneAI derives the owning plugin identity for both transports and applies identical manifest capability checks.
 
 Settings are a JSON object that PlaneAI owns and persists atomically; its on-disk implementation location is not a plugin API. `host.settings.get` returns `{ "settings": { ... } }`; `host.settings.replace` accepts either `{ "settings": { ... } }` or an object directly and returns the same envelope. Both the fixture's `fixture.persistSettings` sidecar example and its UI settings bridge use that public host API. Do not place credentials or tokens in it.
 
