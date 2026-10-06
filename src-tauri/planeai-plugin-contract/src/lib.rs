@@ -103,6 +103,7 @@ const UI_PLACEMENTS: &[&str] = &[
     "sidebar.footer",
     "preferences",
     "main-pane",
+    "dialog",
     "session.panel",
     "session.indicator",
     "titlebar",
@@ -257,8 +258,8 @@ fn validate_ui_contributions(object: &Map<String, Value>, plugin_id: &str) -> Re
             Some(Value::String(value)) => Some(value.as_str()),
             Some(_) => bail!("UI contribution shortcut must be a string"),
         };
-        if !matches!(placement, "main-pane" | "session.panel") && shortcut.is_some() {
-            bail!("UI contribution shortcuts are only valid for main-pane or session-panel contributions");
+        if !matches!(placement, "main-pane" | "dialog" | "session.panel") && shortcut.is_some() {
+            bail!("UI contribution shortcuts are only valid for main-pane, dialog, or session-panel contributions");
         }
         if !placement.starts_with("sidebar.") && has_order {
             bail!("UI contribution order is only valid for sidebar contributions");
@@ -562,6 +563,17 @@ mod tests {
         let mut empty = provider_manifest();
         empty["providers"] = json!([]);
         assert!(provider_error(empty).contains("must not be empty"));
+    }
+
+    #[test]
+    fn dialog_can_claim_a_global_shortcut() {
+        let mut manifest = manifest();
+        manifest["ui_contributions"][0]["placement"] = json!("dialog");
+        manifest["ui_contributions"][0]["shortcut"] = json!("Mod+Shift+R");
+        assert_eq!(
+            validate_local_manifest(&manifest, "macos-arm64").unwrap(),
+            "bin/plugin"
+        );
     }
 
     #[test]

@@ -83,6 +83,7 @@ export type PluginUiPlacement =
   | "sidebar.footer"
   | "preferences"
   | "main-pane"
+  | "dialog"
   | "session.panel"
   | "session.indicator"
   | "titlebar"

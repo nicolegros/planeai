@@ -207,6 +207,8 @@ pub enum PluginUiPlacement {
     Preferences,
     #[serde(rename = "main-pane")]
     MainPane,
+    #[serde(rename = "dialog")]
+    Dialog,
     #[serde(rename = "session.panel")]
     SessionPanel,
     #[serde(rename = "session.indicator")]
@@ -411,11 +413,13 @@ fn validate_ui_contributions(
         )?;
         if !matches!(
             contribution.placement,
-            PluginUiPlacement::MainPane | PluginUiPlacement::SessionPanel
+            PluginUiPlacement::MainPane
+                | PluginUiPlacement::Dialog
+                | PluginUiPlacement::SessionPanel
         ) && contribution.shortcut.is_some()
         {
             return Err(
-                "UI contribution shortcuts are only valid for main-pane or session-panel contributions".to_string(),
+                "UI contribution shortcuts are only valid for main-pane, dialog, or session-panel contributions".to_string(),
             );
         }
         if !contribution.placement.is_sidebar() && contribution.order.is_some() {
@@ -4394,6 +4398,23 @@ mod tests {
         titlebar.ui_contributions[0].placement = PluginUiPlacement::Titlebar;
         titlebar.ui_contributions[0].order = None;
         assert!(titlebar.validate().is_ok());
+
+        let mut dialog: PluginManifest = serde_json::from_value(serde_json::json!({
+            "schema": "planeai.plugin.v1",
+            "id": "dialog-test",
+            "name": "Dialog test",
+            "version": "1.0.0",
+            "host_api_version": HOST_API_VERSION,
+            "source_kind": "local",
+            "backend_entrypoints": { crate::plugin_packages::current_platform_key(): "bin/plugin" },
+            "ui_contributions": [
+                { "id": "manager", "label": "Manager", "placement": "dialog", "entrypoint": "ui/manager.js", "shortcut": "Mod+Shift+R" }
+            ]
+        }))
+        .unwrap();
+        assert!(dialog.validate().is_ok());
+        dialog.ui_contributions[0].order = Some(0);
+        assert!(dialog.validate().unwrap_err().contains("order"));
 
         let mut invalid_shortcut = manifest.clone();
         invalid_shortcut.ui_contributions[0].shortcut = Some("Mod+L".into());
