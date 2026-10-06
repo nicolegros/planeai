@@ -6,7 +6,7 @@
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
-  import { renderTemplate } from "../lib/render-template";
+  import { taskSessionDefaults } from "../lib/task-session-defaults";
   import { LoaderCircle } from "@lucide/svelte";
   import type { RuntimeProvider } from "../lib/plugin-providers";
   import { ProviderChoice } from "../lib/provider-choice.svelte";
@@ -143,10 +143,6 @@
     ...taskItems.map((t) => ({ value: t.key, label: `${t.key}: ${t.title}` })),
   ]);
 
-  function getTaskManagerTemplates() {
-    return config.task_management?.templates;
-  }
-
   function onProjectChanged() {
     if (linkedTask) applyTaskDefaults(linkedTask, { keepTypedName: true });
   }
@@ -172,11 +168,10 @@
     // The name counts every agent in the task workspace; branches and checkouts only clash within one repo.
     const agentOrdinal = taskSessions.length + 1;
     const repoOrdinal = taskSessions.filter((session) => session.project_id === projectValue).length + 1;
-    const templates = getTaskManagerTemplates();
-    if (!(keepTypedName && nameEdited)) sessionName = agentOrdinal === 1 ? task.title : `${task.title} (${agentOrdinal})`;
-    taskPrompt = templates?.prompt ? renderTemplate(templates.prompt, task) : (task.description ? `Implement task ${task.key}: ${task.title}\n\n${task.description}` : `Implement task ${task.key}: ${task.title}`);
-    const baseTaskBranch = templates?.branch ? renderTemplate(templates.branch, task) : `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-/]/g, "")}`;
-    const taskBranch = repoOrdinal === 1 ? baseTaskBranch : `${baseTaskBranch}--${repoOrdinal}`;
+    const defaults = taskSessionDefaults(task, config.task_management?.templates);
+    if (!(keepTypedName && nameEdited)) sessionName = agentOrdinal === 1 ? defaults.name : `${defaults.name} (${agentOrdinal})`;
+    taskPrompt = defaults.prompt;
+    const taskBranch = repoOrdinal === 1 ? defaults.branch : `${defaults.branch}--${repoOrdinal}`;
     branchSearch = taskBranch;
     branchValue = taskBranch;
     newBranchName = taskBranch;

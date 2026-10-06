@@ -19,6 +19,7 @@
   import { isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { isTerminal, isActive as isLoopActive } from "./lib/loop-status";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
+  import { taskSessionDefaults } from "./lib/task-session-defaults";
   import { pluginPreferencesLocation, settingsLocationQuery, type SettingsLocation } from "./lib/settings-registry";
   import { shouldShowOnboarding } from "./lib/onboarding";
   import Onboarding from "./components/Onboarding.svelte";
@@ -784,7 +785,7 @@
   }
 
   function openSessionForTask(task: TaskItem, project: Project): void {
-    taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: task.title, prompt: "", baseBranch: task.base_branch, projectId: project.id };
+    taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: taskSessionDefaults(task, getSettings().task_management?.templates).name, prompt: "", baseBranch: task.base_branch, projectId: project.id };
     showSessionForm = true;
   }
 

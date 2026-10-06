@@ -35,11 +35,15 @@ vi.mock("../../lib/api", () => ({
   },
 }));
 
+const settings = vi.hoisted(() => ({
+  taskManagement: {} as { templates?: { branch?: string; name?: string; prompt?: string } },
+}));
+
 vi.mock("../../lib/settings.svelte", () => ({
   getSettings: () => ({
     providers: { claude: { command: "claude", yolo_flag: null } },
     default_provider: "claude",
-    task_management: {},
+    task_management: settings.taskManagement,
   }),
 }));
 
@@ -208,12 +212,45 @@ it("numbers the name of an additional task agent while defaulting it to an isola
   flushSync();
 
   expect(target.querySelector<HTMLInputElement>("input[placeholder='My session...']")?.value).toBe(
-    "Fix bug (2)",
+    "PROJ-1: Fix bug (2)",
   );
   expect(target.querySelector<HTMLInputElement>("[data-field='branch'] input")?.value).toBe(
     "proj-1/fix-bug--2",
   );
   expect(target.querySelector<HTMLInputElement>("#use-worktree")?.checked).toBe(true);
+});
+
+describe("session name for a task", () => {
+  async function nameFor(templates?: { name?: string }) {
+    settings.taskManagement = templates ? { templates } : {};
+    try {
+      const target = renderForm({
+        taskPrefill: {
+          key: "PROJ-1",
+          title: "Fix bug",
+          description: "",
+          branch: "",
+          name: "",
+          prompt: "",
+        },
+      });
+      await tick();
+      flushSync();
+      await tick();
+      flushSync();
+      return target.querySelector<HTMLInputElement>("input[placeholder='My session...']")!.value;
+    } finally {
+      settings.taskManagement = {};
+    }
+  }
+
+  it("defaults to the key and title, as a session started with the task is named", async () => {
+    expect(await nameFor()).toBe("PROJ-1: Fix bug");
+  });
+
+  it("renders the configured name template", async () => {
+    expect(await nameFor({ name: "{key:lower} · {title:upper}" })).toBe("proj-1 · FIX BUG");
+  });
 });
 
 it("keeps a name typed before the task list finishes loading", async () => {
@@ -287,7 +324,7 @@ it("resets a typed name when another task is picked", async () => {
   await tick();
   flushSync();
 
-  expect(nameInput.value).toBe("Add feature");
+  expect(nameInput.value).toBe("PROJ-2: Add feature");
   target.remove();
 });
 
@@ -506,7 +543,7 @@ describe("cross-project task link", () => {
 
     expect(
       target.querySelector<HTMLInputElement>("input[placeholder='My session...']")?.value,
-    ).toBe("Fix bug (2)");
+    ).toBe("PROJ-1: Fix bug (2)");
     expect(target.querySelector<HTMLInputElement>("[data-field='branch'] input")?.value).toBe(
       "proj-1/fix-bug",
     );
