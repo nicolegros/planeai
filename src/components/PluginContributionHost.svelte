@@ -226,7 +226,9 @@
     frame.style.display = "block";
     frame.style.width = isTitlebar ? "88px" : isSessionIndicator ? "16px" : "100%";
     frame.style.border = "0";
-    if (isTitlebar || isSessionIndicator) frame.style.backgroundColor = "transparent";
+    // A dialog frame shows the dialog's own surface, like the host's forms.
+    const isDialog = contribution.placement === "dialog";
+    if (isTitlebar || isSessionIndicator || isDialog) frame.style.backgroundColor = "transparent";
     if (bridge) {
       // App releases this frame's keyboard like a terminal's, and a click into it claims the keyboard back.
       frame.setAttribute(PROVIDER_FRAME_ATTRIBUTE, "");
@@ -252,7 +254,7 @@
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'">
       <style id="planeai-plugin-theme">${localPluginThemeCss()}</style>
       <style id="planeai-plugin-base">${localPluginBaseCss}</style>
-      ${isTitlebar ? '<style id="planeai-plugin-titlebar">html,body{background:transparent}</style>' : isSessionIndicator ? '<style id="planeai-plugin-indicator">html,body{background:transparent}</style>' : ""}
+      ${isTitlebar ? '<style id="planeai-plugin-titlebar">html,body{background:transparent}</style>' : isSessionIndicator ? '<style id="planeai-plugin-indicator">html,body{background:transparent}</style>' : isDialog ? '<style id="planeai-plugin-dialog">html,body{background:transparent}</style>' : ""}
       <script>
         let cleanup = null;
         let nextRequestId = 0;

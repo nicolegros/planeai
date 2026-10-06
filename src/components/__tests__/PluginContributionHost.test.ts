@@ -409,6 +409,27 @@ describe("PluginContributionHost", () => {
     expect(frame.srcdoc).toContain("html,body{background:transparent}");
   });
 
+  it("lets a local dialog frame show the host dialog's surface", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "dialog" },
+    }) as typeof component;
+
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    expect(frame.style.backgroundColor).toBe("transparent");
+    expect(frame.srcdoc).toContain(
+      '<style id="planeai-plugin-dialog">html,body{background:transparent}</style>',
+    );
+  });
+
   it("uses an unfocusable, pointer-inert transparent iframe for local session indicators", async () => {
     target = document.createElement("div");
     document.body.append(target);
