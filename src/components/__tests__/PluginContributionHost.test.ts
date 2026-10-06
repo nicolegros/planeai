@@ -61,7 +61,10 @@ import { shouldBypassSidebarKeyboard } from "../../lib/sidebar-nav.svelte";
 // Each bundled font answers with its own file name, so a test can tell the faces apart.
 vi.stubGlobal(
   "fetch",
-  vi.fn(async (url: string) => new Response(new TextEncoder().encode(String(url).split("/").pop()!.split("?")[0]))),
+  vi.fn(
+    async (url: string) =>
+      new Response(new TextEncoder().encode(String(url).split("/").pop()!.split("?")[0])),
+  ),
 );
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -738,14 +741,22 @@ describe("PluginContributionHost", () => {
     });
     await vi.waitFor(() => expect(localUiSource).toHaveBeenCalled());
     const hostPostMessage = vi.fn();
-    Object.defineProperty(frame, "contentWindow", { configurable: true, value: { postMessage: hostPostMessage } });
+    Object.defineProperty(frame, "contentWindow", {
+      configurable: true,
+      value: { postMessage: hostPostMessage },
+    });
     source.resolve("export default {};");
-    await vi.waitFor(() => expect(hostPostMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "init" }), "*"));
-    const init = structuredClone(hostPostMessage.mock.calls.find(([message]) => message.type === "init")![0]);
+    await vi.waitFor(() =>
+      expect(hostPostMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "init" }), "*"),
+    );
+    const init = structuredClone(
+      hostPostMessage.mock.calls.find(([message]) => message.type === "init")![0],
+    );
 
     const frameListeners: Array<(event: { source: unknown; data: unknown }) => void> = [];
     const parent = { postMessage: vi.fn() };
-    const registered: Array<{ family: string; source: string; descriptors: FontFaceDescriptors }> = [];
+    const registered: Array<{ family: string; source: string; descriptors: FontFaceDescriptors }> =
+      [];
     const fontsLoaded = Promise.withResolvers<void>();
     class FakeFontFace {
       loaded: Promise<unknown>;
@@ -761,15 +772,30 @@ describe("PluginContributionHost", () => {
       body: {},
       fonts: {
         add: (face: FakeFontFace) =>
-          registered.push({ family: face.family, source: new TextDecoder().decode(face.source), descriptors: face.descriptors }),
+          registered.push({
+            family: face.family,
+            source: new TextDecoder().decode(face.source),
+            descriptors: face.descriptors,
+          }),
       },
     };
     const frameUrl = { createObjectURL: () => "blob:bundle", revokeObjectURL: () => {} };
     let mounted = false;
     // A Function body cannot reach Node's module loader, so the bundle import is stubbed.
     const importBundle = async () => ({ default: { mount: () => ((mounted = true), () => {}) } });
-    const bridge = frame.srcdoc.match(/<script>([\s\S]*)<\/script>/)![1].replace("await import(url)", "await importBundle(url)");
-    new Function("parent", "addEventListener", "removeEventListener", "document", "FontFace", "URL", "importBundle", bridge)(
+    const bridge = frame.srcdoc
+      .match(/<script>([\s\S]*)<\/script>/)![1]
+      .replace("await import(url)", "await importBundle(url)");
+    new Function(
+      "parent",
+      "addEventListener",
+      "removeEventListener",
+      "document",
+      "FontFace",
+      "URL",
+      "importBundle",
+      bridge,
+    )(
       parent,
       (type: string, listener: (event: { source: unknown; data: unknown }) => void) => {
         if (type === "message") frameListeners.push(listener);
@@ -782,7 +808,8 @@ describe("PluginContributionHost", () => {
     );
     for (const listener of frameListeners) listener({ source: parent, data: init });
 
-    const latin = "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD";
+    const latin =
+      "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD";
     await vi.waitFor(() =>
       expect(registered).toEqual([
         {
@@ -805,7 +832,9 @@ describe("PluginContributionHost", () => {
     expect(mounted).toBe(false);
 
     fontsLoaded.resolve();
-    await vi.waitFor(() => expect(parent.postMessage).toHaveBeenCalledWith({ type: "mounted" }, "*"));
+    await vi.waitFor(() =>
+      expect(parent.postMessage).toHaveBeenCalledWith({ type: "mounted" }, "*"),
+    );
     expect(mounted).toBe(true);
   });
 });
