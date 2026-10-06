@@ -133,10 +133,15 @@
   };
 
   /** Placements whose frame is as tall as the plugin's content, reported from inside the frame. */
-  const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "sidebar.header"];
+  const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "dialog", "sidebar.header"];
 
   /** Local placements told about their plugin's data changes in place, since remounting them would flash. */
-  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "sidebar.header", "main-pane"];
+  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "sidebar.header", "main-pane", "dialog"];
+
+  /** Placements the host shows in its dialog chrome. */
+  function inDialog(placement: PluginUiContribution["placement"]): boolean {
+    return placement === "session.panel" || placement === "dialog";
+  }
 
   /** Placements whose frame takes the whole area the host gives it. */
   function fillsContainer(placement: PluginUiContribution["placement"]): boolean {
@@ -213,7 +218,7 @@
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
-    frame.className = fillsContainer(contribution.placement) || contribution.placement === "session.panel"
+    frame.className = fillsContainer(contribution.placement) || inDialog(contribution.placement)
         ? "block h-full w-full border-0"
         : isSessionIndicator
           ? "block h-4 w-4 border-0"
@@ -233,7 +238,7 @@
       frame.tabIndex = -1;
     } else if (fillsContainer(contribution.placement)) {
       frame.style.height = "100%";
-    } else if (contribution.placement === "session.panel") {
+    } else if (inDialog(contribution.placement)) {
       frame.style.height = "360px";
       frame.style.outline = "none";
     }
@@ -845,7 +850,7 @@
       ? plugin.source_kind === "builtin"
         ? "pointer-events-none"
         : "h-full w-full pointer-events-auto"
-      : fillsContainer(contribution.placement) || contribution.placement === "session.panel"
+      : fillsContainer(contribution.placement) || inDialog(contribution.placement)
         ? "h-full w-full"
         : contribution.placement === "session.indicator"
           ? "h-4 w-4 shrink-0 pointer-events-none"
