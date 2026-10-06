@@ -794,7 +794,7 @@
   </div>
 
   {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.header") as item (`${item.plugin.id}:${item.contribution.id}`)}
-    <div class="px-2 py-1" data-plugin-sidebar-slot="header"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={() => onOpenPreferences(pluginPreferencesLocation(item.plugin))} onFailure={() => markSidebarContributionFailed(item)} /></div>
+    <div class="px-3 pb-2" data-plugin-sidebar-slot="header"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={() => onOpenPreferences(pluginPreferencesLocation(item.plugin))} onFailure={() => markSidebarContributionFailed(item)} /></div>
   {/each}
 
   <!-- Main content -->
