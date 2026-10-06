@@ -22,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 use crate::commands;
 use crate::plugin_rpc::*;
 use crate::task_lifecycle::TaskLifecycleBatch;
+use crate::task_start::{PendingTaskStart, StartOptions};
 use planeai_plugin_contract::provider::is_host_controlled_method as is_host_controlled_plugin_method;
 use planeai_plugin_contract::supports_host_api_version;
 pub use planeai_plugin_contract::ProviderFeature;
@@ -144,6 +145,8 @@ pub enum PluginHostCapability {
     SessionAdvisories,
     #[serde(rename = "sessions.complete")]
     SessionsComplete,
+    #[serde(rename = "sessions.start")]
+    SessionsStart,
     #[serde(rename = "tasks.read")]
     TasksRead,
     #[serde(rename = "task-events")]
@@ -360,6 +363,7 @@ fn validate_capabilities(
                     | PluginHostCapability::SessionActions
                     | PluginHostCapability::SessionAdvisories
                     | PluginHostCapability::SessionsComplete
+                    | PluginHostCapability::SessionsStart
                     | PluginHostCapability::TasksRead
                     | PluginHostCapability::TasksCreate
                     | PluginHostCapability::TasksTransition
@@ -1513,7 +1517,8 @@ impl RuntimeProcess {
                 }
             }
             _ => {
-                let result = execute_host_task(
+                let result = execute_app_host_task(
+                    &self.app,
                     &self.plugin_id,
                     &self.capabilities,
                     &self.data_dir,
@@ -1521,7 +1526,6 @@ impl RuntimeProcess {
                     params,
                 )
                 .await;
-                announce_created_task(&self.app, method, &result);
                 if method == "host.sessions.transitionLinkedTask" {
                     if let Ok(value) = &result {
                         if let Some(sessions) =
@@ -1813,12 +1817,44 @@ async fn execute_host_task(
     {
         return Err(CallbackError::NotGranted);
     }
+    if params.get("start").is_some_and(|start| !start.is_null()) {
+        match method {
+            "host.tasks.create" if !capabilities.contains(&PluginHostCapability::SessionsStart) => {
+                return Err(CallbackError::NotGranted)
+            }
+            "host.tasks.createChild" => {
+                return Err(invalid_params("only host.tasks.create can start a session"))
+            }
+            _ => {}
+        }
+    }
     run_host_task(plugin_id, data_dir, method, params).await
 }
 
+/// Host tasks needing the running app, over `execute_host_task`: starting a created task's
+/// session.
+async fn execute_app_host_task(
+    app: &AppHandle,
+    plugin_id: &str,
+    capabilities: &HashSet<PluginHostCapability>,
+    data_dir: &Path,
+    method: &str,
+    params: Value,
+) -> Result<Value, CallbackError> {
+    let mut reply = execute_host_task(plugin_id, capabilities, data_dir, method, params).await?;
+    announce_created_task(app, method);
+    if let Some(pending) = take_pending_start(&mut reply) {
+        let session = crate::task_start::start_in_background(app, pending)
+            .await
+            .map_err(CallbackError::Internal)?;
+        reply["session"] = serde_json::json!(session);
+    }
+    Ok(reply)
+}
+
 /// A top-level task emits no lifecycle event, so the task list hears of it directly.
-fn announce_created_task(app: &AppHandle, method: &str, result: &Result<Value, CallbackError>) {
-    if method == "host.tasks.create" && result.is_ok() {
+fn announce_created_task(app: &AppHandle, method: &str) {
+    if method == "host.tasks.create" {
         if let Err(error) = app.emit("tasks-changed", ()) {
             tracing::warn!(%error, "failed to announce a plugin-created task");
         }
@@ -2226,6 +2262,7 @@ struct PluginTaskRequest {
     description: String,
     priority: i32,
     tags: Vec<String>,
+    start: Option<StartOptions>,
 }
 
 impl PluginTaskRequest {
@@ -2262,8 +2299,38 @@ impl PluginTaskRequest {
                 None | Some(Value::Null) => Vec::new(),
                 Some(value) => plugin_task_tags(value)?,
             },
+            start: match params.get("start") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(plugin_task_start(value)?),
+            },
         })
     }
+}
+
+/// The session a created task starts with; unset fields take the task form's defaults.
+fn plugin_task_start(value: &Value) -> Result<StartOptions, String> {
+    let start = value
+        .as_object()
+        .ok_or("plugin task start must be an object")?;
+    let field = |names: [&str; 2]| names.iter().find_map(|name| start.get(*name));
+    let flag = |names: [&str; 2]| match field(names) {
+        None | Some(Value::Null) => Ok(true),
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| format!("plugin task start.{} must be a boolean", names[0])),
+    };
+    let provider = match start.get("provider") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(provider)) => Some(provider.clone()),
+        Some(_) => return Err("plugin task start.provider must be a string or null".to_string()),
+    };
+    Ok(StartOptions {
+        provider,
+        use_worktree: flag(["use_worktree", "useWorktree"])?,
+        auto_approve: flag(["auto_approve", "autoApprove"])?,
+        branch: None,
+        prompt: None,
+    })
 }
 
 /// Trimmed, non-empty and unique, in the order given.
@@ -2284,6 +2351,8 @@ struct InsertedPluginTask {
     task: Value,
     /// Present only when this call created a child task.
     lifecycle: Option<TaskLifecycleBatch>,
+    /// The session the request asked for, on every retry too, so a lost start still happens.
+    start: Option<PendingTaskStart>,
 }
 
 fn create_plugin_task(plugin_id: &str, request: PluginTaskRequest) -> Result<Value, String> {
@@ -2292,7 +2361,22 @@ fn create_plugin_task(plugin_id: &str, request: PluginTaskRequest) -> Result<Val
     if let Some(batch) = &inserted.lifecycle {
         planeai::task_cli::notify_task_lifecycle(batch);
     }
-    Ok(inserted.task)
+    Ok(task_reply(inserted.task, inserted.start.as_ref()))
+}
+
+/// Where a pending session start rides in a host task's reply until the app takes it.
+const PENDING_START_FIELD: &str = "start";
+
+fn task_reply(mut reply: Value, start: Option<&PendingTaskStart>) -> Value {
+    if let Some(start) = start {
+        reply[PENDING_START_FIELD] = serde_json::json!(start);
+    }
+    reply
+}
+
+fn take_pending_start(reply: &mut Value) -> Option<PendingTaskStart> {
+    let pending = reply.as_object_mut()?.remove(PENDING_START_FIELD)?;
+    serde_json::from_value(pending).ok()
 }
 
 /// Creates a task at most once per (plugin, operation id), so a retried request returns the
@@ -2310,16 +2394,25 @@ fn insert_plugin_task(
         description,
         priority,
         tags,
+        start,
     } = request;
     let project = crate::db::list_projects(conn)
         .map_err(|error| error.to_string())?
         .into_iter()
         .find(|project| project.path == project_path && !project.hidden)
         .ok_or("project was not found or is hidden")?;
+    let pending_start = |task_key: &str| {
+        start.clone().map(|options| PendingTaskStart {
+            project_id: project.id.clone(),
+            task_key: task_key.to_string(),
+            options,
+        })
+    };
     let existing = |task_key: String, conn: &Connection| {
         plugin_task_value(conn, &task_key).map(|task| InsertedPluginTask {
             task,
             lifecycle: None,
+            start: pending_start(&task_key),
         })
     };
     let transaction = conn.transaction().map_err(|error| error.to_string())?;
@@ -2416,6 +2509,7 @@ fn insert_plugin_task(
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())?;
+    let start = pending_start(&task_key);
     let lifecycle = parent_key
         .zip(first_child)
         .map(|(parent_key, first_child)| {
@@ -2433,6 +2527,7 @@ fn insert_plugin_task(
     Ok(InsertedPluginTask {
         task: plugin_task_value(conn, &task_key)?,
         lifecycle,
+        start,
     })
 }
 
@@ -2624,16 +2719,16 @@ impl PluginRuntimeSupervisor {
             .copied()
             .collect::<HashSet<_>>();
         let callback_method = format!("host.{method}");
-        let result = execute_host_task(
+        execute_app_host_task(
+            &self.app,
             plugin_id,
             &capabilities,
             &root.join("data"),
             &callback_method,
             params,
         )
-        .await;
-        announce_created_task(&self.app, &callback_method, &result);
-        result.map_err(|error| error.to_string())
+        .await
+        .map_err(|error| error.to_string())
     }
 
     pub fn begin_shutdown(&self) -> bool {
@@ -4925,6 +5020,154 @@ mod tests {
         assert_eq!(
             created.task["task"]["tags"],
             serde_json::json!(["ritual", "team"])
+        );
+    }
+
+    #[test]
+    fn plugin_task_params_read_the_session_start() {
+        let base = serde_json::json!({
+            "project_path": "/p",
+            "operation_id": "op",
+            "title": "Retro",
+        });
+        let with_start = |value: Value| {
+            let mut params = base.clone();
+            params["start"] = value;
+            PluginTaskRequest::from_params(&params)
+        };
+
+        assert_eq!(PluginTaskRequest::from_params(&base).unwrap().start, None);
+        assert_eq!(with_start(Value::Null).unwrap().start, None);
+        assert_eq!(
+            with_start(serde_json::json!({})).unwrap().start,
+            Some(StartOptions::default())
+        );
+        assert_eq!(
+            with_start(serde_json::json!({
+                "provider": "chat:claude",
+                "use_worktree": false,
+                "autoApprove": false,
+            }))
+            .unwrap()
+            .start,
+            Some(StartOptions {
+                provider: Some("chat:claude".into()),
+                use_worktree: false,
+                auto_approve: false,
+                ..StartOptions::default()
+            })
+        );
+        assert_eq!(
+            with_start(serde_json::json!({ "provider": null }))
+                .unwrap()
+                .start,
+            Some(StartOptions::default())
+        );
+        assert_eq!(
+            with_start(serde_json::json!(3)).unwrap_err(),
+            "plugin task start must be an object"
+        );
+        assert_eq!(
+            with_start(serde_json::json!({ "use_worktree": "yes" })).unwrap_err(),
+            "plugin task start.use_worktree must be a boolean"
+        );
+        assert_eq!(
+            with_start(serde_json::json!({ "provider": 1 })).unwrap_err(),
+            "plugin task start.provider must be a string or null"
+        );
+    }
+
+    #[test]
+    fn a_plugin_task_asking_for_a_session_carries_its_start_even_on_retry() {
+        let (mut conn, _checkout, project) = task_database();
+        let request = || {
+            PluginTaskRequest::from_params(&serde_json::json!({
+                "project_path": project.path,
+                "operation_id": "routine:r1:2026-10-05T13:00:00Z",
+                "title": "Retro",
+                "start": { "provider": "claude" },
+            }))
+            .unwrap()
+        };
+        let expected = PendingTaskStart {
+            project_id: project.id.clone(),
+            task_key: format!("{}-1", project.prefix),
+            options: StartOptions {
+                provider: Some("claude".into()),
+                ..StartOptions::default()
+            },
+        };
+
+        let first = insert_plugin_task(&mut conn, "routines", request()).unwrap();
+        let retried = insert_plugin_task(&mut conn, "routines", request()).unwrap();
+
+        assert_eq!(first.start, Some(expected.clone()));
+        assert_eq!(retried.start, Some(expected));
+        let plain = insert_plugin_task(
+            &mut conn,
+            "routines",
+            top_level_request(&project.path, "other"),
+        )
+        .unwrap();
+        assert_eq!(plain.start, None);
+    }
+
+    #[test]
+    fn a_pending_start_travels_in_the_reply_until_the_host_takes_it() {
+        let pending = PendingTaskStart {
+            project_id: "p".into(),
+            task_key: "PLA-1".into(),
+            options: StartOptions::default(),
+        };
+        let mut reply = task_reply(
+            serde_json::json!({ "task": { "key": "PLA-1" } }),
+            Some(&pending),
+        );
+
+        assert_eq!(take_pending_start(&mut reply), Some(pending));
+        assert_eq!(reply, serde_json::json!({ "task": { "key": "PLA-1" } }));
+        assert_eq!(take_pending_start(&mut reply), None);
+    }
+
+    #[tokio::test]
+    async fn starting_a_session_requires_the_sessions_start_capability() {
+        let data = tempfile::TempDir::new().unwrap();
+        let params = serde_json::json!({
+            "project_path": "/p",
+            "operation_id": "o",
+            "title": "t",
+            "start": {},
+        });
+        let create_only = HashSet::from([PluginHostCapability::TasksCreate]);
+        let error = execute_host_task(
+            "routines",
+            &create_only,
+            data.path(),
+            "host.tasks.create",
+            params.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, CallbackError::NotGranted);
+
+        let both = HashSet::from([
+            PluginHostCapability::TasksCreate,
+            PluginHostCapability::SessionsStart,
+        ]);
+        let mut child = params;
+        child["parent_key"] = "K-1".into();
+        let error = execute_host_task(
+            "routines",
+            &both,
+            data.path(),
+            "host.tasks.createChild",
+            child,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error,
+            CallbackError::InvalidParams("only host.tasks.create can start a session".into())
         );
     }
 
