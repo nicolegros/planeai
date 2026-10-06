@@ -221,7 +221,33 @@ describe("PluginContributionHost", () => {
     expect(frame.style.height).toBe("385px");
   });
 
-  it("reports local session-panel content heights from the host iframe bridge", async () => {
+  it("sizes a local sidebar-header iframe to its content instead of a fixed block", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "sidebar.header" },
+    }) as typeof component;
+
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    expect(frame.style.height).toBe("0px");
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "content-height", height: 32 },
+      }),
+    );
+    expect(frame.style.height).toBe("32px");
+    expect(frame.srcdoc).toContain('"sidebar.header"');
+  });
+
+  it("reports local content heights from the host iframe bridge", async () => {
     target = document.createElement("div");
     document.body.append(target);
     component = mount(PluginContributionHostLocalHarness, {
@@ -236,7 +262,7 @@ describe("PluginContributionHost", () => {
       expect(next).toBeTruthy();
       return next!;
     });
-    expect(frame.srcdoc).toContain("reportSessionPanelContentHeight");
+    expect(frame.srcdoc).toContain("reportContentHeight");
     expect(frame.srcdoc).toContain("child.scrollHeight");
     expect(frame.srcdoc).toContain('send({ type: "content-height", height })');
   });

@@ -131,6 +131,9 @@
     "jira:jira-departed-interaction": async () => jiraDepartedInteractionEntrypoint,
   };
 
+  /** Placements whose frame is as tall as the plugin's content, reported from inside the frame. */
+  const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "sidebar.header"];
+
   /** Placements whose frame takes the whole area the host gives it. */
   function fillsContainer(placement: PluginUiContribution["placement"]): boolean {
     return placement === "interaction" || placement === "main-pane" || placement === "session.main" || placement === "titlebar";
@@ -231,7 +234,7 @@
       frame.style.outline = "none";
     }
     if (contribution.placement.startsWith("sidebar.")) {
-      frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : "160px";
+      frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : contribution.placement === "sidebar.header" ? "0px" : "160px";
       frame.addEventListener("focus", focusSidebar);
       frame.addEventListener("pointerdown", focusSidebar);
     }
@@ -249,9 +252,9 @@
         const dataChangeListeners = new Set();
         const sessionEventListeners = new Set();
         const send = (message) => parent.postMessage(message, "*");
-        let sessionPanelContentObserver = null;
+        let contentHeightObserver = null;
         let contentHeightPending = false;
-        const reportSessionPanelContentHeight = () => {
+        const reportContentHeight = () => {
           if (contentHeightPending || !document.body) return;
           contentHeightPending = true;
           requestAnimationFrame(() => {
@@ -263,12 +266,12 @@
             if (height > 0) send({ type: "content-height", height });
           });
         };
-        const observeSessionPanelContent = (contribution) => {
-          if (contribution?.placement !== "session.panel" || !document.body) return;
-          sessionPanelContentObserver?.disconnect();
-          sessionPanelContentObserver = new MutationObserver(reportSessionPanelContentHeight);
-          sessionPanelContentObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
-          reportSessionPanelContentHeight();
+        const observeContentHeight = (contribution) => {
+          if (!${JSON.stringify(contentSizedPlacements)}.includes(contribution?.placement) || !document.body) return;
+          contentHeightObserver?.disconnect();
+          contentHeightObserver = new MutationObserver(reportContentHeight);
+          contentHeightObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+          reportContentHeight();
         };
         const request = (type, payload = {}) => new Promise((resolve, reject) => {
           const requestId = ++nextRequestId;
@@ -433,8 +436,8 @@
             if (typeof cleanup === "function") cleanup();
             cleanup = null;
             sessionEventListeners.clear();
-            sessionPanelContentObserver?.disconnect();
-            sessionPanelContentObserver = null;
+            contentHeightObserver?.disconnect();
+            contentHeightObserver = null;
             removeEventListener("keydown", forwardEscapeToHost);
             return;
           }
@@ -450,7 +453,7 @@
             const context = { plugin: message.plugin, contribution: message.contribution, session: message.session, host };
             if (message.provider) context.provider = message.provider;
             cleanup = entrypoint.mount(document.body, context);
-            observeSessionPanelContent(message.contribution);
+            observeContentHeight(message.contribution);
             send({ type: "mounted" });
           } catch (error) {
             send({ type: "load-error", message: String(error) });
@@ -544,7 +547,7 @@
           .dataChanged(plugin.id)
           .then((value) => respond(message.requestId, true, value))
           .catch((error) => respond(message.requestId, false, error));
-      } else if (message.type === "content-height" && contribution.placement === "session.panel" && typeof message.height === "number" && Number.isFinite(message.height)) {
+      } else if (message.type === "content-height" && contentSizedPlacements.includes(contribution.placement) && typeof message.height === "number" && Number.isFinite(message.height)) {
         frame.style.height = `${Math.min(Math.max(Math.ceil(message.height), 1), 10_000)}px`;
       } else if (message.type === "content-width" && contribution.placement === "session.indicator" && typeof message.width === "number" && Number.isFinite(message.width)) {
         container?.setAttribute("data-plugin-indicator-visible", message.width > 0 ? "true" : "false");
