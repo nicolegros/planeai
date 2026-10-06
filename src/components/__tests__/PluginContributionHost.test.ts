@@ -205,32 +205,35 @@ describe("PluginContributionHost", () => {
     expect(frame.style.outline).toBe("none");
   });
 
-  it("sizes a local session-panel iframe from its reported content height", async () => {
-    target = document.createElement("div");
-    document.body.append(target);
-    component = mount(PluginContributionHostLocalHarness, {
-      target,
-      props: { placement: "session.panel" },
-    }) as typeof component;
+  it.each(["session.panel", "dialog"] as const)(
+    "sizes a local %s iframe from its reported content height",
+    async (placement) => {
+      target = document.createElement("div");
+      document.body.append(target);
+      component = mount(PluginContributionHostLocalHarness, {
+        target,
+        props: { placement },
+      }) as typeof component;
 
-    const frame = await vi.waitFor(() => {
-      const next = target
-        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
-        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
-      expect(next).toBeTruthy();
-      return next!;
-    });
-    expect(frame.style.height).toBe("360px");
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        data: { type: "content-height", height: 384.2 },
-      }),
-    );
-    expect(frame.style.height).toBe("385px");
-  });
+      const frame = await vi.waitFor(() => {
+        const next = target
+          .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+          ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+        expect(next).toBeTruthy();
+        return next!;
+      });
+      expect(frame.style.height).toBe("360px");
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          data: { type: "content-height", height: 384.2 },
+        }),
+      );
+      expect(frame.style.height).toBe("385px");
+    },
+  );
 
-  it.each(["sidebar.header", "main-pane"] as const)(
+  it.each(["sidebar.header", "main-pane", "dialog"] as const)(
     "tells a local %s frame its plugin's data changed without remounting it",
     async (placement) => {
       target = document.createElement("div");
