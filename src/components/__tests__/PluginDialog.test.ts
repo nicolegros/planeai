@@ -43,6 +43,8 @@ describe("PluginDialog", () => {
     expect(dialog.textContent).toContain("Routines");
     expect(dialog.className).toContain("w-[min(640px,calc(100vw-32px))]");
     expect(dialog.className).not.toContain("452px");
+    expect(dialog.className).toContain("top-[7.5vh]");
+    expect(dialog.className).not.toContain("-translate-y-1/2");
     await vi.waitFor(() =>
       expect(
         dialog.querySelector("[data-plugin-ui-contribution]")?.shadowRoot?.querySelector("iframe")
@@ -70,6 +72,7 @@ describe("PluginDialog", () => {
     const dialog = open("session.panel");
     expect(dialog.className).toContain("w-[min(452px,calc(100vw-32px))]");
     expect(dialog.className).toContain("min-h-[min(360px,85vh)]");
+    expect(dialog.className).toContain("top-1/2 -translate-y-1/2");
     expect(document.querySelector('button[aria-label="Close Routines"]')).toBeNull();
   });
 });

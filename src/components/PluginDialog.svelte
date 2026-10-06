@@ -25,6 +25,7 @@
   size={sessionPanel ? "form" : "wide"}
   class={sessionPanel ? "min-h-[min(360px,85vh)]" : ""}
   closeButton={!sessionPanel}
+  anchor={sessionPanel ? "center" : "top"}
   preventEscapeClose={false}
   preventOpenAutoFocus={true}
   {onClose}

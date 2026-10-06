@@ -17,9 +17,13 @@
      * target must be programmatically focusable (e.g. `tabindex="-1"`).
      */
     initialFocusSelector?: string;
+    /** `top` keeps the dialog's top edge still while content changes its height; `center` re-centers it. */
+    anchor?: "center" | "top";
   }
 
-  let { open, onOpenChange, title, description, children, class: className = "", preventEscapeClose = false, preventOpenAutoFocus = false, initialFocusSelector }: Props = $props();
+  let { open, onOpenChange, title, description, children, class: className = "", preventEscapeClose = false, preventOpenAutoFocus = false, initialFocusSelector, anchor = "center" }: Props = $props();
+
+  const anchors = { center: "top-1/2 -translate-y-1/2", top: "top-[7.5vh]" } as const;
 
   let contentEl = $state<HTMLElement | null>(null);
 
@@ -48,7 +52,7 @@
 <Dialog.Root {open} {onOpenChange}>
   <Dialog.Portal>
     <Dialog.Content
-      class="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 max-h-[85vh] flex flex-col overflow-hidden outline-none rounded-lg border border-border bg-panel shadow-lg {className}"
+      class="fixed left-1/2 {anchors[anchor]} z-50 -translate-x-1/2 max-h-[85vh] flex flex-col overflow-hidden outline-none rounded-lg border border-border bg-panel shadow-lg {className}"
       bind:ref={contentEl}
       onEscapeKeydown={(e) => { if (preventEscapeClose) e.preventDefault(); }}
       onOpenAutoFocus={(e) => { if (preventOpenAutoFocus) { e.preventDefault(); return; } claimInitialFocus(e); }}
