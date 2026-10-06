@@ -12,6 +12,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   hasOpenDialog,
   isTerminalPaneFocused,
+  PROVIDER_FRAME_ATTRIBUTE,
   releaseTerminalDomFocus,
   terminalMayOwnKeyboard,
 } from "../terminal-focus";
@@ -148,6 +149,57 @@ describe("releaseTerminalDomFocus", () => {
     expect(() =>
       releaseTerminalDomFocus({ zone: "sidebar", modalOpen: false, pluginOverlayActive: false }),
     ).not.toThrow();
+  });
+});
+
+describe("releaseTerminalDomFocus with a provider session's chat", () => {
+  /** Plugin frames live in a shadow root, so the document only sees its host as focused. */
+  function mountFocusedFrame(provider = true): HTMLIFrameElement {
+    document.body.innerHTML = "";
+    const host = document.createElement("div");
+    host.setAttribute("data-plugin-ui-contribution", "");
+    document.body.append(host);
+    const frame = document.createElement("iframe");
+    if (provider) frame.setAttribute(PROVIDER_FRAME_ATTRIBUTE, "");
+    host.attachShadow({ mode: "open" }).append(frame);
+    frame.focus();
+    expect(host.shadowRoot!.activeElement).toBe(frame);
+    return frame;
+  }
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("takes the keyboard back from the chat when the zone moves to the sidebar or a dialog opens", () => {
+    // Keys typed in the chat stay in its frame, so the sidebar and dialogs would never see them.
+    for (const ownership of [
+      { zone: "sidebar" as FocusZone, modalOpen: false, pluginOverlayActive: false },
+      { zone: "terminal" as FocusZone, modalOpen: true, pluginOverlayActive: false },
+    ]) {
+      const frame = mountFocusedFrame();
+      const blur = vi.spyOn(frame, "blur");
+      // WebKit keeps sending keys to a blurred frame until the app's own window takes focus.
+      const focusWindow = vi.spyOn(window, "focus");
+      releaseTerminalDomFocus(ownership);
+      expect(blur).toHaveBeenCalledOnce();
+      expect(focusWindow).toHaveBeenCalledOnce();
+      focusWindow.mockRestore();
+    }
+  });
+
+  it("leaves the chat focused while its pane owns the keyboard", () => {
+    const frame = mountFocusedFrame();
+    const blur = vi.spyOn(frame, "blur");
+    releaseTerminalDomFocus({ zone: "terminal", modalOpen: false, pluginOverlayActive: false });
+    expect(blur).not.toHaveBeenCalled();
+  });
+
+  it("leaves other plugin frames alone", () => {
+    const frame = mountFocusedFrame(false);
+    const blur = vi.spyOn(frame, "blur");
+    releaseTerminalDomFocus({ zone: "sidebar", modalOpen: false, pluginOverlayActive: false });
+    expect(blur).not.toHaveBeenCalled();
   });
 });
 

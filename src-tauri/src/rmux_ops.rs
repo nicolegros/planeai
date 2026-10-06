@@ -33,11 +33,12 @@ pub const CURSOR_LABEL: &str = "rmux";
 pub const DEFAULT_COLS: u16 = 80;
 pub const DEFAULT_ROWS: u16 = 24;
 
-/// Bridge a synchronous caller to the shared async rmux client.
+/// Bridge a synchronous caller to the async rmux client.
 ///
-/// The operation may run twice: a cached connection can be dead by the time it is
-/// used, and [`crate::rmux_client::with_retry`] reconnects and retries once. That
-/// is why this takes `Fn` rather than `FnOnce` — callers clone what they capture.
+/// Each call connects afresh: the connection lives on this call's runtime and dies with it.
+/// The operation may run twice, as [`crate::rmux_client::with_fresh`] reconnects and retries
+/// once when the transport goes away. That is why this takes `Fn` rather than `FnOnce`:
+/// callers clone what they capture.
 pub fn blocking<Operation, Fut, T>(operation: Operation) -> Result<T, String>
 where
     Operation: Fn(std::sync::Arc<planeai_rmux::RmuxClient>) -> Fut,
@@ -47,7 +48,20 @@ where
         .enable_all()
         .build()
         .map_err(|error| error.to_string())?;
-    runtime.block_on(crate::rmux_client::with_retry(operation))
+    runtime.block_on(crate::rmux_client::with_fresh(operation))
+}
+
+/// As [`blocking`], without starting a daemon: `None` when none runs, which hosts nothing.
+pub fn blocking_existing<Operation, Fut, T>(operation: Operation) -> Result<Option<T>, String>
+where
+    Operation: Fn(std::sync::Arc<planeai_rmux::RmuxClient>) -> Fut,
+    Fut: std::future::Future<Output = planeai_rmux::Result<T>>,
+{
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
+    runtime.block_on(crate::rmux_client::with_existing(operation))
 }
 
 /// Spawn a resource and record which pane hosts it.
@@ -96,10 +110,11 @@ pub fn spawn_resource_blocking(
                 .map_err(|error| error.to_string())
         },
         || {
-            blocking(move |client| {
+            blocking_existing(move |client| {
                 let workspace = rollback_workspace.clone();
                 async move { client.close_resource(&workspace, handle).await }
             })
+            .map(|_| ())
         },
     )?;
     Ok(handle)
@@ -137,27 +152,39 @@ pub fn read_pane_after(
     planeai_core::capture_cursor::read_after(CURSOR_LABEL, &captured, cursor, max_bytes)
 }
 
-/// Close a single resource, such as one shell tab.
-///
-/// The agent pane and sibling tabs keep running: each resource is its own window.
-pub fn close_resource(pty_key: &str) -> Result<(), String> {
-    let conn = db()?;
-    let Some(record) = crate::rmux_resources::get(&conn, pty_key).map_err(|e| e.to_string())?
-    else {
-        return Ok(());
-    };
-    let Some(workspace) = record.workspace() else {
-        return Ok(());
-    };
-    let handle = record.handle();
-    let result = blocking(move |client| {
-        let workspace = workspace.clone();
-        async move { client.close_resource(&workspace, handle).await }
-    });
-    // Forget the row either way: a pane PlaneAI cannot close is one it can no
-    // longer address, and keeping the row would strand it.
-    let _ = crate::rmux_resources::remove(&conn, pty_key);
-    result
+/// The pane of a terminal tab, found by its window name as a spawn adopts it.
+pub fn find_tab_resource(
+    workspace: &WorkspaceName,
+    pty_key: &str,
+) -> Result<Option<ResourceHandle>, String> {
+    let pane = blocking_existing(|client| {
+        let (workspace, pty_key) = (workspace.clone(), pty_key.to_string());
+        async move { client.find_resource(&workspace, &pty_key).await }
+    })?;
+    Ok(pane.flatten())
+}
+
+/// Close a terminal tab's pane, leaving the agent pane and sibling tabs running. Found by its
+/// window name, its record is forgotten only once it is gone: archiving a session closes the
+/// panes its records name, so a pane must not outlive its record.
+pub fn close_tab_resource(workspace: &WorkspaceName, pty_key: &str) -> Result<(), String> {
+    blocking_existing(|client| {
+        let (workspace, pty_key) = (workspace.clone(), pty_key.to_string());
+        async move { close_named(&client, &workspace, &pty_key).await }
+    })?;
+    crate::rmux_resources::remove(&db()?, pty_key).map_err(|e| e.to_string())
+}
+
+/// Close the pane named for `pty_key` in the workspace, if one still is.
+async fn close_named(
+    client: &planeai_rmux::RmuxClient,
+    workspace: &WorkspaceName,
+    pty_key: &str,
+) -> planeai_rmux::Result<()> {
+    match client.find_resource(workspace, pty_key).await? {
+        Some(handle) => client.close_resource(workspace, handle).await,
+        None => Ok(()),
+    }
 }
 
 /// Close every resource of a session, leaving its workspace for siblings.
@@ -173,19 +200,21 @@ pub fn close_session_resources(session_id: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    let closures: Vec<(WorkspaceName, ResourceHandle)> = records
+    // Found by window name: a recorded pane id may since name another pane, even in another
+    // workspace. A pane that cannot be confirmed is left to the startup orphan sweep.
+    let closures: Vec<(WorkspaceName, String)> = records
         .iter()
-        .filter_map(|record| record.workspace().map(|name| (name, record.handle())))
+        .filter_map(|record| Some((record.workspace()?, record.pty_key.clone())))
         .collect();
 
-    let result = blocking(move |client| {
+    let result = blocking_existing(move |client| {
         let closures = closures.clone();
         async move {
             // Report the first failure but attempt every resource, so one stuck
             // pane cannot strand the rest.
             let mut first_error = None;
-            for (workspace, handle) in closures {
-                if let Err(error) = client.close_resource(&workspace, handle).await {
+            for (workspace, pty_key) in closures {
+                if let Err(error) = close_named(&client, &workspace, &pty_key).await {
                     first_error = first_error.or(Some(error));
                 }
             }
@@ -194,10 +223,11 @@ pub fn close_session_resources(session_id: &str) -> Result<(), String> {
                 None => Ok(()),
             }
         }
-    });
+    })
+    .map(|_| ());
 
-    // Forget the rows regardless: a pane we could not close is not one PlaneAI
-    // can still address, and leaving the row would strand it forever.
+    // Forget the rows regardless: a pane left without a row is closed by the startup
+    // orphan sweep, whereas a row of an archived session would never be acted on again.
     let _ = crate::rmux_resources::remove_for_session(&conn, session_id);
     result
 }
@@ -226,9 +256,10 @@ pub fn delete_workspace(project_id: &str, task_key: &str) -> Result<(), String> 
     }
     .name();
 
+    // No daemon running hosts no workspace: nothing to kill, and none to start for it.
     let kill = {
         let workspace = workspace.clone();
-        blocking(move |client| {
+        blocking_existing(move |client| {
             let workspace = workspace.clone();
             async move { client.kill_workspace(&workspace).await }
         })
@@ -248,7 +279,8 @@ pub fn delete_workspace(project_id: &str, task_key: &str) -> Result<(), String> 
     tracing::info!(
         task_key,
         forgotten,
-        killed = kill.is_ok(),
+        // `Ok(None)`: no daemon runs, or it stopped with this, its last workspace.
+        killed = ?kill,
         "removed task workspace"
     );
     Ok(())
@@ -256,9 +288,34 @@ pub fn delete_workspace(project_id: &str, task_key: &str) -> Result<(), String> 
 
 /// Drop recorded panes the daemon no longer has, returning affected sessions.
 pub fn prune_dead_resources(conn: &Connection) -> Result<Vec<String>, String> {
-    // The caller owns the connection here because it also reconciles session rows.
-    let live = blocking(|client| async move { client.live_pane_ids().await }).unwrap_or_default();
-    crate::rmux_resources::prune_missing(conn, &live).map_err(|error| error.to_string())
+    // The caller owns the connection here because it also reconciles session rows. Records are
+    // read first: one written after the listing names a pane the listing could not see.
+    let recorded = crate::rmux_resources::list_all(conn).map_err(|error| error.to_string())?;
+    let list = || blocking_existing(|client| async move { client.live_pane_ids().await });
+    let listed = list();
+    let live = live_for_prune(
+        listed,
+        || blocking_existing(|_| async { Ok(()) }).map(|daemon| daemon.is_some()),
+        list,
+    )?;
+    crate::rmux_resources::prune_missing(conn, &recorded, &live).map_err(|error| error.to_string())
+}
+
+/// The panes a prune keeps records for. Only no daemon listening means none is live. A daemon
+/// found listening after all, just started or having dropped the listing, is asked once more;
+/// one that cannot answer prunes nothing.
+fn live_for_prune(
+    listed: Result<Option<std::collections::HashSet<u32>>, String>,
+    daemon_listens: impl FnOnce() -> Result<bool, String>,
+    list_again: impl FnOnce() -> Result<Option<std::collections::HashSet<u32>>, String>,
+) -> Result<std::collections::HashSet<u32>, String> {
+    match listed? {
+        Some(live) => Ok(live),
+        None if daemon_listens()? => {
+            list_again()?.ok_or_else(|| "the rmux daemon dropped the pane listing".to_string())
+        }
+        None => Ok(Default::default()),
+    }
 }
 
 /// Live panes PlaneAI has no session for, as a proposal rather than an action.
@@ -272,7 +329,8 @@ pub fn orphan_candidates(
     // An unreachable daemon hosts nothing, so there is nothing to propose. Records
     // are left alone: `prune_dead_resources` owns that direction and can tell a
     // dead daemon from a missing pane.
-    let Ok(live) = blocking(|client| async move { client.live_panes().await }) else {
+    let Ok(Some(live)) = blocking_existing(|client| async move { client.live_panes().await })
+    else {
         return Ok(crate::rmux_resources::OrphanSweep::default());
     };
     crate::rmux_resources::orphaned_panes(conn, &live, known_session_ids)
@@ -314,7 +372,7 @@ pub fn sweep_orphan_panes(
     let closed = closures.len();
     if !closures.is_empty() {
         // Attempt every pane: one stuck pane must not strand the rest.
-        let result = blocking(move |client| {
+        let result = blocking_existing(move |client| {
             let closures = closures.clone();
             async move {
                 let mut first_error = None;
@@ -400,6 +458,31 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_prune_takes_nothing_for_live_only_when_no_daemon_listens() {
+        let listed = std::collections::HashSet::from([3, 5]);
+        let no_probe = || -> Result<bool, String> { unreachable!() };
+        let no_list =
+            || -> Result<Option<std::collections::HashSet<u32>>, String> { unreachable!() };
+        assert_eq!(
+            live_for_prune(Ok(Some(listed.clone())), no_probe, no_list),
+            Ok(listed.clone())
+        );
+        assert_eq!(
+            live_for_prune(Ok(None), || Ok(false), no_list),
+            Ok(Default::default())
+        );
+        // A daemon listening after all, as one just started, is asked again.
+        assert_eq!(
+            live_for_prune(Ok(None), || Ok(true), || Ok(Some(listed.clone()))),
+            Ok(listed)
+        );
+        // One that could not answer, or keeps dropping the listing, prunes nothing.
+        assert!(live_for_prune(Err("timed out".into()), no_probe, no_list).is_err());
+        assert!(live_for_prune(Ok(None), || Ok(true), || Ok(None)).is_err());
+        assert!(live_for_prune(Ok(None), || Err("busy".into()), no_list).is_err());
+    }
     use std::cell::Cell;
 
     #[test]

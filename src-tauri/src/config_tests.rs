@@ -968,6 +968,21 @@ fn find_executable_in_searches_each_path_entry() {
     assert_eq!(find_executable_in("missing-agent", &path), None);
 }
 
+#[cfg(windows)]
+#[test]
+fn find_executable_in_prefers_a_runnable_shim_on_windows() {
+    // npm installs an extensionless shell script beside the `.cmd` shim Windows can run.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("claude"), "#!/bin/sh\n").unwrap();
+    let shim = dir.path().join("claude.cmd");
+    fs::write(&shim, "@echo off\r\n").unwrap();
+    let path = dir.path().display().to_string();
+    let found = find_executable_in("claude", &path).unwrap();
+    assert!(found
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&shim.to_string_lossy()));
+}
+
 #[cfg(not(windows))]
 #[test]
 fn find_executable_in_accepts_explicit_paths() {
@@ -1141,4 +1156,22 @@ fn broken_config_falls_back_to_existing_user_behavior() {
         assert_eq!(config.auto_open_review, Some(true), "{content}");
         assert_eq!(config.onboarding_completed, Some(true), "{content}");
     }
+}
+
+#[test]
+fn provider_keys_with_a_colon_are_reserved_for_plugins() {
+    // A hand-edited config still loads unchanged, so nothing the user wrote is lost.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{ "providers": { "team:claude": { "command": "claude" } } }"#,
+    )
+    .unwrap();
+    let (config, warnings) = load(dir.path());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(config.providers.contains_key("team:claude"));
+    // Saving asks for it to be renamed first.
+    assert!(validate(&config)
+        .unwrap_err()
+        .contains("reserved for plugin providers"));
 }

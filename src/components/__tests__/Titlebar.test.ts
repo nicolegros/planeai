@@ -13,6 +13,7 @@ const plugin: PluginInventory = {
   backend_entrypoint: "bin/plugin",
   capabilities: ["sessions.repository-context"],
   ui_contributions: [],
+  providers: [],
   installed_hash: "hash",
   installed_path: "/plugin",
   original_display_path: "/plugin",

@@ -5,7 +5,7 @@ use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAU
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::SqliteRepository;
 
-use crate::commands::sessions::lifecycle::session_lifecycle_event;
+use crate::commands::sessions::lifecycle::session_transition;
 use crate::db;
 use crate::plugins::PluginRuntimeHandle;
 use crate::state::{ConfigState, DbState, PtyState};
@@ -321,13 +321,11 @@ pub async fn move_task_item(
     }
 
     for session in &archived_sessions {
-        runtime
-            .0
-            .dispatch_session_lifecycle(session_lifecycle_event(
-                session,
-                &session.status,
-                "archived",
-            ));
+        runtime.0.dispatch_session_lifecycle(session_transition(
+            session,
+            &session.status,
+            "archived",
+        ));
     }
     let archived_session_ids = archived_sessions
         .iter()

@@ -10,6 +10,8 @@
   import { randomTaskName } from "../lib/random-task-name";
   import { LoaderCircle } from "@lucide/svelte";
   import * as taskStore from "../lib/task-store.svelte";
+  import type { RuntimeProvider } from "../lib/plugin-providers";
+  import { ProviderChoice } from "../lib/provider-choice.svelte";
 
   interface Props {
     mode: "create" | "edit";
@@ -31,12 +33,14 @@
     onSubmitted: () => void;
     onCancel: () => void;
     onSessionCreated?: (session: Session) => void;
+    /** Providers contributed by running plugins, offered after the configured ones. */
+    runtimeProviders?: RuntimeProvider[];
   }
 
-  let { mode, projects, tasks = [], sessions = [], initial = {}, onSubmitted, onCancel, onSessionCreated }: Props = $props();
+  let { mode, projects, tasks = [], sessions = [], initial = {}, onSubmitted, onCancel, onSessionCreated, runtimeProviders = [] }: Props = $props();
 
   const config = $derived(getSettings());
-  const providerKeys = $derived(Object.keys(config.providers ?? {}));
+  const providers = new ProviderChoice(() => runtimeProviders);
 
   // svelte-ignore state_referenced_locally
   const generatedTitle = mode === "create" && !initial.title ? randomTaskName() : "";
@@ -79,7 +83,6 @@
   // ─── Start session toggle ───────────────────────────────────────────────────
   // svelte-ignore state_referenced_locally
   let startSession = $state(mode === "create");
-  let sessionProvider = $state("");
   let sessionBranch = $state("");
   let sessionPrompt = $state("");
   let useWorktree = $state(true);
@@ -184,9 +187,9 @@
         { key: "s", toggle: () => { startSession = !startSession; } },
       ] : []),
       ...(startSession ? [
-        { key: "p", toggle: () => { const current = sessionProvider || config.default_provider; const idx = providerKeys.indexOf(current); sessionProvider = providerKeys[(idx + 1) % providerKeys.length]; }, shiftToggle: () => { const current = sessionProvider || config.default_provider; const idx = providerKeys.indexOf(current); sessionProvider = providerKeys[(idx - 1 + providerKeys.length) % providerKeys.length]; } },
+        { key: "p", toggle: () => providers.cycle(1), shiftToggle: () => providers.cycle(-1) },
         { key: "w", toggle: () => { useWorktree = !useWorktree; } },
-        { key: "y", toggle: () => { autoApprove = !autoApprove; } },
+        { key: "y", toggle: () => { if (!providers.autoApproveBlocked) autoApprove = !autoApprove; } },
         { key: "n", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='session-branch'] input") ?? null },
         { key: "i", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='session-prompt'] textarea") ?? null },
       ] : []),
@@ -218,7 +221,7 @@
 
         if (startSession && selectedProject) {
           // Validate provider
-          const provider = sessionProvider || config.default_provider;
+          const provider = providers.key;
           if (!provider) {
             showSnackbar("Task created, but no provider configured. Select a provider to start a session.");
             onSubmitted();
@@ -259,7 +262,7 @@
               name,
               useWorktree,
               baseBranch: isNewBranch ? formBaseBranch : null,
-              autoApprove,
+              autoApprove: providers.autoApprove(autoApprove),
               provider,
               taskKey: createdTask.key,
               taskProjectId: null,
@@ -410,24 +413,24 @@
       {#if startSession}
         <div class="space-y-3 pl-1 border-l-2 border-accent/30 ml-1">
           <!-- Provider -->
-          {#if providerKeys.length > 1}
-            <div class="space-y-1 pl-3">
+          {#if providers.keys.length > 1}
+            <div class="space-y-1 pl-3" data-field="provider">
               <Label>Provider <span class="font-mono text-[10px] px-1 rounded {badge}">P</span></Label>
               <Select
-                items={providerKeys.map(k => ({ value: k, label: k }))}
-                bind:value={sessionProvider}
+                items={providers.keys.map((key) => ({ value: key, label: providers.label(key) }))}
+                bind:value={providers.selected}
                 placeholder={config.default_provider ?? "Select provider…"}
               />
             </div>
           {:else}
-            <p class="text-xs text-t3 pl-3">Provider: <span class="font-medium text-t1">{config.default_provider}</span> <span class="font-mono text-[10px] px-1 rounded {badge}">P</span></p>
+            <p class="text-xs text-t3 pl-3">Provider: <span class="font-medium text-t1">{providers.label(providers.key)}</span> <span class="font-mono text-[10px] px-1 rounded {badge}">P</span></p>
           {/if}
 
           <!-- Worktree & Auto-approve -->
           <div class="flex items-center gap-4 pl-3">
             <Checkbox id="use-worktree" label="Worktree" bind:checked={useWorktree} tabindex={-1} />
             <span class="font-mono text-[10px] px-1 rounded {badge}">W</span>
-            <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} tabindex={-1} />
+            <Checkbox id="auto-approve" label="Auto-approve" bind:checked={() => providers.autoApprove(autoApprove), (value) => (autoApprove = value)} disabled={!!providers.autoApproveBlocked} title={providers.autoApproveBlocked} tabindex={-1} />
             <span class="font-mono text-[10px] px-1 rounded {badge}">Y</span>
           </div>
 

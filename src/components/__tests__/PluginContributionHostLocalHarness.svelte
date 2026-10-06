@@ -18,6 +18,7 @@
     backend_entrypoint: "bin/planeai-plugin-fixture",
     capabilities: ["settings", "tasks.read", "task-events"],
     ui_contributions: [],
+    providers: [],
     installed_hash: "fixture-hash",
     installed_path: "/planeai/plugins/packages/sha256/fixture-hash",
     original_display_path: "/source/local-fixture",

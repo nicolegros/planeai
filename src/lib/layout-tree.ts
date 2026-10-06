@@ -24,6 +24,8 @@ export interface TabEntry {
   /** The label was set by the user or the shell and must survive relabeling. */
   customTitle?: boolean;
   filePath?: string;
+  /** A provider session continues in this terminal; closing it returns the session to its chat. */
+  handoff?: boolean;
 }
 
 export interface SplitNode {
@@ -511,6 +513,7 @@ function restoreTab(tab: unknown): TabEntry | null {
     icon: typeof tab.icon === "string" ? tab.icon : "terminal",
     type,
     ...(tab.customTitle ? { customTitle: true } : {}),
+    ...(tab.handoff === true && parts.kind === "shell" ? { handoff: true } : {}),
     ...(typeof tab.filePath === "string"
       ? { filePath: tab.filePath }
       : parts.kind === "editor"

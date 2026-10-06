@@ -51,6 +51,11 @@ pub fn restart(
         return Err("can only restart exited or archived sessions".to_string());
     }
 
+    // Provider sessions resume through their plugin when next used (ADR-0014).
+    if session.backend == crate::session_ops::PLUGIN_BACKEND {
+        return restore(conn, id, config);
+    }
+
     let provider_key = session
         .provider
         .as_deref()
@@ -96,14 +101,7 @@ pub fn restart(
     };
 
     let tmux_name = session.tmux_name.as_deref();
-    // Two agents on the same task share one rmux workspace, so the key comes from
-    // the session's task linkage rather than its id.
-    let rmux_workspace = planeai_rmux::WorkspaceKey::for_session(
-        session.task_project_id(),
-        session.task_key.as_deref(),
-        &session.id,
-    )
-    .name();
+    let rmux_workspace = session.rmux_workspace();
     let try_spawn = |cmd: &str| -> Result<(), String> {
         match session.backend.as_str() {
             "tmux" => {
@@ -130,7 +128,10 @@ pub fn restart(
     };
 
     spawn_result?;
+    restore(conn, id, config)
+}
 
+fn restore(conn: &Connection, id: &str, config: &Config) -> Result<Session, String> {
     db::restore_session(conn, id).map_err(|e| e.to_string())?;
     let updated = db::get_session(conn, id)
         .map_err(|e| e.to_string())?
@@ -573,6 +574,40 @@ mod tests {
         let cfg = Config::default();
         let ops = MockRestartOps::new();
         let updated = restart(&conn, id, &cfg, &ops).unwrap();
+
+        assert_eq!(updated.status, "active");
+        assert_eq!(ops.calls.borrow().len(), 0);
+        assert_eq!(ops.daemon_calls.borrow().len(), 0);
+    }
+
+    #[test]
+    fn restart_provider_session_restores_without_a_configured_provider() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "dddd4444-5555-6666-7777-888899990000";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "provider-restart",
+            None,
+            "main",
+            None,
+            Some("claude-chat:claude"),
+            "plugin",
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        db::mark_session_exited(&conn, id).unwrap();
+
+        let ops = MockRestartOps::new();
+        let updated = restart(&conn, id, &Config::default(), &ops).unwrap();
 
         assert_eq!(updated.status, "active");
         assert_eq!(ops.calls.borrow().len(), 0);

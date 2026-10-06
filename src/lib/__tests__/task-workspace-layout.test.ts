@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../api", () => ({ editor: {}, pty: {}, sessions: {} }));
 vi.mock("../terminal-views", () => ({ disposeTerminalView: vi.fn() }));
 
-import type { Session } from "../types";
+import type { Session, TabEndReason, TabSpec } from "../types";
 import {
   createLayout,
   focusedTabOf,
@@ -48,6 +48,11 @@ function shellTab(ptyKey: string): TabEntry {
   return { ptyKey, label: "Shell", icon: "terminal", type: "shell" };
 }
 
+function agentWithShell(sessionId: string, ptyKey: string): Layout {
+  const base = createLayout([agentTab(sessionId)]);
+  return addTab(base, base.focusedLeafId, shellTab(ptyKey));
+}
+
 function keys(layout: Layout | null): string[][] {
   return leavesOf(layout).map((leaf) => leaf.tabs.map((tab) => tab.ptyKey));
 }
@@ -56,6 +61,8 @@ function setup(persisted: Record<string, Layout> = {}) {
   const saved = new Map<string, string>(
     Object.entries(persisted).map(([key, layout]) => [key, serializeLayout(layout)]),
   );
+  const counters = new Map<string, number>();
+  const ended = new Set<string>();
   const deps = {
     store: {
       load: vi.fn(async (workspace: WorkspaceIdentity) => saved.get(workspace.key) ?? null),
@@ -63,7 +70,20 @@ function setup(persisted: Record<string, Layout> = {}) {
         saved.set(workspace.key, json);
       }),
     },
-    closeShell: vi.fn(async (_sessionId: string, _index: number) => {}),
+    tabs: {
+      // Like the backend: indices never repeat, and a closed tab is ended for good.
+      open: vi.fn(async (sessionId: string, _spec: TabSpec) => {
+        const index = (counters.get(sessionId) ?? 0) + 1;
+        counters.set(sessionId, index);
+        return index;
+      }),
+      close: vi.fn(async (sessionId: string, index: number) => {
+        ended.add(`${sessionId}:${index}`);
+      }),
+      endedAmong: vi.fn(async (ptyKeys: string[]) => ptyKeys.filter((key) => ended.has(key))),
+    },
+    tabEnded: vi.fn(async (_ptyKey: string, _reason: TabEndReason, _error?: string) => {}),
+    handoffRestored: vi.fn((_ptyKey: string) => {}),
     getTerminalCommand: vi.fn(async (_sessionId: string, filePath: string) => `nvim ${filePath}`),
     disposeView: vi.fn(),
   } satisfies TaskWorkspaceLayoutDeps;
@@ -74,7 +94,12 @@ function setup(persisted: Record<string, Layout> = {}) {
       selectedSessionId: selected,
       selectionIsExplicit: explicit,
     });
-  return { workspace, deps, saved, show };
+  /** The backend ended a tab by itself and reported it. */
+  const endTab = (ptyKey: string, reason: TabEndReason = "exited") => {
+    ended.add(ptyKey);
+    return workspace.tabEnded(ptyKey, reason);
+  };
+  return { workspace, deps, saved, show, endTab };
 }
 
 describe("showing a workspace", () => {
@@ -99,7 +124,7 @@ describe("showing a workspace", () => {
     // focus back to b's agent tab in the other pane.
     const { workspace, show } = setup();
     await show(TASK, ["a", "b"], "a");
-    const shell = workspace.openShell("b", { split: "vertical" })!;
+    const shell = (await workspace.openShell("b", { split: "vertical" }))!;
     await show(TASK, ["a", "b"], "b");
     expect(workspace.focusedTab()?.ptyKey).toBe(shell);
   });
@@ -158,7 +183,7 @@ describe("showing a workspace", () => {
   it("saves the current layout before switching and ignores a superseded load", async () => {
     const { workspace, deps, saved, show } = setup();
     await show(TASK, ["a"], "a");
-    workspace.openShell("a");
+    await workspace.openShell("a");
     let release!: () => void;
     deps.store.load.mockImplementationOnce(
       () => new Promise((resolve) => (release = () => resolve(null))),
@@ -194,7 +219,7 @@ describe("reconciling sessions", () => {
   it("adds new agents and drops every tab of sessions that left", async () => {
     const { workspace, show } = setup();
     await show(TASK, ["a", "b"], "a");
-    workspace.openShell("b");
+    await workspace.openShell("b");
     workspace.reconcile([agent("a"), agent("c")]);
     expect(keys(workspace.layout)).toEqual([["a", "c"]]);
   });
@@ -207,107 +232,122 @@ describe("reconciling sessions", () => {
 });
 
 describe("shell tabs", () => {
-  it("opens a shell in the focused pane and persists right away", async () => {
+  it("opens a shell with an index from the backend and persists right away", async () => {
     const { workspace, deps, show } = setup();
     await show(TASK, ["a"], "a");
     deps.store.save.mockClear();
-    expect(workspace.openShell("a")).toBe("a:1");
+    expect(await workspace.openShell("a")).toBe("a:1");
+    expect(deps.tabs.open).toHaveBeenCalledWith("a", { kind: "shell" });
     expect(workspace.focusedTab()?.ptyKey).toBe("a:1");
     expect(deps.store.save).toHaveBeenCalledOnce();
-  });
-
-  it("never reuses an index held by a restored shell", async () => {
-    // Shell 1 was closed before the restart; only shell 2 survives in the layout.
-    const { workspace, show } = setup({
-      [TASK.key]: createLayout([agentTab("a"), shellTab("a:2")]),
-    });
-    await show(TASK, ["a"], "a");
-    expect(keys(workspace.layout)).toEqual([["a", "a:2"]]);
-    expect(workspace.openShell("a")).toBe("a:3");
-  });
-
-  it("does not reuse a closed shell's index within a run", async () => {
-    const { workspace, show } = setup();
-    await show(TASK, ["a"], "a");
-    const first = workspace.openShell("a")!;
-    await workspace.closeTab(first);
-    expect(workspace.openShell("a")).toBe("a:2");
+    expect(await workspace.openShell("a")).toBe("a:2");
   });
 
   it("opens a shell in a new pane split off the focused one", async () => {
     const { workspace, show } = setup();
     await show(TASK, ["a"], "a");
-    expect(workspace.openShell("a", { split: "vertical" })).toBe("a:1");
+    expect(await workspace.openShell("a", { split: "vertical" })).toBe("a:1");
     expect(keys(workspace.layout)).toEqual([["a"], ["a:1"]]);
-    expect(workspace.isSplit).toBe(true);
     expect(workspace.focusedTab()?.ptyKey).toBe("a:1");
   });
 
   it("opens a shell in a given pane and focuses it", async () => {
     const { workspace, show } = setup();
     await show(TASK, ["a"], "a");
-    workspace.openShell("a", { split: "vertical" });
+    await workspace.openShell("a", { split: "vertical" });
     const left = leavesOf(workspace.layout)[0].id;
-    workspace.openShell("a", { paneId: left });
+    await workspace.openShell("a", { paneId: left });
     expect(keys(workspace.layout)).toEqual([["a", "a:2"], ["a:1"]]);
-    expect(workspace.focusedLeaf()?.id).toBe(left);
+    expect(workspace.focusedTab()?.ptyKey).toBe("a:2");
   });
 
-  it("cannot open a shell without a layout", () => {
-    const { workspace } = setup();
-    expect(workspace.openShell("a")).toBeNull();
+  it("cannot open a shell without a layout", async () => {
+    const { workspace, deps } = setup();
+    expect(await workspace.openShell("a")).toBeNull();
+    expect(deps.tabs.open).not.toHaveBeenCalled();
   });
 
-  it("kills a shell on the backend before removing its tab", async () => {
+  it("ends a reserved tab that lost its place while the backend reserved it", async () => {
     const { workspace, deps, show } = setup();
     await show(TASK, ["a"], "a");
-    const ptyKey = workspace.openShell("a")!;
-    deps.closeShell.mockImplementationOnce(async () => {
+    let reserve!: (index: number) => void;
+    deps.tabs.open.mockImplementationOnce(() => new Promise((resolve) => (reserve = resolve)));
+    const opening = workspace.openShell("a");
+    workspace.clear();
+    reserve(1);
+    expect(await opening).toBeNull();
+    expect(deps.tabs.close).toHaveBeenCalledWith("a", 1);
+  });
+
+  it("closes a shell on the backend before removing its tab", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = (await workspace.openShell("a"))!;
+    deps.tabs.close.mockImplementationOnce(async () => {
       expect(workspace.findTab(ptyKey)).not.toBeNull();
     });
     expect(await workspace.closeTab(ptyKey)).toBe("closed");
-    expect(deps.closeShell).toHaveBeenCalledWith("a", 1);
-    expect(workspace.findTab(ptyKey)).toBeNull();
+    expect(deps.tabs.close).toHaveBeenCalledWith("a", 1);
+    expect(keys(workspace.layout)).toEqual([["a"]]);
     expect(deps.disposeView).toHaveBeenCalledWith(ptyKey);
+    // Why it ended reaches others only through its `tab-ended`.
+    expect(deps.tabEnded).not.toHaveBeenCalled();
   });
 
   it("keeps a shell tab whose backend close failed", async () => {
     const { workspace, deps, show } = setup();
     await show(TASK, ["a"], "a");
-    const ptyKey = workspace.openShell("a")!;
-    deps.closeShell.mockRejectedValueOnce(new Error("daemon refused"));
+    const ptyKey = (await workspace.openShell("a"))!;
+    deps.tabs.close.mockRejectedValueOnce(new Error("daemon refused"));
     await expect(workspace.closeTab(ptyKey)).rejects.toThrow("daemon refused");
     expect(workspace.findTab(ptyKey)).not.toBeNull();
-    expect(deps.disposeView).not.toHaveBeenCalled();
+    expect(deps.tabEnded).not.toHaveBeenCalled();
   });
 
-  it("removes a shell that exited by itself, then finalizes it on the backend", async () => {
-    const { workspace, deps, show } = setup();
+  it("drops a tab the backend reports ended", async () => {
+    const { workspace, deps, show, endTab } = setup();
     await show(TASK, ["a"], "a");
-    const ptyKey = workspace.openShell("a")!;
-    await workspace.shellExited(ptyKey);
-    expect(workspace.findTab(ptyKey)).toBeNull();
+    const ptyKey = (await workspace.openShell("a"))!;
+    await endTab(ptyKey);
+    expect(keys(workspace.layout)).toEqual([["a"]]);
+    expect(deps.tabEnded).toHaveBeenCalledWith(ptyKey, "exited", undefined);
     expect(deps.disposeView).toHaveBeenCalledWith(ptyKey);
-    expect(deps.closeShell).toHaveBeenCalledWith("a", 1);
   });
 
-  it("does not close again when the exit follows an explicit close", async () => {
+  it("drops a tab found ended on attach without reporting its end again", async () => {
     const { workspace, deps, show } = setup();
     await show(TASK, ["a"], "a");
-    const ptyKey = workspace.openShell("a")!;
-    await workspace.closeTab(ptyKey);
-    deps.closeShell.mockClear();
-    await workspace.shellExited(ptyKey);
-    expect(deps.closeShell).not.toHaveBeenCalled();
-  });
-
-  it("releases a shell that failed to start", async () => {
-    const { workspace, deps, show } = setup();
-    await show(TASK, ["a"], "a");
-    const ptyKey = workspace.openShell("a")!;
-    await workspace.shellFailedToStart(ptyKey);
-    expect(deps.closeShell).toHaveBeenCalledWith("a", 1);
+    const ptyKey = (await workspace.openShell("a"))!;
+    workspace.dropEnded(ptyKey);
     expect(workspace.findTab(ptyKey)).toBeNull();
+    expect(deps.tabEnded).not.toHaveBeenCalled();
+  });
+
+  it("passes on why a tab failed to start", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = (await workspace.openShell("a"))!;
+    await workspace.tabEnded(ptyKey, "failed_to_start", "no such shell");
+    expect(deps.tabEnded).toHaveBeenCalledWith(ptyKey, "failed_to_start", "no such shell");
+  });
+
+  it("drops a tab that failed to start", async () => {
+    const { workspace, show, endTab } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = (await workspace.openShell("a"))!;
+    await endTab(ptyKey, "failed_to_start");
+    expect(workspace.findTab(ptyKey)).toBeNull();
+  });
+
+  it("passes on a closed tab's end once, as its event reports it", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = (await workspace.openShell("a"))!;
+    await workspace.closeTab(ptyKey);
+    await workspace.tabEnded(ptyKey, "exited");
+    expect(keys(workspace.layout)).toEqual([["a"]]);
+    expect(deps.tabs.close).toHaveBeenCalledOnce();
+    expect(deps.tabEnded.mock.calls).toEqual([[ptyKey, "exited", undefined]]);
   });
 });
 
@@ -320,22 +360,25 @@ describe("across workspace switches", () => {
       () => new Promise((resolve) => (release = () => resolve(null))),
     );
     const loading = show(OTHER, ["x"], "x");
-    expect(workspace.openShell("x")).toBeNull();
+    expect(await workspace.openShell("x")).toBeNull();
     expect(workspace.openDiff("x")).toBe("unavailable");
     expect(workspace.openEditor("x", "a.ts")).toBe("unavailable");
     expect(await workspace.openTerminalEditor("x", "a.ts")).toBeNull();
     release();
     await loading;
     expect(keys(workspace.layout)).toEqual([["x"]]);
+    expect(deps.tabs.open).not.toHaveBeenCalled();
   });
 
   it("does not bring back a shell closed while its workspace was switched away", async () => {
     const { workspace, deps, show } = setup();
     await show(TASK, ["a"], "a");
-    const ptyKey = workspace.openShell("a")!;
+    const ptyKey = (await workspace.openShell("a"))!;
     let killed!: () => void;
-    deps.closeShell.mockImplementationOnce(
-      () => new Promise<void>((resolve) => (killed = resolve)),
+    deps.tabs.close.mockImplementationOnce((sessionId, index) =>
+      new Promise<void>((resolve) => (killed = resolve)).then(() =>
+        deps.tabs.close.getMockImplementation()!(sessionId, index),
+      ),
     );
     const closing = workspace.closeTab(ptyKey);
     await show(OTHER, ["x"], "x");
@@ -345,23 +388,53 @@ describe("across workspace switches", () => {
     expect(keys(workspace.layout)).toEqual([["a"]]);
   });
 
-  it("finalizes and forgets a shell that exited in an unloaded workspace", async () => {
-    const { workspace, deps, show } = setup();
+  it("drops a saved tab that ended while its workspace was not shown", async () => {
+    const { workspace, deps, saved, show, endTab } = setup();
     await show(TASK, ["a"], "a");
-    const ptyKey = workspace.openShell("a")!;
+    const ptyKey = (await workspace.openShell("a"))!;
     await show(OTHER, ["x"], "x");
-    await workspace.shellExited(ptyKey);
-    expect(deps.closeShell).toHaveBeenCalledWith("a", 1);
-    await show(TASK, ["a"], "a");
+    await endTab(ptyKey);
+    expect(deps.tabEnded).toHaveBeenCalledWith(ptyKey, "exited", undefined);
+    expect(await show(TASK, ["a"], "a")).toEqual({ adoptedSessionId: null, restored: true });
+    expect(keys(workspace.layout)).toEqual([["a"]]);
+    expect(deps.tabs.endedAmong).toHaveBeenLastCalledWith([ptyKey]);
+    // The pruned layout is saved, so the backend is not asked about it again.
+    expect(JSON.parse(saved.get(TASK.key)!).tree.tabs).toHaveLength(1);
+  });
+
+  it("drops a tab that ended while its layout was loading", async () => {
+    const { workspace, deps, show, endTab } = setup({
+      [TASK.key]: agentWithShell("a", "a:1"),
+    });
+    let release!: () => void;
+    const stored = deps.store.load.getMockImplementation()!;
+    deps.store.load.mockImplementationOnce(
+      (target) => new Promise((resolve) => (release = () => resolve(stored(target)))),
+    );
+    const loading = show(TASK, ["a"], "a");
+    await endTab("a:1");
+    deps.tabs.endedAmong.mockResolvedValueOnce([]);
+    release();
+    await loading;
     expect(keys(workspace.layout)).toEqual([["a"]]);
   });
 
   it("builds a fresh layout when every remembered tab is gone", async () => {
-    const { workspace, show } = setup({ [TASK.key]: createLayout([shellTab("a:1")]) });
+    const { workspace, show, endTab } = setup({ [TASK.key]: createLayout([shellTab("a:1")]) });
     await show(OTHER, ["x"], "x");
-    await workspace.shellExited("a:1");
+    await endTab("a:1");
     expect(await show(TASK, ["a"], "a")).toEqual({ adoptedSessionId: null, restored: false });
     expect(keys(workspace.layout)).toEqual([["a"]]);
+  });
+
+  it("keeps a restored layout when the backend cannot tell which tabs ended", async () => {
+    const { workspace, deps, show } = setup({
+      [TASK.key]: agentWithShell("a", "a:1"),
+    });
+    deps.tabs.endedAmong.mockRejectedValueOnce(new Error("database locked"));
+    vi.spyOn(console, "warn").mockImplementationOnce(() => {});
+    expect((await show(TASK, ["a"], "a"))?.restored).toBe(true);
+    expect(keys(workspace.layout)).toEqual([["a", "a:1"]]);
   });
 });
 
@@ -405,32 +478,90 @@ describe("workspaceOf", () => {
   });
 });
 
-describe("terminal editor tabs", () => {
-  it("reserves the editor command before the tab can mount", async () => {
+describe("handoff terminals", () => {
+  const handoff: TabSpec = { kind: "program", argv: ["claude", "--resume"] };
+
+  it("keeps a handoff terminal's mark across a reload, so its close still hands back", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = (await workspace.openCommand("a", handoff, "Terminal", { handoff: true }))!;
+    expect(deps.tabs.open).toHaveBeenCalledWith("a", handoff);
+    expect(workspace.findTab(ptyKey)?.tab.handoff).toBe(true);
+    expect(deps.handoffRestored).not.toHaveBeenCalled();
+
+    // A webview reload or app restart loads the saved layout in a fresh instance.
+    const reloaded = createTaskWorkspaceLayout(deps);
+    await reloaded.show(TASK, {
+      agents: [agent("a")],
+      selectedSessionId: "a",
+      selectionIsExplicit: true,
+    });
+    expect(deps.handoffRestored).toHaveBeenCalledWith(ptyKey);
+  });
+
+  it("adopts only the handoff terminals of sessions still in the workspace", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a", "b"], "a");
+    await workspace.openCommand("b", handoff, "Terminal", { handoff: true });
+    const reloaded = createTaskWorkspaceLayout(deps);
+    // b left the workspace (archived) while it was not shown.
+    await reloaded.show(TASK, {
+      agents: [agent("a")],
+      selectedSessionId: "a",
+      selectionIsExplicit: true,
+    });
+    expect(deps.handoffRestored).not.toHaveBeenCalled();
+  });
+
+  it("does not mark other command tabs", async () => {
     const { workspace, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = (await workspace.openCommand(
+      "a",
+      { kind: "command", command: "htop" },
+      "htop",
+    ))!;
+    expect(workspace.findTab(ptyKey)?.tab.handoff).toBeUndefined();
+  });
+});
+
+describe("discarding a shell", () => {
+  it("closes it whatever its state, telling whether this layout held it", async () => {
+    const { workspace, deps, show } = setup();
+    await show(TASK, ["a"], "a");
+    const ptyKey = (await workspace.openCommand(
+      "a",
+      { kind: "program", argv: ["claude"] },
+      "Terminal",
+    ))!;
+    expect(await workspace.discardTerminal(ptyKey)).toBe(true);
+    expect(workspace.findTab(ptyKey)).toBeNull();
+    expect(deps.tabs.close).toHaveBeenCalledWith("a", 1);
+    expect(await workspace.discardTerminal("other:3")).toBe(false);
+  });
+});
+
+describe("terminal editor tabs", () => {
+  it("reserves the editor command with its tab", async () => {
+    const { workspace, deps, show } = setup();
     await show(TASK, ["a"], "a");
     const ptyKey = await workspace.openTerminalEditor("a", "src/main.rs");
     expect(ptyKey).toBe("a:1");
+    expect(deps.tabs.open).toHaveBeenCalledWith("a", {
+      kind: "command",
+      command: "nvim src/main.rs",
+    });
     expect(workspace.findTab(ptyKey!)?.tab.label).toBe("main.rs");
-    expect(workspace.pendingCommand(ptyKey!)).toBe("nvim src/main.rs");
     expect(workspace.focusedTab()?.ptyKey).toBe(ptyKey);
   });
 
-  it("consumes the command once the shell started", async () => {
-    const { workspace, show } = setup();
-    await show(TASK, ["a"], "a");
-    const ptyKey = (await workspace.openTerminalEditor("a", "src/main.rs"))!;
-    workspace.shellStarted(ptyKey);
-    expect(workspace.pendingCommand(ptyKey)).toBeUndefined();
-    expect(workspace.isStarting(ptyKey)).toBe(false);
-  });
-
-  it("refuses to close an editor tab that is still starting", async () => {
+  it("closes an editor tab even before its shell started", async () => {
     const { workspace, deps, show } = setup();
     await show(TASK, ["a"], "a");
     const ptyKey = (await workspace.openTerminalEditor("a", "src/main.rs"))!;
-    expect(await workspace.closeTab(ptyKey)).toBe("starting");
-    expect(deps.closeShell).not.toHaveBeenCalled();
+    expect(await workspace.closeTab(ptyKey)).toBe("closed");
+    expect(deps.tabs.close).toHaveBeenCalledWith("a", 1);
+    expect(workspace.findTab(ptyKey)).toBeNull();
   });
 
   it("opens nothing when the pane went away while the command resolved", async () => {
@@ -443,15 +574,7 @@ describe("terminal editor tabs", () => {
     resolve("nvim src/main.rs");
     expect(await opening).toBeNull();
     expect(workspace.layout).toBeNull();
-  });
-
-  it("releases the reservation when its shell fails to start", async () => {
-    const { workspace, show } = setup();
-    await show(TASK, ["a"], "a");
-    const ptyKey = (await workspace.openTerminalEditor("a", "src/main.rs"))!;
-    await workspace.shellFailedToStart(ptyKey);
-    expect(workspace.isStarting(ptyKey)).toBe(false);
-    expect(workspace.findTab(ptyKey)).toBeNull();
+    expect(deps.tabs.open).not.toHaveBeenCalled();
   });
 });
 
@@ -491,7 +614,7 @@ describe("diff and editor resources", () => {
     await show(TASK, ["a"], "a");
     workspace.openDiff("a");
     expect(await workspace.closeTab("a:diff")).toBe("closed");
-    expect(deps.closeShell).not.toHaveBeenCalled();
+    expect(deps.tabs.close).not.toHaveBeenCalled();
   });
 
   it("leaves agent tabs to the caller", async () => {
@@ -508,7 +631,7 @@ describe("navigation", () => {
     const { workspace, show } = setup();
     await show(TASK, ["a"], "a");
     expect(workspace.cycleTab(1)).toBeNull();
-    workspace.openShell("a");
+    await workspace.openShell("a");
     expect(workspace.cycleTab(1)?.ptyKey).toBe("a");
     expect(workspace.cycleTab(-1)?.ptyKey).toBe("a:1");
   });
@@ -516,7 +639,7 @@ describe("navigation", () => {
   it("titles a tab and keeps the title across reconciliation", async () => {
     const { workspace, show } = setup();
     await show(TASK, ["a"], "a");
-    const ptyKey = workspace.openShell("a")!;
+    const ptyKey = (await workspace.openShell("a"))!;
     workspace.setTabTitle(ptyKey, "cargo");
     workspace.reconcile([agent("a")]);
     expect(workspace.findTab(ptyKey)?.tab.label).toBe("cargo");

@@ -14,14 +14,13 @@
     focusRequest?: { id: number; sessionId: string } | null;
     exited?: boolean;
     skipAttach?: boolean;
-    initialCommand?: string;
     onUserInput?: () => void;
     onAttached?: () => void;
     onAttachError?: (error: unknown) => void;
     onFocused?: (event: PointerEvent | FocusEvent) => void;
   }
 
-  let { sessionId, visible, focused, focusRequest = null, exited = false, skipAttach = false, initialCommand, onUserInput, onAttached, onAttachError, onFocused }: Props = $props();
+  let { sessionId, visible, focused, focusRequest = null, exited = false, skipAttach = false, onUserInput, onAttached, onAttachError, onFocused }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let view = $state<TerminalView | null>(null);
@@ -39,7 +38,6 @@
     const acquired = acquireTerminalView({
       ptyKey: sessionId,
       kind,
-      initialCommand,
       onTitle: kind === "shell"
         ? (title) => {
             const name = extractCommandName(title);

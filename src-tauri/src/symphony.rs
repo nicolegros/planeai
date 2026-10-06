@@ -13,7 +13,7 @@ use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::SqliteRepository;
 
-use crate::commands::sessions::lifecycle::session_lifecycle_event;
+use crate::commands::sessions::lifecycle::session_transition;
 use crate::config::{self, Config};
 use crate::plugins::PluginRuntimeHandle;
 
@@ -235,8 +235,7 @@ impl Backend for TauriBackend {
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("session {} not found", session.id))?;
             crate::db::mark_session_exited(&conn, &session.id).map_err(|e| e.to_string())?;
-            (previous.status == "active")
-                .then(|| session_lifecycle_event(&previous, "active", "exited"))
+            (previous.status == "active").then(|| session_transition(&previous, "active", "exited"))
         };
         if let Some(event) = lifecycle_event {
             self.app_handle

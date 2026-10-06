@@ -84,6 +84,10 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
 }
 
 fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHandle) {
+    if ignores_socket_status(msg, state) {
+        tracing::debug!(session_id = %msg.session_id, event = ?msg.event, "ignored hook status for provider-owned session");
+        return;
+    }
     match msg.event {
         NotifyEvent::SessionCreated => {
             tracing::info!(session_id = %msg.session_id, "[DEBUG-lsr1] session created via socket — emitting to webview");
@@ -92,6 +96,7 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
         NotifyEvent::SessionChanged => {
             tracing::info!(session_id = %msg.session_id, "session changed via socket");
             let _ = app.emit("sessions-changed", ());
+            reconcile_provider_sessions(app);
         }
         NotifyEvent::Busy => {
             let mut s = state.lock().unwrap();
@@ -155,20 +160,179 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
             app.state::<crate::plugins::PluginRuntimeHandle>()
                 .0
                 .dispatch_task_lifecycle(batch);
+            // Completing a task archives its sessions from whichever process moved it.
+            reconcile_provider_sessions(app);
         }
         NotifyEvent::SendPrompt => {
-            if let Some(text) = &msg.text {
-                let pty_manager = app.state::<crate::state::PtyState>().0.clone();
-                let session_id = msg.session_id.clone();
-                let payload = format!("{}\n", text).into_bytes();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = pty_manager.write(&session_id, &payload).await {
-                        tracing::warn!(%session_id, error = %e, "send_prompt write failed");
-                    }
-                });
-            }
+            let Some(text) = msg.text.clone() else {
+                return;
+            };
+            let app = app.clone();
+            let session_id = msg.session_id.clone();
+            tauri::async_runtime::spawn(
+                async move { deliver_prompt(&app, &session_id, text).await },
+            );
         }
     }
+}
+
+fn reconcile_provider_sessions(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let runtime = crate::plugin_providers::AppRuntime::new(&app);
+        let tabs = app.state::<crate::state::TerminalTabsState>().0.clone();
+        // Ended outside the GUI, these sessions' handoff programs would otherwise run on unseen,
+        // including those of sessions no sidecar drives anymore.
+        let mut ended = crate::plugin_providers::reconcile(&runtime).await;
+        ended
+            .extend(crate::plugin_providers::ended_sessions(&runtime, tabs.program_owners()).await);
+        for session_id in ended {
+            tabs.session_ended(&session_id).await;
+        }
+    });
+}
+
+/// Provider sessions get busy/idle/attention from their plugin only (ADR-0014);
+/// the user's own agent hooks still fire inside them and must not compete.
+fn ignores_socket_status(msg: &NotifyMessage, state: &SharedNotifyState) -> bool {
+    matches!(
+        msg.event,
+        NotifyEvent::Busy | NotifyEvent::Stop | NotifyEvent::Notification
+    ) && state.lock().unwrap().is_provider_owned(&msg.session_id)
+}
+
+/// Delivers a prompt by the session's stored backend, so routing never depends on
+/// whether this run has registered the session yet.
+async fn deliver_prompt(app: &AppHandle, session_id: &str, text: String) {
+    let db = app.state::<crate::state::DbState>().0.clone();
+    let id = session_id.to_string();
+    let provider_backed = crate::commands::blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        Ok(crate::db::get_session(&conn, &id)
+            .map_err(|e| e.to_string())?
+            .is_some_and(|session| session.backend == crate::session_ops::PLUGIN_BACKEND))
+    })
+    .await;
+    let runtime = crate::plugin_providers::AppRuntime::new(app);
+    let pty_manager = app.state::<crate::state::PtyState>().0.clone();
+    let write_pty = |bytes: Vec<u8>| async move { pty_manager.write(session_id, &bytes).await };
+    let routed = route_prompt(&runtime, provider_backed, session_id, &text, write_pty).await;
+    if let Err(UndeliveredPrompt { error, report }) = routed {
+        tracing::warn!(%session_id, %error, "send_prompt delivery failed");
+        if report {
+            let _ = app.emit(
+                "prompt-delivery-failed",
+                serde_json::json!({ "session_id": session_id, "error": error }),
+            );
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct UndeliveredPrompt {
+    error: String,
+    /// Its sender was told it was sent; a provider prompt fails for reasons a PTY write does not.
+    report: bool,
+}
+
+async fn route_prompt<R, W, F>(
+    runtime: &R,
+    provider_backed: Result<bool, String>,
+    session_id: &str,
+    text: &str,
+    write_pty: W,
+) -> Result<(), UndeliveredPrompt>
+where
+    R: crate::plugin_providers::ProviderRuntime,
+    W: FnOnce(Vec<u8>) -> F,
+    F: std::future::Future<Output = Result<(), String>>,
+{
+    let (result, report) = match provider_backed {
+        Ok(true) => (
+            crate::plugin_providers::send(runtime, session_id, text)
+                .await
+                .map_err(String::from),
+            true,
+        ),
+        Ok(false) => (write_pty(format!("{text}\n").into_bytes()).await, false),
+        Err(error) => (Err(error), false),
+    };
+    result.map_err(|error| UndeliveredPrompt { error, report })
+}
+
+/// Apply a status reported by a session's plugin provider.
+pub fn apply_provider_status(
+    app: &AppHandle,
+    session_id: &str,
+    status: crate::plugin_providers::ProviderSessionStatus,
+) {
+    use crate::plugin_providers::ProviderSessionStatus;
+    let state = app.state::<crate::state::NotifyHandle>().0.clone();
+    match status {
+        ProviderSessionStatus::Busy => {
+            let resumed = state.lock().unwrap().provider_busy(session_id);
+            emit_state_change(app, session_id, AgentState::Busy);
+            if resumed {
+                let _ = app.emit(
+                    "agent-resumed",
+                    serde_json::json!({ "session_id": session_id }),
+                );
+            }
+        }
+        ProviderSessionStatus::Idle | ProviderSessionStatus::NeedsAttention => {
+            let fired = state.lock().unwrap().provider_settled(session_id);
+            if fired {
+                emit_state_change(app, session_id, AgentState::Idle);
+                fire_notification(app, session_id, &state);
+            }
+        }
+        ProviderSessionStatus::Exited => {
+            // A turn the agent was running ends with it, without a completion notification.
+            release_provider_status(app, session_id);
+            mark_provider_session_exited(app, session_id);
+        }
+    }
+}
+
+/// The sidecar driving a provider session stopped or died: a turn it was running will never
+/// report its end, so the session stops showing as busy, without a completion notification.
+pub fn release_provider_status(app: &AppHandle, session_id: &str) {
+    let state = app.state::<crate::state::NotifyHandle>().0.clone();
+    let released = state.lock().unwrap().provider_released(session_id);
+    // Not `agent-state-change` Idle: the frontend treats that as a finished turn.
+    if released {
+        let _ = app.emit(
+            "agent-released",
+            serde_json::json!({ "session_id": session_id }),
+        );
+    }
+}
+
+fn mark_provider_session_exited(app: &AppHandle, session_id: &str) {
+    let app = app.clone();
+    let session_id = session_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        let db = app.state::<crate::state::DbState>().0.clone();
+        let id = session_id.clone();
+        let exited = crate::commands::blocking(move || {
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            crate::commands::sessions::lifecycle::exit_active_session(&conn, &id)
+        })
+        .await;
+        match exited {
+            Ok(Some(event)) => {
+                let _ = app.emit("pty-exited", serde_json::json!({ "pty_key": session_id }));
+                let _ = app.emit("sessions-changed", ());
+                app.state::<crate::plugins::PluginRuntimeHandle>()
+                    .0
+                    .dispatch_session_lifecycle(event);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%session_id, %error, "failed to mark provider session exited")
+            }
+        }
+    });
 }
 
 /// Start the silence checker thread.
@@ -568,5 +732,70 @@ mod tests {
     fn detect_kiro_hook_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         assert!(!is_kiro_hook_installed_at(&dir.path().join("default.json")));
+    }
+
+    mod prompt_routing {
+        use super::super::{route_prompt, UndeliveredPrompt};
+        use crate::plugin_providers::fake::FakeRuntime;
+        use planeai_plugin_contract::provider as protocol;
+        use std::sync::Mutex;
+
+        #[tokio::test]
+        async fn a_provider_session_receives_its_prompt_through_the_provider() {
+            let runtime = FakeRuntime::running(&[("s1", "active")]);
+            let typed = Mutex::new(None);
+            let write = |bytes: Vec<u8>| {
+                *typed.lock().unwrap() = Some(bytes);
+                async { Ok(()) }
+            };
+            route_prompt(&runtime, Ok(true), "s1", "hello", write)
+                .await
+                .unwrap();
+            assert_eq!(runtime.sent(), [protocol::RESUME, protocol::SEND]);
+            assert!(typed.lock().unwrap().is_none());
+        }
+
+        #[tokio::test]
+        async fn a_failed_provider_prompt_is_reported_to_its_sender() {
+            let runtime = FakeRuntime::running(&[("s1", "active")]);
+            runtime.failing.lock().unwrap().push(protocol::SEND);
+            let error = route_prompt(&runtime, Ok(true), "s1", "hello", |_| async { Ok(()) })
+                .await
+                .unwrap_err();
+            assert!(error.report);
+        }
+
+        #[tokio::test]
+        async fn a_terminal_session_has_its_prompt_typed_with_a_newline() {
+            let runtime = FakeRuntime::running(&[]);
+            let typed = Mutex::new(Vec::new());
+            let write = |bytes: Vec<u8>| {
+                *typed.lock().unwrap() = bytes;
+                async { Err("pty gone".to_string()) }
+            };
+            let error = route_prompt(&runtime, Ok(false), "s1", "hi", write)
+                .await
+                .unwrap_err();
+            assert_eq!(*typed.lock().unwrap(), b"hi\n");
+            assert_eq!(
+                error,
+                UndeliveredPrompt {
+                    error: "pty gone".into(),
+                    report: false
+                }
+            );
+            assert!(runtime.sent().is_empty());
+        }
+
+        #[tokio::test]
+        async fn an_unknown_backend_is_not_reported() {
+            let runtime = FakeRuntime::running(&[]);
+            let error = route_prompt(&runtime, Err("db locked".into()), "s1", "hi", |_| async {
+                Ok(())
+            })
+            .await
+            .unwrap_err();
+            assert!(!error.report);
+        }
     }
 }

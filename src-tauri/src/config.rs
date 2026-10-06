@@ -595,7 +595,7 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         backfill_provider_defaults(&mut config);
         config.onboarding_completed.get_or_insert(true);
         let migrated = migrate_autonomous_prompt_template(&mut config);
-        if let Err(error) = validate(&config) {
+        if let Some(Err(error)) = config.editor.as_ref().map(validate_editor_config) {
             config.editor = Some(invalid_editor_config());
             return (config, vec![format!("Invalid config.json: {error}")]);
         }
@@ -716,17 +716,25 @@ pub fn find_executable_in(name: &str, path: &str) -> Option<PathBuf> {
             return None;
         }
         let plain = directory.join(name);
-        if plain.is_file() {
-            return Some(plain);
+        // Windows runs only files with an executable extension: npm installs an extensionless
+        // shell script beside `claude.cmd`, which must not win.
+        if cfg!(windows) {
+            with_executable_extension(&directory, name).or_else(|| plain.is_file().then_some(plain))
+        } else if plain.is_file() {
+            Some(plain)
+        } else {
+            with_executable_extension(&directory, name)
         }
-        // Windows executables carry an extension.
-        let extensions = std::env::var_os("PATHEXT")?;
-        std::env::split_paths(&extensions).find_map(|extension| {
-            let suffix = extension.to_string_lossy();
-            let suffix = suffix.trim_start_matches('.');
-            let candidate = directory.join(format!("{name}.{suffix}"));
-            (!suffix.is_empty() && candidate.is_file()).then_some(candidate)
-        })
+    })
+}
+
+fn with_executable_extension(directory: &std::path::Path, name: &str) -> Option<PathBuf> {
+    let extensions = std::env::var_os("PATHEXT")?;
+    std::env::split_paths(&extensions).find_map(|extension| {
+        let suffix = extension.to_string_lossy();
+        let suffix = suffix.trim_start_matches('.');
+        let candidate = directory.join(format!("{name}.{suffix}"));
+        (!suffix.is_empty() && candidate.is_file()).then_some(candidate)
     })
 }
 
@@ -829,6 +837,16 @@ pub fn validate_editor_config(editor: &EditorConfig) -> Result<(), String> {
 pub fn validate(config: &Config) -> Result<(), String> {
     if let Some(editor) = &config.editor {
         validate_editor_config(editor)?;
+    }
+    // Sessions using such a key are routed to a plugin, never to this provider.
+    if let Some(key) = config
+        .providers
+        .keys()
+        .find(|key| planeai_plugin_contract::provider::is_reserved_provider_key(key))
+    {
+        return Err(format!(
+            "Provider \"{key}\" cannot contain \":\", which is reserved for plugin providers"
+        ));
     }
     Ok(())
 }

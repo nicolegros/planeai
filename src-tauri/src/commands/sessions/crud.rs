@@ -1,11 +1,11 @@
 use tauri::State;
 
-use crate::commands::sessions::lifecycle::session_lifecycle_event;
+use crate::commands::sessions::lifecycle::session_transition;
 use crate::db;
 use crate::plugins::PluginRuntimeHandle;
 use crate::state::{ConfigState, DbState, NotifyHandle};
 
-use super::helpers::provider_has_hook;
+use super::helpers::register_notify_session;
 
 #[tauri::command]
 pub fn create_session(
@@ -28,14 +28,8 @@ pub fn create_session(
         .flatten()
         .map(|p| p.name)
         .unwrap_or_else(|| "unknown".to_string());
-    let display_name = if name.is_empty() { &branch } else { &name };
-    let hook_enabled = session
-        .provider
-        .as_deref()
-        .map(|pk| provider_has_hook(pk, &cfg))
-        .unwrap_or(false);
     let mut ns = notify.0.lock().unwrap();
-    ns.register_session(&session.id, display_name, &project_name, hook_enabled);
+    register_notify_session(&mut ns, &session, &project_name, &cfg);
 
     Ok(session)
 }
@@ -70,18 +64,8 @@ pub fn rename_session(
             .flatten()
             .map(|p| p.name)
             .unwrap_or_else(|| "unknown".to_string());
-        let display_name = if name.is_empty() {
-            &session.branch
-        } else {
-            &name
-        };
-        let hook_enabled = session
-            .provider
-            .as_deref()
-            .map(|pk| provider_has_hook(pk, &cfg))
-            .unwrap_or(false);
         let mut ns = notify.0.lock().unwrap();
-        ns.register_session(&id, display_name, &project_name, hook_enabled);
+        register_notify_session(&mut ns, &session, &project_name, &cfg);
     }
     Ok(())
 }
@@ -111,11 +95,7 @@ pub fn restore_session(
     let session = crate::session_restart::restart(&conn, &id, &cfg, &ops)?;
     runtime
         .0
-        .dispatch_session_lifecycle(session_lifecycle_event(
-            &session,
-            &previous.status,
-            "active",
-        ));
+        .dispatch_session_lifecycle(session_transition(&session, &previous.status, "active"));
 
     // Register in NotifyState when restoring
     let project_name = db::get_project(&conn, &session.project_id)
@@ -123,18 +103,8 @@ pub fn restore_session(
         .flatten()
         .map(|p| p.name)
         .unwrap_or_else(|| "unknown".to_string());
-    let display_name = if session.name.is_empty() {
-        &session.branch
-    } else {
-        &session.name
-    };
-    let hook_enabled = session
-        .provider
-        .as_deref()
-        .map(|pk| provider_has_hook(pk, &cfg))
-        .unwrap_or(false);
     let mut ns = notify.0.lock().unwrap();
-    ns.register_session(&id, display_name, &project_name, hook_enabled);
+    register_notify_session(&mut ns, &session, &project_name, &cfg);
 
     Ok(())
 }
@@ -163,13 +133,11 @@ pub fn mark_exited(
         .ok_or("session not found")?;
     db::mark_session_exited(&conn, &session_id).map_err(|e| e.to_string())?;
     if previous.status == "active" {
-        runtime
-            .0
-            .dispatch_session_lifecycle(session_lifecycle_event(
-                &previous,
-                &previous.status,
-                "exited",
-            ));
+        runtime.0.dispatch_session_lifecycle(session_transition(
+            &previous,
+            &previous.status,
+            "exited",
+        ));
     }
     Ok(())
 }

@@ -28,4 +28,8 @@ pub trait SessionBackend: Send + Sync {
         false
     }
     fn detach(&self);
+    /// Whether its process has exited; backends that cannot tell report false.
+    fn has_exited(&self) -> bool {
+        false
+    }
 }

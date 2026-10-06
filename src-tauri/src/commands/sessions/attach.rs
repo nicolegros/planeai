@@ -1,7 +1,7 @@
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::commands::sessions::lifecycle::session_lifecycle_event;
+use crate::commands::sessions::lifecycle::session_transition;
 use crate::config;
 use crate::db;
 use crate::plugins::PluginRuntimeHandle;
@@ -22,7 +22,6 @@ pub async fn attach_session(
     notify: State<'_, NotifyHandle>,
     runtime: State<'_, PluginRuntimeHandle>,
     operations: State<'_, ProjectOperationState>,
-    app: tauri::AppHandle,
 ) -> Result<(), String> {
     // Every database and config read below runs through `commands::blocking`: on
     // macOS WKWebView dispatches IPC handlers on the main thread, so doing this
@@ -76,9 +75,7 @@ pub async fn attach_session(
         "attach_session"
     );
 
-    state
-        .0
-        .attach(&session_id, pty_target, app.clone(), on_data, env)?;
+    state.0.attach(&session_id, pty_target, on_data, env)?;
 
     {
         let (display_name, project_name, hook_enabled) = &notification;
@@ -104,7 +101,7 @@ pub async fn attach_session(
     if was_exited {
         runtime
             .0
-            .dispatch_session_lifecycle(session_lifecycle_event(&session, "exited", "active"));
+            .dispatch_session_lifecycle(session_transition(&session, "exited", "active"));
     }
 
     Ok(())

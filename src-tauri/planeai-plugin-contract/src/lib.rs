@@ -2,13 +2,57 @@ use std::collections::HashSet;
 use std::path::{Component, Path};
 
 use anyhow::{anyhow, bail, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
-const RECIPIENT_HOST_API_VERSION: &str = "planeai.plugin-host.v2";
+/// What a declared provider can do beyond running sessions.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderFeature {
+    /// Honors PlaneAI's auto-approve.
+    AutoApprove,
+    /// Can continue a session in the agent's own terminal UI.
+    Handoff,
+}
 
-fn supports_host_api_version(version: &str) -> bool {
-    matches!(version, HOST_API_VERSION | RECIPIENT_HOST_API_VERSION)
+/// The features this host knows, in declared order without duplicates. Features from newer
+/// hosts are skipped, so a plugin declaring one still loads here.
+pub fn known_provider_features(values: &[Value]) -> Vec<ProviderFeature> {
+    let mut features = Vec::new();
+    for feature in values
+        .iter()
+        .filter_map(|value| ProviderFeature::deserialize(value).ok())
+    {
+        if !features.contains(&feature) {
+            features.push(feature);
+        }
+    }
+    features
+}
+
+/// Serde adapter reading `supports` with [`known_provider_features`].
+pub fn deserialize_provider_features<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<ProviderFeature>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Option::<Vec<Value>>::deserialize(deserializer)?.unwrap_or_default();
+    Ok(known_provider_features(&values))
+}
+
+pub mod provider;
+
+pub const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
+pub const RECIPIENT_HOST_API_VERSION: &str = "planeai.plugin-host.v2";
+/// Unstable until plugin-provided session runtimes ship; see ADR-0014.
+pub const PROVIDER_HOST_API_VERSION: &str = "planeai.plugin-host.v3";
+
+pub fn supports_host_api_version(version: &str) -> bool {
+    matches!(
+        version,
+        HOST_API_VERSION | RECIPIENT_HOST_API_VERSION | PROVIDER_HOST_API_VERSION
+    )
 }
 
 const MANIFEST_FIELDS: &[&str] = &[
@@ -24,6 +68,7 @@ const MANIFEST_FIELDS: &[&str] = &[
     "capabilities",
     "ui_entrypoint",
     "background_service",
+    "providers",
 ];
 const UI_CONTRIBUTION_FIELDS: &[&str] = &[
     "id",
@@ -47,6 +92,7 @@ const LOCAL_CAPABILITIES: &[&str] = &[
     "tasks.create",
     "tasks.transition",
     "task-events",
+    "providers",
 ];
 const BACKGROUND_SERVICE_FIELDS: &[&str] = &["method", "interval_setting", "default_interval_ms"];
 const UI_PLACEMENTS: &[&str] = &[
@@ -104,6 +150,7 @@ pub fn validate_local_manifest(manifest: &Value, platform: &str) -> Result<Strin
     validate_capabilities(object)?;
     validate_background_service(object)?;
     validate_ui_contributions(object, id)?;
+    validate_providers(object, id)?;
     Ok(entrypoint.to_owned())
 }
 
@@ -220,6 +267,64 @@ fn validate_ui_contributions(object: &Map<String, Value>, plugin_id: &str) -> Re
             if !shortcuts.insert(shortcut) {
                 bail!("plugin {plugin_id} defines duplicate UI contribution shortcut {shortcut}");
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_providers(object: &Map<String, Value>, plugin_id: &str) -> Result<()> {
+    let declares_capability = object
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|capabilities| capabilities.iter().any(|value| value == "providers"));
+    let providers = match object.get("providers") {
+        None | Some(Value::Null) => {
+            if declares_capability {
+                bail!("the providers capability requires at least one declared provider");
+            }
+            return Ok(());
+        }
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| anyhow!("plugin manifest providers must be an array"))?,
+    };
+    if providers.is_empty() {
+        bail!("plugin manifest providers must not be empty when present");
+    }
+    if !declares_capability {
+        bail!("declared providers require the providers capability");
+    }
+    if object.get("host_api_version").and_then(Value::as_str) != Some(PROVIDER_HOST_API_VERSION) {
+        bail!("declared providers require host API {PROVIDER_HOST_API_VERSION}");
+    }
+    let mut ids = HashSet::new();
+    for provider in providers {
+        let provider = provider
+            .as_object()
+            .ok_or_else(|| anyhow!("provider must be an object"))?;
+        // Unknown fields are left for newer hosts.
+        let id = required_string(provider, "id")?;
+        validate_id(id, "provider")?;
+        if !ids.insert(id) {
+            bail!("plugin {plugin_id} defines duplicate provider {id}");
+        }
+        required_string(provider, "label")?;
+        validate_relative_path(
+            required_string(provider, "entrypoint")?,
+            "provider entrypoint",
+        )?;
+        let features = match provider.get("supports") {
+            None | Some(Value::Null) => continue,
+            Some(value) => value
+                .as_array()
+                .ok_or_else(|| anyhow!("provider supports must be an array"))?,
+        };
+        if features.iter().any(|feature| !feature.is_string()) {
+            bail!("provider supports must be an array of strings");
+        }
+        let mut seen = HashSet::new();
+        if !features.iter().all(|feature| seen.insert(feature.as_str())) {
+            bail!("provider declares duplicate supported features");
         }
     }
     Ok(())
@@ -369,6 +474,92 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("order is only valid"));
+    }
+
+    fn provider_manifest() -> Value {
+        let mut manifest = manifest();
+        manifest["host_api_version"] = json!(PROVIDER_HOST_API_VERSION);
+        manifest["capabilities"] = json!(["providers"]);
+        manifest["providers"] = json!([{
+            "id": "chat",
+            "label": "Chat",
+            "entrypoint": "ui/chat.js",
+            "supports": ["auto_approve", "handoff"]
+        }]);
+        manifest
+    }
+
+    fn provider_error(manifest: Value) -> String {
+        validate_local_manifest(&manifest, "macos-arm64")
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn accepts_providers_on_host_api_v3() {
+        assert_eq!(
+            validate_local_manifest(&provider_manifest(), "macos-arm64").unwrap(),
+            "bin/plugin"
+        );
+    }
+
+    #[test]
+    fn providers_require_host_api_v3() {
+        let mut manifest = provider_manifest();
+        manifest["host_api_version"] = json!("planeai.plugin-host.v2");
+        assert!(provider_error(manifest).contains("require host API"));
+    }
+
+    #[test]
+    fn providers_and_capability_must_be_declared_together() {
+        let mut without_capability = provider_manifest();
+        without_capability["capabilities"] = json!([]);
+        assert!(provider_error(without_capability).contains("require the providers capability"));
+
+        let mut without_providers = provider_manifest();
+        without_providers
+            .as_object_mut()
+            .unwrap()
+            .remove("providers");
+        assert!(provider_error(without_providers).contains("at least one declared provider"));
+    }
+
+    #[test]
+    fn providers_leave_room_for_newer_hosts() {
+        let mut newer = provider_manifest();
+        newer["providers"][0]["icon"] = json!("ui/icon.svg");
+        newer["providers"][0]["supports"] = json!(["handoff", "teleport"]);
+        assert!(validate_local_manifest(&newer, "macos-arm64").is_ok());
+        assert_eq!(
+            known_provider_features(&[json!("teleport"), json!("handoff"), json!("handoff")]),
+            vec![ProviderFeature::Handoff]
+        );
+    }
+
+    #[test]
+    fn providers_are_validated() {
+        let mut duplicate = provider_manifest();
+        duplicate["providers"] = json!([
+            { "id": "chat", "label": "Chat", "entrypoint": "ui/chat.js" },
+            { "id": "chat", "label": "Chat 2", "entrypoint": "ui/chat.js" }
+        ]);
+        assert!(provider_error(duplicate).contains("duplicate provider"));
+
+        let mut unsafe_path = provider_manifest();
+        unsafe_path["providers"][0]["entrypoint"] = json!("../chat.js");
+        assert!(provider_error(unsafe_path).contains("safe package-relative path"));
+
+        let mut not_a_name = provider_manifest();
+        not_a_name["providers"][0]["supports"] = json!([1]);
+        assert!(provider_error(not_a_name).contains("array of strings"));
+
+        let mut duplicate_feature = provider_manifest();
+        duplicate_feature["providers"][0]["supports"] = json!(["handoff", "handoff"]);
+        assert!(provider_error(duplicate_feature).contains("duplicate supported features"));
+
+        let mut empty = provider_manifest();
+        empty["providers"] = json!([]);
+        assert!(provider_error(empty).contains("must not be empty"));
     }
 
     #[test]

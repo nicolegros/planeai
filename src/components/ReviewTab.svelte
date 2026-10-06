@@ -1,13 +1,15 @@
 <script lang="ts">
-  import { git, pty } from "../lib/api";
+  import { git } from "../lib/api";
   import type { ChangedFile } from "../lib/types";
   import { onDestroy, onMount } from "svelte";
   import { isDark, getSettings } from "../lib/settings.svelte";
   import { getActiveZone } from "../lib/focus.svelte";
+  import { reviewShortcutsApply } from "../lib/review-shortcuts";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { ResizeHandle } from "./ui";
   import { addComment, clearComments, editComment, getComments, getFileCommentCount, getTotalCommentCount, reanchorComments, removeComment, type ReviewComment } from "../lib/review-comments.svelte";
   import { ChevronDown, ChevronRight, MessageSquare, Send, Check, AlertTriangle, LoaderCircle } from "@lucide/svelte";
+  import { errorMessage } from "../lib/errors";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { MOD_ENTER_HINT } from "../lib/keyboard";
   import { serializeComments } from "../lib/review-serializer";
@@ -24,12 +26,16 @@
     repoPath: string;
     baseBranch: string;
     visible: boolean;
+    /** Its pane owns the keyboard; window-level shortcuts apply only then. */
+    focused: boolean;
     sessionId: string;
     onEditFile?: (filePath: string) => void;
     onFileChange?: (fileName: string) => void;
+    /** Submit a message to the session's agent. */
+    onSend: (text: string) => Promise<void>;
   }
 
-  let { repoPath, baseBranch, visible, sessionId, onEditFile, onFileChange }: Props = $props();
+  let { repoPath, baseBranch, visible, focused, sessionId, onEditFile, onFileChange, onSend }: Props = $props();
   let files = $state<ChangedFile[]>([]);
   let selectedIndex = $state(0);
   let loading = $state(true);
@@ -376,15 +382,13 @@
         }
         diffs.set(filePath, latest);
       }
-      const bytes = Array.from(new TextEncoder().encode(serializeComments(comments, diffs)));
+      await onSend(serializeComments(comments, diffs));
       recordUserInput(sessionId);
-      await pty.write(sessionId, bytes);
-      await pty.write(sessionId, [0x0d]);
       const count = comments.length;
       clearComments(sessionId);
       showSnackbar(`Feedback sent (${count} comment${count === 1 ? "" : "s"})`, "success");
     } catch (error) {
-      showSnackbar(String(error).replace(/^Error: /, ""), "error");
+      showSnackbar(errorMessage(error), "error");
     } finally {
       sendingFeedback = false;
     }
@@ -402,7 +406,7 @@
   }
 
   function handleKeydown(e: KeyboardEvent): void {
-    if (!visible || getActiveZone() !== "terminal") return;
+    if (!reviewShortcutsApply({ visible, focused, defaultPrevented: e.defaultPrevented, zone: getActiveZone() })) return;
     const element = document.activeElement;
     if (element?.closest("[role='dialog'], [role='alertdialog'], [role='combobox'], dialog[open]")) return;
     if (e.key === "Enter" && e.metaKey) { e.preventDefault(); void sendFeedback(); return; }

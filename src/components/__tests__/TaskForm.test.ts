@@ -383,3 +383,44 @@ describe("TaskForm - Random default title", () => {
     expect(mockCreateTask).toHaveBeenCalledWith(expect.objectContaining({ title: generated }));
   });
 });
+
+describe("TaskForm with plugin providers", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("offers plugin providers and starts the session without auto-approve when unsupported", async () => {
+    const target = renderForm({
+      runtimeProviders: [
+        {
+          key: "chat:claude",
+          plugin: { id: "chat", name: "Chat" },
+          provider: { id: "claude", label: "Claude Chat", entrypoint: "ui/chat.js", supports: [] },
+        },
+      ],
+    });
+    const form = target.querySelector<HTMLElement>("[data-form-keyboard]")!;
+    const press = (key: string) => {
+      form.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      flushSync();
+    };
+    // claude, copilot, then the plugin's provider.
+    press("p");
+    press("p");
+    expect(target.querySelector<HTMLInputElement>("[data-field='provider'] input")?.value).toBe(
+      "Claude Chat",
+    );
+    const autoApprove = target.querySelector<HTMLInputElement>("#auto-approve")!;
+    expect(autoApprove.disabled).toBe(true);
+    expect(autoApprove.checked).toBe(false);
+
+    const titleInput = target.querySelector("[data-field='title'] input") as HTMLInputElement;
+    titleInput.value = "Chat task";
+    titleInput.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    target.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true }));
+    await vi.waitFor(() => expect(mockLaunch).toHaveBeenCalled());
+    expect(mockLaunch.mock.calls[0][0]).toMatchObject({
+      provider: "chat:claude",
+      autoApprove: false,
+    });
+  });
+});

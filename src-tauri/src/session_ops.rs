@@ -531,6 +531,9 @@ fn daemon_send_frames(
     Ok(())
 }
 
+/// `sessions.backend` for sessions whose runtime is a plugin provider (ADR-0014).
+pub const PLUGIN_BACKEND: &str = "plugin";
+
 pub fn send_prompt(
     conn: &Connection,
     id_prefix: &str,
@@ -570,6 +573,13 @@ pub fn send_prompt(
         "local" => {
             ops.notify_socket_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to local PTY");
+        }
+        // The GUI owns provider runtimes, so prompts take the same route as local PTYs.
+        PLUGIN_BACKEND => {
+            // The GUI delivers it later, so refuse what the provider would reject while the caller can still hear it.
+            planeai_plugin_contract::provider::check_prompt_size(text)?;
+            ops.notify_socket_send(&session.id, text)?;
+            tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to plugin provider");
         }
         "daemon" => {
             ops.daemon_send(&session.id, text)?;
@@ -1562,6 +1572,48 @@ mod tests {
         // Local backend sends via notify socket
         assert_eq!(ops.sent_keys.borrow().len(), 0);
         assert_eq!(ops.sent_socket.borrow().len(), 1);
+    }
+
+    #[test]
+    fn send_prompt_plugin_backend_uses_notify_socket() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "ccccdddd-1111-2222-3333-444455556666";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "provider-session",
+            None,
+            "main",
+            None,
+            Some("claude-chat:claude"),
+            "plugin",
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let ops = MockPromptOps::new(true);
+        // Too large for the provider: refused here, since the GUI delivers it later.
+        let oversized = "x".repeat(64 * 1024);
+        assert!(send_prompt(&conn, "cccc", &oversized, &ops)
+            .unwrap_err()
+            .contains("too long"));
+        assert!(ops.sent_socket.borrow().is_empty());
+
+        let result = send_prompt(&conn, "cccc", "hello provider", &ops).unwrap();
+        assert_eq!(result.backend, "plugin");
+        assert_eq!(ops.sent_keys.borrow().len(), 0);
+        assert_eq!(
+            ops.sent_socket.borrow().as_slice(),
+            &[(id.to_string(), "hello provider".to_string())]
+        );
     }
 
     #[test]

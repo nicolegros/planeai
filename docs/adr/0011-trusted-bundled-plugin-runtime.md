@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — amended for local packages
+Accepted - amended for local packages, and partially superseded by ADR-0014 for plugin-provided session runtimes
 
 ## Context
 
@@ -38,5 +38,6 @@ PlaneAI runs bundled and user-selected local plugins as separately compiled subp
 - **In-process Rust trait plugins:** one plugin can crash or corrupt PlaneAI and cannot be safely unloaded.
 - **Dynamic libraries:** platform ABI, signing, dependency, and unload semantics make the host less reliable than a supervised process.
 - **Reusing session/daemon runtime:** plugins are not PTYs, do not belong to projects or worktrees, and should not inherit agent lifecycle semantics.
+  ADR-0014 later lets a plugin provide a session runtime, while the host keeps the session, worktree and lifecycle.
 - **Remote packages, marketplace policy, signing, or automatic updates:** each is a distinct code-distribution and trust-policy problem, intentionally deferred from local trusted v1.
 - **Remote or arbitrary multi-file UI module graphs:** v1 accepts only package-contained self-contained browser ESM bundles. Future module resolution or untrusted UI needs a separate security and compatibility design.

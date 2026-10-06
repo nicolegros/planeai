@@ -1,15 +1,14 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 use tauri::ipc::{Channel, Response};
-use tauri::{AppHandle, Emitter};
 
 use crate::daemon_client::DataConnection;
 use crate::output_observer::{NoopObserver, OutputObserver};
-use crate::pty_planeai_core_adapter::PlaneaiPtyBackend;
+use crate::pty_planeai_core_adapter::{PlaneaiPtyBackend, SpawnCommand};
 use crate::session_backend::{SessionBackend, WriteAck};
 use planeai_pty::FlowControl;
 
@@ -21,6 +20,8 @@ pub enum PtyTarget {
     /// Spawn a command string in a local PTY (shell tabs and agent sessions).
     /// The command is wrapped in the platform shell (`bash -c` on Unix, `cmd /C` on Windows).
     Shell { command: String, cwd: String },
+    /// Run a program with its arguments in a local PTY, without a shell to parse them.
+    Program { argv: Vec<String>, cwd: String },
     /// Attach to a daemon-managed session via data connection.
     Daemon {
         session_id: String,
@@ -36,6 +37,13 @@ pub enum PtyTarget {
         handle: planeai_rmux::ResourceHandle,
     },
 }
+
+pub fn gone_error(pty_key: &str) -> String {
+    format!("{pty_key} no longer runs")
+}
+
+/// Told the pty key of every PTY whose process ended by itself; a detach silences it.
+pub type ExitSink = Arc<dyn Fn(&str) + Send + Sync>;
 
 // Flusher coalesces output so bursts arrive as single chunks.
 const FLUSH_COALESCE: Duration = Duration::from_millis(4);
@@ -176,15 +184,15 @@ impl SessionBackend for RmuxBackend {
 pub struct PtyManager {
     sessions: Arc<RwLock<HashMap<String, Box<dyn SessionBackend>>>>,
     observer: Arc<RwLock<Arc<dyn OutputObserver>>>,
-    tab_close_claims: Arc<Mutex<HashSet<String>>>,
+    exits: ExitSink,
 }
 
 impl PtyManager {
-    pub fn new() -> Self {
+    pub fn new(exits: ExitSink) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             observer: Arc::new(RwLock::new(Arc::new(NoopObserver))),
-            tab_close_claims: Arc::new(Mutex::new(HashSet::new())),
+            exits,
         }
     }
 
@@ -192,25 +200,9 @@ impl PtyManager {
         *self.observer.write().unwrap() = observer;
     }
 
-    /// Claim responsibility for closing a shell tab. A claim persists after a
-    /// successful close so delayed duplicate exit notifications are harmless.
-    pub(crate) fn claim_tab_close(&self, pty_key: &str) -> bool {
-        self.tab_close_claims
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(pty_key.to_string())
-    }
-
-    /// Release a close claim when closing failed so a later retry can proceed.
-    pub(crate) fn cancel_tab_close(&self, pty_key: &str) {
-        self.clear_tab_close_claim(pty_key);
-    }
-
-    fn clear_tab_close_claim(&self, pty_key: &str) {
-        self.tab_close_claims
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(pty_key);
+    /// Report a process that ended outside any attached PTY, such as a daemon session's.
+    pub fn report_exit(&self, pty_key: &str) {
+        (self.exits)(pty_key);
     }
 
     /// Attach a PTY to a session. The command run inside depends on the PtyTarget variant.
@@ -222,19 +214,16 @@ impl PtyManager {
         &self,
         session_id: &str,
         target: PtyTarget,
-        app: AppHandle,
         on_data: Channel<Response>,
         env: Vec<(String, String)>,
     ) -> Result<(), String> {
-        self.clear_tab_close_claim(session_id);
-
         // Handle daemon target via async path
         if let PtyTarget::Daemon {
             session_id: sid,
             socket_path,
         } = target
         {
-            return self.attach_daemon(&sid, socket_path, app, on_data);
+            return self.attach_daemon(&sid, socket_path, on_data);
         }
 
         // Handle rmux target via async path
@@ -244,22 +233,20 @@ impl PtyManager {
             handle,
         } = target
         {
-            return self.attach_rmux(&pty_key, workspace, handle, app, on_data);
+            return self.attach_rmux(&pty_key, workspace, handle, on_data);
         }
 
-        // A shell terminal can remount when its split leaf changes. Rebind its
-        // output channel instead of killing and recreating the running local PTY.
-        if matches!(&target, PtyTarget::Shell { .. }) {
-            let sessions = self.sessions.read().map_err(|e| e.to_string())?;
-            if let Some(existing) = sessions.get(session_id) {
-                if existing.rebind_output(on_data.clone()) {
-                    return Ok(());
-                }
-            }
+        // An agent's terminal remounts when its split leaf changes: its running local PTY gets
+        // the new output channel. Terminal tabs reconnect through `reconnect` instead.
+        if matches!(&target, PtyTarget::Shell { .. })
+            && self.reconnect(session_id, on_data.clone()).is_ok()
+        {
+            return Ok(());
         }
 
         let (command, cwd) = match target {
-            PtyTarget::Shell { command, cwd } => (command, cwd),
+            PtyTarget::Shell { command, cwd } => (SpawnCommand::Shell(command), cwd),
+            PtyTarget::Program { argv, cwd } => (SpawnCommand::Argv(argv), cwd),
             PtyTarget::TmuxAttach { tmux_name } => {
                 #[cfg(not(windows))]
                 {
@@ -271,7 +258,7 @@ impl PtyManager {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
-                    (cmd, cwd)
+                    (SpawnCommand::Shell(cmd), cwd)
                 }
                 #[cfg(windows)]
                 {
@@ -286,13 +273,24 @@ impl PtyManager {
         let cancelled = Arc::new(AtomicBool::new(false));
         let observer = self.observer.read().unwrap().clone();
         let backend = PlaneaiPtyBackend::spawn(
-            session_id, &command, &cwd, env, app, on_data, cancelled, observer,
+            session_id,
+            command,
+            &cwd,
+            env,
+            self.exits.clone(),
+            on_data,
+            cancelled,
+            observer,
         )?;
+        self.publish(session_id, Box::new(backend))
+    }
+
+    /// Make a spawned local backend the session's, replacing any previous one.
+    fn publish(&self, session_id: &str, backend: Box<dyn SessionBackend>) -> Result<(), String> {
         let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
-        if let Some(old) = sessions.get(session_id) {
+        if let Some(old) = sessions.insert(session_id.to_string(), backend) {
             old.detach();
         }
-        sessions.insert(session_id.to_string(), Box::new(backend));
         Ok(())
     }
 
@@ -301,10 +299,10 @@ impl PtyManager {
         &self,
         session_id: &str,
         socket_path: PathBuf,
-        app: AppHandle,
         on_data: Channel<Response>,
     ) -> Result<(), String> {
         tracing::info!(session_id, "attaching to daemon session");
+        let exits = self.exits.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
         let flow = Arc::new(FlowControl::new());
         let sid = session_id.to_string();
@@ -327,7 +325,7 @@ impl PtyManager {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("daemon data connect failed for {}: {}", sid_clone, e);
-                    let _ = app.emit("pty-exited", serde_json::json!({ "pty_key": sid_clone }));
+                    exits(&sid_clone);
                     return;
                 }
             };
@@ -357,7 +355,7 @@ impl PtyManager {
             let cancelled_f = cancelled_clone.clone();
             let flow_f = flow_clone;
             let exit_key = sid_clone.clone();
-            let app_flusher = app.clone();
+            let exits_flusher = exits.clone();
             thread::spawn(move || {
                 let (lock, cv) = &*pending_f;
                 loop {
@@ -370,10 +368,7 @@ impl PtyManager {
                                     let _ = on_data.send(Response::new(chunk));
                                 }
                                 if !cancelled_f.load(Ordering::Acquire) {
-                                    let _ = app_flusher.emit(
-                                        "pty-exited",
-                                        serde_json::json!({ "pty_key": exit_key }),
-                                    );
+                                    exits_flusher(&exit_key);
                                 }
                                 return;
                             }
@@ -396,8 +391,7 @@ impl PtyManager {
                     }
                 }
                 if !cancelled_f.load(Ordering::Acquire) {
-                    let _ =
-                        app_flusher.emit("pty-exited", serde_json::json!({ "pty_key": exit_key }));
+                    exits_flusher(&exit_key);
                 }
             });
 
@@ -443,10 +437,10 @@ impl PtyManager {
         pty_key: &str,
         workspace: planeai_rmux::WorkspaceName,
         handle: planeai_rmux::ResourceHandle,
-        app: AppHandle,
         on_data: Channel<Response>,
     ) -> Result<(), String> {
         tracing::info!(pty_key, %workspace, "attaching to rmux resource");
+        let exits = self.exits.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
         let flow = Arc::new(FlowControl::new());
         let sid = pty_key.to_string();
@@ -475,7 +469,7 @@ impl PtyManager {
                 Ok(attached) => attached,
                 Err(error) => {
                     tracing::error!(pty_key = %sid, %error, "rmux attach failed");
-                    let _ = app.emit("pty-exited", serde_json::json!({ "pty_key": sid }));
+                    exits(&sid);
                     return;
                 }
             };
@@ -505,7 +499,7 @@ impl PtyManager {
             let cancelled_f = cancelled_clone.clone();
             let flow_f = flow_clone;
             let exit_key = sid.clone();
-            let app_flusher = app.clone();
+            let exits_flusher = exits.clone();
             thread::spawn(move || {
                 let (lock, cv) = &*pending_f;
                 loop {
@@ -529,10 +523,7 @@ impl PtyManager {
                                     let _ = on_data.send(Response::new(chunk));
                                 }
                                 if !cancelled_f.load(Ordering::Acquire) {
-                                    let _ = app_flusher.emit(
-                                        "pty-exited",
-                                        serde_json::json!({ "pty_key": exit_key }),
-                                    );
+                                    exits_flusher(&exit_key);
                                 }
                                 return;
                             }
@@ -571,8 +562,7 @@ impl PtyManager {
                     }
                 }
                 if !cancelled_f.load(Ordering::Acquire) {
-                    let _ =
-                        app_flusher.emit("pty-exited", serde_json::json!({ "pty_key": exit_key }));
+                    exits_flusher(&exit_key);
                 }
             });
 
@@ -667,12 +657,30 @@ impl PtyManager {
         backend.resize(rows, cols)
     }
 
+    /// Connect new output to a local PTY still running, never starting one.
+    pub fn reconnect(&self, pty_key: &str, on_data: Channel<Response>) -> Result<(), String> {
+        let sessions = self.sessions.read().map_err(|e| e.to_string())?;
+        match sessions.get(pty_key) {
+            Some(existing) if existing.rebind_output(on_data) => Ok(()),
+            _ => Err(gone_error(pty_key)),
+        }
+    }
+
     /// Detach a session's PTY (cleanup).
     pub fn detach(&self, session_id: &str) {
         let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
         if let Some(backend) = sessions.remove(session_id) {
             backend.detach();
         }
+    }
+
+    /// Whether a process runs behind the key; backends that cannot tell count as running.
+    pub fn is_running(&self, pty_key: &str) -> bool {
+        self.sessions
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(pty_key)
+            .is_some_and(|backend| !backend.has_exited())
     }
 
     /// Pause reading from a session's PTY (flow control back pressure).
@@ -693,28 +701,61 @@ impl PtyManager {
 #[cfg(test)]
 mod tests {
     use super::PtyManager;
+    use crate::session_backend::{SessionBackend, WriteAck};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Default)]
+    struct FakeBackend {
+        detached: Arc<AtomicBool>,
+        exited: Arc<AtomicBool>,
+    }
+
+    impl SessionBackend for FakeBackend {
+        fn write(&self, _data: &[u8]) -> Result<WriteAck, String> {
+            Ok(WriteAck::Immediate)
+        }
+        fn resize(&self, _rows: u16, _cols: u16) -> Result<(), String> {
+            Ok(())
+        }
+        fn pause(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn resume(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn detach(&self) {
+            self.detached.store(true, Ordering::SeqCst);
+        }
+        fn has_exited(&self) -> bool {
+            self.exited.load(Ordering::SeqCst)
+        }
+    }
 
     #[test]
-    fn tab_close_claim_blocks_reentrant_close_until_a_later_attach() {
-        let manager = PtyManager::new();
-        let pty_key = "session-1:2";
+    fn publishing_replaces_and_ends_the_previous_backend() {
+        let manager = PtyManager::new(Arc::new(|_: &str| {}));
+        let first = FakeBackend::default();
+        let first_detached = first.detached.clone();
+        manager.publish("s1:2", Box::new(first)).unwrap();
+        manager
+            .publish("s1:2", Box::new(FakeBackend::default()))
+            .unwrap();
+        assert!(first_detached.load(Ordering::SeqCst));
+        assert!(manager.is_running("s1:2"));
+    }
 
-        assert!(manager.claim_tab_close(pty_key));
-        assert!(
-            !manager.claim_tab_close(pty_key),
-            "a delayed pty-exited close must not claim the tab a second time"
-        );
-
-        manager.cancel_tab_close(pty_key);
-        assert!(
-            manager.claim_tab_close(pty_key),
-            "a failed close must remain retryable"
-        );
-
-        manager.clear_tab_close_claim(pty_key);
-        assert!(
-            manager.claim_tab_close(pty_key),
-            "a newly attached PTY key must be closable again"
-        );
+    #[test]
+    fn a_backend_runs_until_it_exits_or_detaches() {
+        let manager = PtyManager::new(Arc::new(|_: &str| {}));
+        let backend = FakeBackend::default();
+        let (exited, detached) = (backend.exited.clone(), backend.detached.clone());
+        manager.publish("s1:2", Box::new(backend)).unwrap();
+        assert!(manager.is_running("s1:2"));
+        exited.store(true, Ordering::SeqCst);
+        assert!(!manager.is_running("s1:2"));
+        manager.detach("s1:2");
+        assert!(detached.load(Ordering::SeqCst));
+        assert!(!manager.is_running("s1:2"));
     }
 }

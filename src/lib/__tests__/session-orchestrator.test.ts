@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 vi.mock("@tauri-apps/api/window", () => ({
@@ -56,7 +56,7 @@ vi.mock("../api", () => ({
 }));
 
 import { sessions as sessionsApi, symphony } from "../api";
-import { taskWorkspaceLayout } from "../task-workspace-layout.svelte";
+import { providerHandoff, taskWorkspaceLayout } from "../task-workspace-layout.svelte";
 import { getSettings } from "../settings.svelte";
 import type { Session } from "../types";
 import {
@@ -65,6 +65,8 @@ import {
   _resetForTests as resetEditorFeedback,
 } from "../editor-feedback.svelte";
 import {
+  countSessionsLostOnQuit,
+  runningTurns,
   getSessions,
   getActiveSessionId,
   loadSessions,
@@ -224,6 +226,9 @@ describe("session-orchestrator", () => {
   });
 
   describe("archiveSession", () => {
+    // Spies on the shared handoff singleton must not outlive their test, even a failing one.
+    afterEach(() => vi.restoreAllMocks());
+
     it("removes session from list", async () => {
       api.list.mockResolvedValue([makeSession({ id: "s1" })]);
       await loadSessions();
@@ -241,6 +246,14 @@ describe("session-orchestrator", () => {
       await archiveSession(s1);
 
       expect(getEditorFeedbackCount(s1.id)).toBe(0);
+    });
+
+    it("closes a terminal still continuing the session", async () => {
+      const release = vi.spyOn(providerHandoff, "release").mockResolvedValue();
+      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
+      await loadSessions();
+      await archiveSession(makeSession({ id: "s1" }));
+      expect(release).toHaveBeenCalledWith("s1");
     });
   });
 
@@ -756,5 +769,75 @@ describe("selection explicitness", () => {
     const active = getActiveSessionId();
     expect(active).toBe("s1");
     expect(isSelectionExplicit(active!)).toBe(false);
+  });
+});
+
+describe("prompt delivery failures", () => {
+  it("tells the user a prompt never reached a chat session", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    const listenMock = vi.mocked(listen);
+    listenMock.mockClear();
+    const { showSnackbar } = await import("../snackbar.svelte");
+    vi.mocked(showSnackbar).mockClear();
+    createSession({
+      id: "chat",
+      name: "Refactor auth",
+      status: "active",
+      backend: "plugin",
+    } as Session);
+    const cleanup = startEventListeners();
+    const handler = listenMock.mock.calls.find(
+      (c) => c[0] === "prompt-delivery-failed",
+    )![1] as (event: { payload: { session_id: string; error: string } }) => void;
+    handler({ payload: { session_id: "chat", error: "plugin claude-chat is not running" } });
+    expect(showSnackbar).toHaveBeenCalledWith(
+      "A prompt for Refactor auth was not delivered: plugin claude-chat is not running",
+    );
+    cleanup();
+  });
+});
+
+describe("countSessionsLostOnQuit", () => {
+  it("counts active local sessions and busy provider sessions only", () => {
+    const sessions = [
+      { id: "local", status: "active", backend: "local" },
+      { id: "local-exited", status: "exited", backend: "local" },
+      { id: "daemon", status: "active", backend: "daemon" },
+      { id: "chat-busy", status: "active", backend: "plugin" },
+      { id: "chat-idle", status: "active", backend: "plugin" },
+    ] as const;
+    expect(countSessionsLostOnQuit([...sessions], new Set(["chat-busy", "daemon"]))).toBe(2);
+  });
+
+  it("keeps counting a running chat turn after its session is selected, until it ends or its plugin goes away", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    const listenMock = vi.mocked(listen);
+    listenMock.mockClear();
+    const { tasks } = await import("../api");
+    vi.mocked(tasks.fireNotifyHook)
+      .mockReset()
+      .mockResolvedValue(undefined as never);
+    const cleanup = startEventListeners();
+    const handlerFor = (name: string) =>
+      listenMock.mock.calls.find((c) => c[0] === name)![1] as (event: {
+        payload: { session_id: string; state?: string };
+      }) => void;
+
+    handlerFor("agent-state-change")({ payload: { session_id: "chat", state: "Busy" } });
+    expect(runningTurns().has("chat")).toBe(true);
+    // Selecting a session acknowledges it, which must not hide a turn still running.
+    clearAgentState("chat");
+    expect(runningTurns().has("chat")).toBe(true);
+
+    // A sidecar that went away ends the turn without it having finished.
+    handlerFor("agent-released")({ payload: { session_id: "chat" } });
+    expect(runningTurns().has("chat")).toBe(false);
+    await Promise.resolve();
+    expect(tasks.fireNotifyHook).not.toHaveBeenCalled();
+
+    handlerFor("agent-state-change")({ payload: { session_id: "chat", state: "Busy" } });
+    handlerFor("agent-state-change")({ payload: { session_id: "chat", state: "Idle" } });
+    expect(runningTurns().has("chat")).toBe(false);
+    cleanup();
   });
 });

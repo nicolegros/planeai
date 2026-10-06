@@ -16,8 +16,10 @@ import type {
   LoopRunSummary,
   LoopRunDetail,
   RecipeSummary,
+  TabSpec,
 } from "./types";
 import type { AppConfig } from "./settings.svelte";
+import { toProviderSessionError } from "./provider-session-error";
 
 export interface LaunchSessionParams {
   projectId: string;
@@ -82,18 +84,25 @@ export const pty = {
     invoke<boolean>("write_to_pty", { sessionId, data }),
   attach: (sessionId: string, darkMode: boolean, onData: Channel<ArrayBuffer>) =>
     invoke("attach_session", { sessionId, darkMode, onData }),
-  spawnTab: (
+  /** Reserve a terminal tab running `spec`; resolves its index, never one the session had. */
+  openTab: (sessionId: string, spec: TabSpec) => invoke<number>("open_tab", { sessionId, spec }),
+  /** Start a terminal tab, or connect to the process already running it; false when it ended instead. */
+  attachTab: (
     sessionId: string,
     tabIndex: number,
     darkMode: boolean,
     onData: Channel<ArrayBuffer>,
-    initialCommand?: string,
-  ) => invoke("spawn_tab", { sessionId, tabIndex, darkMode, initialCommand, onData }),
+  ) => invoke<boolean>("attach_tab", { sessionId, tabIndex, darkMode, onData }),
   resize: (sessionId: string, rows: number, cols: number) =>
     invoke("resize_pty", { sessionId, rows, cols }),
   pause: (sessionId: string) => invoke("pause_pty", { sessionId }),
   resume: (sessionId: string) => invoke("resume_pty", { sessionId }),
+  /** Close a terminal tab; rejects, leaving it live, when its process could not be ended. */
   closeTab: (sessionId: string, tabIndex: number) => invoke("close_tab", { sessionId, tabIndex }),
+  /** The terminal tabs among `ptyKeys` that ended. */
+  endedTabs: (ptyKeys: string[]) => invoke<string[]>("ended_tabs", { ptyKeys }),
+  /** Whether the tab still runs its program, such as a provider handoff's TUI. */
+  isProgramRunning: (ptyKey: string) => invoke<boolean>("is_program_running", { ptyKey }),
 };
 
 export interface LspConnection {
@@ -265,7 +274,29 @@ export const plugins = {
     invoke<T>("update_plugin_settings", { pluginId, settings }),
   localUiSource: (pluginId: string, contributionId: string) =>
     invoke<string>("local_plugin_ui_source", { pluginId, contributionId }),
+  localProviderUiSource: (pluginId: string, providerId: string) =>
+    invoke<string>("local_plugin_provider_ui_source", { pluginId, providerId }),
   dataChanged: (pluginId: string) => invoke<void>("plugin_data_changed", { pluginId }),
+};
+
+function invokeProviderSession<T>(command: string, args: Record<string, unknown>): Promise<T> {
+  return invoke<T>(command, args).catch((error: unknown) => {
+    throw toProviderSessionError(error);
+  });
+}
+
+/** Host-routed control of plugin provider sessions (ADR-0014). */
+export const providerSessions = {
+  ensure: (sessionId: string) =>
+    invokeProviderSession<void>("provider_session_ensure", { sessionId }),
+  send: (sessionId: string, text: string) =>
+    invokeProviderSession<void>("provider_session_send", { sessionId, text }),
+  interrupt: (sessionId: string) =>
+    invokeProviderSession<void>("provider_session_interrupt", { sessionId }),
+  handoff: (sessionId: string) =>
+    invokeProviderSession<string[]>("provider_session_handoff", { sessionId }),
+  handback: (sessionId: string) =>
+    invokeProviderSession<void>("provider_session_handback", { sessionId }),
 };
 
 export const preferences = {

@@ -31,7 +31,7 @@ The crate has **no** Tauri, Iced, alacritty, or xterm dependencies.
 
 1. **`TauriPtySink`** — implements `PtyEventSink` to forward events to the Tauri frontend:
    - `PtyEvent::Output` → `Channel<Response>::send(bytes)` (same path as legacy)
-   - `PtyEvent::Exit` → `app.emit("pty-exited", { pty_key })` (same event as legacy)
+   - `PtyEvent::Exit` → the PTY manager's exit sink: a terminal tab's exit ends it (`tab-ended`), an agent's emits `pty-exited`
    - `PtyEvent::Error` → `tracing::error!`
 
 2. **`PlaneaiPtyBackend`** — implements `SessionBackend` wrapping `LocalPtySession`:

@@ -48,7 +48,6 @@ export interface TerminalSurface {
 export interface TerminalConnectRequest {
   ptyKey: string;
   kind: TerminalKind;
-  initialCommand?: string;
 }
 
 export interface TerminalPty {
@@ -78,7 +77,6 @@ export interface GeometryHint {
 export interface TerminalViewOptions {
   ptyKey: string;
   kind: TerminalKind;
-  initialCommand?: string;
   pty: TerminalPty;
   createSurface: (handlers: TerminalSurfaceHandlers) => TerminalSurface;
   geometryHint?: GeometryHint;
@@ -257,9 +255,7 @@ export function createTerminalView(options: TerminalViewOptions): TerminalView {
     };
     connection = attempt;
     pty
-      .connect({ ptyKey, kind, initialCommand: options.initialCommand }, (data) =>
-        receive(attempt, data),
-      )
+      .connect({ ptyKey, kind }, (data) => receive(attempt, data))
       .then(() => {
         if (attempt !== connection || phase === "disposed") return;
         attempt.status = "live";

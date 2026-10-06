@@ -10,7 +10,13 @@ import type { FocusZone } from "./focus.svelte";
  * the terminal keeps DOM focus forever — and xterm calls stopPropagation() on
  * keys it consumes, so sidebar navigation never reaches its window key handler.
  * `releaseTerminalDomFocus` therefore enforces the release directly.
+ *
+ * A provider session's chat frame owns the keyboard the same way: keys typed in
+ * it stay in the frame's document, so it follows the same rules.
  */
+
+/** Marks the iframe of a provider session's UI, which owns the keyboard like a terminal. */
+export const PROVIDER_FRAME_ATTRIBUTE = "data-provider-session-frame";
 
 /** Conditions under which the terminal is allowed to own the keyboard at all. */
 export interface TerminalKeyboardOwnership {
@@ -44,8 +50,15 @@ export function isTerminalPaneFocused(input: TerminalPaneFocusInput): boolean {
   );
 }
 
+/** The focused element, looking into the shadow roots plugin frames live in. */
+function deepActiveElement(root: Document): Element | null {
+  let active = root.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  return active;
+}
+
 /**
- * Give up xterm's DOM focus when the terminal may not own the keyboard.
+ * Give up xterm's, or a provider session frame's, DOM focus when it may not own the keyboard.
  * Independent of any pane's `focused` prop, which may never transition.
  *
  * Must run on ownership change *and* on focus arrival: Terminal.svelte's
@@ -60,13 +73,19 @@ export function releaseTerminalDomFocus(
   // Cheapest discriminating check first: this runs on every focusin in the app,
   // and `closest` walks up from one node while `hasOpenDialog` scans the whole
   // document — which grows with the number of mounted terminals.
-  const active = root.activeElement;
-  if (!(active instanceof HTMLElement) || !active.closest(".xterm")) return;
+  const active = deepActiveElement(root);
+  if (
+    !(active instanceof HTMLElement) ||
+    !(active.closest(".xterm") || active.hasAttribute(PROVIDER_FRAME_ATTRIBUTE))
+  )
+    return;
   // The DOM probe catches keyboard-owning dialogs whose open state App does not
   // model, such as the BranchCompare form or Preferences; a hand-maintained list
   // of flags drifts as dialogs are added.
   if (terminalMayOwnKeyboard(ownership) && !hasOpenDialog(root)) return;
   active.blur();
+  // WebKit keeps sending keys to a blurred frame until the app's own window takes focus.
+  if (active.hasAttribute(PROVIDER_FRAME_ATTRIBUTE)) root.defaultView?.focus();
 }
 
 /**
