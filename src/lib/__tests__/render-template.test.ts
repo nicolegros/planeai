@@ -24,7 +24,13 @@ describe("renderTemplate", () => {
   });
 
   it("joins blockers and falls back to the key for an empty parent", () => {
-    const task = { key: "PLA-3", parent_key: null, blocked_by: ["PLA-1", "PLA-2"], tags: ["a", "b"], priority: 2 };
+    const task = {
+      key: "PLA-3",
+      parent_key: null,
+      blocked_by: ["PLA-1", "PLA-2"],
+      tags: ["a", "b"],
+      priority: 2,
+    };
     expect(renderTemplate("{parent_key}|{blocked_by}|{tags}|{priority}", task)).toBe(
       "PLA-3|PLA-1, PLA-2|a,b|2",
     );
