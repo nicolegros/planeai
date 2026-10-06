@@ -12,6 +12,7 @@
   import * as taskStore from "./lib/task-store.svelte";
   import { installKeyboardRouter, matchChord, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT, IS_WINDOWS } from "./lib/keyboard";
   import { findPluginShortcut } from "./lib/plugin-shortcuts";
+  import { resolvePluginOpen, type PluginOpenOrigin } from "./lib/plugin-navigation";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { sidebarNavigationOrder } from "./lib/sidebar-model";
@@ -43,6 +44,7 @@
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
   import SharedDialog from "./components/ui/Dialog.svelte";
   import FormDialog from "./components/ui/FormDialog.svelte";
+  import PluginDialog from "./components/PluginDialog.svelte";
   import LogViewer from "./components/LogViewer.svelte";
   import PostMergePrompt from "./components/PostMergePrompt.svelte";
   import LoopForm from "./components/LoopForm.svelte";
@@ -93,8 +95,8 @@
   let pluginSessionActionsRevision = 0;
   let terminalFocusRequest = $state<{ id: number; sessionId: string } | null>(null);
 
-  let modalPluginId = $state<string | null>(null);
-  let modalContributionId = $state<string | null>(null);
+  /** The contribution open in the host's plugin dialog, and the element to refocus when it closes. */
+  let pluginDialog = $state<{ pluginId: string; contributionId: string; returnFocus: HTMLElement | null } | null>(null);
 
   let logViewerEnabled = $state(false);
   let sessionToDelete = $state<Session | null>(null);
@@ -142,8 +144,8 @@
   const activeLoopId = $derived(loopStore.getActiveLoopId());
   const activePlugin = $derived(pluginInventory.find((plugin) => plugin.id === activePluginId) ?? null);
   const activeContribution = $derived(activePlugin?.ui_contributions.find((contribution) => contribution.id === activeContributionId) ?? null);
-  const modalPlugin = $derived(pluginInventory.find((plugin) => plugin.id === modalPluginId) ?? null);
-  const modalContribution = $derived(modalPlugin?.ui_contributions.find((contribution) => contribution.id === modalContributionId) ?? null);
+  const modalPlugin = $derived(pluginInventory.find((plugin) => plugin.id === pluginDialog?.pluginId) ?? null);
+  const modalContribution = $derived(modalPlugin?.ui_contributions.find((contribution) => contribution.id === pluginDialog?.contributionId) ?? null);
   const comparePluginContribution = (left: { plugin: PluginInventory; contribution: PluginUiContribution }, right: { plugin: PluginInventory; contribution: PluginUiContribution }) =>
     (left.contribution.order ?? 0) - (right.contribution.order ?? 0) || left.plugin.name.localeCompare(right.plugin.name) || left.plugin.id.localeCompare(right.plugin.id) || left.contribution.id.localeCompare(right.contribution.id);
   const sidebarPluginContributions = $derived(
@@ -156,9 +158,9 @@
       plugin.ui_contributions.filter((contribution) => contribution.placement === "session.indicator").map((contribution) => ({ plugin, contribution })),
     ).sort(comparePluginContribution),
   );
-  const mainPaneCommands = $derived(
+  const globalPluginCommands = $derived(
     pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
-      plugin.ui_contributions.filter((contribution) => contribution.placement === "main-pane").map((contribution) => ({ plugin, contribution })),
+      plugin.ui_contributions.filter((contribution) => contribution.placement === "main-pane" || contribution.placement === "dialog").map((contribution) => ({ plugin, contribution })),
     ).sort(comparePluginContribution),
   );
   const sessionPanelCommands = $derived(
@@ -175,7 +177,7 @@
         ).sort(comparePluginContribution)
       : [],
   );
-  const pluginCommands = $derived([...mainPaneCommands, ...sessionPanelCommands]);
+  const pluginCommands = $derived([...globalPluginCommands, ...sessionPanelCommands]);
   const interactionPluginContributions = $derived(
     pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
       plugin.ui_contributions.filter((contribution) => contribution.placement === "interaction").map((contribution) => ({ plugin, contribution })),
@@ -229,7 +231,7 @@
   // one, and xterm swallows the keys the dialog needs. Dialogs App does not model
   // are caught by the DOM probe inside releaseTerminalDomFocus.
   const keyboardModalOpen = $derived(
-    showNewItemModal || !!sessionToDelete || showTaskForm || showProjectForm || !!modalPluginId
+    showNewItemModal || !!sessionToDelete || showTaskForm || showProjectForm || !!pluginDialog
       || showSessionForm || showLoopForm || commandMenuOpen || showShortcuts
       || !!projectToDelete || !!loopToDelete || showQuitConfirm || showOnboarding,
   );
@@ -657,35 +659,37 @@
   }
 
   function closePluginContributionModal(): void {
-    modalPluginId = null;
-    modalContributionId = null;
-    tick().then(() => refocusTerminal());
+    const returnFocus = pluginDialog?.returnFocus;
+    pluginDialog = null;
+    tick().then(() => {
+      if (returnFocus?.isConnected) returnFocus.focus();
+      else refocusTerminal();
+    });
   }
 
-  function openPluginContributionModal(pluginId: string, contributionId: string): void {
-    const plugin = pluginInventory.find((candidate) => candidate.id === pluginId && candidate.state === "running");
-    const contribution = plugin?.ui_contributions.find((candidate) =>
-      candidate.id === contributionId && candidate.placement === "session.panel",
-    );
-    if (!plugin || !contribution || !activeSession) {
-      showSnackbar("Plugin contribution is unavailable for the selected session");
+  /** Opens a contribution on the surface its placement and the request's origin call for. */
+  function openPlugin(pluginId: string, contributionId: string, origin: PluginOpenOrigin): void {
+    const target = resolvePluginOpen(pluginInventory, pluginId, contributionId, origin, !!activeSession);
+    if (target.surface === "unavailable") {
+      showSnackbar("Plugin contribution is unavailable");
       return;
     }
-    leavePluginWorkspace();
-    modalPluginId = pluginId;
-    modalContributionId = contributionId;
+    if (target.surface === "dialog") {
+      // A session panel returns to its terminal; a dialog returns where the user was.
+      const sessionPanel = target.contribution.placement === "session.panel";
+      if (sessionPanel) leavePluginWorkspace();
+      const focused = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+      pluginDialog = { pluginId, contributionId, returnFocus: pluginDialog ? pluginDialog.returnFocus : sessionPanel ? null : focused };
+      return;
+    }
+    pluginDialog = null;
+    if (activePluginId === pluginId && activeContributionId === contributionId) return;
+    loopStore.setActiveLoopId(null);
+    activePluginId = pluginId;
+    activeContributionId = contributionId;
   }
 
-  function openTitlebarPluginContribution(pluginId: string, contributionId: string): void {
-    const contribution = pluginInventory
-      .find((candidate) => candidate.id === pluginId && candidate.state === "running")
-      ?.ui_contributions.find((candidate) => candidate.id === contributionId);
-    if (contribution?.placement === "session.panel") {
-      openPluginContributionModal(pluginId, contributionId);
-      return;
-    }
-    openPluginContribution(pluginId, contributionId);
-  }
+  const navigatePlugin = (pluginId: string, contributionId: string) => openPlugin(pluginId, contributionId, "navigation");
 
   function focusPluginInteraction(): boolean {
     const interaction = document.querySelector<HTMLElement>("[data-plugin-interaction-host] [data-plugin-ui-contribution]");
@@ -732,21 +736,6 @@
           }
         : undefined,
     });
-  }
-
-  function openPluginContribution(pluginId: string, contributionId: string): void {
-    const plugin = pluginInventory.find((candidate) => candidate.id === pluginId && candidate.state === "running");
-    const contribution = plugin?.ui_contributions.find((candidate) =>
-      candidate.id === contributionId && ["main-pane", "session.panel"].includes(candidate.placement),
-    );
-    if (!plugin || !contribution || (contribution.placement === "session.panel" && !activeSession)) {
-      showSnackbar("Plugin contribution is unavailable for the selected session");
-      return;
-    }
-    if (activePluginId === pluginId && activeContributionId === contributionId) return;
-    loopStore.setActiveLoopId(null);
-    activePluginId = pluginId;
-    activeContributionId = contributionId;
   }
 
   /**
@@ -959,18 +948,14 @@
       // until propagation completes so a built-in shortcut always wins.
       queueMicrotask(() => {
       if (event.defaultPrevented || showOnboarding) return;
-      const target = findPluginShortcut(event, sessionPanelCommands, mainPaneCommands);
+      const target = findPluginShortcut(event, sessionPanelCommands, globalPluginCommands);
       if (!target) return;
       event.preventDefault();
-      if (target.contribution.placement === "session.panel") {
-        if (modalPluginId === target.plugin.id && modalContributionId === target.contribution.id) {
-          closePluginContributionModal();
-          return;
-        }
-        openPluginContributionModal(target.plugin.id, target.contribution.id);
+      if (pluginDialog?.pluginId === target.plugin.id && pluginDialog.contributionId === target.contribution.id) {
+        closePluginContributionModal();
         return;
       }
-      openPluginContribution(target.plugin.id, target.contribution.id);
+      openPlugin(target.plugin.id, target.contribution.id, "shortcut");
       });
     };
     window.addEventListener("keydown", onPluginShortcut, true);
@@ -1065,7 +1050,7 @@
         }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
-      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !modalPluginId && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !pluginDialog && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
       () => getActiveZone() === "editor" && workspaceLayout.focusedTab()?.type === "editor",
       () => !!document.activeElement?.closest('[data-form-keyboard]'),
       () => showOnboarding,
@@ -1165,7 +1150,7 @@
     onTabPress={pressTab}
     {titlebarContributions}
     titlebarSession={activePluginSessionContext}
-    onOpenTitlebarContribution={openTitlebarPluginContribution}
+    onOpenTitlebarContribution={(pluginId, contributionId) => openPlugin(pluginId, contributionId, "titlebar")}
     onOpenCommand={() => { commandMenuFileMode = false; commandMenuOpen = true; }}
     {symphonyStatus}
   />
@@ -1201,7 +1186,7 @@
         {sessionIndicatorContributions}
         pluginSessionActions={pluginSessionActions}
         onPluginSessionAction={runPluginSessionAction}
-        onPluginNavigate={openPluginContribution}
+        onPluginNavigate={navigatePlugin}
         onPluginClose={leavePluginWorkspace}
       />
   {/if}
@@ -1305,7 +1290,7 @@
       onSplitHorizontal={() => handleSplitAction("split_horizontal")}
       onCloseSplit={() => handleSplitAction("close_split")}
       pluginCommands={pluginCommands}
-      onOpenPluginContribution={openPluginContribution}
+      onOpenPluginContribution={(pluginId, contributionId) => openPlugin(pluginId, contributionId, "command")}
     />
 
     <KeyboardShortcuts open={showShortcuts} onOpenChange={(v) => (showShortcuts = v)} />
@@ -1375,7 +1360,7 @@
                   onFocused={() => {
                     if (isActiveInLeaf) claimAgentPane(leaf.id, tabEntry.ptyKey);
                   }}
-                  onNavigate={openPluginContribution}
+                  onNavigate={navigatePlugin}
                   onOpenPreferences={openPreferences}
                   onHandoff={handoffProviderSession}
                   onHandback={handbackProviderSession}
@@ -1489,7 +1474,7 @@
           <span class="text-sm font-medium text-t1">{activePlugin ? `${activePlugin.name} · ${activeContribution?.label ?? "Contribution"}` : "Plugin"}</span>
         </div>
         {#if activePlugin && activeContribution}
-          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} session={activeContribution.placement === "session.panel" ? activePluginSessionContext : undefined} getFocusedAgentSession={() => activePluginSessionContext} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={() => openPreferences(pluginPreferencesLocation(activePlugin))} autofocus /></div>
+          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} session={activeContribution.placement === "session.panel" ? activePluginSessionContext : undefined} getFocusedAgentSession={() => activePluginSessionContext} onNavigate={navigatePlugin} onClose={leavePluginWorkspace} onOpenPreferences={() => openPreferences(pluginPreferencesLocation(activePlugin))} autofocus /></div>
         {:else}
           <div class="flex min-h-0 flex-1 items-center justify-center text-sm text-t3">Plugin contribution is no longer available.</div>
         {/if}
@@ -1689,31 +1674,16 @@
   </div>
 </main>
 
-{#if modalPlugin && modalContribution && activePluginSessionContext}
-  <FormDialog
-    title={modalContribution.label}
-    class="min-h-[min(360px,85vh)]"
-    preventEscapeClose={false}
-    preventOpenAutoFocus={true}
+{#if modalPlugin && modalContribution && (modalContribution.placement === "dialog" || activePluginSessionContext)}
+  <PluginDialog
+    plugin={modalPlugin}
+    contribution={modalContribution}
+    session={activePluginSessionContext}
+    getFocusedAgentSession={() => activePluginSessionContext}
+    onNavigate={navigatePlugin}
     onClose={closePluginContributionModal}
-  >
-    <div>
-      <PluginContributionHost
-        plugin={modalPlugin}
-        contribution={modalContribution}
-        session={activePluginSessionContext}
-        getFocusedAgentSession={() => activePluginSessionContext}
-        onNavigate={(pluginId, contributionId) => {
-          closePluginContributionModal();
-          openPluginContribution(pluginId, contributionId);
-        }}
-        onClose={closePluginContributionModal}
-        onOpenPreferences={() => openPreferences(pluginPreferencesLocation(modalPlugin))}
-        closeOnEscape={true}
-        autofocus={true}
-      />
-    </div>
-  </FormDialog>
+    onOpenPreferences={() => openPreferences(pluginPreferencesLocation(modalPlugin))}
+  />
 {/if}
 
 {#if getSnackbarMessage()}
@@ -1731,7 +1701,7 @@
 {:else}
   {#each interactionPluginContributions as { plugin, contribution } (`${plugin.id}:${contribution.id}`)}
     <div class="pointer-events-none fixed inset-0 z-[90]" data-plugin-interaction-host={`${plugin.id}:${contribution.id}`}>
-      <PluginContributionHost {plugin} {contribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={() => openPreferences(pluginPreferencesLocation(plugin))} />
+      <PluginContributionHost {plugin} {contribution} onNavigate={navigatePlugin} onClose={leavePluginWorkspace} onOpenPreferences={() => openPreferences(pluginPreferencesLocation(plugin))} />
     </div>
   {/each}
   <UpdateToast />
