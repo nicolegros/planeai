@@ -38,6 +38,20 @@ export interface LaunchSessionParams {
   taskPrompt: string | null;
 }
 
+/** A task's session as "Start session immediately" starts it; the backend applies the templates. */
+export interface StartTaskSessionParams {
+  projectId: string;
+  taskKey: string;
+  /** `null` starts on the configured default provider. */
+  provider: string | null;
+  useWorktree: boolean;
+  autoApprove: boolean;
+  /** Overrides the branch template. */
+  branch: string | null;
+  /** Overrides the prompt template. */
+  prompt: string | null;
+}
+
 export const sessions = {
   list: () => invoke<Session[]>("list_sessions"),
   listArchived: () => invoke<Session[]>("list_archived_sessions"),
@@ -147,6 +161,8 @@ export const tasks = {
     parentKey?: string | null;
     baseBranch?: string;
   }) => invoke<TaskItem>("create_task_item", params),
+  startSession: (params: StartTaskSessionParams) =>
+    invoke<LaunchResult>("start_task_session", params as unknown as Record<string, unknown>),
   edit: (params: {
     repoPath: string;
     key: string;
