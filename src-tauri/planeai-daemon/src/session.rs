@@ -13,7 +13,7 @@ pub struct DaemonSession {
     buffer: Arc<Mutex<RingBuffer>>,
     alive: Arc<AtomicBool>,
     session: LocalPtySession,
-    tx: broadcast::Sender<Vec<u8>>,
+    tx: broadcast::WeakSender<Vec<u8>>,
 }
 
 impl DaemonSession {
@@ -30,11 +30,12 @@ impl DaemonSession {
         let buffer = Arc::new(Mutex::new(RingBuffer::new(buffer_capacity)));
         let alive = Arc::new(AtomicBool::new(true));
         let (tx, _) = broadcast::channel(64);
+        let weak_tx = tx.downgrade();
 
         let sink: Arc<dyn PtyEventSink> = {
             let primary = Arc::new(DaemonPtySink {
                 buffer: Arc::clone(&buffer),
-                tx: tx.clone(),
+                tx: Mutex::new(Some(tx)),
                 alive: Arc::clone(&alive),
             });
             if let Some(log_sink) = DurableLogSink::open(&session_id, command, cwd) {
@@ -99,7 +100,7 @@ impl DaemonSession {
             buffer,
             alive,
             session,
-            tx,
+            tx: weak_tx,
         })
     }
 
@@ -138,8 +139,12 @@ impl DaemonSession {
         (bytes, next_cursor, truncated)
     }
 
+    /// The receiver yields `Closed` once the session's output ends, immediately if it already has.
     pub fn subscribe_output(&self) -> broadcast::Receiver<Vec<u8>> {
-        self.tx.subscribe()
+        match self.tx.upgrade() {
+            Some(tx) => tx.subscribe(),
+            None => broadcast::channel(1).1,
+        }
     }
 
     pub fn session_id(&self) -> &str {
@@ -156,7 +161,8 @@ impl DaemonSession {
 /// Bridges planeai-pty output events to the daemon's buffer + broadcast mechanism.
 struct DaemonPtySink {
     buffer: Arc<Mutex<RingBuffer>>,
-    tx: broadcast::Sender<Vec<u8>>,
+    /// The only strong sender: dropping it on exit closes every subscriber's stream.
+    tx: Mutex<Option<broadcast::Sender<Vec<u8>>>>,
     alive: Arc<AtomicBool>,
 }
 
@@ -165,10 +171,13 @@ impl PtyEventSink for DaemonPtySink {
         match event {
             PtyEvent::Output { bytes, .. } => {
                 self.buffer.lock().unwrap().write(&bytes);
-                let _ = self.tx.send(bytes);
+                if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+                    let _ = tx.send(bytes);
+                }
             }
             PtyEvent::Exit { .. } => {
                 self.alive.store(false, Ordering::SeqCst);
+                self.tx.lock().unwrap().take();
             }
             PtyEvent::Error { message, .. } => {
                 tracing::error!("planeai-pty error: {message}");
