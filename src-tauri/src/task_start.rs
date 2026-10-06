@@ -141,8 +141,11 @@ pub fn plan_task_session(
         .iter()
         .map(|(name, value)| (*name, value.as_str()))
         .collect::<HashMap<_, _>>();
+    // An empty template counts as unset, as the forms have always read it.
     let render = |template: Option<&String>| {
-        template.map(|template| planeai_core::template::render(template, &vars))
+        template
+            .filter(|template| !template.is_empty())
+            .map(|template| planeai_core::template::render(template, &vars))
     };
     let set = |value: &Option<String>| value.clone().filter(|value| !value.is_empty());
 
@@ -539,36 +542,48 @@ mod tests {
         );
     }
 
+    /// The cases `taskSessionDefaults` runs too, so the forms preview what the planner starts.
+    #[test]
+    fn the_shared_cases_plan_as_the_forms_preview_them() {
+        let cases: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("task_start_cases.json")).unwrap();
+        for case in cases {
+            let name = case["case"].as_str().unwrap();
+            let fields = &case["task"];
+            let text = |field: &str| fields[field].as_str().unwrap_or_default().to_string();
+            let list = |field: &str| serde_json::from_value(fields[field].clone()).unwrap();
+            let task = Task {
+                key: text("key"),
+                title: text("title"),
+                description: text("description"),
+                status: Status::parse(&text("status")).unwrap(),
+                priority: fields["priority"].as_i64().unwrap() as i32,
+                parent_key: fields["parent_key"].as_str().map(str::to_string),
+                blocked_by: list("blocked_by"),
+                tags: list("tags"),
+                base_branch: text("base_branch"),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            };
+            let templates: Option<TaskManagerTemplates> =
+                serde_json::from_value(case["templates"].clone()).unwrap();
+            let plan = plan(templates.as_ref(), &task, &[], StartOptions::default());
+            assert_eq!(
+                serde_json::json!({
+                    "branch": plan.branch,
+                    "name": plan.name,
+                    "prompt": plan.prompt,
+                }),
+                case["expected"],
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn an_empty_description_leaves_the_prompt_at_its_first_line() {
         let plan = plan(None, &task(""), &[], StartOptions::default());
         assert_eq!(plan.prompt, "Implement task PLA-12: Fix Login Redirect");
-    }
-
-    #[test]
-    fn the_default_branch_keeps_only_lowercase_ascii_digits_hyphens_and_slashes() {
-        let mut odd = task("");
-        odd.title = "  Été: v2/API_call --  ".into();
-        assert_eq!(
-            plan(None, &odd, &[], StartOptions::default()).branch,
-            "pla-12/-t-v2/apicall"
-        );
-    }
-
-    #[test]
-    fn templates_render_with_every_task_field() {
-        let templates = templates(
-            "{key:lower}/{title:slug}",
-            "{key:upper} {status} p{priority}",
-            "{title} [{tags}] after {blocked_by} under {parent_key} from {base_branch}",
-        );
-        let plan = plan(Some(&templates), &task(""), &[], StartOptions::default());
-        assert_eq!(plan.branch, "pla-12/fix-login-redirect");
-        assert_eq!(plan.name, "PLA-12 todo p2");
-        assert_eq!(
-            plan.prompt,
-            "Fix Login Redirect [web,auth] after PLA-1, PLA-2 under PLA-12 from develop"
-        );
     }
 
     #[test]
