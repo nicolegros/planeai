@@ -249,7 +249,9 @@ where
 {
     let (result, report) = match provider_backed {
         Ok(true) => (
-            crate::plugin_providers::send(runtime, session_id, text).await,
+            crate::plugin_providers::send(runtime, session_id, text)
+                .await
+                .map_err(String::from),
             true,
         ),
         Ok(false) => (write_pty(format!("{text}\n").into_bytes()).await, false),

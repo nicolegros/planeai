@@ -3325,6 +3325,7 @@ dependencies = [
  "planeai-toon",
  "rusqlite",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

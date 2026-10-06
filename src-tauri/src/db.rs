@@ -387,6 +387,23 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
     Ok(planeai_core::services::SessionService::get(conn, id)?.map(record_to_session))
 }
 
+/// A provider plugin's sessions that still have a row and are not destroyed, as
+/// `(session id, provider id, status)`.
+pub fn list_plugin_provider_sessions(
+    conn: &Connection,
+    plugin_id: &str,
+) -> Result<Vec<(String, String, String)>> {
+    let prefix = format!("{plugin_id}:");
+    let mut stmt = conn.prepare(
+        "SELECT id, substr(provider, length(?2) + 1), status FROM sessions \
+         WHERE backend = ?1 AND status != 'destroyed' AND substr(provider, 1, length(?2)) = ?2",
+    )?;
+    let rows = stmt.query_map(params![crate::session_ops::PLUGIN_BACKEND, prefix], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    })?;
+    rows.collect()
+}
+
 pub fn session_owns_worktree(conn: &Connection, id: &str) -> Result<bool> {
     conn.query_row(
         "SELECT COALESCE(worktree_owned, 1) FROM sessions WHERE id = ?1",
@@ -737,6 +754,46 @@ mod tests {
         rename_session(&conn, &s.id, "new name").unwrap();
         let updated = get_session(&conn, &s.id).unwrap().unwrap();
         assert_eq!(updated.name, "new name");
+    }
+
+    #[test]
+    fn plugin_provider_sessions_are_those_of_the_plugin_not_destroyed() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let session = |id: &str, provider: &str, backend: &str| {
+            create_session_with_id(
+                &conn,
+                id,
+                &p.id,
+                id,
+                None,
+                "main",
+                None,
+                Some(provider),
+                backend,
+                false,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        };
+        session("live", "chat:claude", "plugin");
+        session("archived", "chat:claude", "plugin");
+        session("destroyed", "chat:claude", "plugin");
+        session("other-plugin", "chatter:claude", "plugin");
+        session("configured", "claude", "tmux");
+        archive_session(&conn, "archived").unwrap();
+        destroy_session(&conn, "destroyed").unwrap();
+        let mut sessions = list_plugin_provider_sessions(&conn, "chat").unwrap();
+        sessions.sort();
+        assert_eq!(
+            sessions,
+            [
+                ("archived".into(), "claude".into(), "archived".into()),
+                ("live".into(), "claude".into(), "active".into()),
+            ]
+        );
     }
 
     #[test]

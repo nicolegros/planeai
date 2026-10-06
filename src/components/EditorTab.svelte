@@ -30,6 +30,7 @@
   import { classHighlighter } from "@lezer/highlight";
   import { getSettings } from "../lib/settings.svelte";
   import { isPlatformMod, MOD_ENTER_HINT, MOD_LABEL } from "../lib/keyboard";
+  import { errorMessage } from "../lib/errors";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { recordUserInput } from "../lib/session-orchestrator.svelte";
   import {
@@ -400,7 +401,7 @@
       clearEditorFeedback(sessionId);
       showSnackbar(`Editor feedback sent (${count} note${count === 1 ? "" : "s"})`, "success");
     } catch (error) {
-      showSnackbar(String(error).replace(/^Error: /, ""), "error");
+      showSnackbar(errorMessage(error), "error");
     } finally {
       endEditorFeedbackSend(sessionId);
     }

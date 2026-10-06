@@ -51,7 +51,7 @@ const provider: PluginProvider = {
   id: "echo",
   label: "Echo",
   entrypoint: "ui/chat.js",
-  supports: ["yolo"],
+  supports: ["auto_approve"],
 };
 const plugin: PluginInventory = {
   id: "local-fixture",
@@ -94,7 +94,7 @@ const panelContribution: PluginUiContribution = {
 const bridge = (handoff?: () => Promise<void>): ProviderSessionBridge =>
   createProviderSessionBridge({
     pluginId: plugin.id,
-    providerId: provider.id,
+    provider,
     sessionId: session.id,
     handoff,
   });
@@ -165,6 +165,55 @@ describe("PluginContributionHost provider sessions", () => {
     );
     expect(localUiSource).not.toHaveBeenCalled();
     expect(frame.srcdoc).toContain("session-send");
+  });
+
+  it("gives the provider and its session controls only to the provider's UI", async () => {
+    // Every frame's window, so the init message is caught whenever its frame loads.
+    const postMessage = vi.fn();
+    const contentWindow = vi
+      .spyOn(HTMLIFrameElement.prototype, "contentWindow", "get")
+      .mockReturnValue({ postMessage } as unknown as Window);
+    const init = async (
+      contribution: PluginUiContribution,
+      providerSession?: ProviderSessionBridge,
+    ) => {
+      postMessage.mockClear();
+      const frame = await mountHost(contribution, providerSession);
+      frame.dispatchEvent(new Event("load"));
+      const message = await vi.waitFor(() => {
+        const [message] = postMessage.mock.calls.find(([data]) => data.type === "init") ?? [];
+        expect(message).toBeTruthy();
+        return message;
+      });
+      unmount(component!);
+      component = undefined;
+      target.remove();
+      return message;
+    };
+
+    const chat = await init(
+      providerContribution(provider),
+      bridge(async () => {}),
+    );
+    expect(chat.provider).toEqual({
+      id: provider.id,
+      label: provider.label,
+      supports: provider.supports,
+    });
+    expect(chat.sessionControls).toEqual({ handoff: true });
+    expect((await init(providerContribution(provider), bridge())).sessionControls).toEqual({
+      handoff: false,
+    });
+    const panel = await init(panelContribution);
+    expect(panel.provider).toBeUndefined();
+    expect(panel.sessionControls).toBeUndefined();
+    contentWindow.mockRestore();
+    // The frame builds `host.session` from them, with handoff only when offered.
+    const frame = await mountHost(panelContribution);
+    expect(frame.srcdoc).toContain(
+      "if (message.sessionControls) host.session = sessionControls(message.sessionControls)",
+    );
+    expect(frame.srcdoc).toContain("...(controls.handoff");
   });
 
   it("routes session input and interrupts through the host for the mounted session", async () => {
@@ -259,6 +308,7 @@ describe("PluginContributionHost provider sessions", () => {
         requestId: 6,
         ok: false,
         error: "terminal handoff is not available here",
+        code: "unsupported",
       },
       "*",
     );
@@ -359,6 +409,7 @@ describe("PluginContributionHost provider sessions", () => {
           requestId: 7,
           ok: false,
           error: "session controls are available only to provider session UIs",
+          code: "unsupported",
         },
         "*",
       ),

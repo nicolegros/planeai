@@ -9,6 +9,7 @@
   import { ResizeHandle } from "./ui";
   import { addComment, clearComments, editComment, getComments, getFileCommentCount, getTotalCommentCount, reanchorComments, removeComment, type ReviewComment } from "../lib/review-comments.svelte";
   import { ChevronDown, ChevronRight, MessageSquare, Send, Check, AlertTriangle, LoaderCircle } from "@lucide/svelte";
+  import { errorMessage } from "../lib/errors";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { MOD_ENTER_HINT } from "../lib/keyboard";
   import { serializeComments } from "../lib/review-serializer";
@@ -387,7 +388,7 @@
       clearComments(sessionId);
       showSnackbar(`Feedback sent (${count} comment${count === 1 ? "" : "s"})`, "success");
     } catch (error) {
-      showSnackbar(String(error).replace(/^Error: /, ""), "error");
+      showSnackbar(errorMessage(error), "error");
     } finally {
       sendingFeedback = false;
     }

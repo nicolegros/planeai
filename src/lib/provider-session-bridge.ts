@@ -1,13 +1,16 @@
 import { listen } from "@tauri-apps/api/event";
 import { plugins, providerSessions } from "./api";
+import { ProviderSessionError } from "./provider-session-error";
 import type { PluginSessionEvent } from "./plugin-sdk";
-import type { ProviderSessionEvent } from "./types";
+import type { PluginProvider, ProviderSessionEvent } from "./types";
 
 /**
  * What PlaneAI offers a provider session's UI: its session's controls and events.
  * Plugin frames receive these only through the host, which owns this object.
  */
 export interface ProviderSessionBridge {
+  /** The provider the session runs on, as its UI receives it in `context.provider`. */
+  provider: PluginProvider;
   /** The UI bundle, once the current sidecar drives the session. */
   loadSource(): Promise<string>;
   send(text: string): Promise<void>;
@@ -21,17 +24,18 @@ export interface ProviderSessionBridge {
 
 export function createProviderSessionBridge(options: {
   pluginId: string;
-  providerId: string;
+  provider: PluginProvider;
   sessionId: string;
   handoff?: () => Promise<void>;
   handback?: () => Promise<void>;
 }): ProviderSessionBridge {
-  const { pluginId, providerId, sessionId } = options;
+  const { pluginId, provider, sessionId } = options;
   return {
+    provider,
     loadSource: () =>
       providerSessions
         .ensure(sessionId)
-        .then(() => plugins.localProviderUiSource(pluginId, providerId)),
+        .then(() => plugins.localProviderUiSource(pluginId, provider.id)),
     send: (text) => providerSessions.send(sessionId, text),
     interrupt: () => providerSessions.interrupt(sessionId),
     handoff: options.handoff,
@@ -45,21 +49,29 @@ export function createProviderSessionBridge(options: {
   };
 }
 
-const CONTROLS_REFUSED = "session controls are available only to provider session UIs";
-const HANDOFF_REFUSED = "terminal handoff is not available here";
+const CONTROLS_REFUSED = new ProviderSessionError(
+  "unsupported",
+  "session controls are available only to provider session UIs",
+);
+const HANDOFF_REFUSED = new ProviderSessionError(
+  "unsupported",
+  "terminal handoff is not available here",
+);
 
 /** Session requests a frame may post, each with why it is refused when unavailable. */
 const SESSION_REQUESTS: Record<
   string,
   {
-    refusal: string;
+    refusal: ProviderSessionError;
     run: (bridge: ProviderSessionBridge, message: { text?: unknown }) => Promise<void> | undefined;
   }
 > = {
   "session-send": {
     refusal: CONTROLS_REFUSED,
     run: (bridge, { text }) =>
-      typeof text === "string" ? bridge.send(text) : Promise.reject("session.send requires text"),
+      typeof text === "string"
+        ? bridge.send(text)
+        : Promise.reject(new Error("session.send requires text")),
   },
   "session-interrupt": { refusal: CONTROLS_REFUSED, run: (bridge) => bridge.interrupt() },
   "session-handoff": { refusal: HANDOFF_REFUSED, run: (bridge) => bridge.handoff?.() },

@@ -21,3 +21,4 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde_json = { workspace = true }
+uuid = { version = "1", features = ["v4"] }

@@ -10,9 +10,35 @@ use serde_json::{Map, Value};
 #[serde(rename_all = "snake_case")]
 pub enum ProviderFeature {
     /// Honors PlaneAI's auto-approve.
-    Yolo,
+    AutoApprove,
     /// Can continue a session in the agent's own terminal UI.
     Handoff,
+}
+
+/// The features this host knows, in declared order without duplicates. Features from newer
+/// hosts are skipped, so a plugin declaring one still loads here.
+pub fn known_provider_features(values: &[Value]) -> Vec<ProviderFeature> {
+    let mut features = Vec::new();
+    for feature in values
+        .iter()
+        .filter_map(|value| ProviderFeature::deserialize(value).ok())
+    {
+        if !features.contains(&feature) {
+            features.push(feature);
+        }
+    }
+    features
+}
+
+/// Serde adapter reading `supports` with [`known_provider_features`].
+pub fn deserialize_provider_features<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<ProviderFeature>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Option::<Vec<Value>>::deserialize(deserializer)?.unwrap_or_default();
+    Ok(known_provider_features(&values))
 }
 
 pub mod provider;
@@ -44,7 +70,6 @@ const MANIFEST_FIELDS: &[&str] = &[
     "background_service",
     "providers",
 ];
-const PROVIDER_FIELDS: &[&str] = &["id", "label", "entrypoint", "supports"];
 const UI_CONTRIBUTION_FIELDS: &[&str] = &[
     "id",
     "label",
@@ -277,7 +302,7 @@ fn validate_providers(object: &Map<String, Value>, plugin_id: &str) -> Result<()
         let provider = provider
             .as_object()
             .ok_or_else(|| anyhow!("provider must be an object"))?;
-        reject_unknown_fields(provider, PROVIDER_FIELDS, "provider")?;
+        // Unknown fields are left for newer hosts.
         let id = required_string(provider, "id")?;
         validate_id(id, "provider")?;
         if !ids.insert(id) {
@@ -294,14 +319,12 @@ fn validate_providers(object: &Map<String, Value>, plugin_id: &str) -> Result<()
                 .as_array()
                 .ok_or_else(|| anyhow!("provider supports must be an array"))?,
         };
-        let mut seen = Vec::new();
-        for feature in features {
-            let feature = ProviderFeature::deserialize(feature)
-                .map_err(|_| anyhow!("provider supports an undocumented feature"))?;
-            if seen.contains(&feature) {
-                bail!("provider declares duplicate supported features");
-            }
-            seen.push(feature);
+        if features.iter().any(|feature| !feature.is_string()) {
+            bail!("provider supports must be an array of strings");
+        }
+        let mut seen = HashSet::new();
+        if !features.iter().all(|feature| seen.insert(feature.as_str())) {
+            bail!("provider declares duplicate supported features");
         }
     }
     Ok(())
@@ -461,7 +484,7 @@ mod tests {
             "id": "chat",
             "label": "Chat",
             "entrypoint": "ui/chat.js",
-            "supports": ["yolo", "handoff"]
+            "supports": ["auto_approve", "handoff"]
         }]);
         manifest
     }
@@ -502,11 +525,19 @@ mod tests {
     }
 
     #[test]
-    fn providers_are_validated_strictly() {
-        let mut unknown_field = provider_manifest();
-        unknown_field["providers"][0]["command"] = json!("claude");
-        assert!(provider_error(unknown_field).contains("undocumented field: command"));
+    fn providers_leave_room_for_newer_hosts() {
+        let mut newer = provider_manifest();
+        newer["providers"][0]["icon"] = json!("ui/icon.svg");
+        newer["providers"][0]["supports"] = json!(["handoff", "teleport"]);
+        assert!(validate_local_manifest(&newer, "macos-arm64").is_ok());
+        assert_eq!(
+            known_provider_features(&[json!("teleport"), json!("handoff"), json!("handoff")]),
+            vec![ProviderFeature::Handoff]
+        );
+    }
 
+    #[test]
+    fn providers_are_validated() {
         let mut duplicate = provider_manifest();
         duplicate["providers"] = json!([
             { "id": "chat", "label": "Chat", "entrypoint": "ui/chat.js" },
@@ -518,9 +549,13 @@ mod tests {
         unsafe_path["providers"][0]["entrypoint"] = json!("../chat.js");
         assert!(provider_error(unsafe_path).contains("safe package-relative path"));
 
-        let mut unknown_feature = provider_manifest();
-        unknown_feature["providers"][0]["supports"] = json!(["teleport"]);
-        assert!(provider_error(unknown_feature).contains("undocumented feature"));
+        let mut not_a_name = provider_manifest();
+        not_a_name["providers"][0]["supports"] = json!([1]);
+        assert!(provider_error(not_a_name).contains("array of strings"));
+
+        let mut duplicate_feature = provider_manifest();
+        duplicate_feature["providers"][0]["supports"] = json!(["handoff", "handoff"]);
+        assert!(provider_error(duplicate_feature).contains("duplicate supported features"));
 
         let mut empty = provider_manifest();
         empty["providers"] = json!([]);

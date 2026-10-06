@@ -23,28 +23,32 @@ The host read sidecar stdout only while a request was in flight, and an unsolici
 A trusted local plugin can provide **session runtimes**, which PlaneAI offers as providers.
 
 - **Contract.** A manifest using `planeai.plugin-host.v3` may declare `providers: [{ id, label, entrypoint, supports }]` together with the `providers` capability.
-  `supports` currently accepts `yolo` and `handoff`.
+  `supports` currently accepts `auto_approve` and `handoff`.
+  Provider fields and features the host does not know are ignored, so a plugin can target newer hosts; the handshake tells plugins the host's optional behaviors in `host_features`.
   Bundled plugins cannot declare providers.
 - **Domain.** A runtime-backed provider has the key `<plugin id>:<provider id>`.
   It is listed beside configured command providers and is chosen when a session is created.
   Its sessions use the `plugin` session backend.
 - **Ownership.** The host owns the session row, worktree, branch, task link, lifecycle, status display, notifications and prompt routing.
   The plugin owns the agent process, the conversation, its transcript and the chat UI.
-- **Host to sidecar.** `provider.session.start` (with an optional `initial_prompt`), `provider.session.resume`, `provider.session.send`, `provider.session.interrupt` and `provider.session.stop` (`archive`, `destroy` or `exit`).
-  Each one returns promptly; work happens asynchronously.
+- **Host to sidecar.** `provider.session.start` (with an optional `initial_prompt`), `provider.session.resume`, `provider.session.send`, `provider.session.interrupt` and `provider.session.stop` (`archive`, `destroy` or `exit`), plus `provider.sessions.reconcile` once after the handshake.
+  Each one returns promptly; work happens asynchronously, and `send` only accepts and queues the input.
+  Start, resume, handoff and handback may launch the agent and get 30 seconds; the others get five.
   Plugin UI cannot call `provider.*` methods directly.
+- **Errors.** Provider methods answer with JSON-RPC codes the host acts on: `-32010` for a session the plugin does not know, which the host resumes once and retries, `-32011` handed off, `-32012` prompt too large and `-32013` agent unavailable.
+  The session UI receives refusals with a matching `code`.
 - **Environment.** Start and resume carry the session's working directory and an `env` with `PLANEAI_SESSION_ID`, `PLANEAI_SOCKET` and the augmented `PATH`, so the agent can still spawn sub-sessions and manage tasks.
-- **Sidecar to host.** A JSON-RPC notification `host.session.status { session_id, status }` with `busy`, `idle`, `needs_attention` or `exited`, and `host.session.event { session_id, seq, payload }`.
+- **Sidecar to host.** A JSON-RPC notification `host.providerSession.status { session_id, status }` with `busy`, `idle`, `needs_attention` or `exited`, and `host.providerSession.event { session_id, seq, payload }`.
   The host forwards `payload` opaquely to the session's mounted UI.
-  `seq` increases per session.
+  `seq` is an integer from 1 to 2^53 - 1 that strictly increases for the session's whole lifetime, across sidecar restarts, gaps allowed; the host drops an event that breaks this.
 - **Transport.** The host owns sidecar stdout through a dedicated reader task for the process lifetime.
   Provider notifications are routed as they arrive; every other frame keeps the existing request path and its error semantics.
-  A notification for a session the sidecar does not drive is dropped.
+  A notification for a session the sidecar does not drive is dropped, and one to an unknown `host.*` method is logged and ignored.
 - **Status.** The provider is the only status source for its sessions.
   Hook and PTY status signals for those sessions are ignored, although the user's own agent hooks still run inside them.
   `needs_attention` shows as idle with an attention notification, as hook-driven terminal sessions do.
-- **UI.** The provider's entrypoint replaces the terminal in the session's agent tab.
-  Its bridge adds `context.host.session` with `send`, `interrupt` and `onEvent`, plus `handoff` and `handback` for providers that can continue a session in a terminal.
+- **UI.** The provider's entrypoint replaces the terminal in the session's agent tab, in the `session.main` placement only providers use.
+  Only that UI gets `context.provider` and `context.host.session`, with `send`, `interrupt` and `onEvent`, plus `handoff` and `handback` for providers that can continue a session in a terminal.
   The host makes sure the current sidecar drives the session (resuming it if needed) before mounting the UI.
   The plugin rebuilds its view after a remount by subscribing first, then fetching its own snapshot in frame-sized pages and dropping events at or below the snapshot's `seq`.
   A provider UI that takes focus, from a click or from its own script, takes its pane's keyboard: plugins are trusted local packages, and the host cannot tell the two apart across the frame boundary.
@@ -55,9 +59,13 @@ A trusted local plugin can provide **session runtimes**, which PlaneAI offers as
   `provider.session.handoff` detaches the provider and returns the `argv` that continues the conversation, which the host runs directly, without a shell, in a terminal tab of the same session.
   Closing that tab, or the TUI exiting, calls `provider.session.handback`, so only one side ever drives the conversation; prompts meant for the provider are refused until then.
   A handoff answer without a runnable `argv` is handed straight back, since no terminal opens for it.
+  The host holds the handoff state and passes it to `resume` as `handed_off`, so plugins never persist it: a terminal does not outlive the app.
+  Handoff and handback are idempotent.
 - **Lifecycle.** Runtimes still die with the app.
-  Sessions resume lazily through the provider on next use.
+  Sessions resume lazily through the provider on next use, and `resume` accepts a session whose state the plugin lost.
   Ending a session through any path stops its provider session, including CLI archive, CLI delete and task completion, which the GUI reconciles when notified.
+  The plugin hears `stop` even when the current sidecar never resumed the session, so it can drop what it keeps for it; `stop` is idempotent.
+  Sessions that ended while the plugin was not running are absent from the `provider.sessions.reconcile` it receives after its next handshake, which lists the plugin's sessions that still exist with their status.
   Quitting the app while a provider session is busy asks for confirmation.
 
 ## Consequences

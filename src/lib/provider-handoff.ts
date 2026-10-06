@@ -1,3 +1,4 @@
+import { errorMessage } from "./errors";
 import { parsePtyKey } from "./pty-key";
 import type { TabClose } from "./task-workspace-layout.svelte";
 import type { TabEndReason, TabSpec } from "./types";
@@ -144,7 +145,7 @@ export function createProviderHandoff({
       } catch (handbackError) {
         if (ending.has(ptyKey)) return true;
         notify(
-          `The session could not return to the chat: ${String(handbackError)}. Try again from the session's chat.`,
+          `The session could not return to the chat: ${errorMessage(handbackError)}. Try again from the session's chat.`,
         );
         return true;
       }

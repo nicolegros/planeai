@@ -338,9 +338,15 @@ Choosing one creates a session with the `plugin` backend; there is no PTY or com
 - Launch creates the worktree, calls `provider.session.start` on the owning sidecar with the working directory, `PLANEAI_SESSION_ID`, `PLANEAI_SOCKET`, the augmented `PATH`, auto-approve and the task prompt, then creates the DB row and commits the launch.
 - The agent tab mounts the provider's UI instead of `Terminal`; shell tabs in the same session are ordinary local PTYs.
 - Before the UI mounts, `provider_session_ensure` resumes the session if the current sidecar instance does not drive it yet (after an app restart or plugin reload).
+  The resume carries `handed_off` from the host's in-memory handoff state, which an app restart clears.
+- A request the plugin answers with `-32010` (unknown session) unbinds the session, resumes it and retries once.
+  Other refusals reach the session UI as typed `ProviderError { code, message }` values.
 - `send_prompt` routes `plugin` sessions through the GUI notify socket like `local` ones; the GUI delivers them with `provider.session.send`.
-- `host.session.status` maps onto the notify state machine (`busy`, `idle`, `needs_attention` as an attention notification, `exited`), and notify-socket status for provider sessions is ignored.
+- `host.providerSession.status` maps onto the notify state machine (`busy`, `idle`, `needs_attention` as an attention notification, `exited`), and notify-socket status for provider sessions is ignored.
+  `host.providerSession.event` seqs must keep increasing per session; the host keeps each session's last seq until it stops.
 - Archive, destroy and exit stop the provider session on two paths: the session lifecycle dispatch for sessions the GUI ends, and `plugin_providers::reconcile` for sessions the CLI or task completion ends.
+  The lifecycle dispatch tells the plugin even when no sidecar drives the session, routing by the session's provider key.
+- A provider plugin that starts receives `provider.sessions.reconcile` before it is published as running, listing its sessions that still exist, so it can drop the data of sessions destroyed while it was not running.
 - A launch that fails before its session row exists stops the provider it started.
 - Restarting an exited provider session only restores the row; the provider resumes it on next use.
 - Providers that support `handoff` can continue a session in a terminal tab running their agent's TUI (`provider.session.handoff` returns its argv, run directly without a shell, so the tab closes when the TUI exits); every terminal tab that ends goes through `providerHandoff.tabEnded`, which hands a handoff tab's session back to the provider.

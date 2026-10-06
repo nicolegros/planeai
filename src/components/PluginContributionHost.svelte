@@ -4,17 +4,18 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { jiraDepartedInteractionEntrypoint, jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
   import { plugins, projects as projectsApi, tasks as tasksApi } from "../lib/api";
+  import { frameFailure } from "../lib/provider-session-error";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import { getAllTasks } from "../lib/task-store.svelte";
   import { openPluginModal, openProjectForm } from "../lib/plugin-modal-manager";
-  import type { PluginUiDisposer, PluginUiEntrypoint, PluginUiHost, PluginSessionContext } from "../lib/plugin-sdk";
+  import type { PluginProviderContext, PluginUiDisposer, PluginUiEntrypoint, PluginUiHost, PluginSessionContext } from "../lib/plugin-sdk";
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import { focusSidebar } from "../lib/focus.svelte";
   import { PROVIDER_FRAME_ATTRIBUTE } from "../lib/terminal-focus";
   import { hostKeyReplay, isTextEditingChord, shouldForwardHostChord } from "../lib/plugin-shortcuts";
   import { isDark } from "../lib/settings.svelte";
-  import type { PluginInventory, PluginUiContribution } from "../lib/types";
+  import type { PluginInventory, PluginProvider, PluginUiContribution } from "../lib/types";
   import { isSessionRequest, serveSessionRequest, type ProviderSessionBridge } from "../lib/provider-session-bridge";
 
   interface Props {
@@ -191,6 +192,11 @@
     button.addEventListener("click", retry);
     root.replaceChildren(message, button);
     if (contribution.placement.startsWith("sidebar.")) onFailure(error);
+  }
+
+  /** The provider as its session UI sees it; the bundle's entrypoint is the host's business. */
+  function providerContextOf({ id, label, supports }: PluginProvider): PluginProviderContext {
+    return { id, label, supports: [...supports] };
   }
 
   function createLocalPluginFrame(root: ShadowRoot, sessionContext?: PluginSessionContext): PluginUiDisposer {
@@ -378,17 +384,19 @@
             },
             notify: (message, kind = "error") => send({ type: "notify", message, kind }),
           },
-          session: {
-            send: (text) => request("session-send", { text }),
-            interrupt: () => request("session-interrupt"),
-            handoff: () => request("session-handoff"),
-            handback: () => request("session-handback"),
-            onEvent: (listener) => {
-              sessionEventListeners.add(listener);
-              return () => sessionEventListeners.delete(listener);
-            },
-          },
         };
+        // Only a provider's session UI controls its session, and hands it off only when its provider can.
+        const sessionControls = (controls) => ({
+          send: (text) => request("session-send", { text }),
+          interrupt: () => request("session-interrupt"),
+          onEvent: (listener) => {
+            sessionEventListeners.add(listener);
+            return () => sessionEventListeners.delete(listener);
+          },
+          ...(controls.handoff
+            ? { handoff: () => request("session-handoff"), handback: () => request("session-handback") }
+            : {}),
+        });
         addEventListener("message", async (event) => {
           if (event.source !== parent) return;
           const message = event.data;
@@ -411,7 +419,7 @@
             if (!pendingRequest) return;
             pending.delete(message.requestId);
             if (message.ok) pendingRequest.resolve(message.value);
-            else pendingRequest.reject(new Error(message.error));
+            else pendingRequest.reject(Object.assign(new Error(message.error), message.code ? { code: message.code } : {}));
             return;
           }
           if (message.type === "sidebar-event") {
@@ -438,7 +446,10 @@
             URL.revokeObjectURL(url);
             const entrypoint = module.default || module.pluginEntrypoint;
             if (!entrypoint || typeof entrypoint.mount !== "function") throw new Error("local UI bundle must default-export a PluginUiEntrypoint");
-            cleanup = entrypoint.mount(document.body, { plugin: message.plugin, contribution: message.contribution, session: message.session, host });
+            if (message.sessionControls) host.session = sessionControls(message.sessionControls);
+            const context = { plugin: message.plugin, contribution: message.contribution, session: message.session, host };
+            if (message.provider) context.provider = message.provider;
+            cleanup = entrypoint.mount(document.body, context);
             observeSessionPanelContent(message.contribution);
             send({ type: "mounted" });
           } catch (error) {
@@ -476,7 +487,7 @@
     const respond = (requestId: number | undefined, ok: boolean, value?: unknown): void => {
       if (requestId === undefined) return;
       frame.contentWindow?.postMessage(
-        ok ? { type: "response", requestId, ok: true, value } : { type: "response", requestId, ok: false, error: String(value) },
+        ok ? { type: "response", requestId, ok: true, value } : { type: "response", requestId, ok: false, ...frameFailure(value) },
         "*",
       );
     };
@@ -596,7 +607,10 @@
             contribution: PluginUiContribution;
             session?: PluginSessionContext;
           };
-          frame.contentWindow?.postMessage({ type: "init", source, ...context }, "*");
+          const providerContext = bridge
+            ? { provider: providerContextOf(bridge.provider), sessionControls: { handoff: Boolean(bridge.handoff) } }
+            : {};
+          frame.contentWindow?.postMessage({ type: "init", source, ...context, ...providerContext }, "*");
         })
         .catch((error) => showLoadFailure(root, error));
     };

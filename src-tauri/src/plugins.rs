@@ -20,6 +20,7 @@ use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 
 use crate::commands;
+use crate::plugin_rpc::*;
 use crate::task_lifecycle::TaskLifecycleBatch;
 use planeai_plugin_contract::provider::is_host_controlled_method as is_host_controlled_plugin_method;
 use planeai_plugin_contract::supports_host_api_version;
@@ -34,10 +35,8 @@ const JIRA_LIFECYCLE_RPC_TIMEOUT: Duration = Duration::from_secs(90);
 const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(40 * 60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
-const MAX_RPC_FRAME_BYTES: u64 = 64 * 1024;
 const MAX_PLUGIN_SESSION_PROMPT_CHARS: usize = 100_000;
 const FRAME_QUEUE_CAPACITY: usize = 256;
-const STDOUT_CLOSED_ERROR: &str = "plugin process closed stdout unexpectedly";
 const JIRA_PLUGIN_ID: &str = "jira";
 const GITHUB_PLUGIN_ID: &str = "github";
 const JIRA_BACKEND_ENTRYPOINT: &str = "planeai-plugin-jira";
@@ -164,13 +163,16 @@ pub enum PluginHostCapability {
 }
 
 /// A session runtime a plugin offers as a provider; its UI replaces the agent terminal.
+/// Fields and features from newer hosts are ignored, so such a plugin still loads.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct PluginProvider {
     pub id: String,
     pub label: String,
     pub entrypoint: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "planeai_plugin_contract::deserialize_provider_features"
+    )]
     pub supports: Vec<ProviderFeature>,
 }
 
@@ -547,165 +549,6 @@ struct PluginHandshake {
     host_api_version: String,
     #[serde(default)]
     lifecycle_event_subscriptions: HashSet<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct JsonRpcRequest<'a> {
-    jsonrpc: &'static str,
-    id: u64,
-    method: &'a str,
-    params: Value,
-}
-
-#[derive(Debug, Serialize)]
-struct JsonRpcNotification<'a> {
-    jsonrpc: &'static str,
-    method: &'a str,
-    params: Value,
-}
-
-#[derive(Debug, Deserialize)]
-struct JsonRpcResponse {
-    jsonrpc: String,
-    id: Value,
-    #[serde(default)]
-    error: Option<JsonRpcError>,
-}
-
-#[derive(Debug, Deserialize)]
-struct JsonRpcError {
-    code: i64,
-    message: String,
-}
-
-#[derive(Debug)]
-struct JsonRpcCallbackRequest {
-    id: Value,
-    method: String,
-    params: Value,
-}
-
-/// Encode one complete JSON-RPC message frame. The process transport is JSONL,
-/// so every request and response must have exactly one trailing newline.
-pub fn encode_json_rpc_line(id: u64, method: &str, params: Value) -> Result<String, String> {
-    let value = serde_json::to_string(&JsonRpcRequest {
-        jsonrpc: "2.0",
-        id,
-        method,
-        params,
-    })
-    .map_err(|e| format!("failed to encode JSON-RPC request: {e}"))?;
-    encode_json_rpc_frame(value, "request")
-}
-
-fn encode_json_rpc_cancel_request_line(request_id: u64) -> Result<String, String> {
-    let value = serde_json::to_string(&JsonRpcNotification {
-        jsonrpc: "2.0",
-        method: "$/cancelRequest",
-        params: serde_json::json!({ "id": request_id }),
-    })
-    .map_err(|e| format!("failed to encode JSON-RPC cancellation notification: {e}"))?;
-    encode_json_rpc_frame(value, "cancellation notification")
-}
-
-fn encode_json_rpc_frame(value: String, kind: &str) -> Result<String, String> {
-    let frame = format!("{value}\n");
-    if frame.len() > MAX_RPC_FRAME_BYTES as usize {
-        return Err(format!("plugin JSON-RPC {kind} exceeded the frame limit"));
-    }
-    Ok(frame)
-}
-
-fn parse_json_rpc_response(
-    line: &str,
-    expected_id: u64,
-) -> Result<(JsonRpcResponse, Option<Value>), String> {
-    let value: Value =
-        serde_json::from_str(line).map_err(|e| format!("malformed JSON-RPC response: {e}"))?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| "malformed JSON-RPC response: expected an object".to_string())?;
-    let has_result = object.contains_key("result");
-    if has_result == object.contains_key("error") {
-        return Err(
-            "malformed JSON-RPC response: expected exactly one of result or error".to_string(),
-        );
-    }
-    // Preserve member presence separately from its JSON value: `result: null`
-    // is a valid JSON-RPC success response and must not look like a missing field.
-    let result = has_result.then(|| object["result"].clone());
-    let response: JsonRpcResponse =
-        serde_json::from_value(value).map_err(|e| format!("malformed JSON-RPC response: {e}"))?;
-    if response.jsonrpc != "2.0" {
-        return Err("malformed JSON-RPC response: expected jsonrpc 2.0".to_string());
-    }
-    if response.id.as_u64() != Some(expected_id) {
-        return Err("malformed JSON-RPC response: response id did not match request".to_string());
-    }
-    Ok((response, result))
-}
-
-fn decode_json_rpc_response(line: &str, expected_id: u64) -> Result<Value, String> {
-    let (response, result) = parse_json_rpc_response(line, expected_id)?;
-    if let Some(error) = response.error {
-        return Err(format!(
-            "plugin RPC error {}: {}",
-            error.code, error.message
-        ));
-    }
-    result.ok_or_else(|| "malformed JSON-RPC response: missing result".to_string())
-}
-
-fn decode_json_rpc_cancellation_response(line: &str, expected_id: u64) -> Result<String, String> {
-    let (response, _) = parse_json_rpc_response(line, expected_id)?;
-    match response.error {
-        Some(error) if error.code == -32800 => Ok(format!(
-            "plugin RPC error {}: {}",
-            error.code, error.message
-        )),
-        Some(error) => Err(format!(
-            "plugin cancellation response used error code {}; expected -32800",
-            error.code
-        )),
-        None => Err("plugin cancellation response must use error code -32800".to_string()),
-    }
-}
-
-fn timed_out_request_error(method: &str) -> String {
-    format!("plugin RPC {method} timed out")
-}
-
-fn cancellation_acknowledgement_error(
-    method: &str,
-    request_id: u64,
-    frame: Option<&str>,
-) -> String {
-    frame
-        .and_then(|frame| decode_json_rpc_cancellation_response(frame, request_id).ok())
-        .unwrap_or_else(|| timed_out_request_error(method))
-}
-
-fn request_queue_timeout_error(method: &str) -> String {
-    format!("plugin RPC {method} request queue timed out")
-}
-
-/// Prefix for requests refused before any byte reached the sidecar.
-const REQUEST_NOT_SENT: &str = "plugin RPC request not sent: ";
-
-/// A request too large or malformed to send fails before reaching the sidecar.
-fn encode_request(id: u64, method: &str, params: Value) -> Result<String, String> {
-    encode_json_rpc_line(id, method, params).map_err(|error| format!("{REQUEST_NOT_SENT}{error}"))
-}
-
-fn is_fatal_plugin_runtime_error(error: &str) -> bool {
-    // A valid JSON-RPC error is an application-level response and leaves the
-    // connection usable. A request that never acquired the local queue also
-    // leaves the sidecar untouched. Any other request failure means stdout or
-    // the request protocol can no longer be trusted, so retire this runtime
-    // before another request can consume a stale or malformed frame.
-    !error.starts_with("plugin RPC error ")
-        && !error.starts_with(REQUEST_NOT_SENT)
-        && !error.ends_with(" request queue timed out")
 }
 
 pub fn bundled_manifests() -> Result<Vec<PluginManifest>, String> {
@@ -1259,7 +1102,7 @@ struct RuntimeProcess {
     instance: u64,
     child: AsyncMutex<Child>,
     stdin: AsyncMutex<ChildStdin>,
-    /// Frames from the stdout reader task, minus provider notifications it routes itself.
+    /// Frames from the stdout reader task, minus the host notifications it handles itself.
     frames: AsyncMutex<mpsc::Receiver<Result<String, String>>>,
     request_lock: AsyncMutex<()>,
     next_request_id: AtomicU64,
@@ -1326,6 +1169,19 @@ struct PluginSessionCompletion {
 struct PluginSessionPrompt {
     session_id: String,
     text: String,
+}
+
+/// A callback's params read as `T` and checked by `validate`. A bad payload is the plugin's
+/// mistake: it answers -32602 and leaves the runtime running.
+fn callback_params<T: serde::de::DeserializeOwned, U>(
+    params: Value,
+    subject: &str,
+    validate: impl FnOnce(T) -> Result<U, String>,
+) -> Result<U, CallbackError> {
+    serde_json::from_value(params)
+        .map_err(|error| format!("invalid {subject}: {error}"))
+        .and_then(validate)
+        .map_err(CallbackError::InvalidParams)
 }
 
 fn validate_plugin_session_actions(
@@ -1397,13 +1253,15 @@ fn dispatch_plugin_session_prompt(
     capabilities: &HashSet<PluginHostCapability>,
     params: Value,
     send: impl FnOnce(&str, &str) -> Result<(), String>,
-) -> Result<Value, String> {
+) -> Result<Value, CallbackError> {
     if !capabilities.contains(&PluginHostCapability::SessionsPrompt) {
-        return Err("plugin capability is not granted".to_string());
+        return Err(CallbackError::NotGranted);
     }
-    let prompt = serde_json::from_value(params)
-        .map_err(|error| format!("invalid plugin session prompt: {error}"))
-        .and_then(validate_plugin_session_prompt)?;
+    let prompt = callback_params(
+        params,
+        "plugin session prompt",
+        validate_plugin_session_prompt,
+    )?;
     send(&prompt.session_id, &prompt.text)?;
     Ok(serde_json::json!({ "delivered": true }))
 }
@@ -1426,12 +1284,12 @@ fn request_timeout(method: &str) -> Duration {
     match method {
         "jira.syncNow" => JIRA_SYNC_RPC_TIMEOUT,
         "plugin.taskLifecycle" | "plugin.sessionLifecycle" => JIRA_LIFECYCLE_RPC_TIMEOUT,
-        _ => RPC_TIMEOUT,
+        _ => planeai_plugin_contract::provider::request_timeout(method).unwrap_or(RPC_TIMEOUT),
     }
 }
 
 impl RuntimeProcess {
-    async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
+    async fn request(&self, method: &str, params: Value) -> Result<Value, PluginRpcError> {
         self.request_with_timeout(method, params, request_timeout(method))
             .await
     }
@@ -1441,7 +1299,7 @@ impl RuntimeProcess {
         method: &str,
         params: Value,
         request_timeout: Duration,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, PluginRpcError> {
         let deadline = Instant::now() + request_timeout;
         // JSON-RPC responses share one stdout stream. Serialize normal host
         // requests while stdin remains independently writable for cancellation.
@@ -1451,42 +1309,38 @@ impl RuntimeProcess {
             .map_err(|_| request_queue_timeout_error(method))?;
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1;
         let frame = encode_request(request_id, method, params)?;
-        self.write_request_frame(&frame, deadline).await?;
+        self.write_request_frame(&frame, deadline)
+            .await
+            .map_err(PluginRpcError::Broken)?;
 
         let remaining = deadline.saturating_duration_since(Instant::now());
         match timeout(remaining, self.read_matching_response()).await {
             Ok(Ok(frame)) => decode_json_rpc_frame(&frame, request_id),
-            Ok(Err(error)) => Err(error),
-            Err(_) => self.cancel_timed_out_request(method, request_id).await,
+            Ok(Err(error)) => Err(PluginRpcError::Broken(error)),
+            Err(_) => Err(self.cancel_timed_out_request(method, request_id).await),
         }
     }
 
-    async fn cancel_timed_out_request(
-        &self,
-        method: &str,
-        request_id: u64,
-    ) -> Result<Value, String> {
+    /// How a request that timed out ends, once cancelled.
+    async fn cancel_timed_out_request(&self, method: &str, request_id: u64) -> PluginRpcError {
         let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
-        let frame = encode_json_rpc_cancel_request_line(request_id)?;
+        let frame = match encode_json_rpc_cancel_request_line(request_id) {
+            Ok(frame) => frame,
+            Err(error) => return PluginRpcError::Broken(error),
+        };
         if self
             .write_cancellation_frame(&frame, deadline)
             .await
             .is_err()
         {
-            return Err(cancellation_acknowledgement_error(method, request_id, None));
+            return cancellation_acknowledgement_error(method, request_id, None);
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         match timeout(remaining, self.read_matching_response()).await {
-            Ok(Ok(frame)) => Err(cancellation_acknowledgement_error(
-                method,
-                request_id,
-                Some(&frame),
-            )),
+            Ok(Ok(frame)) => cancellation_acknowledgement_error(method, request_id, Some(&frame)),
             // The original timeout remains the externally meaningful error when
             // the plugin cannot acknowledge cancellation correctly or in time.
-            Ok(Err(_)) | Err(_) => {
-                Err(cancellation_acknowledgement_error(method, request_id, None))
-            }
+            Ok(Err(_)) | Err(_) => cancellation_acknowledgement_error(method, request_id, None),
         }
     }
 
@@ -1548,6 +1402,8 @@ impl RuntimeProcess {
         .map_err(|_| "plugin cancellation notification timed out".to_string())?
     }
 
+    /// The next response frame, serving the sidecar's callbacks until it arrives. Fails only
+    /// when stdout or the protocol can no longer be trusted.
     async fn read_matching_response(&self) -> Result<String, String> {
         loop {
             let frame = self
@@ -1568,19 +1424,20 @@ impl RuntimeProcess {
         }
     }
 
-    async fn handle_plugin_request(&self, request: JsonRpcCallbackRequest) -> Result<(), String> {
-        let JsonRpcCallbackRequest { id, method, params } = request;
-        let result = match method.as_str() {
+    async fn serve_callback(&self, method: &str, params: Value) -> Result<Value, CallbackError> {
+        match method {
             "host.sessions.actions" => {
                 if !self
                     .capabilities
                     .contains(&PluginHostCapability::SessionActions)
                 {
-                    Err("plugin capability is not granted".to_string())
+                    Err(CallbackError::NotGranted)
                 } else {
-                    let actions = serde_json::from_value(params)
-                        .map_err(|error| format!("invalid plugin session actions: {error}"))
-                        .and_then(validate_plugin_session_actions)?;
+                    let actions = callback_params(
+                        params,
+                        "plugin session actions",
+                        validate_plugin_session_actions,
+                    )?;
                     *self.session_actions.lock().await = actions.clone();
                     self.app
                         .emit(
@@ -1598,20 +1455,20 @@ impl RuntimeProcess {
                     .capabilities
                     .contains(&PluginHostCapability::SessionAdvisories)
                 {
-                    Err("plugin capability is not granted".to_string())
+                    Err(CallbackError::NotGranted)
                 } else {
-                    serde_json::from_value(params)
-                        .map_err(|error| format!("invalid plugin session advisory: {error}"))
-                        .and_then(validate_plugin_session_advisory)
-                        .and_then(|advisory| {
-                            self.app
-                                .emit(
-                                    "plugin-session-advisory",
-                                    serde_json::json!({ "plugin_id": self.plugin_id, "advisory": advisory }),
-                                )
-                                .map_err(|error| format!("failed to emit plugin advisory: {error}"))
-                        })
-                        .map(|_| serde_json::json!({ "accepted": true }))
+                    let advisory = callback_params(
+                        params,
+                        "plugin session advisory",
+                        validate_plugin_session_advisory,
+                    )?;
+                    self.app
+                        .emit(
+                            "plugin-session-advisory",
+                            serde_json::json!({ "plugin_id": self.plugin_id, "advisory": advisory }),
+                        )
+                        .map_err(|error| format!("failed to emit plugin advisory: {error}"))?;
+                    Ok(serde_json::json!({ "accepted": true }))
                 }
             }
             "host.sessions.prompt" => {
@@ -1621,31 +1478,38 @@ impl RuntimeProcess {
                         .map_err(|error| error.to_string())?;
                     let ops =
                         crate::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
-                    dispatch_plugin_session_prompt(&capabilities, params, |session_id, text| {
-                        crate::session_ops::send_prompt(&conn, session_id, text, &ops).map(|_| ())
-                    })
+                    Ok(dispatch_plugin_session_prompt(
+                        &capabilities,
+                        params,
+                        |session_id, text| {
+                            crate::session_ops::send_prompt(&conn, session_id, text, &ops)
+                                .map(|_| ())
+                        },
+                    ))
                 })
                 .await
+                .map_err(CallbackError::Internal)
+                .and_then(std::convert::identity)
             }
             "host.sessions.complete" => {
                 if !self
                     .capabilities
                     .contains(&PluginHostCapability::SessionsComplete)
                 {
-                    Err("plugin capability is not granted".to_string())
+                    Err(CallbackError::NotGranted)
                 } else {
-                    serde_json::from_value(params)
-                        .map_err(|error| format!("invalid plugin session completion: {error}"))
-                        .and_then(validate_plugin_session_completion)
-                        .and_then(|completion| {
-                            self.app
-                                .emit(
-                                    "plugin-session-completed",
-                                    serde_json::json!({ "plugin_id": self.plugin_id, "completion": completion }),
-                                )
-                                .map_err(|error| format!("failed to emit plugin completion: {error}"))
-                        })
-                        .map(|_| serde_json::json!({ "accepted": true }))
+                    let completion = callback_params(
+                        params,
+                        "plugin session completion",
+                        validate_plugin_session_completion,
+                    )?;
+                    self.app
+                        .emit(
+                            "plugin-session-completed",
+                            serde_json::json!({ "plugin_id": self.plugin_id, "completion": completion }),
+                        )
+                        .map_err(|error| format!("failed to emit plugin completion: {error}"))?;
+                    Ok(serde_json::json!({ "accepted": true }))
                 }
             }
             _ => {
@@ -1653,7 +1517,7 @@ impl RuntimeProcess {
                     &self.plugin_id,
                     &self.capabilities,
                     &self.data_dir,
-                    &method,
+                    method,
                     params,
                 )
                 .await;
@@ -1671,7 +1535,11 @@ impl RuntimeProcess {
                                 {
                                     pty_state.0.detach(&session.id);
                                     runtime.0.dispatch_session_lifecycle(
-                                        crate::commands::sessions::lifecycle::session_lifecycle_event(&session, &session.status, "archived"),
+                                        crate::commands::sessions::lifecycle::session_transition(
+                                            &session,
+                                            &session.status,
+                                            "archived",
+                                        ),
                                     );
                                     archived_any_session = true;
                                 }
@@ -1689,7 +1557,12 @@ impl RuntimeProcess {
                     value
                 })
             }
-        };
+        }
+    }
+
+    async fn handle_plugin_request(&self, request: JsonRpcCallbackRequest) -> Result<(), String> {
+        let JsonRpcCallbackRequest { id, method, params } = request;
+        let result = self.serve_callback(&method, params).await;
         let frame = encode_host_callback_response(id, result)?;
         let mut stdin = self.stdin.lock().await;
         stdin
@@ -1734,7 +1607,7 @@ impl RuntimeProcess {
         let frame = timeout(remaining, self.read_matching_response())
             .await
             .map_err(|_| "plugin shutdown request timed out".to_string())??;
-        decode_json_rpc_frame(&frame, request_id)
+        decode_json_rpc_frame(&frame, request_id).map_err(String::from)
     }
 
     /// This instance no longer drives sessions; see `plugin_providers::runtime_stopped`.
@@ -1770,37 +1643,6 @@ impl RuntimeProcess {
             }
         }
     }
-}
-
-fn encode_host_callback_response(
-    id: Value,
-    result: Result<Value, String>,
-) -> Result<String, String> {
-    let response = match result {
-        Ok(result) => serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-        Err(message) => {
-            serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": message } })
-        }
-    };
-    let mut frame = serde_json::to_string(&response)
-        .map_err(|error| format!("failed to encode host callback response: {error}"))?;
-    if !host_callback_response_fits(&frame) {
-        frame = serde_json::to_string(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": response["id"],
-            "error": {
-                "code": -32000,
-                "message": "host callback response exceeded the frame limit",
-            },
-        }))
-        .map_err(|error| format!("failed to encode bounded host callback error: {error}"))?;
-        if !host_callback_response_fits(&frame) {
-            return Err(
-                "plugin callback id leaves no room for a bounded host response".to_string(),
-            );
-        }
-    }
-    Ok(frame)
 }
 
 fn read_plugin_settings(data_dir: &Path) -> Result<Value, String> {
@@ -1938,13 +1780,14 @@ fn legacy_jira_issue_matches(
     .map_err(|error| format!("failed to match legacy Jira issue: {error}"))
 }
 
+/// A host task a sidecar or UI calls, gated by the plugin's capabilities.
 async fn execute_host_task(
     plugin_id: &str,
     capabilities: &HashSet<PluginHostCapability>,
     data_dir: &Path,
     method: &str,
     params: Value,
-) -> Result<Value, String> {
+) -> Result<Value, CallbackError> {
     let required = match method {
         "host.settings.get" | "host.settings.replace" | "host.settings.patch" => {
             PluginHostCapability::Settings
@@ -1959,7 +1802,7 @@ async fn execute_host_task(
         "host.tasks.createChild" => PluginHostCapability::TasksCreate,
         "host.task.create" => PluginHostCapability::TasksCreate,
         "host.task.update" => PluginHostCapability::TasksUpdate,
-        _ => return Err("host method not found".to_string()),
+        _ => return Err(CallbackError::NotFound),
     };
     if !capabilities.contains(&required)
         || (matches!(
@@ -1967,11 +1810,34 @@ async fn execute_host_task(
             "host.task.create" | "host.task.update" | "host.jira.legacyIssue.matches"
         ) && plugin_id != JIRA_PLUGIN_ID)
     {
-        return Err("plugin capability is not granted".to_string());
+        return Err(CallbackError::NotGranted);
     }
+    run_host_task(plugin_id, data_dir, method, params).await
+}
 
+fn invalid_params(message: &str) -> CallbackError {
+    CallbackError::InvalidParams(message.to_string())
+}
+
+/// Runs a host task's storage work off the async runtime; its failures are internal.
+async fn blocking_host_task<F>(work: F) -> Result<Value, CallbackError>
+where
+    F: FnOnce() -> Result<Value, String> + Send + 'static,
+{
+    commands::blocking(work)
+        .await
+        .map_err(CallbackError::Internal)
+}
+
+/// Runs a host task whose params are checked first, so a bad request answers -32602.
+async fn run_host_task(
+    plugin_id: &str,
+    data_dir: &Path,
+    method: &str,
+    params: Value,
+) -> Result<Value, CallbackError> {
     if method == "host.projects.list" {
-        return commands::blocking(|| {
+        return blocking_host_task(|| {
             let path = planeai_paths::db_path();
             let conn = Connection::open(path).map_err(|error| error.to_string())?;
             let projects = crate::db::list_projects(&conn)
@@ -1993,7 +1859,7 @@ async fn execute_host_task(
     }
 
     if method == "host.sessions.list" {
-        return commands::blocking(|| {
+        return blocking_host_task(|| {
             let path = planeai_paths::db_path();
             let conn = Connection::open(path).map_err(|error| error.to_string())?;
             let sessions = crate::db::list_sessions(&conn)
@@ -2024,9 +1890,9 @@ async fn execute_host_task(
             .or_else(|| params.get("sessionId"))
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
-            .ok_or("repository context requires session_id")?
+            .ok_or_else(|| invalid_params("repository context requires session_id"))?
             .to_string();
-        return commands::blocking(move || {
+        return blocking_host_task(move || {
             let path = planeai_paths::db_path();
             let conn = Connection::open(path).map_err(|error| error.to_string())?;
             let session = crate::db::get_session(&conn, &session_id)
@@ -2061,20 +1927,21 @@ async fn execute_host_task(
             .or_else(|| params.get("sessionId"))
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
-            .ok_or("linked task transition requires session_id")?
+            .ok_or_else(|| invalid_params("linked task transition requires session_id"))?
             .to_string();
         let status = params
             .get("status")
             .and_then(Value::as_str)
             .and_then(Status::parse)
-            .ok_or("linked task transition requires a valid status")?;
-        return commands::blocking(move || transition_linked_plugin_task(&session_id, status))
+            .ok_or_else(|| invalid_params("linked task transition requires a valid status"))?;
+        return blocking_host_task(move || transition_linked_plugin_task(&session_id, status))
             .await;
     }
 
     if method == "host.tasks.createChild" {
         let plugin_id = plugin_id.to_string();
-        return commands::blocking(move || create_plugin_child_task(&plugin_id, params)).await;
+        let child = ChildTask::from_params(&params).map_err(CallbackError::InvalidParams)?;
+        return blocking_host_task(move || create_plugin_child_task(&plugin_id, child)).await;
     }
 
     if matches!(
@@ -2083,27 +1950,30 @@ async fn execute_host_task(
     ) {
         let data_dir = data_dir.to_path_buf();
         let method = method.to_string();
-        return commands::blocking(move || match method.as_str() {
-            "host.settings.get" => {
-                let path = settings_path(&params)?;
-                read_plugin_settings(&data_dir).map(|settings| {
-                    let settings = path
-                        .as_deref()
-                        .map(|path| plugin_settings_at_path(&settings, path))
-                        .unwrap_or(settings);
-                    serde_json::json!({ "settings": settings })
-                })
-            }
-            "host.settings.replace" => {
-                let settings = params.get("settings").cloned().unwrap_or(params);
-                replace_plugin_settings(&data_dir, settings)
-                    .map(|settings| serde_json::json!({ "settings": settings }))
-            }
-            "host.settings.patch" => {
-                let patch = params.get("patch").cloned().unwrap_or(params);
-                patch_plugin_settings(&data_dir, patch)
-                    .map(|()| serde_json::json!({ "updated": true }))
-            }
+        let path = match method.as_str() {
+            "host.settings.get" => settings_path(&params).map_err(CallbackError::InvalidParams)?,
+            _ => None,
+        };
+        let document = match method.as_str() {
+            "host.settings.replace" => params.get("settings").cloned().unwrap_or(params),
+            "host.settings.patch" => params.get("patch").cloned().unwrap_or(params),
+            _ => Value::Null,
+        };
+        if method != "host.settings.get" && !document.is_object() {
+            return Err(invalid_params("plugin settings must be a JSON object"));
+        }
+        return blocking_host_task(move || match method.as_str() {
+            "host.settings.get" => read_plugin_settings(&data_dir).map(|settings| {
+                let settings = path
+                    .as_deref()
+                    .map(|path| plugin_settings_at_path(&settings, path))
+                    .unwrap_or(settings);
+                serde_json::json!({ "settings": settings })
+            }),
+            "host.settings.replace" => replace_plugin_settings(&data_dir, document)
+                .map(|settings| serde_json::json!({ "settings": settings })),
+            "host.settings.patch" => patch_plugin_settings(&data_dir, document)
+                .map(|()| serde_json::json!({ "updated": true })),
             _ => unreachable!(),
         })
         .await;
@@ -2113,14 +1983,14 @@ async fn execute_host_task(
             .get("key")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
-            .ok_or("legacy Jira issue lookup requires key")?
+            .ok_or_else(|| invalid_params("legacy Jira issue lookup requires key"))?
             .to_string();
         let summary = params
             .get("summary")
             .and_then(Value::as_str)
-            .ok_or("legacy Jira issue lookup requires summary")?
+            .ok_or_else(|| invalid_params("legacy Jira issue lookup requires summary"))?
             .to_string();
-        return commands::blocking(move || {
+        return blocking_host_task(move || {
             let path = planeai_paths::db_path();
             let conn = Connection::open(path).map_err(|error| error.to_string())?;
             legacy_jira_issue_matches(&conn, &key, &summary)
@@ -2133,9 +2003,9 @@ async fn execute_host_task(
         let key = params
             .get("key")
             .and_then(Value::as_str)
-            .ok_or("task read requires key")?
+            .ok_or_else(|| invalid_params("task read requires key"))?
             .to_string();
-        return commands::blocking(move || {
+        return blocking_host_task(move || {
             let path = planeai_paths::db_path();
             let repo = SqliteRepository::open_read_only(
                 path.to_str().ok_or("invalid PlaneAI task database path")?,
@@ -2151,9 +2021,16 @@ async fn execute_host_task(
         })
         .await;
     }
+    let write = match method {
+        "host.task.create" => TaskWrite::Create(task_create_params(&params)?),
+        "host.task.update" => {
+            let (key, update) = task_update_params(&params)?;
+            TaskWrite::Update(key, update)
+        }
+        _ => return Err(CallbackError::NotFound),
+    };
     let data_dir = data_dir.to_path_buf();
-    let method = method.to_string();
-    commands::blocking(move || {
+    blocking_host_task(move || {
         let settings: Value = serde_json::from_reader(
             std::fs::File::open(data_dir.join("settings.json")).map_err(|error| {
                 format!("failed to read plugin settings for task capability: {error}")
@@ -2178,87 +2055,101 @@ async fn execute_host_task(
             &prefix,
         )
         .map_err(|error| error.to_string())?;
-        match method.as_str() {
-            "host.task.create" => {
-                let status = params
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .map(|value| Status::parse(value).ok_or("invalid task status"))
-                    .transpose()?;
-                let task = repo
-                    .create(CreateParams {
-                        key: params
-                            .get("key")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                        title: params
-                            .get("title")
-                            .and_then(Value::as_str)
-                            .ok_or("task create requires title")?
-                            .to_string(),
-                        description: params
-                            .get("description")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                        status,
-                        priority: params.get("priority").and_then(Value::as_i64).unwrap_or(0)
-                            as i32,
-                        tags: params
-                            .get("tags")
-                            .cloned()
-                            .map(serde_json::from_value)
-                            .transpose()
-                            .map_err(|error| format!("invalid task tags: {error}"))?
-                            .unwrap_or_default(),
-                        ..Default::default()
-                    })
-                    .map_err(|error| error.to_string())?;
-                serde_json::to_value(task).map_err(|error| error.to_string())
-            }
-            "host.task.update" => {
-                let key = params
-                    .get("key")
-                    .and_then(Value::as_str)
-                    .ok_or("task update requires key")?;
-                let status = params
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .map(|value| Status::parse(value).ok_or("invalid task status"))
-                    .transpose()?;
-                let task = repo
-                    .update(
-                        key,
-                        UpdateParams {
-                            title: params
-                                .get("title")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                            description: params
-                                .get("description")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                            status,
-                            priority: params
-                                .get("priority")
-                                .and_then(Value::as_i64)
-                                .map(|value| value as i32),
-                            tags: params
-                                .get("tags")
-                                .cloned()
-                                .map(serde_json::from_value)
-                                .transpose()
-                                .map_err(|error| format!("invalid task tags: {error}"))?,
-                            ..Default::default()
-                        },
-                    )
-                    .map_err(|error| error.to_string())?;
-                serde_json::to_value(task).map_err(|error| error.to_string())
-            }
-            _ => Err("host method not found".to_string()),
+        let task = match write {
+            TaskWrite::Create(create) => repo.create(create),
+            TaskWrite::Update(key, update) => repo.update(&key, update),
         }
+        .map_err(|error| error.to_string())?;
+        serde_json::to_value(task).map_err(|error| error.to_string())
     })
     .await
+}
+
+enum TaskWrite {
+    Create(CreateParams),
+    Update(String, UpdateParams),
+}
+
+fn task_status_param(params: &Value) -> Result<Option<Status>, CallbackError> {
+    params
+        .get("status")
+        .and_then(Value::as_str)
+        .map(|value| Status::parse(value).ok_or_else(|| invalid_params("invalid task status")))
+        .transpose()
+}
+
+fn task_tags_param(params: &Value) -> Result<Option<Vec<String>>, CallbackError> {
+    params
+        .get("tags")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| CallbackError::InvalidParams(format!("invalid task tags: {error}")))
+}
+
+fn task_create_params(params: &Value) -> Result<CreateParams, CallbackError> {
+    Ok(CreateParams {
+        key: params
+            .get("key")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        title: params
+            .get("title")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid_params("task create requires title"))?
+            .to_string(),
+        description: params
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        status: task_status_param(params)?,
+        priority: params.get("priority").and_then(Value::as_i64).unwrap_or(0) as i32,
+        tags: task_tags_param(params)?.unwrap_or_default(),
+        ..Default::default()
+    })
+}
+
+fn task_update_params(params: &Value) -> Result<(String, UpdateParams), CallbackError> {
+    let key = params
+        .get("key")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_params("task update requires key"))?
+        .to_string();
+    let update = UpdateParams {
+        title: params
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        description: params
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        status: task_status_param(params)?,
+        priority: params
+            .get("priority")
+            .and_then(Value::as_i64)
+            .map(|value| value as i32),
+        tags: task_tags_param(params)?,
+        ..Default::default()
+    };
+    Ok((key, update))
+}
+
+/// Whether a plugin starts after its reconciliation: only a broken runtime fails the start;
+/// a plugin that refused it still runs, its stale data kept until the next start.
+fn startup_reconciliation(
+    plugin_id: &str,
+    result: Result<(), PluginRpcError>,
+) -> Result<(), String> {
+    match result {
+        Err(error) if error.is_fatal() => Err(error.into()),
+        Err(error) => {
+            tracing::warn!(plugin_id, %error, "provider session reconciliation failed");
+            Ok(())
+        }
+        Ok(()) => Ok(()),
+    }
 }
 
 fn transition_linked_plugin_task(session_id: &str, status: Status) -> Result<Value, String> {
@@ -2303,34 +2194,49 @@ fn transition_linked_plugin_task(session_id: &str, status: Status) -> Result<Val
         .map_err(|error| error.to_string())
 }
 
-fn create_plugin_child_task(plugin_id: &str, params: Value) -> Result<Value, String> {
-    let project_path = params
-        .get("project_path")
-        .or_else(|| params.get("projectPath"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("child task create requires project_path")?;
-    let parent_key = params
-        .get("parent_key")
-        .or_else(|| params.get("parentKey"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("child task create requires parent_key")?;
-    let operation_id = params
-        .get("operation_id")
-        .or_else(|| params.get("operationId"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("child task create requires operation_id")?;
-    let title = params
-        .get("title")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("child task create requires title")?;
-    let description = params
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+/// A child task request's params, checked before anything is written.
+#[derive(Debug)]
+struct ChildTask {
+    project_path: String,
+    parent_key: String,
+    operation_id: String,
+    title: String,
+    description: String,
+}
+
+impl ChildTask {
+    fn from_params(params: &Value) -> Result<Self, String> {
+        let required = |names: &[&str], what: &str| {
+            names
+                .iter()
+                .find_map(|name| params.get(*name))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| format!("child task create requires {what}"))
+        };
+        Ok(Self {
+            project_path: required(&["project_path", "projectPath"], "project_path")?,
+            parent_key: required(&["parent_key", "parentKey"], "parent_key")?,
+            operation_id: required(&["operation_id", "operationId"], "operation_id")?,
+            title: required(&["title"], "title")?,
+            description: params
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        })
+    }
+}
+
+fn create_plugin_child_task(plugin_id: &str, child: ChildTask) -> Result<Value, String> {
+    let ChildTask {
+        project_path,
+        parent_key,
+        operation_id,
+        title,
+        description,
+    } = child;
     let path = planeai_paths::db_path();
     let mut conn = Connection::open(path).map_err(|error| error.to_string())?;
     let project = crate::db::list_projects(&conn)
@@ -2618,6 +2524,7 @@ impl PluginRuntimeSupervisor {
             params,
         )
         .await
+        .map_err(|error| error.to_string())
     }
 
     pub fn begin_shutdown(&self) -> bool {
@@ -2758,7 +2665,7 @@ impl PluginRuntimeSupervisor {
         if result.is_ok() && plugin_id == JIRA_PLUGIN_ID && method == "jira.connect.complete" {
             self.wake_background_worker(plugin_id).await;
         }
-        result
+        result.map_err(String::from)
     }
 
     async fn call_internal(
@@ -2767,28 +2674,32 @@ impl PluginRuntimeSupervisor {
         method: &str,
         params: Value,
         host_controlled: bool,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, PluginRpcError> {
         if !host_controlled && is_host_controlled_plugin_method(method) {
-            return Err("plugin lifecycle methods are reserved for PlaneAI".to_string());
+            return Err("plugin lifecycle methods are reserved for PlaneAI"
+                .to_string()
+                .into());
         }
         let process = {
             let _lifecycle = self.lifecycle.lock().await;
-            let inventory = self
-                .inventory(plugin_id)
-                .await?
-                .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
+            let inventory = self.inventory(plugin_id).await?.ok_or_else(|| {
+                PluginRpcError::NotRunning(format!("plugin inventory entry not found: {plugin_id}"))
+            })?;
             if inventory.state != PluginRuntimeState::Running {
-                return Err(format!("plugin {plugin_id} is not running"));
+                return Err(PluginRpcError::NotRunning(format!(
+                    "plugin {plugin_id} is not running"
+                )));
             }
             self.processes.lock().await.get(plugin_id).cloned()
         };
-        let process =
-            process.ok_or_else(|| format!("plugin runtime was not available: {plugin_id}"))?;
+        let process = process.ok_or_else(|| {
+            PluginRpcError::NotRunning(format!("plugin runtime was not available: {plugin_id}"))
+        })?;
         let result = process.request(method, params).await;
         let Err(error) = result else {
             return result;
         };
-        if !is_fatal_plugin_runtime_error(&error) {
+        if !error.is_fatal() {
             return Err(error);
         }
 
@@ -2806,7 +2717,7 @@ impl PluginRuntimeSupervisor {
                     plugin_id,
                     true,
                     PluginRuntimeState::Error,
-                    Some(error.clone()),
+                    Some(error.to_string()),
                 )
                 .await
             {
@@ -2859,7 +2770,7 @@ impl PluginRuntimeSupervisor {
     /// is best-effort and requires both manifest capability and handshake opt-in.
     pub fn dispatch_session_lifecycle(
         self: &Arc<Self>,
-        event: crate::commands::sessions::lifecycle::SessionLifecycleEvent,
+        transition: crate::commands::sessions::lifecycle::SessionTransition,
     ) {
         if self.shutting_down.load(Ordering::Acquire) {
             tracing::warn!(
@@ -2869,6 +2780,10 @@ impl PluginRuntimeSupervisor {
         }
         let supervisor = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
+            let crate::commands::sessions::lifecycle::SessionTransition {
+                event,
+                provider_session,
+            } = transition;
             // Sessions the GUI ends dispatch this event; ends from the CLI or task
             // completion reach `plugin_providers::reconcile` instead.
             if let Some(reason) = crate::plugin_providers::stop_reason(&event.status) {
@@ -2880,8 +2795,10 @@ impl PluginRuntimeSupervisor {
                     .0
                     .clone();
                 tabs.session_ended(&event.session_id).await;
-                let runtime = crate::plugin_providers::AppRuntime::new(&supervisor.app);
-                crate::plugin_providers::stop(&runtime, &event.session_id, reason).await;
+                if let Some(target) = provider_session {
+                    let runtime = crate::plugin_providers::AppRuntime::new(&supervisor.app);
+                    crate::plugin_providers::stop(&runtime, &target, reason).await;
+                }
             }
             let event = match serde_json::to_value(&event) {
                 Ok(event) => event,
@@ -2975,7 +2892,7 @@ impl PluginRuntimeSupervisor {
         plugin_id: &str,
         method: &str,
         params: Value,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, PluginRpcError> {
         debug_assert!(method.starts_with("provider."));
         self.call_internal(plugin_id, method, params, true).await
     }
@@ -3262,11 +3179,7 @@ impl PluginRuntimeSupervisor {
         .await
         {
             Ok(binary) => binary,
-            Err(error) => {
-                self.update_state(&id, true, PluginRuntimeState::Error, Some(error.clone()))
-                    .await?;
-                return Err(error);
-            }
+            Err(error) => return self.fail_startup(&id, error).await,
         };
 
         // Bundled plugins own durable state too; Jira settings and credentials
@@ -3283,66 +3196,13 @@ impl PluginRuntimeSupervisor {
         )
         .await
         {
-            Ok(process) => process,
-            Err(error) => {
-                self.update_state(&id, true, PluginRuntimeState::Error, Some(error.clone()))
-                    .await?;
-                return Err(error);
-            }
+            Ok(process) => Arc::new(process),
+            Err(error) => return self.fail_startup(&id, error).await,
         };
-        let process = Arc::new(process);
-
-        let handshake_result = process
-            .request(
-                "plugin.handshake",
-                serde_json::json!({
-                    "host_api_version": inventory.host_api_version,
-                    "host_capabilities": capabilities,
-                }),
-            )
-            .await;
-        let handshake: PluginHandshake = match handshake_result.and_then(|value| {
-            serde_json::from_value::<PluginHandshake>(value)
-                .map_err(|e| format!("invalid plugin handshake: {e}"))
-        }) {
-            Ok(value)
-                if value.plugin_id == inventory.id
-                    && value.plugin_name == inventory.name
-                    && value.plugin_version == inventory.version
-                    && value.host_api_version == inventory.host_api_version =>
-            {
-                value
-            }
-            Ok(_) => {
-                let error = "plugin handshake identity or host API version did not match manifest"
-                    .to_string();
-                let _ = stop_process(process).await;
-                self.update_state(&id, true, PluginRuntimeState::Error, Some(error.clone()))
-                    .await?;
-                return Err(error);
-            }
-            Err(error) => {
-                let _ = stop_process(process).await;
-                self.update_state(&id, true, PluginRuntimeState::Error, Some(error.clone()))
-                    .await?;
-                return Err(error);
-            }
-        };
-        {
-            let mut subscriptions = process.lifecycle_event_subscriptions.lock().await;
-            *subscriptions = handshake.lifecycle_event_subscriptions;
-            subscriptions.retain(|subscription| {
-                (subscription == "task.lifecycle"
-                    && process
-                        .capabilities
-                        .contains(&PluginHostCapability::TaskEvents))
-                    || (subscription == "session.lifecycle"
-                        && process
-                            .capabilities
-                            .contains(&PluginHostCapability::SessionEvents))
-            });
+        if let Err(error) = self.initialize_runtime(&inventory, &process).await {
+            let _ = stop_process(process).await;
+            return self.fail_startup(&id, error).await;
         }
-        tracing::info!(plugin_id = %handshake.plugin_id, version = %handshake.plugin_version, "plugin runtime handshake completed");
 
         // Publish the ready runtime before emitting the running lifecycle event so
         // mounted UI contributions cannot observe `running` without a callable handle.
@@ -3372,6 +3232,106 @@ impl PluginRuntimeSupervisor {
         self.inventory(&id)
             .await?
             .ok_or_else(|| format!("plugin inventory entry not found after startup: {id}"))
+    }
+
+    /// Records a runtime that failed to start, returning why.
+    async fn fail_startup<T>(&self, plugin_id: &str, error: String) -> Result<T, String> {
+        self.update_state(
+            plugin_id,
+            true,
+            PluginRuntimeState::Error,
+            Some(error.clone()),
+        )
+        .await?;
+        Err(error)
+    }
+
+    /// Handshakes with a spawned runtime and, for a provider plugin, reconciles its sessions,
+    /// all before the runtime is published, so no start or resume can precede them.
+    async fn initialize_runtime(
+        &self,
+        inventory: &PluginInventory,
+        process: &RuntimeProcess,
+    ) -> Result<(), String> {
+        let value = process
+            .request(
+                "plugin.handshake",
+                serde_json::json!({
+                    "host_api_version": inventory.host_api_version,
+                    "host_capabilities": process.capabilities,
+                    "host_features": planeai_plugin_contract::provider::HOST_FEATURES,
+                }),
+            )
+            .await?;
+        let handshake = serde_json::from_value::<PluginHandshake>(value)
+            .map_err(|e| format!("invalid plugin handshake: {e}"))?;
+        if handshake.plugin_id != inventory.id
+            || handshake.plugin_name != inventory.name
+            || handshake.plugin_version != inventory.version
+            || handshake.host_api_version != inventory.host_api_version
+        {
+            return Err(
+                "plugin handshake identity or host API version did not match manifest".to_string(),
+            );
+        }
+        {
+            let mut subscriptions = process.lifecycle_event_subscriptions.lock().await;
+            *subscriptions = handshake.lifecycle_event_subscriptions;
+            subscriptions.retain(|subscription| {
+                (subscription == "task.lifecycle"
+                    && process
+                        .capabilities
+                        .contains(&PluginHostCapability::TaskEvents))
+                    || (subscription == "session.lifecycle"
+                        && process
+                            .capabilities
+                            .contains(&PluginHostCapability::SessionEvents))
+            });
+        }
+        tracing::info!(plugin_id = %handshake.plugin_id, version = %handshake.plugin_version, "plugin runtime handshake completed");
+        if process
+            .capabilities
+            .contains(&PluginHostCapability::Providers)
+        {
+            let reconciled = self
+                .reconcile_provider_sessions(&inventory.id, process)
+                .await;
+            startup_reconciliation(&inventory.id, reconciled)?;
+        }
+        Ok(())
+    }
+
+    /// Tells a freshly started provider plugin which of its sessions still exist, so it can
+    /// drop what it keeps for the others.
+    async fn reconcile_provider_sessions(
+        &self,
+        plugin_id: &str,
+        process: &RuntimeProcess,
+    ) -> Result<(), PluginRpcError> {
+        let owner = plugin_id.to_string();
+        let sessions = self
+            .with_db(move |conn| {
+                crate::db::list_plugin_provider_sessions(conn, &owner)
+                    .map_err(|error| error.to_string())
+            })
+            .await?;
+        let sessions = sessions
+            .into_iter()
+            .map(|(session_id, provider_id, status)| {
+                serde_json::json!({
+                    "session_id": session_id,
+                    "provider_id": provider_id,
+                    "status": status,
+                })
+            })
+            .collect::<Vec<_>>();
+        process
+            .request(
+                planeai_plugin_contract::provider::RECONCILE,
+                serde_json::json!({ "sessions": sessions }),
+            )
+            .await
+            .map(|_| ())
     }
 
     pub async fn disable(&self, plugin_id: &str) -> Result<PluginInventory, String> {
@@ -3565,65 +3525,6 @@ impl PluginRuntimeSupervisor {
     }
 }
 
-fn host_callback_response_fits(frame: &str) -> bool {
-    frame.len() < MAX_RPC_FRAME_BYTES as usize
-}
-
-fn validate_plugin_response_frame(frame: &[u8]) -> Result<(), String> {
-    if frame.len() > MAX_RPC_FRAME_BYTES as usize {
-        return Err("plugin JSON-RPC response exceeded the frame limit".to_string());
-    }
-    if !frame.ends_with(b"\n") {
-        return Err("plugin JSON-RPC response was not newline terminated".to_string());
-    }
-    Ok(())
-}
-
-fn parse_json_rpc_callback_request(value: Value) -> Result<JsonRpcCallbackRequest, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "malformed plugin JSON-RPC callback: expected an object".to_string())?;
-    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-        return Err("malformed plugin JSON-RPC callback: expected jsonrpc 2.0".to_string());
-    }
-    if object.contains_key("result") || object.contains_key("error") {
-        return Err(
-            "malformed plugin JSON-RPC callback: request cannot contain result or error"
-                .to_string(),
-        );
-    }
-    let id = object
-        .get("id")
-        .filter(|id| matches!(id, Value::String(_) | Value::Number(_)))
-        .cloned()
-        .ok_or_else(|| {
-            "malformed plugin JSON-RPC callback: id must be a string or number".to_string()
-        })?;
-    let method = object
-        .get("method")
-        .and_then(Value::as_str)
-        .filter(|method| !method.is_empty())
-        .ok_or_else(|| {
-            "malformed plugin JSON-RPC callback: method must be a nonempty string".to_string()
-        })?
-        .to_owned();
-    let params = object.get("params").cloned().unwrap_or(Value::Null);
-    if !params.is_null() && !params.is_array() && !params.is_object() {
-        return Err(
-            "malformed plugin JSON-RPC callback: params must be null, an array, or an object"
-                .to_string(),
-        );
-    }
-    Ok(JsonRpcCallbackRequest { id, method, params })
-}
-
-fn decode_json_rpc_frame(frame: &str, request_id: u64) -> Result<Value, String> {
-    let line = frame
-        .strip_suffix('\n')
-        .ok_or_else(|| "plugin JSON-RPC response was not newline terminated".to_string())?;
-    decode_json_rpc_response(line, request_id)
-}
-
 fn resolve_plugin_binary(app: &AppHandle, inventory: &PluginInventory) -> Result<PathBuf, String> {
     match inventory.source_kind {
         PluginSourceKind::Builtin => resolve_trusted_binary(app, &inventory.backend_entrypoint),
@@ -3752,6 +3653,7 @@ async fn spawn_runtime(
     tokio::spawn(read_stdout_frames(
         BufReader::new(stdout),
         frame_sender,
+        plugin_id.to_string(),
         notification_sink,
         stdout_failure.clone(),
     ));
@@ -3779,22 +3681,40 @@ async fn spawn_runtime(
     })
 }
 
-/// Owns sidecar stdout for the process lifetime so provider notifications are
-/// delivered while no host request is in flight. Every other frame is queued for
-/// the request path in arrival order; the first transport error ends the stream and is
-/// recorded in `failure`, so the runtime is retired without waiting for a request to see it.
+/// Owns sidecar stdout for the process lifetime so notifications are handled as they
+/// arrive, not only while a host request is in flight: provider notifications are routed,
+/// and any other `host.*` notification, as one from a newer host's contract, is dropped.
+/// Every other frame is queued for the request path in arrival order; the first transport
+/// error ends the stream and is recorded in `failure`, so the runtime is retired without
+/// waiting for a request to see it.
 async fn read_stdout_frames(
     mut stdout: BufReader<ChildStdout>,
     frames: mpsc::Sender<Result<String, String>>,
+    plugin_id: String,
     notifications: Option<crate::plugin_providers::NotificationSink>,
     failure: Arc<std::sync::OnceLock<String>>,
 ) {
     loop {
         let frame = read_stdout_frame(&mut stdout).await;
-        if let (Ok(frame), Some(sink)) = (&frame, &notifications) {
-            if sink.try_handle(frame) {
+        let handles = |method: &str| {
+            notifications
+                .as_ref()
+                .is_some_and(|sink| sink.handles(method))
+        };
+        match frame.as_deref().map_or(StdoutFrame::Queue, |frame| {
+            classify_stdout_frame(frame, handles)
+        }) {
+            StdoutFrame::Route(method, params) => {
+                if let Some(sink) = &notifications {
+                    sink.route(&method, params);
+                }
                 continue;
             }
+            StdoutFrame::Drop(method) => {
+                tracing::warn!(%plugin_id, %method, "ignored a host notification this host does not know");
+                continue;
+            }
+            StdoutFrame::Queue => {}
         }
         if let Err(error) = &frame {
             let _ = failure.set(error.clone());
@@ -4458,21 +4378,21 @@ mod tests {
     }
 
     #[test]
-    fn fatal_runtime_errors_exclude_valid_json_rpc_errors() {
-        assert!(!is_fatal_plugin_runtime_error(
-            "plugin RPC error -32000: rejected"
-        ));
-        assert!(is_fatal_plugin_runtime_error(
-            "malformed plugin JSON-RPC frame: bad JSON"
-        ));
-        assert!(is_fatal_plugin_runtime_error(
-            "failed to write plugin JSON-RPC request: broken pipe"
-        ));
+    fn shutdown_uses_the_documented_three_second_grace() {
+        assert_eq!(SHUTDOWN_TIMEOUT, Duration::from_secs(3));
     }
 
     #[test]
-    fn shutdown_uses_the_documented_three_second_grace() {
-        assert_eq!(SHUTDOWN_TIMEOUT, Duration::from_secs(3));
+    fn providers_ignore_what_this_host_does_not_know() {
+        let provider: PluginProvider = serde_json::from_value(serde_json::json!({
+            "id": "chat",
+            "label": "Chat",
+            "entrypoint": "ui/chat.js",
+            "icon": "ui/icon.svg",
+            "supports": ["teleport", "handoff"],
+        }))
+        .unwrap();
+        assert_eq!(provider.supports, [ProviderFeature::Handoff]);
     }
 
     #[test]
@@ -4483,6 +4403,10 @@ mod tests {
             JIRA_LIFECYCLE_RPC_TIMEOUT
         );
         assert_eq!(request_timeout("jira.status"), RPC_TIMEOUT);
+        assert_eq!(
+            request_timeout("provider.session.start"),
+            Duration::from_secs(30)
+        );
     }
 
     #[test]
@@ -4658,6 +4582,123 @@ mod tests {
             .contains("JSON object"));
     }
 
+    #[test]
+    fn a_bad_callback_payload_is_the_plugins_mistake_not_a_broken_runtime() {
+        let error = callback_params(
+            serde_json::json!({ "actions": "not a list" }),
+            "plugin session actions",
+            validate_plugin_session_actions,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, CallbackError::InvalidParams(message) if message.starts_with("invalid plugin session actions"))
+        );
+        let duplicate = serde_json::json!({ "actions": [
+            { "id": "a", "label": "One" },
+            { "id": "a", "label": "Two" },
+        ] });
+        assert!(matches!(
+            callback_params(
+                duplicate,
+                "plugin session actions",
+                validate_plugin_session_actions
+            ),
+            Err(CallbackError::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn only_a_broken_runtime_fails_a_start_over_reconciliation() {
+        assert!(startup_reconciliation("chat", Ok(())).is_ok());
+        let refused = PluginRpcError::Rpc {
+            code: -32601,
+            message: "method not found".into(),
+        };
+        assert!(startup_reconciliation("chat", Err(refused)).is_ok());
+        let broken =
+            PluginRpcError::Broken("plugin RPC provider.sessions.reconcile timed out".into());
+        assert_eq!(
+            startup_reconciliation("chat", Err(broken)).unwrap_err(),
+            "plugin RPC provider.sessions.reconcile timed out"
+        );
+    }
+
+    #[tokio::test]
+    async fn host_tasks_answer_bad_params_as_invalid_params() {
+        let data = tempfile::TempDir::new().unwrap();
+        let settings = HashSet::from([PluginHostCapability::Settings]);
+        let tasks = HashSet::from([
+            PluginHostCapability::TasksCreate,
+            PluginHostCapability::TasksUpdate,
+            PluginHostCapability::TasksTransition,
+        ]);
+        let run = |capabilities: &HashSet<PluginHostCapability>,
+                   plugin: &'static str,
+                   method: &'static str,
+                   params: Value| {
+            let capabilities = capabilities.clone();
+            let data = data.path().to_path_buf();
+            async move { execute_host_task(plugin, &capabilities, &data, method, params).await }
+        };
+        for (capabilities, plugin, method, params) in [
+            (
+                &settings,
+                "local-test",
+                "host.settings.replace",
+                serde_json::json!({ "settings": 3 }),
+            ),
+            (
+                &settings,
+                "local-test",
+                "host.settings.patch",
+                serde_json::json!({ "patch": [] }),
+            ),
+            (
+                &settings,
+                "local-test",
+                "host.settings.get",
+                serde_json::json!({ "path": [] }),
+            ),
+            (
+                &tasks,
+                JIRA_PLUGIN_ID,
+                "host.task.create",
+                serde_json::json!({}),
+            ),
+            (
+                &tasks,
+                JIRA_PLUGIN_ID,
+                "host.task.create",
+                serde_json::json!({ "title": "t", "tags": 1 }),
+            ),
+            (
+                &tasks,
+                JIRA_PLUGIN_ID,
+                "host.task.update",
+                serde_json::json!({ "status": "x" }),
+            ),
+            (
+                &tasks,
+                "local-test",
+                "host.sessions.transitionLinkedTask",
+                serde_json::json!({ "session_id": "s" }),
+            ),
+        ] {
+            let error = run(capabilities, plugin, method, params.clone())
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, CallbackError::InvalidParams(_)),
+                "{method} {params}: {error:?}"
+            );
+        }
+        assert!(ChildTask::from_params(
+            &serde_json::json!({ "projectPath": "/p", "parentKey": "K-1", "operationId": "o" })
+        )
+        .unwrap_err()
+        .contains("title"));
+    }
+
     #[tokio::test]
     async fn generic_settings_callbacks_work_for_a_local_plugin() {
         let data = tempfile::TempDir::new().unwrap();
@@ -4682,16 +4723,18 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result["settings"]["mode"], "local");
-        assert!(execute_host_task(
-            "local-test",
-            &HashSet::new(),
-            data.path(),
-            "host.settings.get",
-            Value::Null
-        )
-        .await
-        .unwrap_err()
-        .contains("not granted"));
+        assert!(
+            execute_host_task(
+                "local-test",
+                &HashSet::new(),
+                data.path(),
+                "host.settings.get",
+                Value::Null
+            )
+            .await
+            .unwrap_err()
+                == CallbackError::NotGranted
+        );
     }
 
     #[tokio::test]
@@ -4847,85 +4890,6 @@ mod tests {
     }
 
     #[test]
-    fn oversized_requests_leave_the_runtime_running() {
-        let error = encode_request(
-            1,
-            "provider.session.send",
-            serde_json::json!({ "text": "x".repeat(70_000) }),
-        )
-        .unwrap_err();
-        assert!(!is_fatal_plugin_runtime_error(&error));
-        assert!(is_fatal_plugin_runtime_error(
-            "plugin process closed stdout unexpectedly"
-        ));
-    }
-
-    #[cfg(unix)]
-    async fn stdout_frames_from(script: &str) -> Vec<Result<String, String>> {
-        stdout_frames_and_failure(script).await.0
-    }
-
-    #[cfg(unix)]
-    async fn stdout_frames_and_failure(
-        script: &str,
-    ) -> (Vec<Result<String, String>>, Option<String>) {
-        let mut child = Command::new("sh")
-            .args(["-c", script])
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let stdout = BufReader::new(child.stdout.take().unwrap());
-        let (sender, mut receiver) = mpsc::channel(8);
-        let failure = Arc::new(std::sync::OnceLock::new());
-        read_stdout_frames(stdout, sender, None, failure.clone()).await;
-        let _ = child.wait().await;
-        let mut frames = Vec::new();
-        while let Ok(frame) = receiver.try_recv() {
-            frames.push(frame);
-        }
-        (frames, failure.get().cloned())
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn an_unreadable_frame_records_why_the_reader_stopped() {
-        // One frame over the limit, with the process still running behind it.
-        let (frames, failure) = stdout_frames_and_failure(&format!(
-            "printf '%0{}d\\n' 0; sleep 1",
-            MAX_RPC_FRAME_BYTES + 10
-        ))
-        .await;
-        assert_eq!(frames.len(), 1);
-        assert!(failure.is_some_and(|error| Err(error) == frames[0]));
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn stdout_reader_queues_frames_in_order_then_reports_close() {
-        let frames = stdout_frames_from(r#"printf '{"id":1}\n{"id":2}\n'"#).await;
-        assert_eq!(
-            frames,
-            vec![
-                Ok("{\"id\":1}\n".to_string()),
-                Ok("{\"id\":2}\n".to_string()),
-                Err(STDOUT_CLOSED_ERROR.to_string()),
-            ]
-        );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn stdout_reader_stops_at_the_first_transport_error() {
-        let frames = stdout_frames_from(r#"printf '{"id":1}'"#).await;
-        assert_eq!(
-            frames,
-            vec![Err(
-                "plugin JSON-RPC response was not newline terminated".to_string()
-            )]
-        );
-    }
-
-    #[test]
     fn local_plugin_session_callback_payloads_are_strict_and_provider_aware() {
         let actions = validate_plugin_session_actions(SessionActionsRequest {
             actions: vec![
@@ -4969,90 +4933,6 @@ mod tests {
             message: Some("Integration completed".into()),
         })
         .is_ok());
-    }
-
-    #[test]
-    fn json_rpc_uses_newline_frames_and_validates_responses() {
-        let frame = encode_json_rpc_line(7, "jira.status", Value::Null).unwrap();
-        assert!(frame.ends_with('\n'));
-        assert!(
-            encode_json_rpc_line(7, &"x".repeat(MAX_RPC_FRAME_BYTES as usize), Value::Null)
-                .unwrap_err()
-                .contains("exceeded")
-        );
-        let value = decode_json_rpc_frame(
-            r#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}
-"#,
-            7,
-        )
-        .unwrap();
-        assert_eq!(value["ok"], true);
-        assert_eq!(
-            decode_json_rpc_response(r#"{"jsonrpc":"2.0","id":7,"result":null}"#, 7).unwrap(),
-            Value::Null
-        );
-        let exact_limit = [vec![b'x'; MAX_RPC_FRAME_BYTES as usize - 1], vec![b'\n']].concat();
-        assert!(validate_plugin_response_frame(&exact_limit).is_ok());
-        let over_limit = [vec![b'x'; MAX_RPC_FRAME_BYTES as usize], vec![b'\n']].concat();
-        assert!(validate_plugin_response_frame(&over_limit).is_err());
-        assert!(validate_plugin_response_frame(&vec![b'x'; MAX_RPC_FRAME_BYTES as usize]).is_err());
-        assert!(decode_json_rpc_response("not json", 7)
-            .unwrap_err()
-            .contains("malformed"));
-        assert!(
-            decode_json_rpc_frame(r#"{"jsonrpc":"2.0","id":7,"result":{}}"#, 7)
-                .unwrap_err()
-                .contains("newline terminated")
-        );
-        assert!(
-            decode_json_rpc_response(r#"{"jsonrpc":"2.0","id":8,"result":{}}"#, 7)
-                .unwrap_err()
-                .contains("did not match")
-        );
-        let cancellation = encode_json_rpc_cancel_request_line(7).unwrap();
-        let cancellation: Value = serde_json::from_str(cancellation.trim_end()).unwrap();
-        assert_eq!(cancellation["method"], "$/cancelRequest");
-        assert_eq!(cancellation["params"]["id"], 7);
-        assert!(decode_json_rpc_cancellation_response(
-            r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32800,"message":"cancelled"}}"#,
-            7,
-        )
-        .unwrap()
-        .contains("-32800"));
-        assert!(decode_json_rpc_cancellation_response(
-            r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32603,"message":"failed"}}"#,
-            7,
-        )
-        .unwrap_err()
-        .contains("expected -32800"));
-        for response in [
-            r#"{"jsonrpc":"2.0","id":7,"result":{},"error":{"code":-32800,"message":"cancelled"}}"#,
-            r#"{"jsonrpc":"2.0","id":7}"#,
-        ] {
-            assert!(decode_json_rpc_response(response, 7)
-                .unwrap_err()
-                .contains("exactly one"));
-        }
-
-        let timeout_error = timed_out_request_error("jira.status");
-        for acknowledgement in [
-            Some("not json"),
-            Some(r#"{"jsonrpc":"2.0","id":8,"error":{"code":-32800,"message":"cancelled"}}"#),
-            Some(r#"{"jsonrpc":"2.0","id":7,"result":{}}"#),
-            None,
-        ] {
-            let error = cancellation_acknowledgement_error("jira.status", 7, acknowledgement);
-            assert_eq!(error, timeout_error);
-            assert!(is_fatal_plugin_runtime_error(&error));
-        }
-        assert_eq!(
-            cancellation_acknowledgement_error(
-                "jira.status",
-                7,
-                Some(r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32800,"message":"cancelled"}}"#),
-            ),
-            "plugin RPC error -32800: cancelled"
-        );
     }
 }
 
@@ -5118,13 +4998,15 @@ mod session_prompt_tests {
             )
             .is_err());
         }
-        assert!(dispatch_plugin_session_prompt(
-            &HashSet::new(),
-            serde_json::json!({ "session_id": "session-123", "text": "should not send" }),
-            |_, _| panic!("ungranted plugins must not deliver a prompt"),
-        )
-        .unwrap_err()
-        .contains("not granted"));
+        assert!(
+            dispatch_plugin_session_prompt(
+                &HashSet::new(),
+                serde_json::json!({ "session_id": "session-123", "text": "should not send" }),
+                |_, _| panic!("ungranted plugins must not deliver a prompt"),
+            )
+            .unwrap_err()
+                == CallbackError::NotGranted
+        );
     }
 }
 

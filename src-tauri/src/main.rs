@@ -19,6 +19,7 @@ mod output_observer;
 mod paths;
 mod plugin_packages;
 mod plugin_providers;
+mod plugin_rpc;
 mod plugins;
 mod pty;
 mod pty_planeai_core_adapter;

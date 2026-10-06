@@ -10,6 +10,8 @@ const PLUGIN_VERSION: &str = "0.1.0";
 const HOST_API_VERSION: &str = "planeai.plugin-host.v3";
 const SETTINGS_GET_ID: &str = "fixture-settings-get";
 const SETTINGS_REPLACE_ID: &str = "fixture-settings-replace";
+/// The provider contract's error for a session the plugin does not know.
+const SESSION_NOT_FOUND: i64 = -32010;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -248,10 +250,23 @@ struct EchoProvider {
     sessions: HashMap<String, EchoSession>,
 }
 
-#[derive(Default)]
 struct EchoSession {
     seq: u64,
     events: Vec<Value>,
+}
+
+impl EchoSession {
+    /// Event seqs must keep increasing across sidecar restarts. The fixture keeps nothing on
+    /// disk, so a session it starts or resumes counts on from the current time in microseconds.
+    fn new() -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        Self {
+            seq: now.as_micros() as u64,
+            events: Vec::new(),
+        }
+    }
 }
 
 impl EchoProvider {
@@ -259,12 +274,18 @@ impl EchoProvider {
         let id = request.get("id").cloned().unwrap_or(Value::Null);
         let method = request["method"].as_str().unwrap_or_default();
         let params = &request["params"];
+        // Every session lives in this process, which reconciliation never drops.
+        if method == "provider.sessions.reconcile" {
+            return (success(id, json!({})), Vec::new());
+        }
         let Some(session_id) = params["session_id"].as_str().map(str::to_owned) else {
             return (error(id, -32602, "session_id is required"), Vec::new());
         };
         match method {
             "provider.session.start" | "provider.session.resume" => {
-                self.sessions.entry(session_id.clone()).or_default();
+                self.sessions
+                    .entry(session_id.clone())
+                    .or_insert_with(EchoSession::new);
                 let notifications = match params["initial_prompt"].as_str() {
                     Some(prompt) => self.turn(&session_id, prompt),
                     None => vec![status(&session_id, "idle")],
@@ -272,15 +293,24 @@ impl EchoProvider {
                 (success(id, json!({})), notifications)
             }
             "fixture.providerSnapshot" => {
-                let session = self.sessions.entry(session_id).or_default();
+                let session = self
+                    .sessions
+                    .entry(session_id)
+                    .or_insert_with(EchoSession::new);
                 (
                     success(id, json!({ "seq": session.seq, "events": session.events })),
                     Vec::new(),
                 )
             }
-            _ if !self.sessions.contains_key(&session_id) => {
-                (error(id, -32602, "unknown provider session"), Vec::new())
+            // Stopping is idempotent, whether or not the session is known.
+            "provider.session.stop" => {
+                self.sessions.remove(&session_id);
+                (success(id, json!({ "stopped": true })), Vec::new())
             }
+            _ if !self.sessions.contains_key(&session_id) => (
+                error(id, SESSION_NOT_FOUND, "unknown provider session"),
+                Vec::new(),
+            ),
             "provider.session.send" => match params["text"].as_str() {
                 Some(text) => {
                     let notifications = self.turn(&session_id, text);
@@ -300,16 +330,15 @@ impl EchoProvider {
                 vec![status(&session_id, "idle")],
             ),
             "provider.session.handback" => (success(id, json!({})), Vec::new()),
-            "provider.session.stop" => {
-                self.sessions.remove(&session_id);
-                (success(id, json!({ "stopped": true })), Vec::new())
-            }
             _ => (error(id, -32601, "method not found"), Vec::new()),
         }
     }
 
     fn turn(&mut self, session_id: &str, text: &str) -> Vec<Value> {
-        let session = self.sessions.entry(session_id.to_owned()).or_default();
+        let session = self
+            .sessions
+            .entry(session_id.to_owned())
+            .or_insert_with(EchoSession::new);
         let mut notifications = vec![status(session_id, "busy")];
         for payload in [
             json!({ "type": "user", "text": text }),
@@ -320,7 +349,7 @@ impl EchoProvider {
             session.events.push(event.clone());
             notifications.push(json!({
                 "jsonrpc": "2.0",
-                "method": "host.session.event",
+                "method": "host.providerSession.event",
                 "params": { "session_id": session_id, "seq": session.seq, "payload": payload },
             }));
         }
@@ -332,7 +361,7 @@ impl EchoProvider {
 fn status(session_id: &str, status: &str) -> Value {
     json!({
         "jsonrpc": "2.0",
-        "method": "host.session.status",
+        "method": "host.providerSession.status",
         "params": { "session_id": session_id, "status": status },
     })
 }
@@ -464,16 +493,22 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             methods,
-            ["busy", "host.session.event", "host.session.event", "idle"]
+            [
+                "busy",
+                "host.providerSession.event",
+                "host.providerSession.event",
+                "idle"
+            ]
         );
-        assert_eq!(notifications[2]["params"]["seq"], 2);
+        let first = notifications[1]["params"]["seq"].as_u64().unwrap();
+        assert_eq!(notifications[2]["params"]["seq"], first + 1);
         assert_eq!(notifications[2]["params"]["payload"]["text"], "echo: hi");
 
         let (snapshot, _) = provider.handle(&provider_request(
             "fixture.providerSnapshot",
             json!({ "session_id": "s1" }),
         ));
-        assert_eq!(snapshot["result"]["seq"], 2);
+        assert_eq!(snapshot["result"]["seq"], first + 1);
         assert_eq!(snapshot["result"]["events"].as_array().unwrap().len(), 2);
     }
 
@@ -503,7 +538,7 @@ mod tests {
             "provider.session.send",
             json!({ "session_id": "missing", "text": "hi" }),
         ));
-        assert_eq!(response["error"]["code"], -32602);
+        assert_eq!(response["error"]["code"], SESSION_NOT_FOUND);
 
         provider.handle(&provider_request(
             "provider.session.start",
@@ -518,7 +553,12 @@ mod tests {
             "provider.session.interrupt",
             json!({ "session_id": "s1" }),
         ));
-        assert_eq!(response["error"]["code"], -32602);
+        assert_eq!(response["error"]["code"], SESSION_NOT_FOUND);
+        let (response, _) = provider.handle(&provider_request(
+            "provider.session.stop",
+            json!({ "session_id": "s1", "reason": "destroy" }),
+        ));
+        assert_eq!(response["result"]["stopped"], true);
     }
 
     #[test]

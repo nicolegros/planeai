@@ -11,6 +11,7 @@ import {
 
 function bridge(overrides: Partial<ProviderSessionBridge> = {}): ProviderSessionBridge {
   return {
+    provider: { id: "echo", label: "Echo", entrypoint: "ui/chat.js", supports: [] },
     loadSource: vi.fn(),
     send: vi.fn(async () => {}),
     interrupt: vi.fn(async () => {}),
@@ -36,21 +37,25 @@ describe("serveSessionRequest", () => {
   });
 
   it("requires text to send", async () => {
-    await expect(serveSessionRequest(bridge(), { type: "session-send" })).rejects.toBe(
+    await expect(serveSessionRequest(bridge(), { type: "session-send" })).rejects.toThrow(
       "session.send requires text",
     );
   });
 
   it("refuses session controls to frames without a provider session", async () => {
-    await expect(serveSessionRequest(undefined, { type: "session-send", text: "hi" })).rejects.toBe(
-      "session controls are available only to provider session UIs",
-    );
+    await expect(
+      serveSessionRequest(undefined, { type: "session-send", text: "hi" }),
+    ).rejects.toMatchObject({
+      code: "unsupported",
+      message: "session controls are available only to provider session UIs",
+    });
   });
 
   it("refuses handoff when the provider cannot continue in a terminal", async () => {
-    await expect(serveSessionRequest(bridge(), { type: "session-handoff" })).rejects.toBe(
-      "terminal handoff is not available here",
-    );
+    await expect(serveSessionRequest(bridge(), { type: "session-handoff" })).rejects.toMatchObject({
+      code: "unsupported",
+      message: "terminal handoff is not available here",
+    });
     const handback = vi.fn(async () => {});
     await serveSessionRequest(bridge({ handback }), { type: "session-handback" });
     expect(handback).toHaveBeenCalledOnce();
