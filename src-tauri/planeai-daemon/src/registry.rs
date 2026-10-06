@@ -457,12 +457,28 @@ mod tests {
         .unwrap()
     }
 
+    /// Polls until `id` has exited: a fixed sleep flakes when the whole workspace's tests load the machine.
+    fn wait_for_exit(reg: &mut SessionRegistry, id: &str) -> Vec<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut exited = Vec::new();
+        loop {
+            exited.extend(reg.poll_exits());
+            if exited.iter().any(|candidate| candidate == id) {
+                return exited;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{id} did not exit within 10s"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
     #[test]
     fn running_to_exited_via_poll() {
         let mut reg = SessionRegistry::new();
         spawn_echo(&mut reg, "s1");
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let exited = reg.poll_exits();
+        let exited = wait_for_exit(&mut reg, "s1");
         assert!(exited.contains(&"s1".to_string()));
         assert_eq!(reg.list()[0].status, "exited");
         // Session is still in registry
@@ -513,8 +529,7 @@ mod tests {
     fn exited_retained_until_gc() {
         let mut reg = SessionRegistry::new().with_gc_ttl(Duration::from_millis(50));
         spawn_echo(&mut reg, "s1");
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        reg.poll_exits();
+        wait_for_exit(&mut reg, "s1");
         // Not yet GC'd
         assert_eq!(reg.list().len(), 1);
         // Wait for GC TTL
@@ -529,8 +544,7 @@ mod tests {
         let mut reg = SessionRegistry::new();
         spawn_sleep(&mut reg, "live");
         spawn_echo(&mut reg, "dead");
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        reg.poll_exits();
+        wait_for_exit(&mut reg, "dead");
         assert_eq!(reg.live_count(), 1);
         assert_eq!(reg.list().len(), 2);
         reg.kill("live").unwrap();
@@ -559,8 +573,7 @@ mod tests {
     fn replace_exited_works() {
         let mut reg = SessionRegistry::new();
         spawn_echo(&mut reg, "s1");
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        reg.poll_exits();
+        wait_for_exit(&mut reg, "s1");
         let outcome = reg
             .spawn(
                 "s1",
@@ -639,8 +652,7 @@ mod tests {
     fn attach_if_running_errors_when_exited() {
         let mut reg = SessionRegistry::new();
         spawn_echo(&mut reg, "s1");
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        reg.poll_exits();
+        wait_for_exit(&mut reg, "s1");
         let err = reg
             .spawn(
                 "s1",
