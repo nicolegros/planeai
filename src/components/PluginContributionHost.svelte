@@ -17,6 +17,7 @@
   import { isDark } from "../lib/settings.svelte";
   import type { PluginInventory, PluginProvider, PluginUiContribution } from "../lib/types";
   import { isSessionRequest, serveSessionRequest, type ProviderSessionBridge } from "../lib/provider-session-bridge";
+  import { pluginFrameFonts } from "../lib/plugin-frame-fonts";
 
   interface Props {
     plugin: PluginInventory;
@@ -447,6 +448,10 @@
           if (message.type !== "init") return;
           sidebarKeydownRoutingEnabled = message.contribution?.placement?.startsWith("sidebar.") ?? false;
           try {
+            // The UI mounts once the theme fonts are in, so it never lays out in a fallback font first.
+            const fonts = message.fonts.map(({ family, data, descriptors }) => new FontFace(family, data, descriptors));
+            for (const font of fonts) document.fonts.add(font);
+            await Promise.allSettled(fonts.map((font) => font.loaded));
             const url = URL.createObjectURL(new Blob([message.source], { type: "text/javascript" }));
             const module = await import(url);
             URL.revokeObjectURL(url);
@@ -606,8 +611,8 @@
     // A provider UI mounts only once its session is driven by the current sidecar.
     const loadSource = (): Promise<string> => (bridge ? bridge.loadSource() : plugins.localUiSource(plugin.id, contribution.id));
     const initialise = (): void => {
-      void loadSource()
-        .then((source) => {
+      void Promise.all([loadSource(), pluginFrameFonts()])
+        .then(([source, fonts]) => {
           const context = JSON.parse(JSON.stringify({ plugin, contribution, session: sessionContext })) as {
             plugin: PluginInventory;
             contribution: PluginUiContribution;
@@ -616,7 +621,7 @@
           const providerContext = bridge
             ? { provider: providerContextOf(bridge.provider), sessionControls: { handoff: Boolean(bridge.handoff) } }
             : {};
-          frame.contentWindow?.postMessage({ type: "init", source, ...context, ...providerContext }, "*");
+          frame.contentWindow?.postMessage({ type: "init", source, fonts, ...context, ...providerContext }, "*");
         })
         .catch((error) => showLoadFailure(root, error));
     };
