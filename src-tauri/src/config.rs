@@ -212,6 +212,17 @@ pub struct Provider {
     pub autonomous_prompt_template: Option<String>,
 }
 
+impl Provider {
+    /// What `build_provider_launch_command` needs to start this provider's agent.
+    pub fn launch_config(&self) -> planeai_core::session_launch::ProviderConfig {
+        planeai_core::session_launch::ProviderConfig {
+            command: self.command.clone(),
+            yolo_flag: self.yolo_flag.clone(),
+            prompt_command: self.prompt_command.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskManagerTemplates {
     #[serde(default, skip_serializing_if = "Option::is_none")]
