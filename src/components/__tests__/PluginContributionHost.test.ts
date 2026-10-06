@@ -221,33 +221,38 @@ describe("PluginContributionHost", () => {
     expect(frame.style.height).toBe("385px");
   });
 
-  it.each(["sidebar.header", "main-pane"] as const)("tells a local %s frame its plugin's data changed without remounting it", async (placement) => {
-    target = document.createElement("div");
-    document.body.append(target);
-    component = mount(PluginContributionHostLocalHarness, {
-      target,
-      props: { placement },
-    }) as typeof component;
+  it.each(["sidebar.header", "main-pane"] as const)(
+    "tells a local %s frame its plugin's data changed without remounting it",
+    async (placement) => {
+      target = document.createElement("div");
+      document.body.append(target);
+      component = mount(PluginContributionHostLocalHarness, {
+        target,
+        props: { placement },
+      }) as typeof component;
 
-    const frame = await vi.waitFor(() => {
-      const next = target
-        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
-        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
-      expect(next).toBeTruthy();
-      return next!;
-    });
-    const posted = vi.spyOn(frame.contentWindow!, "postMessage");
-    const changed = await vi.waitFor(() => {
-      const listener = eventListeners.get("plugin-data-changed");
-      expect(listener).toBeTruthy();
-      return listener!;
-    });
+      const frame = await vi.waitFor(() => {
+        const next = target
+          .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+          ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+        expect(next).toBeTruthy();
+        return next!;
+      });
+      const posted = vi.spyOn(frame.contentWindow!, "postMessage");
+      const changed = await vi.waitFor(() => {
+        const listener = eventListeners.get("plugin-data-changed");
+        expect(listener).toBeTruthy();
+        return listener!;
+      });
 
-    changed({ payload: "local-fixture" });
+      changed({ payload: "local-fixture" });
 
-    expect(posted).toHaveBeenCalledWith({ type: "data-changed" }, "*");
-    expect(target.querySelector("[data-plugin-ui-contribution]")?.shadowRoot?.querySelector("iframe")).toBe(frame);
-  });
+      expect(posted).toHaveBeenCalledWith({ type: "data-changed" }, "*");
+      expect(
+        target.querySelector("[data-plugin-ui-contribution]")?.shadowRoot?.querySelector("iframe"),
+      ).toBe(frame);
+    },
+  );
 
   it("sizes a local sidebar-header iframe to its content instead of a fixed block", async () => {
     target = document.createElement("div");
