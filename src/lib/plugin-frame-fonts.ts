@@ -26,8 +26,8 @@ let loading: Promise<PluginFrameFont[]> | undefined;
  * blocks font fetches. Loaded once and shared by every frame.
  */
 export function pluginFrameFonts(): Promise<PluginFrameFont[]> {
-  loading ??= Promise.all(
-    faces.map(async ({ family, url, weight }) => {
+  return (loading ??= Promise.all(
+    faces.map(async ({ family, url, weight }): Promise<PluginFrameFont> => {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
       return {
@@ -39,6 +39,5 @@ export function pluginFrameFonts(): Promise<PluginFrameFont[]> {
   ).catch((error) => {
     console.error("Plugin frame fonts failed to load", error);
     return [];
-  });
-  return loading;
+  }));
 }
