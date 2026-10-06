@@ -409,7 +409,7 @@ describe("PluginContributionHost", () => {
     expect(frame.srcdoc).toContain("html,body{background:transparent}");
   });
 
-  it("lets a local dialog frame show the host dialog's surface", async () => {
+  it("lets a local dialog frame show the dialog's surface and shrink to its content", async () => {
     target = document.createElement("div");
     document.body.append(target);
     component = mount(PluginContributionHostLocalHarness, {
@@ -426,7 +426,7 @@ describe("PluginContributionHost", () => {
     });
     expect(frame.style.backgroundColor).toBe("transparent");
     expect(frame.srcdoc).toContain(
-      '<style id="planeai-plugin-dialog">html,body{background:transparent}</style>',
+      '<style id="planeai-plugin-dialog">html,body{height:auto;min-height:0;background:transparent}</style>',
     );
   });
 
