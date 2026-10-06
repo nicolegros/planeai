@@ -534,6 +534,14 @@ fn daemon_send_frames(
 /// `sessions.backend` for sessions whose runtime is a plugin provider (ADR-0014).
 pub const PLUGIN_BACKEND: &str = "plugin";
 
+/// Whether the backend runs nothing at launch: the first attach spawns the agent (`local`).
+pub fn spawns_on_attach(backend: &str) -> bool {
+    !matches!(
+        backend,
+        "tmux" | "daemon" | planeai_rmux::BACKEND | PLUGIN_BACKEND
+    )
+}
+
 pub fn send_prompt(
     conn: &Connection,
     id_prefix: &str,

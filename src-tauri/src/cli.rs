@@ -69,6 +69,8 @@ pub struct SessionPlan {
     /// Project owning `task_key` when it differs from `project_id`.
     pub task_project_id: Option<String>,
     pub parent_session_id: Option<String>,
+    /// The task prompt, already part of `command`.
+    pub prompt: Option<String>,
 }
 
 impl SessionPlan {
@@ -154,6 +156,7 @@ pub fn build_session_plan(
         project_id: project.id.clone(),
         task_project_id: None,
         parent_session_id: opts.parent_session_id.clone(),
+        prompt: opts.prompt.clone(),
     })
 }
 
@@ -310,6 +313,10 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             task_project_id: plan.task_project_id.clone(),
             base_branch: plan.base_branch.clone(),
             parent_session_id: plan.parent_session_id.clone(),
+            pending_prompt: plan
+                .prompt
+                .clone()
+                .filter(|_| crate::session_ops::spawns_on_attach(&plan.backend)),
             ..Default::default()
         },
     )
@@ -529,6 +536,53 @@ mod tests {
         assert_eq!(
             resolve_task_project_id(&projects, &own, &task_opts(None, Some("owner"))).unwrap_err(),
             "--task-project requires --task-key"
+        );
+    }
+
+    #[test]
+    fn a_local_session_keeps_its_prompt_for_the_apps_first_attach() {
+        let repo = tempfile::tempdir().unwrap();
+        let repo_path = repo.path().canonicalize().unwrap().display().to_string();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        ] {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo_path)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        }
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", &repo_path).unwrap();
+        let opts = SessionCreateOpts {
+            prompt: Some("Fix the login redirect".to_string()),
+            ..task_opts(Some("MYA-1"), None)
+        };
+        let env = Env {
+            socket_path: repo.path().join("no-gui.sock"),
+            ..test_env("local")
+        };
+        let plan = build_session_plan("session-1", &opts, &env, &project).unwrap();
+
+        execute_plan(&plan, &conn, &env).unwrap();
+
+        // The app's first attach spawns the agent with it (`resolve_attach_plan`).
+        assert_eq!(
+            db::pending_prompt(&conn, "session-1").unwrap().as_deref(),
+            Some("Fix the login redirect")
         );
     }
 

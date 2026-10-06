@@ -171,13 +171,8 @@ pub(crate) async fn launch(
             .get(&pk)
             .ok_or_else(|| format!("Unknown provider: {pk}"))?;
 
-        let core_provider = planeai_core::session_launch::ProviderConfig {
-            command: provider_def.command.clone(),
-            yolo_flag: provider_def.yolo_flag.clone(),
-            prompt_command: provider_def.prompt_command.clone(),
-        };
         let launch_cmd = planeai_core::session_launch::build_provider_launch_command(
-            &core_provider,
+            &provider_def.launch_config(),
             auto_approve,
             task_prompt.as_deref(),
             false, // manual launches are not autonomous
@@ -360,6 +355,8 @@ pub(crate) async fn launch(
         e.to_string()
     })?;
 
+    // Nothing ran the agent yet on such a backend: its first attach does, with this prompt.
+    let pending_prompt = task_prompt.filter(|_| crate::session_ops::spawns_on_attach(&backend));
     let session = db::create_session_with_params(
         &conn,
         &planeai_core::services::CreateSessionParams {
@@ -377,6 +374,7 @@ pub(crate) async fn launch(
             task_key: Some(task_key),
             task_project_id,
             base_branch: effective_base_branch,
+            pending_prompt,
             ..Default::default()
         },
     )

@@ -189,12 +189,19 @@ pub fn resolve_attach_plan(
             .unwrap_or(project_path)
             .to_string();
 
-        let is_first_attach = !session.attached_once;
-
-        let cmd = if is_first_attach {
-            config::launch_command(provider_def, session.auto_approve)
-        } else {
+        let cmd = if session.attached_once {
             config::restart_command_for_provider(provider_def)
+        } else {
+            // This spawn is the launch, so it carries the task prompt `launch` kept for it.
+            let prompt = db::pending_prompt(conn, session_id).map_err(|e| e.to_string())?;
+            planeai_core::session_launch::build_provider_launch_command(
+                &provider_def.launch_config(),
+                session.auto_approve,
+                prompt.as_deref(),
+                false,
+                None,
+            )
+            .command
         };
 
         let target = pty::PtyTarget::Shell {
@@ -465,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn a_local_session_launches_on_first_attach_and_restarts_afterwards() {
+    fn a_local_session_spawns_in_its_worktree_with_the_local_env() {
         // A local attach spawns a process, so its worktree has to exist: the env
         // builder validates the cwd rather than handing a bad one to the PTY.
         let worktree = tempfile::tempdir().unwrap();
@@ -492,29 +499,71 @@ mod tests {
 
         let first = resolve_attach_plan(&conn, &config_with_provider(), "session-1", None)
             .expect("first attach");
-        let launch_command = match &first.pty_target {
-            pty::PtyTarget::Shell { command, cwd } => {
-                // The worktree, not the project root: that is where the agent works.
-                assert_eq!(cwd, &worktree_path);
-                command.clone()
-            }
+        match &first.pty_target {
+            // The worktree, not the project root: that is where the agent works.
+            pty::PtyTarget::Shell { cwd, .. } => assert_eq!(cwd, &worktree_path),
+            other => panic!("expected a shell target, got {other:?}"),
+        }
+        assert!(first.env.iter().any(|(key, _)| key == "PATH"));
+    }
+
+    #[test]
+    fn a_local_session_delivers_its_task_prompt_on_the_first_spawn_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("planeai.db");
+        let worktree_path = dir.path().display().to_string();
+        let open = || {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            db::migrate(&conn).unwrap();
+            conn
+        };
+        let command = |conn: &rusqlite::Connection| match resolve_attach_plan(
+            conn,
+            &config_with_provider(),
+            "session-1",
+            None,
+        )
+        .expect("attach plan")
+        .pty_target
+        {
+            pty::PtyTarget::Shell { command, .. } => command,
             other => panic!("expected a shell target, got {other:?}"),
         };
+        {
+            let conn = open();
+            let project = db::create_project(&conn, "demo", "/repos/demo").unwrap();
+            db::create_session_with_params(
+                &conn,
+                &planeai_core::services::CreateSessionParams {
+                    id: "session-1".into(),
+                    project_id: project.id,
+                    name: "PLA-1: demo".into(),
+                    branch: "feature".into(),
+                    worktree_path: Some(worktree_path),
+                    backend: "local".into(),
+                    task_key: Some("PLA-1".into()),
+                    pending_prompt: Some("Fix the login redirect".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+
+        // The app may restart before anyone opens the session.
+        let conn = open();
+        assert_eq!(command(&conn), "kiro-cli chat 'Fix the login redirect'");
 
         db::mark_attached(&conn, "session-1").unwrap();
-        let second = resolve_attach_plan(&conn, &config_with_provider(), "session-1", None)
-            .expect("second attach");
-        let restart_command = match &second.pty_target {
-            pty::PtyTarget::Shell { command, .. } => command.clone(),
-            other => panic!("expected a shell target, got {other:?}"),
-        };
+        assert_eq!(command(&conn), "kiro-cli chat --resume");
 
-        // A second attach must resume rather than start a fresh agent.
-        assert_ne!(
-            launch_command, restart_command,
-            "attaching twice should not re-run the launch command"
+        conn.execute("UPDATE sessions SET status = 'exited'", [])
+            .unwrap();
+        db::restore_session(&conn, "session-1").unwrap();
+        assert_eq!(
+            command(&conn),
+            "kiro-cli chat --resume",
+            "a restored session resumes without replaying the prompt"
         );
-        assert!(first.env.iter().any(|(key, _)| key == "PATH"));
     }
 
     #[test]

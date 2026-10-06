@@ -416,6 +416,10 @@ pub fn mark_attached(conn: &Connection, id: &str) -> Result<()> {
     planeai_core::services::SessionService::mark_attached(conn, id)
 }
 
+pub fn pending_prompt(conn: &Connection, id: &str) -> Result<Option<String>> {
+    planeai_core::services::SessionService::pending_prompt(conn, id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
