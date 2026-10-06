@@ -59,11 +59,15 @@ vi.mock("../../lib/keyboard", () => ({
   MOD_ENTER_HINT: "⌘↵",
 }));
 
+const settings = vi.hoisted(() => ({
+  taskManagement: {} as { templates?: { branch?: string; name?: string; prompt?: string } },
+}));
+
 vi.mock("../../lib/settings.svelte", () => ({
   getSettings: () => ({
     providers: { claude: { command: "claude" }, copilot: { command: "gh copilot" } },
     default_provider: "claude",
-    task_management: {},
+    task_management: settings.taskManagement,
   }),
 }));
 
@@ -168,18 +172,49 @@ describe("TaskForm - Start session toggle", () => {
     expect(target.textContent).toContain("Provider");
   });
 
-  it("auto-generates branch name from title", async () => {
+  function branchPreview(title: string) {
     const target = renderForm();
     const titleInput = target.querySelector("[data-field='title'] input") as HTMLInputElement;
-    titleInput.value = "Fix login redirect";
+    titleInput.value = title;
     titleInput.dispatchEvent(new Event("input", { bubbles: true }));
     flushSync();
+    const field = target.querySelector("[data-field='session-branch']")!;
+    return {
+      placeholder: field.querySelector("input")!.placeholder,
+      note: field.querySelector("p")?.textContent?.replace(/\s+/g, " ").trim(),
+    };
+  }
 
-    // The branch field should show the placeholder or preview text
-    const branchInput = target.querySelector(
-      "[data-field='session-branch'] input",
-    ) as HTMLInputElement;
-    expect(branchInput.placeholder).toContain("fix-login-redirect");
+  it("previews the branch the backend creates: the task key, then the title slug", () => {
+    expect(branchPreview("Fix login redirect")).toEqual({
+      placeholder: "task-?/fix-login-redirect",
+      note: "Will create: task-?/fix-login-redirect from main",
+    });
+  });
+
+  it("says an existing branch is checked out rather than created", async () => {
+    const target = renderForm();
+    await tick();
+    const field = target.querySelector("[data-field='session-branch']")!;
+    const input = field.querySelector("input")!;
+    input.value = "develop";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    expect(field.querySelector("p")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Will check out: develop",
+    );
+  });
+
+  it("previews the configured branch template", () => {
+    settings.taskManagement = { templates: { branch: "feat/{title:slug}-{key:lower}" } };
+    try {
+      expect(branchPreview("Fix login redirect")).toEqual({
+        placeholder: "feat/fix-login-redirect-task-?",
+        note: "Will create: feat/fix-login-redirect-task-? from main",
+      });
+    } finally {
+      settings.taskManagement = {};
+    }
   });
 
   it("creates the task, then has the backend start its session, on submit with toggle ON", async () => {
