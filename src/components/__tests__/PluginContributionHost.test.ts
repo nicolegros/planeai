@@ -58,6 +58,12 @@ import type { PluginInventory, PluginUiContribution } from "../../lib/types";
 import { focusTerminal, getActiveZone } from "../../lib/focus.svelte";
 import { shouldBypassSidebarKeyboard } from "../../lib/sidebar-nav.svelte";
 
+// Each bundled font answers with its own file name, so a test can tell the faces apart.
+vi.stubGlobal(
+  "fetch",
+  vi.fn(async (url: string) => new Response(new TextEncoder().encode(String(url).split("/").pop()!.split("?")[0]))),
+);
+
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((eventName: string, handler: (event: { payload: string }) => void) => {
     eventListeners.set(eventName, handler);
@@ -716,5 +722,90 @@ describe("PluginContributionHost", () => {
     const host = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]")!;
     await vi.waitFor(() => expect(host.shadowRoot?.childNodes).toHaveLength(0));
     expect(pluginCall).toHaveBeenCalledTimes(2);
+  });
+  it("registers the host's theme fonts in a local frame before its UI mounts", async () => {
+    const source = Promise.withResolvers<string>();
+    localUiSource.mockReturnValue(source.promise);
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    await vi.waitFor(() => expect(localUiSource).toHaveBeenCalled());
+    const hostPostMessage = vi.fn();
+    Object.defineProperty(frame, "contentWindow", { configurable: true, value: { postMessage: hostPostMessage } });
+    source.resolve("export default {};");
+    await vi.waitFor(() => expect(hostPostMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "init" }), "*"));
+    const init = structuredClone(hostPostMessage.mock.calls.find(([message]) => message.type === "init")![0]);
+
+    const frameListeners: Array<(event: { source: unknown; data: unknown }) => void> = [];
+    const parent = { postMessage: vi.fn() };
+    const registered: Array<{ family: string; source: string; descriptors: FontFaceDescriptors }> = [];
+    const fontsLoaded = Promise.withResolvers<void>();
+    class FakeFontFace {
+      loaded: Promise<unknown>;
+      constructor(
+        readonly family: string,
+        readonly source: ArrayBuffer,
+        readonly descriptors: FontFaceDescriptors,
+      ) {
+        this.loaded = fontsLoaded.promise;
+      }
+    }
+    const frameDocument = {
+      body: {},
+      fonts: {
+        add: (face: FakeFontFace) =>
+          registered.push({ family: face.family, source: new TextDecoder().decode(face.source), descriptors: face.descriptors }),
+      },
+    };
+    const frameUrl = { createObjectURL: () => "blob:bundle", revokeObjectURL: () => {} };
+    let mounted = false;
+    // A Function body cannot reach Node's module loader, so the bundle import is stubbed.
+    const importBundle = async () => ({ default: { mount: () => ((mounted = true), () => {}) } });
+    const bridge = frame.srcdoc.match(/<script>([\s\S]*)<\/script>/)![1].replace("await import(url)", "await importBundle(url)");
+    new Function("parent", "addEventListener", "removeEventListener", "document", "FontFace", "URL", "importBundle", bridge)(
+      parent,
+      (type: string, listener: (event: { source: unknown; data: unknown }) => void) => {
+        if (type === "message") frameListeners.push(listener);
+      },
+      () => {},
+      frameDocument,
+      FakeFontFace,
+      frameUrl,
+      importBundle,
+    );
+    for (const listener of frameListeners) listener({ source: parent, data: init });
+
+    const latin = "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD";
+    await vi.waitFor(() =>
+      expect(registered).toEqual([
+        {
+          family: "IBM Plex Sans Variable",
+          source: "ibm-plex-sans-latin-wght-normal.woff2",
+          descriptors: { style: "normal", weight: "100 700", unicodeRange: latin, display: "swap" },
+        },
+        {
+          family: "IBM Plex Mono",
+          source: "ibm-plex-mono-latin-400-normal.woff2",
+          descriptors: { style: "normal", weight: "400", unicodeRange: latin, display: "swap" },
+        },
+        {
+          family: "IBM Plex Mono",
+          source: "ibm-plex-mono-latin-500-normal.woff2",
+          descriptors: { style: "normal", weight: "500", unicodeRange: latin, display: "swap" },
+        },
+      ]),
+    );
+    expect(mounted).toBe(false);
+
+    fontsLoaded.resolve();
+    await vi.waitFor(() => expect(parent.postMessage).toHaveBeenCalledWith({ type: "mounted" }, "*"));
+    expect(mounted).toBe(true);
   });
 });
