@@ -87,7 +87,7 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
 - `tasks.read` permits the keyed single-task lookup aliases `host.tasks.read` and `host.task.get`. Each accepts `{ "key": "TASK-123" }` and returns `{ "task": ... }` (or `{ "task": null }` when no task matches).
 - `tasks.create` permits `host.tasks.create` and `host.tasks.createChild`.
   `host.tasks.create` creates a top-level `todo` task.
-  It requires `projectPath`, `title`, and a plugin-scoped `operationId`, accepts an optional `description`, and rejects `parentKey`.
+  It requires `projectPath`, `title`, and a plugin-scoped `operationId`, accepts an optional `description`, integer `priority` (default `0`) and `tags` array, and rejects `parentKey`.
   PlaneAI rejects hidden or unknown projects, returns the originally created task when the same operation is retried, and refreshes the task list.
   `host.tasks.createChild` requires `projectPath`, `parentKey`, `title`, `description`, and a plugin-scoped `operationId`; PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
   Both return `{ "task": ... }`.
