@@ -1831,8 +1831,8 @@ async fn execute_host_task(
     run_host_task(plugin_id, data_dir, method, params).await
 }
 
-/// Host tasks needing the running app, over `execute_host_task`: starting a created task's
-/// session.
+/// Host tasks needing the running app, over `execute_host_task`: the provider list and
+/// starting a created task's session.
 async fn execute_app_host_task(
     app: &AppHandle,
     plugin_id: &str,
@@ -1841,6 +1841,9 @@ async fn execute_app_host_task(
     method: &str,
     params: Value,
 ) -> Result<Value, CallbackError> {
+    if method == "host.sessions.providers" {
+        return sessions_providers(capabilities, || crate::task_start::provider_catalog(app)).await;
+    }
     let mut reply = execute_host_task(plugin_id, capabilities, data_dir, method, params).await?;
     announce_created_task(app, method);
     if let Some(pending) = take_pending_start(&mut reply) {
@@ -1850,6 +1853,22 @@ async fn execute_app_host_task(
         reply["session"] = serde_json::json!(session);
     }
     Ok(reply)
+}
+
+/// The providers a `start` may name, as the task form lists them.
+async fn sessions_providers<F, Fut>(
+    capabilities: &HashSet<PluginHostCapability>,
+    catalog: F,
+) -> Result<Value, CallbackError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<crate::task_start::ProviderCatalog, String>>,
+{
+    if !capabilities.contains(&PluginHostCapability::SessionsStart) {
+        return Err(CallbackError::NotGranted);
+    }
+    let catalog = catalog().await.map_err(CallbackError::Internal)?;
+    serde_json::to_value(catalog).map_err(|error| CallbackError::Internal(error.to_string()))
 }
 
 /// A top-level task emits no lifecycle event, so the task list hears of it directly.
@@ -5127,6 +5146,39 @@ mod tests {
         assert_eq!(take_pending_start(&mut reply), Some(pending));
         assert_eq!(reply, serde_json::json!({ "task": { "key": "PLA-1" } }));
         assert_eq!(take_pending_start(&mut reply), None);
+    }
+
+    #[tokio::test]
+    async fn the_provider_list_requires_sessions_start() {
+        let catalog = || async {
+            Ok(crate::task_start::ProviderCatalog {
+                default: "claude".into(),
+                providers: vec![crate::task_start::ProviderOption {
+                    key: "chat:claude".into(),
+                    label: "Claude Chat".into(),
+                    auto_approve: false,
+                }],
+            })
+        };
+
+        let denied = sessions_providers(
+            &HashSet::from([PluginHostCapability::TasksCreate]),
+            || async { panic!("the catalog is not read without the capability") },
+        )
+        .await;
+        assert_eq!(denied, Err(CallbackError::NotGranted));
+        assert_eq!(
+            sessions_providers(
+                &HashSet::from([PluginHostCapability::SessionsStart]),
+                catalog
+            )
+            .await
+            .unwrap(),
+            serde_json::json!({
+                "default": "claude",
+                "providers": [{ "key": "chat:claude", "label": "Claude Chat", "auto_approve": false }],
+            })
+        );
     }
 
     #[tokio::test]
