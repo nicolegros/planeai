@@ -28,7 +28,7 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-function render(archivedSessions: Session[] = []) {
+function render(archivedSessions: Session[] = [], shown: TaskItem = task) {
   const target = document.body.appendChild(document.createElement("div"));
   const onNewSession = vi.fn();
   const onRestore = vi.fn();
@@ -36,7 +36,7 @@ function render(archivedSessions: Session[] = []) {
   mounted.push(
     mount(EmptyTaskWorkspace, {
       target,
-      props: { task, archivedSessions, onNewSession, onRestore, onEdit },
+      props: { task: shown, archivedSessions, onNewSession, onRestore, onEdit },
     }),
   );
   return { target, onNewSession, onRestore, onEdit };
@@ -49,6 +49,13 @@ describe("EmptyTaskWorkspace", () => {
     expect(target.textContent).toContain("PLA-315");
     expect(target.textContent).toContain(task.title);
     expect(target.querySelector("button")?.textContent).toContain("Restore Archived agent");
+  });
+
+  it("labels a higher priority number as more urgent", () => {
+    const label = (priority: number) =>
+      render([], { ...task, priority }).target.querySelectorAll("dd")[1]?.textContent;
+
+    expect([0, 1, 2, 3, 7].map(label)).toEqual(["None", "Low", "Medium", "High", "High"]);
   });
 
   it("routes N, R, and E shortcuts while active", () => {

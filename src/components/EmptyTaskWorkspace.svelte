@@ -24,7 +24,9 @@
   }
 
   function priorityLabel(priority: number | null | undefined): string {
-    return priority === 1 ? "High" : priority === 2 ? "Medium" : priority === 3 ? "Low" : "None";
+    // A higher number is more urgent, matching how the sidebar and command menu sort tasks.
+    const level = priority ?? 0;
+    return level >= 3 ? "High" : level === 2 ? "Medium" : level === 1 ? "Low" : "None";
   }
 </script>
 
