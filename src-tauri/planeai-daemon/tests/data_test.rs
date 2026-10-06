@@ -1,7 +1,8 @@
 #[cfg(unix)]
 mod data_tests {
     use planeai_daemon::protocol::{
-        read_frame, write_frame, CONN_CONTROL, CONN_DATA, FRAME_INPUT, FRAME_OUTPUT, FRAME_RESIZE,
+        read_frame, write_frame, CONN_CONTROL, CONN_DATA, FRAME_EOF, FRAME_INPUT, FRAME_OUTPUT,
+        FRAME_RESIZE,
     };
     use planeai_daemon::server::DaemonServer;
     use planeai_daemon::transport::DaemonListener;
@@ -397,6 +398,34 @@ mod data_tests {
             }
         }
         assert!(got_eof, "data connection should close after session exits");
+    }
+
+    #[tokio::test]
+    async fn session_exit_closes_data_connection_attached_while_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+        let _shutdown = start_server(&sock).await;
+
+        let mut ctrl = connect_control(&sock).await;
+        spawn_session(&mut ctrl, "exit2", "/bin/sh", r#""-c","sleep 1; echo bye""#).await;
+        let mut data = connect_data(&sock, "exit2").await;
+
+        let mut output = Vec::new();
+        let mut last_frame = None;
+        let closed = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok((frame_type, payload)) = read_frame(&mut data).await {
+                output.extend_from_slice(&payload);
+                last_frame = Some(frame_type);
+            }
+        })
+        .await;
+
+        assert!(
+            closed.is_ok(),
+            "data connection should close after session exits"
+        );
+        assert!(String::from_utf8_lossy(&output).contains("bye"));
+        assert_eq!(last_frame, Some(FRAME_EOF));
     }
 
     #[tokio::test]
