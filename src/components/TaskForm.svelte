@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Project, TaskItem, Session } from "../lib/types";
-  import { sessions as sessionsApi, projects as projectsApi } from "../lib/api";
+  import { projects as projectsApi, tasks as tasksApi } from "../lib/api";
   import { Button, Input, Label, Select, PillInput, PillCombobox, Checkbox } from "./ui";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -220,59 +220,22 @@
         });
 
         if (startSession && selectedProject) {
-          // Validate provider
-          const provider = providers.key;
-          if (!provider) {
+          if (!providers.key) {
             showSnackbar("Task created, but no provider configured. Select a provider to start a session.");
             onSubmitted();
             return;
           }
-
-          // Build session params from templates
-          const templates = config.task_management?.templates;
-          const realTask = {
-            key: createdTask.key,
-            title: createdTask.title,
-            description: createdTask.description,
-            priority: createdTask.priority,
-            blocked_by: createdTask.blocked_by,
-            tags: createdTask.tags,
-            parent_key: createdTask.parent_key,
-            base_branch: createdTask.base_branch,
-            status: createdTask.status,
-          };
-          const branch = sessionBranch || (templates?.branch
-            ? renderTemplate(templates.branch, realTask)
-            : `${createdTask.key.toLowerCase()}/${slugFromTitle}`);
-          const isNewBranch = !branches.some((b) => b.value === branch);
-          const prompt = sessionPrompt || (templates?.prompt
-            ? renderTemplate(templates.prompt, realTask)
-            : (createdTask.description ? `Implement task ${createdTask.key}: ${createdTask.title}\n\n${createdTask.description}` : `Implement task ${createdTask.key}: ${createdTask.title}`));
-          const name = templates?.name
-            ? renderTemplate(templates.name, realTask)
-            : `${createdTask.key}: ${formTitle.trim()}`;
-
           try {
-            const { session, warning } = await sessionsApi.launch({
+            const { session, warning } = await tasksApi.startSession({
               projectId: selectedProject.id,
-              projectName: selectedProject.name,
-              repoPath: selectedProject.path,
-              branch,
-              isNewBranch,
-              name,
-              useWorktree,
-              baseBranch: isNewBranch ? formBaseBranch : null,
-              autoApprove: providers.autoApprove(autoApprove),
-              provider,
               taskKey: createdTask.key,
-              taskProjectId: null,
-              taskPrompt: prompt,
+              provider: providers.key,
+              useWorktree,
+              autoApprove: providers.autoApprove(autoApprove),
+              branch: sessionBranch || null,
+              prompt: sessionPrompt || null,
             });
             if (warning) showSnackbar(warning, "success");
-            // Move to in_progress — don't block session navigation on failure
-            taskStore.moveTask(createdTask.key, "in_progress", repoPath).catch(() => {
-              showSnackbar("Session started but failed to update task status.");
-            });
             onSessionCreated?.(session);
           } catch (e: any) {
             showSnackbar(`Task created but session failed: ${e}`);

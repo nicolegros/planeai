@@ -18,7 +18,7 @@ const mockCreateTask = vi.fn((_params?: unknown) =>
 const mockMoveTask = vi.fn((_key?: unknown, _status?: unknown, _repoPath?: unknown) =>
   Promise.resolve(),
 );
-const mockLaunch = vi.fn((_params?: unknown) =>
+const mockStartSession = vi.fn((_params?: unknown) =>
   Promise.resolve({
     session: {
       id: "sess-new",
@@ -39,12 +39,12 @@ const mockLaunch = vi.fn((_params?: unknown) =>
 );
 
 vi.mock("../../lib/api", () => ({
-  sessions: { launch: (...args: unknown[]) => mockLaunch(args[0]) },
   projects: { listBranches: vi.fn(() => Promise.resolve(["main", "develop"])) },
   tasks: {
     listAll: vi.fn(() => Promise.resolve([])),
     list: vi.fn(() => Promise.resolve([])),
     create: (params: unknown) => mockCreateTask(params),
+    startSession: (params: unknown) => mockStartSession(params),
     edit: vi.fn(() => Promise.resolve()),
     move: vi.fn(() => Promise.resolve()),
   },
@@ -182,7 +182,7 @@ describe("TaskForm - Start session toggle", () => {
     expect(branchInput.placeholder).toContain("fix-login-redirect");
   });
 
-  it("creates task and launches session on submit with toggle ON", async () => {
+  it("creates the task, then has the backend start its session, on submit with toggle ON", async () => {
     const onSessionCreated = vi.fn();
     const onSubmitted = vi.fn();
     const target = renderForm({ onSessionCreated, onSubmitted });
@@ -203,9 +203,18 @@ describe("TaskForm - Start session toggle", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(mockCreateTask).toHaveBeenCalled();
-    expect(mockMoveTask).toHaveBeenCalledWith("TASK-2", "in_progress", "/tmp/myapp");
-    expect(mockLaunch).toHaveBeenCalled();
-    expect(onSessionCreated).toHaveBeenCalled();
+    expect(mockStartSession).toHaveBeenCalledWith({
+      projectId: "proj-1",
+      taskKey: "TASK-2",
+      provider: "claude",
+      useWorktree: true,
+      autoApprove: true,
+      branch: null,
+      prompt: null,
+    });
+    // The backend moves the task to in_progress.
+    expect(mockMoveTask).not.toHaveBeenCalled();
+    expect(onSessionCreated).toHaveBeenCalledWith(expect.objectContaining({ id: "sess-new" }));
   });
 
   it("creates task without session when toggle is OFF", async () => {
@@ -237,14 +246,14 @@ describe("TaskForm - Start session toggle", () => {
 
     expect(mockCreateTask).toHaveBeenCalled();
     expect(mockMoveTask).not.toHaveBeenCalled();
-    expect(mockLaunch).not.toHaveBeenCalled();
+    expect(mockStartSession).not.toHaveBeenCalled();
     expect(onSessionCreated).not.toHaveBeenCalled();
     expect(onSubmitted).toHaveBeenCalled();
   });
 
   it("keeps task and shows error if session launch fails", async () => {
     const { showSnackbar } = await import("../../lib/snackbar.svelte");
-    mockLaunch.mockRejectedValueOnce(new Error("Agent not found"));
+    mockStartSession.mockRejectedValueOnce(new Error("Agent not found"));
     const onSessionCreated = vi.fn();
     const onSubmitted = vi.fn();
     const target = renderForm({ onSessionCreated, onSubmitted });
@@ -266,7 +275,7 @@ describe("TaskForm - Start session toggle", () => {
     // Task should still be created
     expect(mockCreateTask).toHaveBeenCalled();
     // Session creation attempted
-    expect(mockLaunch).toHaveBeenCalled();
+    expect(mockStartSession).toHaveBeenCalled();
     // But session created callback not called
     expect(onSessionCreated).not.toHaveBeenCalled();
     // Snackbar shown with error
@@ -417,10 +426,29 @@ describe("TaskForm with plugin providers", () => {
     titleInput.dispatchEvent(new Event("input", { bubbles: true }));
     flushSync();
     target.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true }));
-    await vi.waitFor(() => expect(mockLaunch).toHaveBeenCalled());
-    expect(mockLaunch.mock.calls[0][0]).toMatchObject({
+    await vi.waitFor(() => expect(mockStartSession).toHaveBeenCalled());
+    expect(mockStartSession.mock.calls[0][0]).toMatchObject({
       provider: "chat:claude",
       autoApprove: false,
+    });
+  });
+
+  it("passes the branch and prompt the user typed as overrides", async () => {
+    const target = renderForm();
+    const type = (selector: string, value: string) => {
+      const field = target.querySelector(selector) as HTMLInputElement | HTMLTextAreaElement;
+      field.value = value;
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+    };
+    type("[data-field='title'] input", "Typed task");
+    type("[data-field='session-branch'] input", "feature/typed");
+    type("[data-field='session-prompt'] textarea", "Do the typed thing");
+    target.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true }));
+    await vi.waitFor(() => expect(mockStartSession).toHaveBeenCalled());
+    expect(mockStartSession.mock.calls[0][0]).toMatchObject({
+      branch: "feature/typed",
+      prompt: "Do the typed thing",
     });
   });
 });
