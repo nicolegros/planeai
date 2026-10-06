@@ -70,35 +70,55 @@ describe("TaskWorkspace session selection", () => {
     );
   });
 
-  it("routes titlebar targets by their destination placement", () => {
+  it("routes titlebar, command menu, shortcut and frame navigation through the placement resolver", () => {
+    // Which surface each origin opens is resolvePluginOpen's job (plugin-navigation.test.ts).
     expect(appSource).toMatch(
       /const titlebarContributions = \$derived\([\s\S]*?contribution\.placement === "titlebar"/,
     );
     expect(appSource).toMatch(
-      /function openTitlebarPluginContribution\(pluginId: string, contributionId: string\): void \{[\s\S]*?contribution\?\.placement === "session\.panel"[\s\S]*?openPluginContributionModal\(pluginId, contributionId\);[\s\S]*?openPluginContribution\(pluginId, contributionId\);/,
+      /function openPlugin\(pluginId: string, contributionId: string, origin: PluginOpenOrigin\): void \{\s*const target = resolvePluginOpen\(pluginInventory, pluginId, contributionId, origin, !!activeSession\);/,
     );
     expect(appSource).toMatch(
-      /<Titlebar[\s\S]*?\{titlebarContributions\}[\s\S]*?titlebarSession=\{activePluginSessionContext\}[\s\S]*?onOpenTitlebarContribution=\{openTitlebarPluginContribution\}/,
+      /<Titlebar[\s\S]*?\{titlebarContributions\}[\s\S]*?titlebarSession=\{activePluginSessionContext\}[\s\S]*?onOpenTitlebarContribution=\{\(pluginId, contributionId\) => openPlugin\(pluginId, contributionId, "titlebar"\)\}/,
+    );
+    expect(appSource).toMatch(
+      /onOpenPluginContribution=\{\(pluginId, contributionId\) => openPlugin\(pluginId, contributionId, "command"\)\}/,
+    );
+    expect(appSource).not.toMatch(/onNavigate=\{(?!navigatePlugin\})/);
+  });
+
+  it("lists dialog contributions with main panes in the command menu and shortcuts", () => {
+    expect(appSource).toMatch(
+      /const globalPluginCommands = \$derived\([\s\S]*?contribution\.placement === "main-pane" \|\| contribution\.placement === "dialog"/,
+    );
+    expect(appSource).toMatch(
+      /const pluginCommands = \$derived\(\[\.\.\.globalPluginCommands, \.\.\.sessionPanelCommands\]\)/,
     );
   });
 
-  it("routes an active session-panel plugin shortcut without legacy PR state", () => {
+  it("toggles a plugin dialog from its shortcut without legacy PR state", () => {
     expect(appSource).toMatch(
-      /findPluginShortcut\(event, sessionPanelCommands, mainPaneCommands\)/,
+      /findPluginShortcut\(event, sessionPanelCommands, globalPluginCommands\)/,
     );
     expect(appSource).toMatch(/window\.addEventListener\("keydown", onPluginShortcut, true\)/);
     expect(appSource).toMatch(
-      /target\.contribution\.placement === "session\.panel"[\s\S]*?openPluginContributionModal\(target\.plugin\.id, target\.contribution\.id\)/,
+      /if \(pluginDialog\?\.pluginId === target\.plugin\.id && pluginDialog\.contributionId === target\.contribution\.id\) \{\s*closePluginContributionModal\(\);\s*return;\s*\}\s*openPlugin\(target\.plugin\.id, target\.contribution\.id, "shortcut"\);/,
     );
     expect(appSource).not.toContain("showPrPanel");
   });
 
-  it("opens only a titlebar navigation target session panel in the generic modal", () => {
+  it("shows a dialog contribution without a session and a session panel only with one", () => {
     expect(appSource).toMatch(
-      /function openPluginContributionModal\(pluginId: string, contributionId: string\): void \{[\s\S]*?candidate\.placement === "session\.panel"[\s\S]*?modalPluginId = pluginId;/,
+      /\{#if modalPlugin && modalContribution && \(modalContribution\.placement === "dialog" \|\| activePluginSessionContext\)\}\s*<PluginDialog[\s\S]*?session=\{activePluginSessionContext\}[\s\S]*?getFocusedAgentSession=\{\(\) => activePluginSessionContext\}[\s\S]*?onNavigate=\{navigatePlugin\}[\s\S]*?onClose=\{closePluginContributionModal\}/,
+    );
+  });
+
+  it("closes the plugin dialog when a main pane opens, and returns focus where it was on close", () => {
+    expect(appSource).toMatch(
+      /if \(target\.surface === "dialog"\) \{[\s\S]*?return;\s*\}\s*pluginDialog = null;\s*if \(activePluginId === pluginId/,
     );
     expect(appSource).toMatch(
-      /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?title=\{modalContribution\.label\}[\s\S]*?preventEscapeClose=\{false\}[\s\S]*?<PluginContributionHost[\s\S]*?session=\{activePluginSessionContext\}[\s\S]*?getFocusedAgentSession=\{\(\) => activePluginSessionContext\}[\s\S]*?closeOnEscape=\{true\}/,
+      /function closePluginContributionModal\(\): void \{\s*const returnFocus = pluginDialog\?\.returnFocus;\s*pluginDialog = null;\s*tick\(\)\.then\(\(\) => \{\s*if \(returnFocus\?\.isConnected\) returnFocus\.focus\(\);\s*else refocusTerminal\(\);/,
     );
   });
 });
@@ -141,19 +161,6 @@ it("ignores split shortcuts while the layout is hidden or empty", () => {
 it("preserves editor focus when a split-pane click originates inside an editor", () => {
   expect(appSource).toMatch(
     /event\.target instanceof Element && event\.target\.closest\("\[data-editor-tab\]"\)[\s\S]*?focusTerminal\(\);/,
-  );
-});
-
-it("allows a session-panel modal to use its contribution's reported content height", () => {
-  expect(appSource).not.toContain('class="h-[min(78vh,720px)]"');
-  expect(appSource).toMatch(
-    /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?title=\{modalContribution\.label\}[\s\S]*?class="min-h-\[min\(360px,85vh\)\]"[\s\S]*?preventEscapeClose=\{false\}[\s\S]*?<div>\s*<PluginContributionHost/,
-  );
-});
-
-it("reserves initial modal focus for the session-panel plugin iframe", () => {
-  expect(appSource).toMatch(
-    /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?preventOpenAutoFocus=\{true\}[\s\S]*?<PluginContributionHost[\s\S]*?autofocus=\{true\}/,
   );
 });
 
