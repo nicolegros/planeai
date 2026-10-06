@@ -134,6 +134,9 @@
   /** Placements whose frame is as tall as the plugin's content, reported from inside the frame. */
   const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "sidebar.header"];
 
+  /** Local placements told about their plugin's data changes in place, since remounting them would flash. */
+  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "sidebar.header", "main-pane"];
+
   /** Placements whose frame takes the whole area the host gives it. */
   function fillsContainer(placement: PluginUiContribution["placement"]): boolean {
     return placement === "interaction" || placement === "main-pane" || placement === "session.main" || placement === "titlebar";
@@ -619,7 +622,7 @@
     };
 
     const refreshData = (): void => frame.contentWindow?.postMessage({ type: "data-changed" }, "*");
-    if (isSessionIndicator) refreshLocalPluginData = refreshData;
+    if (refreshedInPlacePlacements.includes(contribution.placement)) refreshLocalPluginData = refreshData;
     let framed = true;
     let unlistenSessionEvents: (() => void) | undefined;
     if (bridge) {
@@ -798,11 +801,14 @@
     const refreshTheme = (): void => refreshLocalPluginTheme?.();
     window.addEventListener("planeai-theme-changed", refreshTheme);
     void listen<string>("plugin-data-changed", (event) => {
-      if (event.payload !== plugin.id || !["sidebar.section", "interaction", "session.panel", "session.indicator"].includes(contribution.placement)) return;
+      if (event.payload !== plugin.id) return;
+      if (refreshLocalPluginData) {
+        refreshLocalPluginData();
+        return;
+      }
+      if (!["sidebar.section", "interaction", "session.panel", "session.indicator"].includes(contribution.placement)) return;
       if (plugin.source_kind === "builtin" && dataChangeListeners.size > 0) {
         notify(dataChangeListeners);
-      } else if (contribution.placement === "session.indicator" && refreshLocalPluginData) {
-        refreshLocalPluginData();
       } else {
         retry();
       }
