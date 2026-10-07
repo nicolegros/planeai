@@ -10,10 +10,9 @@ use tokio::sync::broadcast;
 
 pub struct DaemonSession {
     session_id: String,
-    buffer: Arc<Mutex<RingBuffer>>,
+    output: Arc<SessionOutput>,
     alive: Arc<AtomicBool>,
     session: LocalPtySession,
-    tx: broadcast::WeakSender<Vec<u8>>,
 }
 
 impl DaemonSession {
@@ -27,15 +26,12 @@ impl DaemonSession {
         buffer_capacity: usize,
     ) -> anyhow::Result<Self> {
         let session_id = session_id.into();
-        let buffer = Arc::new(Mutex::new(RingBuffer::new(buffer_capacity)));
+        let output = Arc::new(SessionOutput::new(buffer_capacity));
         let alive = Arc::new(AtomicBool::new(true));
-        let (tx, _) = broadcast::channel(64);
-        let weak_tx = tx.downgrade();
 
         let sink: Arc<dyn PtyEventSink> = {
             let primary = Arc::new(DaemonPtySink {
-                buffer: Arc::clone(&buffer),
-                tx: Mutex::new(Some(tx)),
+                output: Arc::clone(&output),
                 alive: Arc::clone(&alive),
             });
             if let Some(log_sink) = DurableLogSink::open(&session_id, command, cwd) {
@@ -97,10 +93,9 @@ impl DaemonSession {
 
         Ok(Self {
             session_id,
-            buffer,
+            output,
             alive,
             session,
-            tx: weak_tx,
         })
     }
 
@@ -123,28 +118,22 @@ impl DaemonSession {
     }
 
     pub fn buffer_snapshot(&self) -> Vec<u8> {
-        self.buffer.lock().unwrap().snapshot()
-    }
-
-    /// Return the current write offset for cursor-based reads.
-    pub fn buffer_write_offset(&self) -> u64 {
-        self.buffer.lock().unwrap().write_offset()
+        self.output.buffer.lock().unwrap().snapshot()
     }
 
     /// Read buffer content written after `after_offset`, up to `max_bytes` (0 = unlimited).
     /// Returns (raw_bytes, new_write_offset, truncated).
     pub fn buffer_read_after(&self, after_offset: u64, max_bytes: usize) -> (Vec<u8>, u64, bool) {
-        let buf = self.buffer.lock().unwrap();
-        let (bytes, next_cursor, truncated) = buf.read_after(after_offset, max_bytes);
-        (bytes, next_cursor, truncated)
+        self.output
+            .buffer
+            .lock()
+            .unwrap()
+            .read_after(after_offset, max_bytes)
     }
 
-    /// The receiver yields `Closed` once the session's output ends, immediately if it already has.
-    pub fn subscribe_output(&self) -> broadcast::Receiver<Vec<u8>> {
-        match self.tx.upgrade() {
-            Some(tx) => tx.subscribe(),
-            None => broadcast::channel(1).1,
-        }
+    /// The buffered output so far, and a receiver for the output after it.
+    pub fn snapshot_and_subscribe(&self) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
+        self.output.snapshot_and_subscribe()
     }
 
     pub fn session_id(&self) -> &str {
@@ -156,28 +145,60 @@ impl DaemonSession {
     }
 }
 
+// ─── SessionOutput ───────────────────────────────────────────────────────────
+
+/// A session's output: the replay buffer and the live stream that continues it.
+struct SessionOutput {
+    buffer: Mutex<RingBuffer>,
+    /// Dropped when the session's output ends, which closes every subscriber's stream.
+    tx: Mutex<Option<broadcast::Sender<Vec<u8>>>>,
+}
+
+impl SessionOutput {
+    fn new(buffer_capacity: usize) -> Self {
+        Self {
+            buffer: Mutex::new(RingBuffer::new(buffer_capacity)),
+            tx: Mutex::new(Some(broadcast::channel(64).0)),
+        }
+    }
+
+    fn publish(&self, bytes: Vec<u8>) {
+        self.buffer.lock().unwrap().write(&bytes);
+        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+            let _ = tx.send(bytes);
+        }
+    }
+
+    fn close(&self) {
+        self.tx.lock().unwrap().take();
+    }
+
+    /// The receiver yields `Closed` once the output ends, immediately if it already has.
+    fn snapshot_and_subscribe(&self) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
+        let snapshot = self.buffer.lock().unwrap().snapshot();
+        let rx = match self.tx.lock().unwrap().as_ref() {
+            Some(tx) => tx.subscribe(),
+            None => broadcast::channel(1).1,
+        };
+        (snapshot, rx)
+    }
+}
+
 // ─── DaemonPtySink ───────────────────────────────────────────────────────────
 
-/// Bridges planeai-pty output events to the daemon's buffer + broadcast mechanism.
+/// Bridges planeai-pty output events to the session's output.
 struct DaemonPtySink {
-    buffer: Arc<Mutex<RingBuffer>>,
-    /// The only strong sender: dropping it on exit closes every subscriber's stream.
-    tx: Mutex<Option<broadcast::Sender<Vec<u8>>>>,
+    output: Arc<SessionOutput>,
     alive: Arc<AtomicBool>,
 }
 
 impl PtyEventSink for DaemonPtySink {
     fn send(&self, event: PtyEvent) -> anyhow::Result<()> {
         match event {
-            PtyEvent::Output { bytes, .. } => {
-                self.buffer.lock().unwrap().write(&bytes);
-                if let Some(tx) = self.tx.lock().unwrap().as_ref() {
-                    let _ = tx.send(bytes);
-                }
-            }
+            PtyEvent::Output { bytes, .. } => self.output.publish(bytes),
             PtyEvent::Exit { .. } => {
                 self.alive.store(false, Ordering::SeqCst);
-                self.tx.lock().unwrap().take();
+                self.output.close();
             }
             PtyEvent::Error { message, .. } => {
                 tracing::error!("planeai-pty error: {message}");

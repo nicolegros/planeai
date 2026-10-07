@@ -93,7 +93,7 @@ async fn subscribe_output_receives_bytes() {
         4096,
     )
     .unwrap();
-    let mut rx = session.subscribe_output();
+    let (_, mut rx) = session.snapshot_and_subscribe();
 
     let result = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await;
     std::thread::sleep(Duration::from_millis(300));

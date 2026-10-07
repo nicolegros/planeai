@@ -58,9 +58,7 @@ async fn handle_data_inner(
         .get(&session_id)
         .ok_or_else(|| anyhow::anyhow!("session not found: {session_id}"))?;
 
-    // Get snapshot and subscriber while holding lock
-    let snapshot = session.buffer_snapshot();
-    let mut output_rx = session.subscribe_output();
+    let (snapshot, mut output_rx) = session.snapshot_and_subscribe();
     drop(reg);
 
     let (mut reader, mut writer) = tokio::io::split(stream);
