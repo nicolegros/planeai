@@ -653,14 +653,6 @@ pub fn normalize_base_path(raw: &str) -> String {
     expanded.trim_end_matches('/').to_string()
 }
 
-/// Build the full launch command for a provider, optionally appending the yolo flag.
-pub fn launch_command(provider: &Provider, yolo: bool) -> String {
-    match (yolo, &provider.yolo_flag) {
-        (true, Some(flag)) => format!("{} {}", provider.command, flag),
-        _ => provider.command.clone(),
-    }
-}
-
 /// Build the command for restarting a session: use interactive resume if available, otherwise fresh launch.
 pub fn restart_command_for_provider(provider: &Provider) -> String {
     if let Some(ref resume_cmd) = provider.resume_command {

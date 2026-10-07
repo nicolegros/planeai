@@ -69,7 +69,8 @@ pub struct SessionPlan {
     /// Project owning `task_key` when it differs from `project_id`.
     pub task_project_id: Option<String>,
     pub parent_session_id: Option<String>,
-    /// The task prompt, already part of `command`.
+    /// The task prompt, part of `command`. A `local` session runs no command here: its
+    /// first attach in the app spawns the agent with this prompt.
     pub prompt: Option<String>,
 }
 
@@ -98,11 +99,7 @@ pub fn build_session_plan(
     if let Some(prompt) = &opts.prompt {
         planeai_core::session_launch::check_task_prompt(prompt)?;
     }
-    let mut cmd = config::launch_command(provider_def, opts.yolo);
-
-    if let (Some(prompt), Some(prompt_tpl)) = (&opts.prompt, &provider_def.prompt_command) {
-        planeai_core::template::append_prompt(&mut cmd, prompt_tpl, prompt);
-    }
+    let cmd = provider_def.first_launch_command(opts.yolo, opts.prompt.as_deref());
 
     let short_id = &session_id.replace('-', "")[..8];
 
@@ -584,6 +581,26 @@ mod tests {
             db::pending_prompt(&conn, "session-1").unwrap().as_deref(),
             Some("Fix the login redirect")
         );
+    }
+
+    #[test]
+    fn the_cli_starts_an_agent_with_the_command_the_app_uses() {
+        let env = test_env("daemon");
+        let command = |yolo: bool, prompt: Option<&str>| {
+            let opts = SessionCreateOpts {
+                yolo,
+                prompt: prompt.map(str::to_string),
+                ..task_opts(Some("MYA-1"), None)
+            };
+            let plan = build_session_plan("session-1", &opts, &env, &test_project()).unwrap();
+            let app = env.config.providers["kiro"].first_launch_command(yolo, prompt);
+            (plan.command, app)
+        };
+        for (yolo, prompt) in [(false, None), (true, Some("- Fix it")), (false, Some(""))] {
+            let (cli, app) = command(yolo, prompt);
+            assert_eq!(cli, app, "yolo {yolo}, prompt {prompt:?}");
+        }
+        assert_eq!(command(false, Some("")).0, "kiro-cli chat");
     }
 
     #[test]

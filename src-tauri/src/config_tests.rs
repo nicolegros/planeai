@@ -247,36 +247,36 @@ fn migrate_from_db_does_nothing_when_config_exists() {
 }
 
 #[test]
-fn launch_command_returns_base_when_yolo_false() {
+fn first_launch_command_returns_base_when_yolo_false() {
     let provider = Provider {
         command: "kiro-cli chat".to_string(),
         yolo_flag: Some("--trust-all-tools".to_string()),
         ..Default::default()
     };
-    assert_eq!(launch_command(&provider, false), "kiro-cli chat");
+    assert_eq!(provider.first_launch_command(false, None), "kiro-cli chat");
 }
 
 #[test]
-fn launch_command_appends_yolo_flag_when_yolo_true() {
+fn first_launch_command_appends_yolo_flag_when_yolo_true() {
     let provider = Provider {
         command: "kiro-cli chat".to_string(),
         yolo_flag: Some("--trust-all-tools".to_string()),
         ..Default::default()
     };
     assert_eq!(
-        launch_command(&provider, true),
+        provider.first_launch_command(true, None),
         "kiro-cli chat --trust-all-tools"
     );
 }
 
 #[test]
-fn launch_command_ignores_yolo_when_no_flag() {
+fn first_launch_command_ignores_yolo_when_no_flag() {
     let provider = Provider {
         command: "aider".to_string(),
         yolo_flag: None,
         ..Default::default()
     };
-    assert_eq!(launch_command(&provider, true), "aider");
+    assert_eq!(provider.first_launch_command(true, None), "aider");
 }
 
 #[test]
