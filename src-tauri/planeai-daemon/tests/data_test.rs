@@ -429,6 +429,29 @@ mod data_tests {
     }
 
     #[tokio::test]
+    async fn kill_closes_an_attached_data_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+        let _shutdown = start_server(&sock).await;
+
+        let mut ctrl = connect_control(&sock).await;
+        spawn_session(&mut ctrl, "kill1", "sleep", r#""30""#).await;
+        let mut data = connect_data(&sock, "kill1").await;
+        kill_session(&mut ctrl, "kill1").await;
+
+        let mut last_frame = None;
+        let closed = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok((frame_type, _)) = read_frame(&mut data).await {
+                last_frame = Some(frame_type);
+            }
+        })
+        .await;
+
+        assert!(closed.is_ok(), "data connection should close after a kill");
+        assert_eq!(last_frame, Some(FRAME_EOF));
+    }
+
+    #[tokio::test]
     async fn connection_type_routing() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("daemon.sock");
