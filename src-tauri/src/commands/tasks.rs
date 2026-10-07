@@ -221,6 +221,34 @@ pub fn edit_task_item(
     Ok(TaskItem::from(task))
 }
 
+/// Start a session for the task, as "Start session immediately" does after creating it.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn start_task_session(
+    app: AppHandle,
+    project_id: String,
+    task_key: String,
+    provider: Option<String>,
+    use_worktree: bool,
+    auto_approve: bool,
+    branch: Option<String>,
+    prompt: Option<String>,
+) -> Result<crate::commands::sessions::launch::LaunchResult, String> {
+    crate::task_start::start(
+        &app,
+        &project_id,
+        &task_key,
+        crate::task_start::StartOptions {
+            provider,
+            use_worktree,
+            auto_approve,
+            branch,
+            prompt,
+        },
+    )
+    .await
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn move_task_item(

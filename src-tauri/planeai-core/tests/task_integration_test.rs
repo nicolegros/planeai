@@ -52,6 +52,31 @@ fn resolve_task_prompt_uses_custom_template() {
     assert_eq!(prompt, "[PLA-2] Add feature");
 }
 
+#[test]
+fn resolve_task_prompt_sees_every_task_template_variable() {
+    let task = planeai_tasks::model::Task {
+        key: "PLA-3".to_string(),
+        title: "Fix Login_Redirect".to_string(),
+        description: "Users land on /home".to_string(),
+        status: planeai_tasks::model::Status::InReview,
+        priority: 4,
+        parent_key: None,
+        blocked_by: vec!["PLA-1".to_string(), "PLA-2".to_string()],
+        tags: vec!["web".to_string(), "auth".to_string()],
+        base_branch: "develop".to_string(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    let prompt = TaskService::resolve_task_prompt(
+        &task,
+        Some("{parent_key:lower}/{title:slug} p{priority} [{tags}] after {blocked_by} on {base_branch} ({status})"),
+    );
+    assert_eq!(
+        prompt,
+        "pla-3/fix-login_redirect p4 [web,auth] after PLA-1, PLA-2 on develop (in_review)"
+    );
+}
+
 // ─── TaskService::resolve_task_launch ────────────────────────────────────────
 
 #[test]

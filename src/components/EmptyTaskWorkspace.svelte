@@ -23,8 +23,12 @@
     else if (key === "e") { event.preventDefault(); onEdit(); }
   }
 
+  /** The 0-5 scale plugins write (Jira: Lowest 1 to Highest 5); higher sorts first in the sidebar. */
+  const PRIORITY_LABELS = ["None", "Lowest", "Low", "Medium", "High", "Highest"] as const;
+
   function priorityLabel(priority: number | null | undefined): string {
-    return priority === 1 ? "High" : priority === 2 ? "Medium" : priority === 3 ? "Low" : "None";
+    const level = Math.min(Math.max(Math.trunc(priority ?? 0), 0), PRIORITY_LABELS.length - 1);
+    return PRIORITY_LABELS[level]!;
   }
 </script>
 

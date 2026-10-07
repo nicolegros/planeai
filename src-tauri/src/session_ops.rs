@@ -534,6 +534,16 @@ fn daemon_send_frames(
 /// `sessions.backend` for sessions whose runtime is a plugin provider (ADR-0014).
 pub const PLUGIN_BACKEND: &str = "plugin";
 
+/// The task prompt a new session keeps for its first attach: only a backend that runs nothing
+/// at launch (`local`) keeps it; every other backend already started the agent with it.
+pub fn pending_prompt(backend: &str, task_prompt: Option<String>) -> Option<String> {
+    let spawns_on_attach = !matches!(
+        backend,
+        "tmux" | "daemon" | planeai_rmux::BACKEND | PLUGIN_BACKEND
+    );
+    task_prompt.filter(|_| spawns_on_attach)
+}
+
 pub fn send_prompt(
     conn: &Connection,
     id_prefix: &str,
@@ -853,6 +863,24 @@ fn forward_task_lifecycle(batch: planeai_core::task_lifecycle::TaskLifecycleBatc
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_a_local_session_keeps_its_task_prompt_for_the_first_attach() {
+        let kept = |backend: &str| pending_prompt(backend, Some("Fix it".into()));
+        assert_eq!(
+            [
+                "local",
+                "tmux",
+                "daemon",
+                planeai_rmux::BACKEND,
+                PLUGIN_BACKEND
+            ]
+            .map(kept),
+            [Some("Fix it".into()), None, None, None, None]
+        );
+        assert_eq!(pending_prompt("local", None), None);
+    }
+
     use super::*;
     use crate::cleanup::CleanupOps;
     use crate::config::Config;

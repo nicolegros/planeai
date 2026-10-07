@@ -1,0 +1,86 @@
+[
+  {
+    "case": "without templates the defaults apply",
+    "task": {
+      "key": "PLA-12",
+      "title": "Fix Login Redirect",
+      "description": "Users land on /home.",
+      "status": "todo",
+      "priority": 2,
+      "parent_key": null,
+      "blocked_by": [],
+      "tags": [],
+      "base_branch": "develop"
+    },
+    "templates": null,
+    "expected": {
+      "branch": "pla-12/fix-login-redirect",
+      "name": "PLA-12: Fix Login Redirect",
+      "prompt": "Implement task PLA-12: Fix Login Redirect\n\nUsers land on /home."
+    }
+  },
+  {
+    "case": "the default branch keeps only lowercase ASCII, digits, hyphens and slashes",
+    "task": {
+      "key": "PLA-12",
+      "title": "  Été: v2/API_call --  ",
+      "description": "",
+      "status": "todo",
+      "priority": 0,
+      "parent_key": null,
+      "blocked_by": [],
+      "tags": [],
+      "base_branch": "main"
+    },
+    "templates": null,
+    "expected": {
+      "branch": "pla-12/-t-v2/apicall",
+      "name": "PLA-12:   Été: v2/API_call --  ",
+      "prompt": "Implement task PLA-12:   Été: v2/API_call --  "
+    }
+  },
+  {
+    "case": "templates render with every task field",
+    "task": {
+      "key": "PLA-12",
+      "title": "Fix Login Redirect",
+      "description": "",
+      "status": "todo",
+      "priority": 2,
+      "parent_key": null,
+      "blocked_by": ["PLA-1", "PLA-2"],
+      "tags": ["web", "auth"],
+      "base_branch": "develop"
+    },
+    "templates": {
+      "branch": "{key:lower}/{title:slug}",
+      "name": "{key:upper} {status} p{priority}",
+      "prompt": "{title} [{tags}] after {blocked_by} under {parent_key} from {base_branch}"
+    },
+    "expected": {
+      "branch": "pla-12/fix-login-redirect",
+      "name": "PLA-12 todo p2",
+      "prompt": "Fix Login Redirect [web,auth] after PLA-1, PLA-2 under PLA-12 from develop"
+    }
+  },
+  {
+    "case": "empty templates count as unset",
+    "task": {
+      "key": "PLA-3",
+      "title": "Retro",
+      "description": "",
+      "status": "todo",
+      "priority": 0,
+      "parent_key": "PLA-1",
+      "blocked_by": [],
+      "tags": [],
+      "base_branch": "main"
+    },
+    "templates": { "branch": "", "name": "", "prompt": "" },
+    "expected": {
+      "branch": "pla-3/retro",
+      "name": "PLA-3: Retro",
+      "prompt": "Implement task PLA-3: Retro"
+    }
+  }
+]

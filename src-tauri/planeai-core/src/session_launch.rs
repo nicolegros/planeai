@@ -44,25 +44,65 @@ fn default_provider() -> String {
     "kiro".to_string()
 }
 
+/// A provider PlaneAI configures out of the box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltinProvider {
+    pub key: &'static str,
+    pub command: &'static str,
+    pub yolo_flag: &'static str,
+    pub resume_command: &'static str,
+    /// Starts an interactive session on the prompt. `--` ends option parsing, so a prompt
+    /// starting with `-` stays a prompt.
+    pub prompt_command: &'static str,
+}
+
+pub const BUILTIN_PROVIDERS: [BuiltinProvider; 4] = [
+    BuiltinProvider {
+        key: "kiro",
+        command: "kiro-cli chat",
+        yolo_flag: "--trust-all-tools",
+        resume_command: "kiro-cli chat --resume",
+        prompt_command: "-- {prompt}",
+    },
+    BuiltinProvider {
+        key: "claude",
+        command: "claude",
+        yolo_flag: "--dangerously-skip-permissions",
+        resume_command: "claude --resume",
+        prompt_command: "-- {prompt}",
+    },
+    BuiltinProvider {
+        key: "copilot",
+        command: "copilot",
+        yolo_flag: "--allow-all-tools",
+        resume_command: "copilot --continue",
+        // `-i` reads a prompt starting with `-` as a flag; the `=` form never does.
+        prompt_command: "--interactive={prompt}",
+    },
+    BuiltinProvider {
+        key: "codex",
+        command: "codex",
+        yolo_flag: "--dangerously-bypass-approvals-and-sandbox",
+        resume_command: "codex resume --last",
+        prompt_command: "-- {prompt}",
+    },
+];
+
 impl Default for LaunchConfig {
     fn default() -> Self {
-        let mut providers = HashMap::new();
-        providers.insert(
-            "kiro".to_string(),
-            ProviderConfig {
-                command: "kiro-cli chat".to_string(),
-                yolo_flag: Some("--trust-all-tools".to_string()),
-                prompt_command: Some("{prompt}".to_string()),
-            },
-        );
-        providers.insert(
-            "claude".to_string(),
-            ProviderConfig {
-                command: "claude".to_string(),
-                yolo_flag: Some("--dangerously-skip-permissions".to_string()),
-                prompt_command: Some("-p {prompt}".to_string()),
-            },
-        );
+        let providers = BUILTIN_PROVIDERS
+            .iter()
+            .map(|builtin| {
+                (
+                    builtin.key.to_string(),
+                    ProviderConfig {
+                        command: builtin.command.to_string(),
+                        yolo_flag: Some(builtin.yolo_flag.to_string()),
+                        prompt_command: Some(builtin.prompt_command.to_string()),
+                    },
+                )
+            })
+            .collect();
         Self {
             providers,
             default_provider: "kiro".to_string(),
@@ -179,6 +219,23 @@ pub struct ProviderLaunchCommand {
     pub command: String,
     pub prompt_was_injected: bool,
     pub auto_approve_was_applied: bool,
+}
+
+/// Characters a task prompt may have: it travels as one command-line argument, and the
+/// system bounds a command line (macOS `ARG_MAX` is 1 MiB) with the environment included.
+pub const MAX_TASK_PROMPT_CHARS: usize = 100_000;
+
+/// Refuse a task prompt no agent command line can carry, before anything is created for it.
+pub fn check_task_prompt(prompt: &str) -> Result<(), String> {
+    if prompt.contains('\0') {
+        return Err("The task prompt contains a NUL character.".to_string());
+    }
+    if prompt.chars().count() > MAX_TASK_PROMPT_CHARS {
+        return Err(format!(
+            "The task prompt is longer than {MAX_TASK_PROMPT_CHARS} characters."
+        ));
+    }
+    Ok(())
 }
 
 /// Build the provider launch command from provider config + launch parameters.

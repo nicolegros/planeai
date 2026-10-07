@@ -17,6 +17,7 @@
   import { isDark } from "../lib/settings.svelte";
   import type { PluginInventory, PluginProvider, PluginUiContribution } from "../lib/types";
   import { isSessionRequest, serveSessionRequest, type ProviderSessionBridge } from "../lib/provider-session-bridge";
+  import { pluginFrameFonts } from "../lib/plugin-frame-fonts";
 
   interface Props {
     plugin: PluginInventory;
@@ -131,6 +132,17 @@
     "jira:jira-departed-interaction": async () => jiraDepartedInteractionEntrypoint,
   };
 
+  /** Placements whose frame is as tall as the plugin's content, reported from inside the frame. */
+  const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "dialog", "sidebar.header"];
+
+  /** Local placements told about their plugin's data changes in place, since remounting them would flash. */
+  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "sidebar.header", "main-pane", "dialog"];
+
+  /** Placements the host shows in its dialog chrome. */
+  function inDialog(placement: PluginUiContribution["placement"]): boolean {
+    return placement === "session.panel" || placement === "dialog";
+  }
+
   /** Placements whose frame takes the whole area the host gives it. */
   function fillsContainer(placement: PluginUiContribution["placement"]): boolean {
     return placement === "interaction" || placement === "main-pane" || placement === "session.main" || placement === "titlebar";
@@ -206,7 +218,7 @@
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
-    frame.className = fillsContainer(contribution.placement) || contribution.placement === "session.panel"
+    frame.className = fillsContainer(contribution.placement) || inDialog(contribution.placement)
         ? "block h-full w-full border-0"
         : isSessionIndicator
           ? "block h-4 w-4 border-0"
@@ -214,7 +226,9 @@
     frame.style.display = "block";
     frame.style.width = isTitlebar ? "88px" : isSessionIndicator ? "16px" : "100%";
     frame.style.border = "0";
-    if (isTitlebar || isSessionIndicator) frame.style.backgroundColor = "transparent";
+    // A content-sized frame shows the host surface around it, and its auto-height document lets it shrink.
+    const isContentSized = contentSizedPlacements.includes(contribution.placement);
+    if (isTitlebar || isSessionIndicator || isContentSized) frame.style.backgroundColor = "transparent";
     if (bridge) {
       // App releases this frame's keyboard like a terminal's, and a click into it claims the keyboard back.
       frame.setAttribute(PROVIDER_FRAME_ATTRIBUTE, "");
@@ -226,12 +240,12 @@
       frame.tabIndex = -1;
     } else if (fillsContainer(contribution.placement)) {
       frame.style.height = "100%";
-    } else if (contribution.placement === "session.panel") {
+    } else if (inDialog(contribution.placement)) {
       frame.style.height = "360px";
       frame.style.outline = "none";
     }
     if (contribution.placement.startsWith("sidebar.")) {
-      frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : "160px";
+      frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : contribution.placement === "sidebar.header" ? "0px" : "160px";
       frame.addEventListener("focus", focusSidebar);
       frame.addEventListener("pointerdown", focusSidebar);
     }
@@ -240,7 +254,7 @@
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'">
       <style id="planeai-plugin-theme">${localPluginThemeCss()}</style>
       <style id="planeai-plugin-base">${localPluginBaseCss}</style>
-      ${isTitlebar ? '<style id="planeai-plugin-titlebar">html,body{background:transparent}</style>' : isSessionIndicator ? '<style id="planeai-plugin-indicator">html,body{background:transparent}</style>' : ""}
+      ${isTitlebar ? '<style id="planeai-plugin-titlebar">html,body{background:transparent}</style>' : isSessionIndicator ? '<style id="planeai-plugin-indicator">html,body{background:transparent}</style>' : isContentSized ? '<style id="planeai-plugin-content-sized">html,body{height:auto;min-height:0;background:transparent}</style>' : ""}
       <script>
         let cleanup = null;
         let nextRequestId = 0;
@@ -249,9 +263,9 @@
         const dataChangeListeners = new Set();
         const sessionEventListeners = new Set();
         const send = (message) => parent.postMessage(message, "*");
-        let sessionPanelContentObserver = null;
+        let contentHeightObserver = null;
         let contentHeightPending = false;
-        const reportSessionPanelContentHeight = () => {
+        const reportContentHeight = () => {
           if (contentHeightPending || !document.body) return;
           contentHeightPending = true;
           requestAnimationFrame(() => {
@@ -263,12 +277,12 @@
             if (height > 0) send({ type: "content-height", height });
           });
         };
-        const observeSessionPanelContent = (contribution) => {
-          if (contribution?.placement !== "session.panel" || !document.body) return;
-          sessionPanelContentObserver?.disconnect();
-          sessionPanelContentObserver = new MutationObserver(reportSessionPanelContentHeight);
-          sessionPanelContentObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
-          reportSessionPanelContentHeight();
+        const observeContentHeight = (contribution) => {
+          if (!${JSON.stringify(contentSizedPlacements)}.includes(contribution?.placement) || !document.body) return;
+          contentHeightObserver?.disconnect();
+          contentHeightObserver = new MutationObserver(reportContentHeight);
+          contentHeightObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+          reportContentHeight();
         };
         const request = (type, payload = {}) => new Promise((resolve, reject) => {
           const requestId = ++nextRequestId;
@@ -433,14 +447,18 @@
             if (typeof cleanup === "function") cleanup();
             cleanup = null;
             sessionEventListeners.clear();
-            sessionPanelContentObserver?.disconnect();
-            sessionPanelContentObserver = null;
+            contentHeightObserver?.disconnect();
+            contentHeightObserver = null;
             removeEventListener("keydown", forwardEscapeToHost);
             return;
           }
           if (message.type !== "init") return;
           sidebarKeydownRoutingEnabled = message.contribution?.placement?.startsWith("sidebar.") ?? false;
           try {
+            // The UI mounts once the theme fonts are in, so it never lays out in a fallback font first.
+            const fonts = message.fonts.map(({ family, data, descriptors }) => new FontFace(family, data, descriptors));
+            for (const font of fonts) document.fonts.add(font);
+            await Promise.allSettled(fonts.map((font) => font.loaded));
             const url = URL.createObjectURL(new Blob([message.source], { type: "text/javascript" }));
             const module = await import(url);
             URL.revokeObjectURL(url);
@@ -450,7 +468,7 @@
             const context = { plugin: message.plugin, contribution: message.contribution, session: message.session, host };
             if (message.provider) context.provider = message.provider;
             cleanup = entrypoint.mount(document.body, context);
-            observeSessionPanelContent(message.contribution);
+            observeContentHeight(message.contribution);
             send({ type: "mounted" });
           } catch (error) {
             send({ type: "load-error", message: String(error) });
@@ -544,7 +562,7 @@
           .dataChanged(plugin.id)
           .then((value) => respond(message.requestId, true, value))
           .catch((error) => respond(message.requestId, false, error));
-      } else if (message.type === "content-height" && contribution.placement === "session.panel" && typeof message.height === "number" && Number.isFinite(message.height)) {
+      } else if (message.type === "content-height" && contentSizedPlacements.includes(contribution.placement) && typeof message.height === "number" && Number.isFinite(message.height)) {
         frame.style.height = `${Math.min(Math.max(Math.ceil(message.height), 1), 10_000)}px`;
       } else if (message.type === "content-width" && contribution.placement === "session.indicator" && typeof message.width === "number" && Number.isFinite(message.width)) {
         container?.setAttribute("data-plugin-indicator-visible", message.width > 0 ? "true" : "false");
@@ -600,8 +618,8 @@
     // A provider UI mounts only once its session is driven by the current sidecar.
     const loadSource = (): Promise<string> => (bridge ? bridge.loadSource() : plugins.localUiSource(plugin.id, contribution.id));
     const initialise = (): void => {
-      void loadSource()
-        .then((source) => {
+      void Promise.all([loadSource(), pluginFrameFonts()])
+        .then(([source, fonts]) => {
           const context = JSON.parse(JSON.stringify({ plugin, contribution, session: sessionContext })) as {
             plugin: PluginInventory;
             contribution: PluginUiContribution;
@@ -610,13 +628,13 @@
           const providerContext = bridge
             ? { provider: providerContextOf(bridge.provider), sessionControls: { handoff: Boolean(bridge.handoff) } }
             : {};
-          frame.contentWindow?.postMessage({ type: "init", source, ...context, ...providerContext }, "*");
+          frame.contentWindow?.postMessage({ type: "init", source, fonts, ...context, ...providerContext }, "*");
         })
         .catch((error) => showLoadFailure(root, error));
     };
 
     const refreshData = (): void => frame.contentWindow?.postMessage({ type: "data-changed" }, "*");
-    if (isSessionIndicator) refreshLocalPluginData = refreshData;
+    if (refreshedInPlacePlacements.includes(contribution.placement)) refreshLocalPluginData = refreshData;
     let framed = true;
     let unlistenSessionEvents: (() => void) | undefined;
     if (bridge) {
@@ -795,11 +813,14 @@
     const refreshTheme = (): void => refreshLocalPluginTheme?.();
     window.addEventListener("planeai-theme-changed", refreshTheme);
     void listen<string>("plugin-data-changed", (event) => {
-      if (event.payload !== plugin.id || !["sidebar.section", "interaction", "session.panel", "session.indicator"].includes(contribution.placement)) return;
+      if (event.payload !== plugin.id) return;
+      if (refreshLocalPluginData) {
+        refreshLocalPluginData();
+        return;
+      }
+      if (!["sidebar.section", "interaction", "session.panel", "session.indicator"].includes(contribution.placement)) return;
       if (plugin.source_kind === "builtin" && dataChangeListeners.size > 0) {
         notify(dataChangeListeners);
-      } else if (contribution.placement === "session.indicator" && refreshLocalPluginData) {
-        refreshLocalPluginData();
       } else {
         retry();
       }
@@ -831,7 +852,7 @@
       ? plugin.source_kind === "builtin"
         ? "pointer-events-none"
         : "h-full w-full pointer-events-auto"
-      : fillsContainer(contribution.placement) || contribution.placement === "session.panel"
+      : fillsContainer(contribution.placement) || inDialog(contribution.placement)
         ? "h-full w-full"
         : contribution.placement === "session.indicator"
           ? "h-4 w-4 shrink-0 pointer-events-none"

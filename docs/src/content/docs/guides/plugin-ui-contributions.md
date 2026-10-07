@@ -21,7 +21,7 @@ my-plugin/
     └── entry.js
 ```
 
-`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, or the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
+`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers), or `planeai.plugin-host.v4` for plugins that use the `sessions.start` capability or the `dialog` placement (each version includes the ones before it); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
 
 Every backend and UI path must be a package-relative file path: no absolute paths and no `..`. The active platform's backend must exist and be executable. On Unix, its executable mode is preserved in the imported copy.
 
@@ -74,7 +74,7 @@ The platform key is the current OS and architecture: `macos-arm64`, `macos-x64`,
 
 ### Capabilities
 
-Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `tasks.read`, `tasks.create`, `tasks.transition`, `task-events`, and `providers`; duplicates and all other local capabilities are rejected.
+Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `sessions.start`, `tasks.read`, `tasks.create`, `tasks.transition`, `task-events`, and `providers`; duplicates and all other local capabilities are rejected.
 
 - `settings` permits sidecar callbacks `host.settings.get` and `host.settings.replace`.
 - `projects.read` permits `host.projects.list`, returning non-hidden active projects.
@@ -85,13 +85,35 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
 - `sessions.advisories` permits `host.sessions.advisory` with `{ "session_id", "message", "severity" }`, where severity is `info`, `warning`, or `error`. PlaneAI renders the advisory; sidecars never inject UI directly.
 - `sessions.complete` permits `host.sessions.complete` with `{ "session_id", "message"? }`. PlaneAI presents its standard Archive/Destroy/Keep prompt, or Done/Nothing when the selected session has a linked task. Thus completion requests reuse the host's session cleanup and linked-task behavior rather than asking plugins to control sessions.
 - `tasks.read` permits the keyed single-task lookup aliases `host.tasks.read` and `host.task.get`. Each accepts `{ "key": "TASK-123" }` and returns `{ "task": ... }` (or `{ "task": null }` when no task matches).
-- `tasks.create` permits `host.tasks.createChild`. It requires `projectPath`, `parentKey`, `title`, `description`, and a plugin-scoped `operationId`; PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
+- `tasks.create` permits `host.tasks.create` and `host.tasks.createChild`.
+  `host.tasks.create` creates a top-level `todo` task.
+  It requires `project_path`, `title`, and a plugin-scoped `operation_id`, accepts an optional `description`, integer `priority` (default `0`) and `tags` array, and rejects `parent_key`.
+  Every two-word param also accepts its camelCase spelling (`projectPath`, `operationId`, `parentKey`).
+  `title` is at most 255 characters, `description` at most 65,536, `operation_id` at most 256, `tags` at most 20 of 64 characters each, none may contain NUL, and `priority` is 0 (none) to 5 (highest), the scale the Jira plugin writes.
+  PlaneAI rejects hidden or unknown projects, returns the originally created task when the same operation is retried, and refreshes the task list.
+  A request PlaneAI refuses (bad params, an unknown or hidden project, a missing or foreign parent, a `start` naming a provider nothing configured or installed provides) answers `-32602`, which retrying cannot fix.
+  A `start` naming the provider of an installed plugin that is not running, as right after PlaneAI launches, answers `-32004` and creates nothing, so retry it later.
+  `-32603` is a host failure worth retrying.
+  `host.tasks.createChild` requires `project_path` (or `projectPath`), `parent_key` (or `parentKey`), `title`, `description`, and a plugin-scoped `operation_id` (or `operationId`); PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
+  Both return `{ "task": ... }`.
+- `sessions.start` lets `host.tasks.create` start the new task's session, as the task form's "Start session immediately" does.
+  Add `start: { "provider"?: string | null, "use_worktree"?: boolean, "auto_approve"?: boolean }` to the request; omitted fields default to the configured default provider, a worktree, and auto-approve.
+  A request with `start` but without `sessions.start` fails as not granted, and `host.tasks.createChild` rejects `start`.
+  PlaneAI renders the branch, session name, and prompt from the configured task templates (or their defaults), launches the session, and moves the task to `in_progress`.
+  Auto-approve is turned off for a plugin provider that does not support it.
+  The reply does not wait for the launch: it is `{ "task": ..., "session": "starting" }`, or `"exists"` when the task already has a session.
+  PlaneAI records the requested start with the operation until a session exists or the start fails, and resumes a start still pending when it next launches, so quitting mid-start loses nothing.
+  Retrying the same `operationId` never starts a second session, and the first request's `start` decides: a retry answers `"starting"` while the start is pending, `"exists"` once it succeeded, and `"failed"` with `"session_error"` once it failed.
+  A failed start, or one that succeeded with a warning, is shown to the user naming the plugin, as in "Routines created KEY, but its session could not start: ...".
+  `sessions.start` also permits `host.sessions.providers`, returning `{ "default": "claude", "providers": [{ "key", "label", "auto_approve" }] }`: the configured providers, then those of running plugins, as the task form lists them.
+  `auto_approve` is `false` for a plugin provider that does not support it.
+  With the `local` session backend the agent spawns only when a terminal view attaches, so a session started this way waits until the user opens it.
 - `tasks.transition` permits `host.sessions.transitionLinkedTask` with `{ "session_id", "status" }`. PlaneAI resolves the task strictly from that session's linked task key, changes its lifecycle status, and emits the normal task lifecycle batch (including automatic parent completion).
 - `task-events` permits event delivery only when the handshake also subscribes to `task.lifecycle`.
 - `providers` permits declaring `providers` (host API v3 only) and the provider session contract described in [Providers](#providers). It is required exactly when `providers` is declared.
 - `session-events` permits best-effort `plugin.sessionLifecycle` delivery only when the handshake also subscribes to `session.lifecycle`. Events describe committed host session status changes and include the session/project identity, branch, linked task key, previous status, and new status.
 
-The sandbox UI can use the same read/create operations directly through `context.host.rpc.call("projects.list")`, `context.host.rpc.call("sessions.list")`, `context.host.rpc.call("task.get", { key })`, and `context.host.rpc.call("tasks.createChild", params)`. The sidecar uses matching nested callbacks with the `host.` prefix. PlaneAI derives the owning plugin identity for both transports and applies identical manifest capability checks.
+The sandbox UI can use the same read/create operations directly through `context.host.rpc.call("projects.list")`, `context.host.rpc.call("sessions.list")`, `context.host.rpc.call("task.get", { key })`, `context.host.rpc.call("tasks.create", params)`, `context.host.rpc.call("tasks.createChild", params)`, and `context.host.rpc.call("sessions.providers")`. The sidecar uses matching nested callbacks with the `host.` prefix. PlaneAI derives the owning plugin identity for both transports and applies identical manifest capability checks.
 
 Settings are a JSON object that PlaneAI owns and persists atomically; its on-disk implementation location is not a plugin API. `host.settings.get` returns `{ "settings": { ... } }`; `host.settings.replace` accepts either `{ "settings": { ... } }` or an object directly and returns the same envelope. Both the fixture's `fixture.persistSettings` sidecar example and its UI settings bridge use that public host API. Do not place credentials or tokens in it.
 
@@ -121,7 +143,7 @@ Ignore params and features you do not know; newer hosts add them.
 Response IDs must exactly correlate with the request ID. Return either `result` or a JSON-RPC `error`, not both. PlaneAI sends the reserved `plugin.shutdown` during disable/reload/app shutdown; acknowledge it and exit promptly. Do not expose or invoke `plugin.handshake` or `plugin.shutdown` from plugin UI.
 
 A sidecar may make a host callback while PlaneAI is waiting for its response. Send a normal JSON-RPC request on stdout, wait for the correlated host response on stdin, then finish the original request.
-A failed callback answers with a JSON-RPC error code: `-32601` for an unknown host method, `-32003` for a capability the plugin was not granted, `-32602` for invalid params, and `-32603` for anything else. `fixture.persistSettings` demonstrates `host.settings.get` followed by `host.settings.replace`. Keep callback IDs distinct from the active request ID and continue reading until the matching response arrives.
+A failed callback answers with a JSON-RPC error code: `-32601` for an unknown host method, `-32003` for a capability the plugin was not granted, `-32602` for invalid params, `-32004` for a valid request PlaneAI cannot serve yet and the plugin should retry later, and `-32603` for anything else. `fixture.persistSettings` demonstrates `host.settings.get` followed by `host.settings.replace`. Keep callback IDs distinct from the active request ID and continue reading until the matching response arrives.
 
 Handshake and ordinary RPC calls have a five-second deadline; provider methods have [their own](#providers). On deadline expiry, PlaneAI sends the JSON-RPC `$/cancelRequest` notification with `{ "id": <original request ID> }`. Keep reading stdin while work is active; cancel cooperatively and return the original request's JSON-RPC error `{ "code": -32800, "message": "request cancelled" }` within three seconds. PlaneAI treats any other response or no cancellation response as a failed runtime and stops it. `plugin.shutdown` also has a three-second grace period before the process is killed. Do not define a competing cancellation wire format in v1.
 
@@ -271,7 +293,14 @@ export default {
 
 PlaneAI injects a host-owned baseline stylesheet into every local UI iframe. It resets document sizing and box sizing, applies PlaneAI's default font/background/text colors, and provides low-specificity typography, borders, and focus styles for native controls. Your module's styles load afterwards, so you can override those defaults normally.
 
+Frames sized to their content (`dialog`, `session.panel` and `sidebar.header`) get an auto-height, transparent document instead, so they shrink as their content does and show the host surface around them.
+Measure your content rather than the viewport there: an element at `height: 100%` resolves to its content height.
+
 Use only these stable semantic custom properties, never PlaneAI's internal `--color-*` or `--font-*` variables: `--planeai-font-sans`, `--planeai-font-mono`, `--planeai-canvas`, `--planeai-main`, `--planeai-surface`, `--planeai-surface-raised`, `--planeai-text`, `--planeai-text-muted`, `--planeai-text-subtle`, `--planeai-border`, `--planeai-border-strong`, `--planeai-accent`, `--planeai-on-accent`, `--planeai-accent-subtle`, `--planeai-success`, `--planeai-warning`, `--planeai-danger`, `--planeai-radius`, and `--planeai-space-1` through `--planeai-space-6`. PlaneAI updates those properties in place whenever its active theme or appearance changes; it does not remount your UI.
+
+The theme fonts are available in every local UI iframe, so text set in `var(--planeai-font-sans)` or `var(--planeai-font-mono)` renders in the same IBM Plex Sans and IBM Plex Mono as PlaneAI.
+PlaneAI registers their Latin faces (Plex Sans at weights 100 to 700, Plex Mono at 400 and 500) in the frame's `document.fonts` before it calls `mount`, so your first layout already uses them.
+The frame still cannot fetch fonts itself; characters outside the Latin range, and weights or styles outside those faces, fall back to the next family in the token's stack.
 
 For example, local UI CSS can adopt or intentionally customize the host theme:
 
@@ -303,7 +332,25 @@ For example, local UI CSS can adopt or intentionally customize the host theme:
 
 The fixture UI calls `context.host.call("fixture.status")`, loads a saved greeting with `context.host.settings.get()`, replaces it when **Save greeting** is selected, calls `data.changed()`, and removes its click handler in its disposer.
 
-Each `ui_contributions` item requires a unique safe `id`, `label`, `placement`, and `entrypoint`. Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, `main-pane`, `session.panel`, and `titlebar`. Sidebar contributions may set integer `order`. `main-pane` and `session.panel` contributions may declare an optional portable `Mod+[Shift+][Alt+]A-Z` shortcut and are discoverable in Cmd+K while running. PlaneAI rejects duplicate declared shortcuts across installed plugins. When a matching selected-session panel is available, it receives its declared chord before a main-pane contribution or a legacy host fallback; otherwise the host's normal shortcut behavior continues. A `session.panel` contribution is also discoverable as an action at the end of the titlebar whenever a session is selected; PlaneAI supplies its UI entrypoint the selected session's identity, project ID, branch, base branch, status, provider, and linked task key. A compact `titlebar` contribution is rendered independently at the end of the titlebar with the same selected-session context. It can call `navigation.open(pluginId, contributionId)` to open a declared `session.panel` in a generic modal, rather than replacing the main workspace. During the GitHub migration, its plugin-owned pull-request chip deliberately appears beside the retained legacy PR-status chip or **Create PR** affordance; the legacy UI and routes remain available as a fallback when the plugin is unavailable. UI context does not supply a working-tree path—request the separately capability-gated `host.sessions.repositoryContext` operation when needed. Use the placement's available space conservatively; the host owns focus, navigation, keyboard routing, lifecycle, loading/retry UI, and teardown.
+Each `ui_contributions` item requires a unique safe `id`, `label`, `placement`, and `entrypoint`.
+Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, `main-pane`, `dialog`, `session.panel`, and `titlebar`.
+Sidebar contributions may set integer `order`.
+A local `sidebar.header`, `dialog`, or `session.panel` frame is as tall as its content, which the host bridge measures and reports, so a compact header control takes only the space it draws.
+`main-pane`, `dialog`, and `session.panel` contributions may declare an optional portable `Mod+[Shift+][Alt+]A-Z` shortcut, and `main-pane` and `dialog` contributions are discoverable in Cmd+K while running.
+PlaneAI rejects duplicate declared shortcuts across installed plugins.
+When a matching selected-session panel is available, it receives its declared chord before a main-pane or dialog contribution or a legacy host fallback; otherwise the host's normal shortcut behavior continues.
+A `dialog` contribution opens in PlaneAI's dialog, titled with the contribution's `label`, over whatever the user is doing and with or without a selected session.
+It opens from Cmd+K, from its shortcut (which also closes it), or from `navigation.open(pluginId, contributionId)` in any of the plugin's frames, such as a `sidebar.header` button.
+Only one plugin dialog is open at a time, and opening a `main-pane` contribution closes it.
+Escape, the dialog's close button, and `navigation.close()` close it and return focus where it was; a frame that handles Escape itself and calls `preventDefault()` keeps it, for example to close an inline editor first.
+The dialog is 640px wide, or narrower in a small window, and scrolls its content past 85% of the window's height, so lay the UI out for that width and let it grow with its content instead of filling a fixed height or scrolling internally.
+Its frame receives no `session` context.
+A `session.panel` contribution is also discoverable as an action at the end of the titlebar whenever a session is selected; PlaneAI supplies its UI entrypoint the selected session's identity, project ID, branch, base branch, status, provider, and linked task key.
+A compact `titlebar` contribution is rendered independently at the end of the titlebar with the same selected-session context.
+It can call `navigation.open(pluginId, contributionId)` to open a declared `session.panel` in the same dialog, rather than replacing the main workspace.
+During the GitHub migration, its plugin-owned pull-request chip deliberately appears beside the retained legacy PR-status chip or **Create PR** affordance; the legacy UI and routes remain available as a fallback when the plugin is unavailable.
+UI context does not supply a working-tree path; request the separately capability-gated `host.sessions.repositoryContext` operation when needed.
+Use the placement's available space conservatively; the host owns focus, navigation, keyboard routing, lifecycle, loading/retry UI, and teardown.
 Inside a local plugin frame, PlaneAI forwards Cmd/Ctrl chords to its own shortcut router, so app shortcuts such as Mod+[ keep working while the frame has focus.
 Call `preventDefault()` on a chord to keep it for your UI; Ctrl+Tab and Mod+N always reach PlaneAI.
 A provider session's UI owns the keyboard like a terminal: PlaneAI takes focus out of its frame when the sidebar or a dialog takes over, and gives it back when its pane does.

@@ -1194,7 +1194,7 @@ mod tests {
         assert!(validate_local_manifest(&recipient_api, "test-platform").is_ok());
 
         let mut incompatible_api = manifest();
-        incompatible_api["host_api_version"] = json!("planeai.plugin-host.v4");
+        incompatible_api["host_api_version"] = json!("planeai.plugin-host.v5");
         assert!(validate_local_manifest(&incompatible_api, "test-platform").is_err());
 
         let mut unsupported_capability = manifest();

@@ -70,7 +70,7 @@ pub fn restart(
     } else {
         None
     };
-    let fresh_cmd = crate::config::launch_command(provider_def, session.auto_approve);
+    let fresh_cmd = provider_def.first_launch_command(session.auto_approve, None);
 
     tracing::info!(
         backend = %session.backend,

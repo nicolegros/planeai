@@ -567,3 +567,44 @@ fn set_parent_with_first_child_assignment_reports_only_the_first_assignment() {
     assert_eq!(first_assignment, Some(true));
     assert_eq!(second_assignment, Some(false));
 }
+
+#[test]
+fn insert_task_commits_and_rolls_back_with_the_callers_transaction() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+    let params = CreateParams {
+        title: "Retro".into(),
+        tags: vec!["weekly".into()],
+        ..Default::default()
+    };
+    let count = |conn: &Connection| -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
+            .unwrap()
+    };
+
+    let tx = conn.transaction().unwrap();
+    let rolled_back = insert_task(&tx, "OPS", &params).unwrap();
+    drop(tx);
+    assert_eq!(rolled_back.key, "OPS-1");
+    assert_eq!(count(&conn), 0, "a dropped transaction leaves no task");
+
+    let tx = conn.transaction().unwrap();
+    let created = insert_task(&tx, "OPS", &params).unwrap();
+    tx.commit().unwrap();
+    assert_eq!(
+        created,
+        InsertedTask {
+            key: "OPS-1".into(),
+            inserted: true,
+            first_child: None,
+        }
+    );
+    let row: (String, String) = conn
+        .query_row(
+            "SELECT base_branch, (SELECT tag FROM task_tags WHERE task_key = 'OPS-1') FROM tasks WHERE key = 'OPS-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(row, ("main".to_string(), "weekly".to_string()));
+}

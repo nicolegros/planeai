@@ -215,6 +215,9 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
          )",
     )?;
 
+    // The task prompt a `local` session's agent gets when it first spawns, on attach.
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN pending_prompt TEXT");
+
     // Shell tabs are tracked by the persisted TaskWorkspace layout, not a per-session count.
     let _ = conn.execute_batch("ALTER TABLE sessions DROP COLUMN tab_count");
 
@@ -313,6 +316,8 @@ pub struct CreateSessionParams {
     pub auto_dispatched: bool,
     pub parent_session_id: Option<String>,
     pub task_project_id: Option<String>,
+    /// For a backend that spawns the agent on first attach rather than at launch.
+    pub pending_prompt: Option<String>,
 }
 
 // ─── ProjectService ──────────────────────────────────────────────────────────
@@ -547,8 +552,8 @@ impl SessionService {
             .filter(|id| params.task_key.is_some() && *id != params.project_id);
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, auto_approve, task_key, base_branch, auto_dispatched, parent_session_id, task_project_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, auto_approve, task_key, base_branch, auto_dispatched, parent_session_id, task_project_id, pending_prompt)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 params.id,
                 params.project_id,
@@ -566,6 +571,7 @@ impl SessionService {
                 params.auto_dispatched,
                 params.parent_session_id,
                 task_project_id,
+                params.pending_prompt,
             ],
         )?;
         Ok(SessionRecord {
@@ -801,11 +807,42 @@ impl SessionService {
         Ok(count > 0)
     }
 
-    /// Mark a session as having been attached at least once.
+    /// Mark a session as having been attached at least once; its pending prompt is delivered.
     pub fn mark_attached(conn: &Connection, session_id: &str) -> SqlResult<()> {
         conn.execute(
-            "UPDATE sessions SET attached_once = 1 WHERE id = ?1 AND attached_once = 0",
+            "UPDATE sessions SET attached_once = 1, pending_prompt = NULL WHERE id = ?1 AND attached_once = 0",
             params![session_id],
+        )?;
+        Ok(())
+    }
+
+    /// The prompt the session's first spawn still has to deliver.
+    pub fn pending_prompt(conn: &Connection, session_id: &str) -> SqlResult<Option<String>> {
+        conn.query_row(
+            "SELECT pending_prompt FROM sessions WHERE id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// Remove the prompt a spawn is about to deliver, so no later spawn delivers it again.
+    pub fn take_pending_prompt(conn: &Connection, session_id: &str) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET pending_prompt = NULL WHERE id = ?1",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Give a taken prompt back after its spawn failed, unless an attach already happened.
+    pub fn return_pending_prompt(
+        conn: &Connection,
+        session_id: &str,
+        prompt: &str,
+    ) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET pending_prompt = ?2 WHERE id = ?1 AND attached_once = 0",
+            params![session_id, prompt],
         )?;
         Ok(())
     }
@@ -1064,18 +1101,12 @@ impl TaskService {
         repo.get(key).map_err(|e| e.to_string())
     }
 
-    /// Resolve the task prompt from task title + description using a template.
-    /// Template uses {key}, {title}, {description} placeholders.
+    /// Resolve the task prompt from a template over the task's template variables.
     pub fn resolve_task_prompt(
         task: &planeai_tasks::model::Task,
         template: Option<&str>,
     ) -> String {
-        let tmpl = template.unwrap_or("{title}\n\n{description}");
-        let mut vars = std::collections::HashMap::new();
-        vars.insert("key", task.key.as_str());
-        vars.insert("title", task.title.as_str());
-        vars.insert("description", task.description.as_str());
-        crate::template::render(tmpl, &vars)
+        crate::template::TaskVars::from(task).render(template.unwrap_or("{title}\n\n{description}"))
     }
 
     /// Link a session to a task and optionally move task to a new status (on_start hook).

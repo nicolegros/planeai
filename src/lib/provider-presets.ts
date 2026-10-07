@@ -6,7 +6,7 @@ export interface ProviderPreset {
   provider: Provider;
 }
 
-/// Mirrors the backend's default providers (`Config::default` in config.rs) so
+/// Mirrors the backend's default providers (`BUILTIN_PROVIDERS` in planeai-core) so
 /// existing configs can add a supported agent in one click.
 export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   {
@@ -16,7 +16,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
       command: "kiro-cli chat",
       yolo_flag: "--trust-all-tools",
       resume_command: "kiro-cli chat --resume",
-      prompt_command: "{prompt}",
+      prompt_command: "-- {prompt}",
     },
   },
   {
@@ -26,16 +26,17 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
       command: "claude",
       yolo_flag: "--dangerously-skip-permissions",
       resume_command: "claude --resume",
-      prompt_command: "-p {prompt}",
+      prompt_command: "-- {prompt}",
     },
   },
   {
     key: "copilot",
     label: "Copilot",
     provider: {
-      command: "copilot --resume",
+      command: "copilot",
       yolo_flag: "--allow-all-tools",
-      prompt_command: "{prompt}",
+      resume_command: "copilot --continue",
+      prompt_command: "--interactive={prompt}",
     },
   },
   {
@@ -45,7 +46,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
       command: "codex",
       yolo_flag: "--dangerously-bypass-approvals-and-sandbox",
       resume_command: "codex resume --last",
-      prompt_command: "{prompt}",
+      prompt_command: "-- {prompt}",
     },
   },
 ];

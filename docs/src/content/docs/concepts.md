@@ -15,12 +15,12 @@ Sessions can be linked to a task. When a session is linked, planeai tracks which
 
 ## Providers
 
-A provider is the configuration layer between planeai and an AI agent CLI. It tells planeai how to start a session, how to send a prompt to a running agent, and what flags to use in autonomous mode.
+A provider is the configuration layer between planeai and an AI agent CLI. It tells planeai how to start a session, how to start it on a task prompt, and what flags to use in autonomous mode.
 
 planeai ships with no hardcoded agent — it works with any CLI that accepts text input. You configure providers for the agents you use (Kiro, Claude, Copilot, Codex, or anything else). Each provider defines:
 
 - **command** — how to start a new agent session
-- **prompt_command** — how to send a message to an existing session
+- **prompt_command** - the arguments that start the agent on a task prompt
 - **yolo_flag** — what flag enables autonomous mode (skipping confirmations)
 - **autonomous_prompt_template** — how task details are formatted when dispatched
 

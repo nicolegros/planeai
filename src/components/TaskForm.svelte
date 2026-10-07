@@ -1,12 +1,12 @@
 <script lang="ts">
   import type { Project, TaskItem, Session } from "../lib/types";
-  import { sessions as sessionsApi, projects as projectsApi } from "../lib/api";
+  import { projects as projectsApi, tasks as tasksApi } from "../lib/api";
   import { Button, Input, Label, Select, PillInput, PillCombobox, Checkbox } from "./ui";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { getSettings } from "../lib/settings.svelte";
-  import { renderTemplate } from "../lib/render-template";
+  import { taskSessionDefaults } from "../lib/task-session-defaults";
   import { randomTaskName } from "../lib/random-task-name";
   import { LoaderCircle } from "@lucide/svelte";
   import * as taskStore from "../lib/task-store.svelte";
@@ -113,33 +113,23 @@
     }
   });
 
-  // Auto-generate session fields from task title/description
-  const slugFromTitle = $derived(
-    formTitle.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-/]/g, "").replace(/-+$/, "")
+  // The session the backend will start; the key is unknown until the task exists.
+  const sessionDefaults = $derived(
+    taskSessionDefaults(
+      {
+        key: "TASK-?",
+        title: formTitle.trim(),
+        description: formDescription,
+        priority: formPriority,
+        blocked_by: formBlockedBy,
+        tags: formTags,
+        parent_key: formParentKey,
+        base_branch: formBaseBranch,
+        status: "todo",
+      },
+      config.task_management?.templates,
+    ),
   );
-
-  // Template rendering for prompt preview
-  // Build a preview of what the prompt will be using configured templates
-  const defaultPrompt = $derived.by(() => {
-    const templates = config.task_management?.templates;
-    const virtualTask = {
-      key: "TASK-?",
-      title: formTitle.trim(),
-      description: formDescription,
-      priority: formPriority,
-      blocked_by: formBlockedBy,
-      tags: formTags,
-      parent_key: formParentKey,
-      base_branch: formBaseBranch,
-      status: "todo",
-    };
-    if (templates?.prompt) {
-      return renderTemplate(templates.prompt, virtualTask);
-    }
-    return formDescription
-      ? `Implement task ${virtualTask.key}: ${virtualTask.title}\n\n${formDescription}`
-      : `Implement task ${virtualTask.key}: ${virtualTask.title}`;
-  });
 
   // Derive task items for parent_key and blocked_by comboboxes — scoped to current project
   const projectTasks = $derived.by(() => {
@@ -166,6 +156,9 @@
   );
 
   const selectedProject = $derived(projects.find((p) => p.path === formProjectPath));
+
+  const sessionBranchName = $derived(sessionBranch || sessionDefaults.branch);
+  const branchExists = $derived(branches.some((b) => b.value === sessionBranchName));
 
   // Check if branch is already used by an active session
   const branchAlreadyUsed = $derived(
@@ -220,59 +213,22 @@
         });
 
         if (startSession && selectedProject) {
-          // Validate provider
-          const provider = providers.key;
-          if (!provider) {
+          if (!providers.key) {
             showSnackbar("Task created, but no provider configured. Select a provider to start a session.");
             onSubmitted();
             return;
           }
-
-          // Build session params from templates
-          const templates = config.task_management?.templates;
-          const realTask = {
-            key: createdTask.key,
-            title: createdTask.title,
-            description: createdTask.description,
-            priority: createdTask.priority,
-            blocked_by: createdTask.blocked_by,
-            tags: createdTask.tags,
-            parent_key: createdTask.parent_key,
-            base_branch: createdTask.base_branch,
-            status: createdTask.status,
-          };
-          const branch = sessionBranch || (templates?.branch
-            ? renderTemplate(templates.branch, realTask)
-            : `${createdTask.key.toLowerCase()}/${slugFromTitle}`);
-          const isNewBranch = !branches.some((b) => b.value === branch);
-          const prompt = sessionPrompt || (templates?.prompt
-            ? renderTemplate(templates.prompt, realTask)
-            : (createdTask.description ? `Implement task ${createdTask.key}: ${createdTask.title}\n\n${createdTask.description}` : `Implement task ${createdTask.key}: ${createdTask.title}`));
-          const name = templates?.name
-            ? renderTemplate(templates.name, realTask)
-            : `${createdTask.key}: ${formTitle.trim()}`;
-
           try {
-            const { session, warning } = await sessionsApi.launch({
+            const { session, warning } = await tasksApi.startSession({
               projectId: selectedProject.id,
-              projectName: selectedProject.name,
-              repoPath: selectedProject.path,
-              branch,
-              isNewBranch,
-              name,
-              useWorktree,
-              baseBranch: isNewBranch ? formBaseBranch : null,
-              autoApprove: providers.autoApprove(autoApprove),
-              provider,
               taskKey: createdTask.key,
-              taskProjectId: null,
-              taskPrompt: prompt,
+              provider: providers.key,
+              useWorktree,
+              autoApprove: providers.autoApprove(autoApprove),
+              branch: sessionBranch || null,
+              prompt: sessionPrompt || null,
             });
             if (warning) showSnackbar(warning, "success");
-            // Move to in_progress — don't block session navigation on failure
-            taskStore.moveTask(createdTask.key, "in_progress", repoPath).catch(() => {
-              showSnackbar("Session started but failed to update task status.");
-            });
             onSessionCreated?.(session);
           } catch (e: any) {
             showSnackbar(`Task created but session failed: ${e}`);
@@ -439,10 +395,16 @@
             <Label>Branch <span class="font-mono text-[10px] px-1 rounded {badge}">N</span></Label>
             <Input
               bind:value={sessionBranch}
-              placeholder={slugFromTitle ? `${slugFromTitle}` : "auto-generated from title"}
+              placeholder={sessionDefaults.branch}
             />
-            {#if sessionBranch || slugFromTitle}
-              <p class="text-xs text-t3">Will create: <span class="font-medium font-mono text-t1">{sessionBranch || slugFromTitle}</span> from <span class="font-medium font-mono text-t1">{formBaseBranch || "main"}</span></p>
+            {#if sessionBranch || formTitle.trim()}
+              <p class="text-xs text-t3">
+                {#if branchExists}
+                  Will check out: <span class="font-medium font-mono text-t1">{sessionBranchName}</span>
+                {:else}
+                  Will create: <span class="font-medium font-mono text-t1">{sessionBranchName}</span> from <span class="font-medium font-mono text-t1">{formBaseBranch || "main"}</span>
+                {/if}
+              </p>
             {/if}
           </div>
 
@@ -455,7 +417,7 @@
             <Label>Initial prompt <span class="font-mono text-[10px] px-1 rounded {badge}">I</span></Label>
             <textarea
               bind:value={sessionPrompt}
-              placeholder={defaultPrompt}
+              placeholder={sessionDefaults.prompt}
               class="w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 resize-none min-h-[3rem] max-h-[30vh] overflow-y-auto focus:outline-none focus:ring-1 focus:ring-accent"
               rows="2"
               oninput={(e) => { const el = e.currentTarget; el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }}

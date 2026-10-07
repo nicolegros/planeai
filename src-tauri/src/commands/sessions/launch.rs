@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager};
 
 use planeai_core::command::augmented_path;
 use planeai_tasks::model::DEFAULT_BASE_BRANCH;
@@ -39,14 +39,26 @@ fn require_task_key(task_key: Option<String>) -> Result<String, String> {
         .ok_or_else(|| "A task is required to create a session.".to_string())
 }
 
+/// A session to launch for a task; the project's name and path are loaded from its row.
+#[derive(Debug, Clone)]
+pub(crate) struct LaunchRequest {
+    pub project_id: String,
+    pub branch: String,
+    pub is_new_branch: bool,
+    pub name: String,
+    pub use_worktree: bool,
+    pub base_branch: Option<String>,
+    pub auto_approve: bool,
+    pub provider: Option<String>,
+    pub task_key: Option<String>,
+    pub task_project_id: Option<String>,
+    pub task_prompt: Option<String>,
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn launch_session(
     app: AppHandle,
-    state: State<'_, DbState>,
-    notify: State<'_, NotifyHandle>,
-    config_state: State<'_, ConfigState>,
-    operations: State<'_, ProjectOperationState>,
     project_id: String,
     project_name: String,
     repo_path: String,
@@ -61,10 +73,55 @@ pub async fn launch_session(
     task_project_id: Option<String>,
     task_prompt: Option<String>,
 ) -> Result<LaunchResult, String> {
-    let task_key = require_task_key(task_key)?;
-    // Tauri accepts these client-provided fields for compatibility; the authoritative values
-    // are loaded below after acquiring the project operation lock.
+    // Tauri accepts these client-provided fields for compatibility; `launch` loads the
+    // authoritative values after acquiring the project operation lock.
     let _ = (&project_name, &repo_path);
+    launch(
+        &app,
+        LaunchRequest {
+            project_id,
+            branch,
+            is_new_branch,
+            name,
+            use_worktree,
+            base_branch,
+            auto_approve,
+            provider,
+            task_key,
+            task_project_id,
+            task_prompt,
+        },
+    )
+    .await
+}
+
+/// Create the branch or worktree, spawn the agent on the configured backend and record the
+/// session, undoing the git work when a later step fails.
+pub(crate) async fn launch(
+    app: &AppHandle,
+    request: LaunchRequest,
+) -> Result<LaunchResult, String> {
+    let LaunchRequest {
+        project_id,
+        branch,
+        is_new_branch,
+        name,
+        use_worktree,
+        base_branch,
+        auto_approve,
+        provider,
+        task_key,
+        task_project_id,
+        task_prompt,
+    } = request;
+    let state = app.state::<DbState>();
+    let notify = app.state::<NotifyHandle>();
+    let config_state = app.state::<ConfigState>();
+    let operations = app.state::<ProjectOperationState>();
+    let task_key = require_task_key(task_key)?;
+    if let Some(prompt) = &task_prompt {
+        planeai_core::session_launch::check_task_prompt(prompt)?;
+    }
     let operation_lock = operations.lock_for(&project_id);
     let _operation_guard = operation_lock.lock_owned().await;
     let (project_name, repo_path) = crate::commands::blocking({
@@ -88,11 +145,13 @@ pub async fn launch_session(
     })
     .await?;
     let workspace_project_id = task_project_id.as_deref().unwrap_or(&project_id);
-    tracing::info!(task_prompt = ?task_prompt, auto_approve, provider = ?provider, task_key = ?task_key, "launch_session called");
+    // The prompt is task content: log its size, never its text.
+    let prompt_chars = task_prompt.as_deref().map(|prompt| prompt.chars().count());
+    tracing::info!(prompt_chars = ?prompt_chars, auto_approve, provider = ?provider, task_key = ?task_key, "launch_session called");
     // Plugin providers have no command: their sidecar runs the agent (ADR-0014).
     let runtime_provider = match provider.as_deref() {
         Some(key) if plugin_providers::parse_provider_key(key).is_some() => {
-            plugin_providers::resolve(&plugin_providers::AppRuntime::new(&app), key).await?;
+            plugin_providers::resolve(&plugin_providers::AppRuntime::new(app), key).await?;
             Some(key.to_string())
         }
         _ => None,
@@ -117,20 +176,8 @@ pub async fn launch_session(
             .get(&pk)
             .ok_or_else(|| format!("Unknown provider: {pk}"))?;
 
-        let core_provider = planeai_core::session_launch::ProviderConfig {
-            command: provider_def.command.clone(),
-            yolo_flag: provider_def.yolo_flag.clone(),
-            prompt_command: provider_def.prompt_command.clone(),
-        };
-        let launch_cmd = planeai_core::session_launch::build_provider_launch_command(
-            &core_provider,
-            auto_approve,
-            task_prompt.as_deref(),
-            false, // manual launches are not autonomous
-            None,  // autonomous_prompt_template not used for manual launches
-        );
-        let c = launch_cmd.command;
-        tracing::info!(command = %c, prompt_injected = launch_cmd.prompt_was_injected, approve_applied = launch_cmd.auto_approve_was_applied, "launch command built");
+        let c = provider_def.first_launch_command(auto_approve, task_prompt.as_deref());
+        tracing::info!(provider_command = %provider_def.command, auto_approve, prompt_chars = ?prompt_chars, "launch command built");
 
         let be = config::resolve_backend(&cfg).to_string();
         let sb = 1_048_576;
@@ -232,7 +279,7 @@ pub async fn launch_session(
                 extra_path_dirs: extra_path_dirs.clone(),
             };
             plugin_providers::launch(
-                std::sync::Arc::new(plugin_providers::AppRuntime::new(&app)),
+                std::sync::Arc::new(plugin_providers::AppRuntime::new(app)),
                 &context,
                 task_prompt.as_deref(),
             )
@@ -251,7 +298,7 @@ pub async fn launch_session(
             .await
         } else {
             spawn_in_daemon(
-                &app,
+                app,
                 &session_id,
                 &working_dir,
                 &cmd,
@@ -306,6 +353,7 @@ pub async fn launch_session(
         e.to_string()
     })?;
 
+    let pending_prompt = crate::session_ops::pending_prompt(&backend, task_prompt);
     let session = db::create_session_with_params(
         &conn,
         &planeai_core::services::CreateSessionParams {
@@ -323,6 +371,7 @@ pub async fn launch_session(
             task_key: Some(task_key),
             task_project_id,
             base_branch: effective_base_branch,
+            pending_prompt,
             ..Default::default()
         },
     )

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::task::{Task, TaskSource};
@@ -126,16 +126,12 @@ impl SessionDispatcher {
         backend.create_worktree(&self.project_path, &wt_path, &branch, &resolved_base)?;
 
         // Build agent launch command via shared helper (autonomous=true for auto-dispatch)
-        let rendered_prompt = if let Some(tpl) = &self.dispatch_config.prompt_template {
-            let mut vars = HashMap::new();
-            vars.insert("key", task.key.as_str());
-            vars.insert("title", task.title.as_str());
-            vars.insert("description", task.description.as_str());
-            vars.insert("parent_key", effective_parent_key);
-            Some(template::render(tpl, &vars))
-        } else {
-            None
-        };
+        let vars = template::TaskVars::from(task);
+        let rendered_prompt = self
+            .dispatch_config
+            .prompt_template
+            .as_deref()
+            .map(|tpl| vars.render(tpl));
 
         let provider_config = crate::session_launch::ProviderConfig {
             command: self.dispatch_config.provider_command.clone(),
@@ -150,13 +146,13 @@ impl SessionDispatcher {
             self.dispatch_config.prompt_wrapper.as_deref(),
         );
         let cmd = launch_result.command;
+        // The prompt is task content: log its size, never its text.
         tracing::info!(
-            command = %cmd,
+            provider_command = %self.dispatch_config.provider_command,
             prompt_injected = launch_result.prompt_was_injected,
             approve_applied = launch_result.auto_approve_was_applied,
-            prompt_template = ?self.dispatch_config.prompt_template,
             prompt_command = ?self.dispatch_config.prompt_command,
-            rendered_prompt = ?rendered_prompt,
+            prompt_chars = ?rendered_prompt.as_deref().map(|prompt| prompt.chars().count()),
             "dispatch command built"
         );
 
@@ -176,13 +172,7 @@ impl SessionDispatcher {
         }
 
         let session_name = if let Some(tpl) = &self.dispatch_config.name_template {
-            let mut vars = HashMap::new();
-            vars.insert("key", task.key.as_str());
-            vars.insert("title", task.title.as_str());
-            vars.insert("description", task.description.as_str());
-            vars.insert("status", task.status.as_str());
-            vars.insert("parent_key", effective_parent_key);
-            template::render(tpl, &vars)
+            vars.render(tpl)
         } else {
             format!("{}: {}", task.key, task.title)
         };

@@ -212,6 +212,29 @@ pub struct Provider {
     pub autonomous_prompt_template: Option<String>,
 }
 
+impl Provider {
+    /// What `build_provider_launch_command` needs to start this provider's agent.
+    pub fn launch_config(&self) -> planeai_core::session_launch::ProviderConfig {
+        planeai_core::session_launch::ProviderConfig {
+            command: self.command.clone(),
+            yolo_flag: self.yolo_flag.clone(),
+            prompt_command: self.prompt_command.clone(),
+        }
+    }
+
+    /// The command a new session's agent starts with, carrying the task prompt if any.
+    pub fn first_launch_command(&self, auto_approve: bool, task_prompt: Option<&str>) -> String {
+        planeai_core::session_launch::build_provider_launch_command(
+            &self.launch_config(),
+            auto_approve,
+            task_prompt,
+            false,
+            None,
+        )
+        .command
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskManagerTemplates {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -330,47 +353,19 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        let mut providers = HashMap::new();
-        providers.insert(
-            "kiro".to_string(),
-            Provider {
-                command: "kiro-cli chat".to_string(),
-                yolo_flag: Some("--trust-all-tools".to_string()),
-                resume_command: Some("kiro-cli chat --resume".to_string()),
-                prompt_command: Some("{prompt}".to_string()),
-                autonomous_prompt_template: None, // deprecated: now on auto_dispatch
-            },
-        );
-        providers.insert(
-            "claude".to_string(),
-            Provider {
-                command: "claude".to_string(),
-                yolo_flag: Some("--dangerously-skip-permissions".to_string()),
-                resume_command: Some("claude --resume".to_string()),
-                prompt_command: Some("-p {prompt}".to_string()),
-                autonomous_prompt_template: None, // deprecated: now on auto_dispatch
-            },
-        );
-        providers.insert(
-            "copilot".to_string(),
-            Provider {
-                command: "copilot --resume".to_string(),
-                yolo_flag: Some("--allow-all-tools".to_string()),
-                resume_command: None,
-                prompt_command: Some("{prompt}".to_string()),
-                autonomous_prompt_template: None, // deprecated: now on auto_dispatch
-            },
-        );
-        providers.insert(
-            "codex".to_string(),
-            Provider {
-                command: "codex".to_string(),
-                yolo_flag: Some("--dangerously-bypass-approvals-and-sandbox".to_string()),
-                resume_command: Some("codex resume --last".to_string()),
-                prompt_command: Some("{prompt}".to_string()),
-                autonomous_prompt_template: None, // deprecated: now on auto_dispatch
-            },
-        );
+        let providers = planeai_core::session_launch::BUILTIN_PROVIDERS
+            .iter()
+            .map(|builtin| {
+                let provider = Provider {
+                    command: builtin.command.to_string(),
+                    yolo_flag: Some(builtin.yolo_flag.to_string()),
+                    resume_command: Some(builtin.resume_command.to_string()),
+                    prompt_command: Some(builtin.prompt_command.to_string()),
+                    autonomous_prompt_template: None,
+                };
+                (builtin.key.to_string(), provider)
+            })
+            .collect();
         Config {
             appearance: Appearance {
                 mode: "system".to_string(),
@@ -440,8 +435,6 @@ fn migrate_legacy_task_managers(val: &mut serde_json::Value) {
     obj.remove("default_task_manager");
 }
 
-/// Backfill new provider fields from defaults for known providers.
-/// This ensures existing config files get resume support without manual editing.
 fn backfill_provider_defaults(config: &mut Config) {
     let defaults = Config::default();
     for (key, default_provider) in &defaults.providers {
@@ -650,14 +643,6 @@ pub fn normalize_base_path(raw: &str) -> String {
         raw.to_string()
     };
     expanded.trim_end_matches('/').to_string()
-}
-
-/// Build the full launch command for a provider, optionally appending the yolo flag.
-pub fn launch_command(provider: &Provider, yolo: bool) -> String {
-    match (yolo, &provider.yolo_flag) {
-        (true, Some(flag)) => format!("{} {}", provider.command, flag),
-        _ => provider.command.clone(),
-    }
 }
 
 /// Build the command for restarting a session: use interactive resume if available, otherwise fresh launch.

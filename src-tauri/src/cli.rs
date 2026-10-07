@@ -69,6 +69,9 @@ pub struct SessionPlan {
     /// Project owning `task_key` when it differs from `project_id`.
     pub task_project_id: Option<String>,
     pub parent_session_id: Option<String>,
+    /// The task prompt, part of `command`. A `local` session runs no command here: its
+    /// first attach in the app spawns the agent with this prompt.
+    pub prompt: Option<String>,
 }
 
 impl SessionPlan {
@@ -93,11 +96,10 @@ pub fn build_session_plan(
         .get(provider_key)
         .ok_or_else(|| format!("unknown provider: {provider_key}"))?;
 
-    let mut cmd = config::launch_command(provider_def, opts.yolo);
-
-    if let (Some(prompt), Some(prompt_tpl)) = (&opts.prompt, &provider_def.prompt_command) {
-        planeai_core::template::append_prompt(&mut cmd, prompt_tpl, prompt);
+    if let Some(prompt) = &opts.prompt {
+        planeai_core::session_launch::check_task_prompt(prompt)?;
     }
+    let cmd = provider_def.first_launch_command(opts.yolo, opts.prompt.as_deref());
 
     let short_id = &session_id.replace('-', "")[..8];
 
@@ -154,6 +156,7 @@ pub fn build_session_plan(
         project_id: project.id.clone(),
         task_project_id: None,
         parent_session_id: opts.parent_session_id.clone(),
+        prompt: opts.prompt.clone(),
     })
 }
 
@@ -310,6 +313,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             task_project_id: plan.task_project_id.clone(),
             base_branch: plan.base_branch.clone(),
             parent_session_id: plan.parent_session_id.clone(),
+            pending_prompt: crate::session_ops::pending_prompt(&plan.backend, plan.prompt.clone()),
             ..Default::default()
         },
     )
@@ -530,6 +534,73 @@ mod tests {
             resolve_task_project_id(&projects, &own, &task_opts(None, Some("owner"))).unwrap_err(),
             "--task-project requires --task-key"
         );
+    }
+
+    #[test]
+    fn a_local_session_keeps_its_prompt_for_the_apps_first_attach() {
+        let repo = tempfile::tempdir().unwrap();
+        let repo_path = repo.path().canonicalize().unwrap().display().to_string();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        ] {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo_path)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        }
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", &repo_path).unwrap();
+        let opts = SessionCreateOpts {
+            prompt: Some("Fix the login redirect".to_string()),
+            ..task_opts(Some("MYA-1"), None)
+        };
+        let env = Env {
+            socket_path: repo.path().join("no-gui.sock"),
+            ..test_env("local")
+        };
+        let plan = build_session_plan("session-1", &opts, &env, &project).unwrap();
+
+        execute_plan(&plan, &conn, &env).unwrap();
+
+        // The app's first attach spawns the agent with it (`resolve_attach_plan`).
+        assert_eq!(
+            db::pending_prompt(&conn, "session-1").unwrap().as_deref(),
+            Some("Fix the login redirect")
+        );
+    }
+
+    #[test]
+    fn the_cli_starts_an_agent_with_the_command_the_app_uses() {
+        let env = test_env("daemon");
+        let command = |yolo: bool, prompt: Option<&str>| {
+            let opts = SessionCreateOpts {
+                yolo,
+                prompt: prompt.map(str::to_string),
+                ..task_opts(Some("MYA-1"), None)
+            };
+            let plan = build_session_plan("session-1", &opts, &env, &test_project()).unwrap();
+            let app = env.config.providers["kiro"].first_launch_command(yolo, prompt);
+            (plan.command, app)
+        };
+        for (yolo, prompt) in [(false, None), (true, Some("- Fix it")), (false, Some(""))] {
+            let (cli, app) = command(yolo, prompt);
+            assert_eq!(cli, app, "yolo {yolo}, prompt {prompt:?}");
+        }
+        assert_eq!(command(false, Some("")).0, "kiro-cli chat");
     }
 
     #[test]

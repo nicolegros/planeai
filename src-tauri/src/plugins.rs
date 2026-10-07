@@ -22,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 use crate::commands;
 use crate::plugin_rpc::*;
 use crate::task_lifecycle::TaskLifecycleBatch;
+use crate::task_start::{PendingTaskStart, RequestedStart, SessionStart, StartOptions};
 use planeai_plugin_contract::provider::is_host_controlled_method as is_host_controlled_plugin_method;
 use planeai_plugin_contract::supports_host_api_version;
 pub use planeai_plugin_contract::ProviderFeature;
@@ -144,6 +145,8 @@ pub enum PluginHostCapability {
     SessionAdvisories,
     #[serde(rename = "sessions.complete")]
     SessionsComplete,
+    #[serde(rename = "sessions.start")]
+    SessionsStart,
     #[serde(rename = "tasks.read")]
     TasksRead,
     #[serde(rename = "task-events")]
@@ -204,6 +207,8 @@ pub enum PluginUiPlacement {
     Preferences,
     #[serde(rename = "main-pane")]
     MainPane,
+    #[serde(rename = "dialog")]
+    Dialog,
     #[serde(rename = "session.panel")]
     SessionPanel,
     #[serde(rename = "session.indicator")]
@@ -360,6 +365,7 @@ fn validate_capabilities(
                     | PluginHostCapability::SessionActions
                     | PluginHostCapability::SessionAdvisories
                     | PluginHostCapability::SessionsComplete
+                    | PluginHostCapability::SessionsStart
                     | PluginHostCapability::TasksRead
                     | PluginHostCapability::TasksCreate
                     | PluginHostCapability::TasksTransition
@@ -407,11 +413,13 @@ fn validate_ui_contributions(
         )?;
         if !matches!(
             contribution.placement,
-            PluginUiPlacement::MainPane | PluginUiPlacement::SessionPanel
+            PluginUiPlacement::MainPane
+                | PluginUiPlacement::Dialog
+                | PluginUiPlacement::SessionPanel
         ) && contribution.shortcut.is_some()
         {
             return Err(
-                "UI contribution shortcuts are only valid for main-pane or session-panel contributions".to_string(),
+                "UI contribution shortcuts are only valid for main-pane, dialog, or session-panel contributions".to_string(),
             );
         }
         if !contribution.placement.is_sidebar() && contribution.order.is_some() {
@@ -590,6 +598,28 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY (plugin_id, operation_id)
         );",
     )?;
+    // The session the operation's request asked for: `start_options` while it is wanted,
+    // `start_state` pending until a session row exists or the start fails for good.
+    for (column, definition) in [
+        ("start_options", "TEXT"),
+        (
+            "start_state",
+            "TEXT CHECK (start_state IN ('pending', 'started', 'failed'))",
+        ),
+        ("start_error", "TEXT"),
+    ] {
+        let has_column = conn
+            .prepare("PRAGMA table_info(plugin_task_operations)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|existing| existing == column);
+        if !has_column {
+            conn.execute_batch(&format!(
+                "ALTER TABLE plugin_task_operations ADD COLUMN {column} {definition}"
+            ))?;
+        }
+    }
     for (column, definition) in [
         ("installed_hash", "TEXT"),
         ("installed_path", "TEXT"),
@@ -1513,7 +1543,8 @@ impl RuntimeProcess {
                 }
             }
             _ => {
-                let result = execute_host_task(
+                let result = execute_app_host_task(
+                    &self.app,
                     &self.plugin_id,
                     &self.capabilities,
                     &self.data_dir,
@@ -1799,7 +1830,7 @@ async fn execute_host_task(
         "host.tasks.read" | "host.task.get" | "host.jira.legacyIssue.matches" => {
             PluginHostCapability::TasksRead
         }
-        "host.tasks.createChild" => PluginHostCapability::TasksCreate,
+        "host.tasks.create" | "host.tasks.createChild" => PluginHostCapability::TasksCreate,
         "host.task.create" => PluginHostCapability::TasksCreate,
         "host.task.update" => PluginHostCapability::TasksUpdate,
         _ => return Err(CallbackError::NotFound),
@@ -1812,11 +1843,138 @@ async fn execute_host_task(
     {
         return Err(CallbackError::NotGranted);
     }
+    if params.get("start").is_some_and(|start| !start.is_null()) {
+        match method {
+            "host.tasks.create" if !capabilities.contains(&PluginHostCapability::SessionsStart) => {
+                return Err(CallbackError::NotGranted)
+            }
+            "host.tasks.createChild" => {
+                return Err(invalid_params("only host.tasks.create can start a session"))
+            }
+            _ => {}
+        }
+    }
     run_host_task(plugin_id, data_dir, method, params).await
+}
+
+/// Host tasks needing the running app, over `execute_host_task`: the provider list and
+/// starting a created task's session.
+async fn execute_app_host_task(
+    app: &AppHandle,
+    plugin_id: &str,
+    capabilities: &HashSet<PluginHostCapability>,
+    data_dir: &Path,
+    method: &str,
+    params: Value,
+) -> Result<Value, CallbackError> {
+    if method == "host.sessions.providers" {
+        return sessions_providers(capabilities, || crate::task_start::provider_catalog(app)).await;
+    }
+    // Without these capabilities `execute_host_task` refuses the call as not granted.
+    let may_start = [
+        PluginHostCapability::TasksCreate,
+        PluginHostCapability::SessionsStart,
+    ]
+    .iter()
+    .all(|capability| capabilities.contains(capability));
+    if let Some(provider) = start_provider(method, &params).filter(|_| may_start) {
+        let availability = crate::task_start::provider_availability(app, &provider)
+            .await
+            .map_err(CallbackError::Internal)?;
+        check_start_provider(&provider, availability)?;
+    }
+    let reply = execute_host_task(plugin_id, capabilities, data_dir, method, params).await?;
+    announce_created_task(app, method);
+    answer_requested_start(reply, |pending| {
+        crate::task_start::start_in_background(app, pending)
+    })
+    .await
+}
+
+/// Replace the requested start riding in a task reply with where the session stands,
+/// starting it in the background while it is pending.
+async fn answer_requested_start<F, Fut>(
+    mut reply: Value,
+    start_in_background: F,
+) -> Result<Value, CallbackError>
+where
+    F: FnOnce(PendingTaskStart) -> Fut,
+    Fut: std::future::Future<Output = Result<SessionStart, String>>,
+{
+    let session = match take_requested_start(&mut reply) {
+        None => return Ok(reply),
+        Some(RequestedStart::Pending(pending)) => start_in_background(pending)
+            .await
+            .map_err(CallbackError::Internal)?,
+        Some(RequestedStart::Started) => SessionStart::Exists,
+        Some(RequestedStart::Failed { error }) => {
+            reply["session_error"] = Value::String(error);
+            SessionStart::Failed
+        }
+    };
+    reply["session"] = serde_json::json!(session);
+    Ok(reply)
+}
+
+/// The provider a task create's `start` names; unset or empty means the default.
+fn start_provider(method: &str, params: &Value) -> Option<String> {
+    (method == "host.tasks.create")
+        .then(|| params.get("start")?.get("provider")?.as_str())
+        .flatten()
+        .filter(|provider| !provider.is_empty())
+        .map(str::to_string)
+}
+
+/// Refused before the task exists, so a typo does not leave a task whose session never starts,
+/// and a plugin provider still starting up is retried rather than given up on.
+fn check_start_provider(
+    provider: &str,
+    availability: crate::task_start::ProviderAvailability,
+) -> Result<(), CallbackError> {
+    use crate::task_start::ProviderAvailability;
+    match availability {
+        ProviderAvailability::Available => Ok(()),
+        ProviderAvailability::NotRunning => Err(CallbackError::Unavailable(format!(
+            "plugin task start.provider is not running yet: {provider}"
+        ))),
+        ProviderAvailability::Unknown => Err(CallbackError::InvalidParams(format!(
+            "plugin task start.provider is not an available provider: {provider}"
+        ))),
+    }
+}
+
+/// The providers a `start` may name, as the task form lists them.
+async fn sessions_providers<F, Fut>(
+    capabilities: &HashSet<PluginHostCapability>,
+    catalog: F,
+) -> Result<Value, CallbackError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<crate::task_start::ProviderCatalog, String>>,
+{
+    if !capabilities.contains(&PluginHostCapability::SessionsStart) {
+        return Err(CallbackError::NotGranted);
+    }
+    let catalog = catalog().await.map_err(CallbackError::Internal)?;
+    serde_json::to_value(catalog).map_err(|error| CallbackError::Internal(error.to_string()))
+}
+
+/// A top-level task emits no lifecycle event, so the task list hears of it directly.
+fn announce_created_task(app: &AppHandle, method: &str) {
+    if method == "host.tasks.create" {
+        if let Err(error) = app.emit("tasks-changed", ()) {
+            tracing::warn!(%error, "failed to announce a plugin-created task");
+        }
+    }
 }
 
 fn invalid_params(message: &str) -> CallbackError {
     CallbackError::InvalidParams(message.to_string())
+}
+
+/// A failure the request did not cause, so retrying it may succeed.
+fn internal(error: impl std::fmt::Display) -> CallbackError {
+    CallbackError::Internal(error.to_string())
 }
 
 /// Runs a host task's storage work off the async runtime; its failures are internal.
@@ -1938,10 +2096,26 @@ async fn run_host_task(
             .await;
     }
 
-    if method == "host.tasks.createChild" {
+    if matches!(method, "host.tasks.create" | "host.tasks.createChild") {
         let plugin_id = plugin_id.to_string();
-        let child = ChildTask::from_params(&params).map_err(CallbackError::InvalidParams)?;
-        return blocking_host_task(move || create_plugin_child_task(&plugin_id, child)).await;
+        let request =
+            PluginTaskRequest::from_params(&params).map_err(CallbackError::InvalidParams)?;
+        match (method, &request.parent_key) {
+            ("host.tasks.createChild", None) => {
+                return Err(invalid_params("child task create requires parent_key"))
+            }
+            ("host.tasks.create", Some(_)) => {
+                return Err(invalid_params(
+                    "host.tasks.create creates a top-level task; use host.tasks.createChild for a child",
+                ))
+            }
+            _ => {}
+        }
+        // A request the host refuses answers -32602, so the plugin stops retrying it;
+        // `execute_app_host_task` answers -32004 for a start provider not running yet.
+        return commands::blocking(move || Ok(create_plugin_task(&plugin_id, request)))
+            .await
+            .map_err(CallbackError::Internal)?;
     }
 
     if matches!(
@@ -2194,150 +2368,339 @@ fn transition_linked_plugin_task(session_id: &str, status: Status) -> Result<Val
         .map_err(|error| error.to_string())
 }
 
-/// A child task request's params, checked before anything is written.
+/// A plugin task request's params, checked before anything is written.
 #[derive(Debug)]
-struct ChildTask {
+struct PluginTaskRequest {
     project_path: String,
-    parent_key: String,
+    parent_key: Option<String>,
     operation_id: String,
     title: String,
     description: String,
+    priority: i32,
+    tags: Vec<String>,
+    start: Option<StartOptions>,
 }
 
-impl ChildTask {
+impl PluginTaskRequest {
     fn from_params(params: &Value) -> Result<Self, String> {
-        let required = |names: &[&str], what: &str| {
+        let text = |names: &[&str]| {
             names
                 .iter()
                 .find_map(|name| params.get(*name))
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
                 .map(str::to_string)
-                .ok_or_else(|| format!("child task create requires {what}"))
         };
+        let required = |names: &[&str], what: &str| {
+            text(names).ok_or_else(|| format!("plugin task create requires {what}"))
+        };
+        let title = bounded_text("title", required(&["title"], "title")?, MAX_TITLE_CHARS)?;
+        let description = params
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         Ok(Self {
             project_path: required(&["project_path", "projectPath"], "project_path")?,
-            parent_key: required(&["parent_key", "parentKey"], "parent_key")?,
-            operation_id: required(&["operation_id", "operationId"], "operation_id")?,
-            title: required(&["title"], "title")?,
-            description: params
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            parent_key: text(&["parent_key", "parentKey"]),
+            operation_id: bounded_text(
+                "operation_id",
+                required(&["operation_id", "operationId"], "operation_id")?,
+                MAX_OPERATION_ID_CHARS,
+            )?,
+            title,
+            description: bounded_text("description", description, MAX_DESCRIPTION_CHARS)?,
+            priority: match params.get("priority") {
+                None | Some(Value::Null) => 0,
+                Some(value) => value
+                    .as_i64()
+                    .filter(|priority| (0..=5).contains(priority))
+                    .ok_or("plugin task priority must be an integer between 0 and 5")?
+                    as i32,
+            },
+            tags: match params.get("tags") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(value) => plugin_task_tags(value)?,
+            },
+            start: match params.get("start") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(plugin_task_start(value)?),
+            },
         })
     }
 }
 
-fn create_plugin_child_task(plugin_id: &str, child: ChildTask) -> Result<Value, String> {
-    let ChildTask {
+const MAX_TITLE_CHARS: usize = 255;
+const MAX_DESCRIPTION_CHARS: usize = 65_536;
+const MAX_OPERATION_ID_CHARS: usize = 256;
+const MAX_TAGS: usize = 20;
+const MAX_TAG_CHARS: usize = 64;
+
+/// A plugin-supplied text the task stores and its session prompt may carry.
+fn bounded_text(what: &str, value: String, max_chars: usize) -> Result<String, String> {
+    if value.contains('\0') {
+        return Err(format!(
+            "plugin task {what} must not contain NUL characters"
+        ));
+    }
+    if value.chars().count() > max_chars {
+        return Err(format!(
+            "plugin task {what} must be at most {max_chars} characters"
+        ));
+    }
+    Ok(value)
+}
+
+/// The session a created task starts with; unset fields take the task form's defaults.
+fn plugin_task_start(value: &Value) -> Result<StartOptions, String> {
+    let start = value
+        .as_object()
+        .ok_or("plugin task start must be an object")?;
+    let field = |names: [&str; 2]| names.iter().find_map(|name| start.get(*name));
+    let flag = |names: [&str; 2]| match field(names) {
+        None | Some(Value::Null) => Ok(true),
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| format!("plugin task start.{} must be a boolean", names[0])),
+    };
+    let provider = match start.get("provider") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(provider)) => Some(provider.clone()),
+        Some(_) => return Err("plugin task start.provider must be a string or null".to_string()),
+    };
+    Ok(StartOptions {
+        provider,
+        use_worktree: flag(["use_worktree", "useWorktree"])?,
+        auto_approve: flag(["auto_approve", "autoApprove"])?,
+        branch: None,
+        prompt: None,
+    })
+}
+
+/// Trimmed, non-empty and unique, in the order given.
+fn plugin_task_tags(value: &Value) -> Result<Vec<String>, String> {
+    let malformed = || "plugin task tags must be an array of strings".to_string();
+    let mut tags = Vec::new();
+    for tag in value.as_array().ok_or_else(malformed)? {
+        let tag = tag.as_str().ok_or_else(malformed)?.trim();
+        if tag.contains('\0') {
+            return Err("plugin task tags must not contain NUL characters".to_string());
+        }
+        if tag.chars().count() > MAX_TAG_CHARS {
+            return Err(format!(
+                "plugin task tags must be at most {MAX_TAG_CHARS} characters each"
+            ));
+        }
+        if !tag.is_empty() && !tags.iter().any(|known| known == tag) {
+            tags.push(tag.to_string());
+        }
+    }
+    if tags.len() > MAX_TAGS {
+        return Err(format!(
+            "plugin task create accepts at most {MAX_TAGS} tags"
+        ));
+    }
+    Ok(tags)
+}
+
+#[derive(Debug)]
+struct InsertedPluginTask {
+    task: Value,
+    /// Present only when this call created a child task.
+    lifecycle: Option<TaskLifecycleBatch>,
+    /// The session the operation's first request asked for and where it stands, on every
+    /// retry too.
+    start: Option<RequestedStart>,
+}
+
+fn create_plugin_task(plugin_id: &str, request: PluginTaskRequest) -> Result<Value, CallbackError> {
+    let mut conn = Connection::open(planeai_paths::db_path()).map_err(internal)?;
+    let inserted = insert_plugin_task(&mut conn, plugin_id, request)?;
+    if let Some(batch) = &inserted.lifecycle {
+        planeai::task_cli::notify_task_lifecycle(batch);
+    }
+    Ok(task_reply(inserted.task, inserted.start.as_ref()))
+}
+
+/// Where a requested session start rides in a host task's reply until the app takes it.
+const REQUESTED_START_FIELD: &str = "start";
+
+fn task_reply(mut reply: Value, start: Option<&RequestedStart>) -> Value {
+    if let Some(start) = start {
+        reply[REQUESTED_START_FIELD] = serde_json::json!(start);
+    }
+    reply
+}
+
+fn take_requested_start(reply: &mut Value) -> Option<RequestedStart> {
+    let requested = reply.as_object_mut()?.remove(REQUESTED_START_FIELD)?;
+    serde_json::from_value(requested).ok()
+}
+
+/// Creates a task at most once per (plugin, operation id), so a retried request returns the
+/// task the first attempt created.
+fn insert_plugin_task(
+    conn: &mut Connection,
+    plugin_id: &str,
+    request: PluginTaskRequest,
+) -> Result<InsertedPluginTask, CallbackError> {
+    let PluginTaskRequest {
         project_path,
         parent_key,
         operation_id,
         title,
         description,
-    } = child;
-    let path = planeai_paths::db_path();
-    let mut conn = Connection::open(path).map_err(|error| error.to_string())?;
-    let project = crate::db::list_projects(&conn)
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .find(|project| project.path == project_path && !project.hidden)
-        .ok_or("project was not found or is hidden")?;
-    let transaction = conn.transaction().map_err(|error| error.to_string())?;
-    if let Some(task_key) = transaction
+        priority,
+        tags,
+        start,
+    } = request;
+    // Immediate: two requests with one operation id serialize on the write lock instead of
+    // both reading "absent" and one failing with SQLITE_BUSY when it upgrades to write.
+    let transaction = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(internal)?;
+    let projects = crate::db::list_projects(&transaction).map_err(internal)?;
+    let plugin = transaction
         .query_row(
-            "SELECT task_key FROM plugin_task_operations WHERE plugin_id = ?1 AND operation_id = ?2",
-            rusqlite::params![plugin_id, operation_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?
-        .flatten()
-    {
-        transaction.commit().map_err(|error| error.to_string())?;
-        return plugin_task_value(&conn, &task_key);
-    }
-    let reserved = transaction
-        .execute(
-            "INSERT OR IGNORE INTO plugin_task_operations (plugin_id, operation_id, task_key) VALUES (?1, ?2, NULL)",
-            rusqlite::params![plugin_id, operation_id],
-        )
-        .map_err(|error| error.to_string())?;
-    if reserved == 0 {
-        transaction.commit().map_err(|error| error.to_string())?;
-        let task_key = conn
-            .query_row(
-                "SELECT task_key FROM plugin_task_operations WHERE plugin_id = ?1 AND operation_id = ?2",
-                rusqlite::params![plugin_id, operation_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .map_err(|error| error.to_string())?
-            .ok_or("child task operation is still in progress")?;
-        return plugin_task_value(&conn, &task_key);
-    }
-    let parent_prefix = transaction
-        .query_row(
-            "SELECT project_prefix FROM tasks WHERE key = ?1",
-            rusqlite::params![parent_key],
+            "SELECT name FROM plugin_inventory WHERE id = ?1",
+            [plugin_id],
             |row| row.get::<_, String>(0),
         )
         .optional()
-        .map_err(|error| error.to_string())?
-        .ok_or("parent task was not found")?;
-    if parent_prefix != project.prefix {
-        return Err("parent task does not belong to the selected project".to_string());
+        .map_err(internal)?
+        .unwrap_or_else(|| plugin_id.to_string());
+    if let Some(stored) = transaction
+        .query_row(
+            "SELECT o.task_key, t.project_prefix, o.start_state, o.start_options, o.start_error FROM plugin_task_operations o JOIN tasks t ON t.key = o.task_key WHERE o.plugin_id = ?1 AND o.operation_id = ?2",
+            rusqlite::params![plugin_id, operation_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(internal)?
+    {
+        transaction.commit().map_err(internal)?;
+        let (task_key, prefix, state, options, error) = stored;
+        // The first request decides the session, so a retry with other params changes nothing,
+        // and the task, with its session, stays in its own project.
+        let start = match state.as_deref() {
+            None => None,
+            Some("started") => Some(RequestedStart::Started),
+            Some("failed") => Some(RequestedStart::Failed {
+                error: error.unwrap_or_default(),
+            }),
+            Some(_) => {
+                let project = projects
+                    .iter()
+                    .find(|project| project.prefix == prefix)
+                    .ok_or_else(|| internal(format!("task {task_key} has no project")))?;
+                let options = serde_json::from_str(options.as_deref().unwrap_or("{}"))
+                    .map_err(internal)?;
+                Some(RequestedStart::Pending(PendingTaskStart {
+                    plugin,
+                    project_id: project.id.clone(),
+                    task_key: task_key.clone(),
+                    options,
+                }))
+            }
+        };
+        return Ok(InsertedPluginTask {
+            task: plugin_task_value(conn, &task_key).map_err(CallbackError::Internal)?,
+            lifecycle: None,
+            start,
+        });
     }
+    let project = projects
+        .into_iter()
+        .find(|project| project.path == project_path && !project.hidden)
+        .ok_or_else(|| invalid_params("project was not found or is hidden"))?;
+    if let Some(parent_key) = &parent_key {
+        let parent_prefix = transaction
+            .query_row(
+                "SELECT project_prefix FROM tasks WHERE key = ?1",
+                rusqlite::params![parent_key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(internal)?
+            .ok_or_else(|| invalid_params("parent task was not found"))?;
+        if parent_prefix != project.prefix {
+            return Err(invalid_params(
+                "parent task does not belong to the selected project",
+            ));
+        }
+    }
+    let created = planeai_tasks::sqlite::insert_task(
+        &transaction,
+        &project.prefix,
+        &CreateParams {
+            title,
+            description,
+            priority,
+            parent_key: parent_key.clone(),
+            tags,
+            ..Default::default()
+        },
+    )
+    .map_err(internal)?;
+    let task_key = created.key;
+    let first_child = created.first_child;
+    let start_options = start
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(internal)?;
     transaction
         .execute(
-            "INSERT OR IGNORE INTO task_projects (prefix, next_seq) VALUES (?1, 1)",
-            rusqlite::params![project.prefix],
+            "INSERT INTO plugin_task_operations (plugin_id, operation_id, task_key, start_options, start_state) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                plugin_id,
+                operation_id,
+                task_key,
+                start_options,
+                start.as_ref().map(|_| "pending")
+            ],
         )
-        .map_err(|error| error.to_string())?;
-    let sequence: i64 = transaction
-        .query_row(
-            "UPDATE task_projects SET next_seq = next_seq + 1 WHERE prefix = ?1 RETURNING next_seq - 1",
-            rusqlite::params![project.prefix],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())?;
-    let task_key = format!("{}-{sequence}", project.prefix);
-    let first_child = !transaction
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM tasks WHERE parent_key = ?1)",
-            rusqlite::params![parent_key],
-            |row| row.get::<_, bool>(0),
-        )
-        .map_err(|error| error.to_string())?;
-    let now = chrono::Utc::now().to_rfc3339();
-    transaction
-        .execute(
-            "INSERT INTO tasks (key, project_prefix, title, description, status, priority, parent_key, base_branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'todo', 0, ?5, 'main', ?6, ?6)",
-            rusqlite::params![task_key, project.prefix, title, description, parent_key, now],
-        )
-        .map_err(|error| error.to_string())?;
-    transaction
-        .execute(
-            "UPDATE plugin_task_operations SET task_key = ?3 WHERE plugin_id = ?1 AND operation_id = ?2",
-            rusqlite::params![plugin_id, operation_id, task_key],
-        )
-        .map_err(|error| error.to_string())?;
-    transaction.commit().map_err(|error| error.to_string())?;
-    planeai::task_cli::notify_task_lifecycle(&TaskLifecycleBatch::new(
-        crate::task_lifecycle::TaskLifecycleOrigin::Ui,
-        project.id,
-        project.prefix,
-        vec![crate::task_lifecycle::TaskLifecycleEvent::ChildAssigned {
-            child_key: task_key.clone(),
-            parent_key: parent_key.to_string(),
-            is_first_child_assignment: first_child,
-        }],
-    ));
-    plugin_task_value(&conn, &task_key)
+        .map_err(internal)?;
+    transaction.commit().map_err(internal)?;
+    let start = start.map(|options| {
+        RequestedStart::Pending(PendingTaskStart {
+            plugin,
+            project_id: project.id.clone(),
+            task_key: task_key.clone(),
+            options,
+        })
+    });
+    let lifecycle = parent_key
+        .zip(first_child)
+        .map(|(parent_key, first_child)| {
+            TaskLifecycleBatch::new(
+                crate::task_lifecycle::TaskLifecycleOrigin::Ui,
+                project.id,
+                project.prefix,
+                vec![crate::task_lifecycle::TaskLifecycleEvent::ChildAssigned {
+                    child_key: task_key.clone(),
+                    parent_key,
+                    is_first_child_assignment: first_child,
+                }],
+            )
+        });
+    Ok(InsertedPluginTask {
+        task: plugin_task_value(conn, &task_key).map_err(CallbackError::Internal)?,
+        lifecycle,
+        start,
+    })
 }
 
 fn plugin_task_value(conn: &Connection, task_key: &str) -> Result<Value, String> {
-    let task = conn
+    let mut task = conn
         .query_row(
             "SELECT key, title, description, status, priority, parent_key, COALESCE(base_branch, 'main') FROM tasks WHERE key = ?1",
             rusqlite::params![task_key],
@@ -2351,12 +2714,20 @@ fn plugin_task_value(conn: &Connection, task_key: &str) -> Result<Value, String>
                 "url": Value::Null,
                 "base_branch": row.get::<_, String>(6)?,
                 "blocked_by": Vec::<String>::new(),
-                "tags": Vec::<String>::new(),
             })),
         )
         .optional()
         .map_err(|error| error.to_string())?
-        .ok_or("idempotent child task result was not found")?;
+        .ok_or("idempotent plugin task result was not found")?;
+    let tags = conn
+        .prepare("SELECT tag FROM task_tags WHERE task_key = ?1 ORDER BY tag")
+        .and_then(|mut statement| {
+            statement
+                .query_map(rusqlite::params![task_key], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| error.to_string())?;
+    task["tags"] = serde_json::json!(tags);
     Ok(serde_json::json!({ "task": task }))
 }
 
@@ -2516,7 +2887,8 @@ impl PluginRuntimeSupervisor {
             .copied()
             .collect::<HashSet<_>>();
         let callback_method = format!("host.{method}");
-        execute_host_task(
+        execute_app_host_task(
+            &self.app,
             plugin_id,
             &capabilities,
             &root.join("data"),
@@ -4172,6 +4544,23 @@ mod tests {
         titlebar.ui_contributions[0].order = None;
         assert!(titlebar.validate().is_ok());
 
+        let mut dialog: PluginManifest = serde_json::from_value(serde_json::json!({
+            "schema": "planeai.plugin.v1",
+            "id": "dialog-test",
+            "name": "Dialog test",
+            "version": "1.0.0",
+            "host_api_version": planeai_plugin_contract::TASK_SESSION_HOST_API_VERSION,
+            "source_kind": "local",
+            "backend_entrypoints": { crate::plugin_packages::current_platform_key(): "bin/plugin" },
+            "ui_contributions": [
+                { "id": "manager", "label": "Manager", "placement": "dialog", "entrypoint": "ui/manager.js", "shortcut": "Mod+Shift+R" }
+            ]
+        }))
+        .unwrap();
+        assert!(dialog.validate().is_ok());
+        dialog.ui_contributions[0].order = Some(0);
+        assert!(dialog.validate().unwrap_err().contains("order"));
+
         let mut invalid_shortcut = manifest.clone();
         invalid_shortcut.ui_contributions[0].shortcut = Some("Mod+L".into());
         assert!(invalid_shortcut
@@ -4692,11 +5081,802 @@ mod tests {
                 "{method} {params}: {error:?}"
             );
         }
-        assert!(ChildTask::from_params(
+        assert!(PluginTaskRequest::from_params(
             &serde_json::json!({ "projectPath": "/p", "parentKey": "K-1", "operationId": "o" })
         )
         .unwrap_err()
         .contains("title"));
+        let top_level =
+            serde_json::json!({ "project_path": "/p", "operation_id": "o", "title": "t" });
+        let error = run(
+            &tasks,
+            "routines",
+            "host.tasks.createChild",
+            top_level.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error,
+            CallbackError::InvalidParams("child task create requires parent_key".into())
+        );
+        let mut with_parent = top_level;
+        with_parent["parent_key"] = "K-1".into();
+        let error = run(&tasks, "routines", "host.tasks.create", with_parent)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            CallbackError::InvalidParams(
+                "host.tasks.create creates a top-level task; use host.tasks.createChild for a child"
+                    .into()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn top_level_task_create_requires_the_tasks_create_capability() {
+        let data = tempfile::TempDir::new().unwrap();
+        let error = execute_host_task(
+            "routines",
+            &HashSet::from([PluginHostCapability::Settings]),
+            data.path(),
+            "host.tasks.create",
+            serde_json::json!({ "project_path": "/p", "operation_id": "o", "title": "t" }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, CallbackError::NotGranted);
+    }
+
+    fn task_database() -> (Connection, tempfile::TempDir, crate::db::Project) {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+        let checkout = tempfile::TempDir::new().unwrap();
+        let path = checkout.path().to_string_lossy().to_string();
+        let project = crate::db::create_project(&conn, "Demo", &path).unwrap();
+        (conn, checkout, project)
+    }
+
+    fn top_level_request(project_path: &str, operation_id: &str) -> PluginTaskRequest {
+        PluginTaskRequest::from_params(&serde_json::json!({
+            "project_path": project_path,
+            "operation_id": operation_id,
+            "title": "Weekly retro 2026-10-05",
+            "description": "Notes for Monday",
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_top_level_plugin_task_is_a_todo_task_in_the_project() {
+        let (mut conn, _checkout, project) = task_database();
+        let created = insert_plugin_task(
+            &mut conn,
+            "routines",
+            top_level_request(&project.path, "routine:r1:2026-10-05T13:00:00Z"),
+        )
+        .unwrap();
+
+        let key = format!("{}-1", project.prefix);
+        assert!(created.lifecycle.is_none());
+        assert_eq!(
+            created.task,
+            serde_json::json!({ "task": {
+                "key": key,
+                "title": "Weekly retro 2026-10-05",
+                "description": "Notes for Monday",
+                "status": "todo",
+                "priority": 0,
+                "parent_key": null,
+                "url": null,
+                "base_branch": "main",
+                "blocked_by": [],
+                "tags": [],
+            } })
+        );
+        let stored: (String, Option<String>) = conn
+            .query_row(
+                "SELECT project_prefix, parent_key FROM tasks WHERE key = ?1",
+                [&key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored, (project.prefix.clone(), None));
+    }
+
+    #[test]
+    fn concurrent_requests_with_one_operation_id_all_get_the_one_task() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("planeai.db");
+        let project_path = {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+            crate::db::migrate(&conn).unwrap();
+            planeai_tasks::sqlite::migrate(&conn).unwrap();
+            migrate(&conn).unwrap();
+            crate::db::create_project(&conn, "Demo", "/repos/demo")
+                .unwrap()
+                .path
+        };
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let keys = (0..8)
+            .map(|_| {
+                let (db_path, project_path, barrier) =
+                    (db_path.clone(), project_path.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let mut conn = Connection::open(&db_path).unwrap();
+                    barrier.wait();
+                    insert_plugin_task(
+                        &mut conn,
+                        "routines",
+                        top_level_request(&project_path, "routine:r1:2026-10-05T13:00:00Z"),
+                    )
+                    .map(|created| created.task["task"]["key"].clone())
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(keys, vec![Ok(serde_json::json!("DEM-1")); 8]);
+    }
+
+    #[test]
+    fn a_plugin_task_carries_its_priority_and_tags() {
+        let (mut conn, _checkout, project) = task_database();
+        let request = PluginTaskRequest::from_params(&serde_json::json!({
+            "project_path": project.path,
+            "operation_id": "routine:r1:2026-10-05T13:00:00Z",
+            "title": "Retro",
+            "priority": 2,
+            "tags": ["ritual", " team ", "ritual", ""],
+        }))
+        .unwrap();
+
+        let created = insert_plugin_task(&mut conn, "routines", request).unwrap();
+
+        assert_eq!(created.task["task"]["priority"], 2);
+        assert_eq!(
+            created.task["task"]["tags"],
+            serde_json::json!(["ritual", "team"])
+        );
+    }
+
+    #[test]
+    fn a_start_must_name_an_available_provider() {
+        use crate::task_start::ProviderAvailability;
+        let checked = |method: &str, start: Value, availability| {
+            start_provider(method, &serde_json::json!({ "title": "t", "start": start }))
+                .map(|provider| check_start_provider(&provider, availability))
+        };
+        let named = |provider: &str| serde_json::json!({ "provider": provider });
+
+        assert_eq!(
+            checked(
+                "host.tasks.create",
+                named("claude"),
+                ProviderAvailability::Available
+            ),
+            Some(Ok(()))
+        );
+        assert_eq!(
+            checked(
+                "host.tasks.create",
+                named("cluade"),
+                ProviderAvailability::Unknown
+            ),
+            Some(Err(CallbackError::InvalidParams(
+                "plugin task start.provider is not an available provider: cluade".into()
+            )))
+        );
+        assert_eq!(
+            checked(
+                "host.tasks.create",
+                named("claude-chat:claude"),
+                ProviderAvailability::NotRunning
+            )
+            .map(|checked| checked.map_err(|error| (error.code(), error.to_string()))),
+            Some(Err((
+                -32004,
+                "plugin task start.provider is not running yet: claude-chat:claude".into()
+            )))
+        );
+        assert_eq!(
+            checked(
+                "host.tasks.create",
+                named(""),
+                ProviderAvailability::Unknown
+            ),
+            None
+        );
+        assert_eq!(
+            checked(
+                "host.tasks.create",
+                serde_json::json!({}),
+                ProviderAvailability::Unknown
+            ),
+            None
+        );
+        assert_eq!(
+            checked(
+                "host.tasks.createChild",
+                named("x"),
+                ProviderAvailability::Unknown
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn plugin_task_params_are_bounded() {
+        let refused = |field: &str, value: Value| {
+            let mut params = serde_json::json!({
+                "project_path": "/p",
+                "operation_id": "op",
+                "title": "Retro",
+            });
+            params[field] = value;
+            PluginTaskRequest::from_params(&params).err()
+        };
+        let long = |n: usize| Value::String("x".repeat(n));
+
+        assert_eq!(refused("title", long(255)), None);
+        assert_eq!(
+            refused("title", long(256)),
+            Some("plugin task title must be at most 255 characters".into())
+        );
+        assert_eq!(refused("description", long(65_536)), None);
+        assert_eq!(
+            refused("description", long(65_537)),
+            Some("plugin task description must be at most 65536 characters".into())
+        );
+        assert_eq!(
+            refused("operation_id", long(257)),
+            Some("plugin task operation_id must be at most 256 characters".into())
+        );
+        assert_eq!(
+            refused("operation_id", serde_json::json!("  ")),
+            Some("plugin task create requires operation_id".into())
+        );
+        assert_eq!(
+            refused("description", serde_json::json!("a\0b")),
+            Some("plugin task description must not contain NUL characters".into())
+        );
+        assert_eq!(
+            refused("tags", serde_json::json!([long(65)])),
+            Some("plugin task tags must be at most 64 characters each".into())
+        );
+        assert_eq!(
+            refused(
+                "tags",
+                Value::Array((0..21).map(|i| i.to_string().into()).collect())
+            ),
+            Some("plugin task create accepts at most 20 tags".into())
+        );
+        assert_eq!(refused("priority", serde_json::json!(5)), None);
+        for priority in [-1, 6] {
+            assert_eq!(
+                refused("priority", serde_json::json!(priority)),
+                Some("plugin task priority must be an integer between 0 and 5".into())
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_task_params_read_the_session_start() {
+        let base = serde_json::json!({
+            "project_path": "/p",
+            "operation_id": "op",
+            "title": "Retro",
+        });
+        let with_start = |value: Value| {
+            let mut params = base.clone();
+            params["start"] = value;
+            PluginTaskRequest::from_params(&params)
+        };
+
+        assert_eq!(PluginTaskRequest::from_params(&base).unwrap().start, None);
+        assert_eq!(with_start(Value::Null).unwrap().start, None);
+        assert_eq!(
+            with_start(serde_json::json!({})).unwrap().start,
+            Some(StartOptions::default())
+        );
+        assert_eq!(
+            with_start(serde_json::json!({
+                "provider": "chat:claude",
+                "use_worktree": false,
+                "autoApprove": false,
+            }))
+            .unwrap()
+            .start,
+            Some(StartOptions {
+                provider: Some("chat:claude".into()),
+                use_worktree: false,
+                auto_approve: false,
+                ..StartOptions::default()
+            })
+        );
+        assert_eq!(
+            with_start(serde_json::json!({ "provider": null }))
+                .unwrap()
+                .start,
+            Some(StartOptions::default())
+        );
+        assert_eq!(
+            with_start(serde_json::json!(3)).unwrap_err(),
+            "plugin task start must be an object"
+        );
+        assert_eq!(
+            with_start(serde_json::json!({ "use_worktree": "yes" })).unwrap_err(),
+            "plugin task start.use_worktree must be a boolean"
+        );
+        assert_eq!(
+            with_start(serde_json::json!({ "provider": 1 })).unwrap_err(),
+            "plugin task start.provider must be a string or null"
+        );
+    }
+
+    #[test]
+    fn a_plugin_task_asking_for_a_session_carries_its_start_even_on_retry() {
+        let (mut conn, _checkout, project) = task_database();
+        let request = |start: Value| {
+            PluginTaskRequest::from_params(&serde_json::json!({
+                "project_path": project.path,
+                "operation_id": "routine:r1:2026-10-05T13:00:00Z",
+                "title": "Retro",
+                "start": start,
+            }))
+            .unwrap()
+        };
+        let expected = RequestedStart::Pending(PendingTaskStart {
+            plugin: "routines".into(),
+            project_id: project.id.clone(),
+            task_key: format!("{}-1", project.prefix),
+            options: StartOptions {
+                provider: Some("claude".into()),
+                ..StartOptions::default()
+            },
+        });
+
+        let first = insert_plugin_task(
+            &mut conn,
+            "routines",
+            request(serde_json::json!({ "provider": "claude" })),
+        )
+        .unwrap();
+        let retried = insert_plugin_task(&mut conn, "routines", request(Value::Null)).unwrap();
+
+        assert_eq!(first.start, Some(expected.clone()));
+        assert_eq!(retried.start, Some(expected), "the first request decides");
+        let plain = insert_plugin_task(
+            &mut conn,
+            "routines",
+            top_level_request(&project.path, "other"),
+        )
+        .unwrap();
+        assert_eq!(plain.start, None);
+    }
+
+    #[test]
+    fn a_retried_start_targets_the_project_of_the_task_the_first_attempt_created() {
+        let (mut conn, _checkout, project) = task_database();
+        let other_checkout = tempfile::TempDir::new().unwrap();
+        let other =
+            crate::db::create_project(&conn, "Other", &other_checkout.path().to_string_lossy())
+                .unwrap();
+        let request = |project_path: &str| {
+            PluginTaskRequest::from_params(&serde_json::json!({
+                "project_path": project_path,
+                "operation_id": "routine:r1:2026-10-05T13:00:00Z",
+                "title": "Retro",
+                "start": {},
+            }))
+            .unwrap()
+        };
+        insert_plugin_task(&mut conn, "routines", request(&project.path)).unwrap();
+        crate::db::hide_project(&conn, &project.id).unwrap();
+
+        let retried = insert_plugin_task(&mut conn, "routines", request(&other.path)).unwrap();
+
+        assert_eq!(
+            retried.start,
+            Some(RequestedStart::Pending(PendingTaskStart {
+                plugin: "routines".into(),
+                project_id: project.id.clone(),
+                task_key: format!("{}-1", project.prefix),
+                options: StartOptions::default(),
+            }))
+        );
+    }
+
+    #[test]
+    fn a_requested_start_survives_a_restart_until_it_settles_once() {
+        use crate::task_start::{finish_start, pending_starts};
+        let (mut conn, _checkout, project) = task_database();
+        conn.execute(
+            "INSERT INTO plugin_inventory (id, name, version, host_api_version, source_kind, backend_entrypoint) VALUES ('routines', 'Routines', '1', 'v', 'local', 'bin/r')",
+            [],
+        )
+        .unwrap();
+        let request = |operation_id: &str| {
+            PluginTaskRequest::from_params(&serde_json::json!({
+                "project_path": project.path,
+                "operation_id": operation_id,
+                "title": "Retro",
+                "start": { "provider": "claude" },
+            }))
+            .unwrap()
+        };
+        let pending = |start: Option<RequestedStart>| match start {
+            Some(RequestedStart::Pending(pending)) => pending,
+            other => panic!("expected a pending start, got {other:?}"),
+        };
+        let first = pending(
+            insert_plugin_task(&mut conn, "routines", request("a"))
+                .unwrap()
+                .start,
+        );
+        let second = pending(
+            insert_plugin_task(&mut conn, "routines", request("b"))
+                .unwrap()
+                .start,
+        );
+        let third = pending(
+            insert_plugin_task(&mut conn, "routines", request("c"))
+                .unwrap()
+                .start,
+        );
+        assert_eq!(first.plugin, "Routines");
+
+        // What the app resumes after quitting before any session row existed.
+        assert_eq!(
+            pending_starts(&conn).unwrap(),
+            vec![first.clone(), second.clone(), third.clone()]
+        );
+
+        assert_eq!(finish_start(&conn, &first, Ok(None)), Ok(None));
+        assert_eq!(
+            finish_start(
+                &conn,
+                &second,
+                Ok(Some("Branch is already in a worktree".into()))
+            ),
+            Ok(Some(format!(
+                "Routines started a session for {}: Branch is already in a worktree",
+                second.task_key
+            )))
+        );
+        assert_eq!(
+            finish_start(&conn, &third, Err("Unknown provider: claude".into())),
+            Ok(Some(format!(
+                "Routines created {}, but its session could not start: Unknown provider: claude",
+                third.task_key
+            )))
+        );
+        assert_eq!(pending_starts(&conn).unwrap(), Vec::new());
+        finish_start(&conn, &third, Ok(None)).unwrap();
+
+        let mut retried = |operation_id| {
+            insert_plugin_task(&mut conn, "routines", request(operation_id))
+                .unwrap()
+                .start
+        };
+        assert_eq!(retried("a"), Some(RequestedStart::Started));
+        assert_eq!(retried("b"), Some(RequestedStart::Started));
+        assert_eq!(
+            retried("c"),
+            Some(RequestedStart::Failed {
+                error: "Unknown provider: claude".into()
+            }),
+            "a failed start stays failed rather than starting a second time"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_task_reply_says_where_its_session_stands() {
+        let task = serde_json::json!({ "task": { "key": "PLA-1" } });
+        let pending = PendingTaskStart {
+            plugin: "Routines".into(),
+            project_id: "p".into(),
+            task_key: "PLA-1".into(),
+            options: StartOptions::default(),
+        };
+        let answer = |requested: Option<RequestedStart>, outcome: SessionStart| {
+            let reply = task_reply(task.clone(), requested.as_ref());
+            async move { answer_requested_start(reply, |_| async move { Ok(outcome) }).await }
+        };
+
+        assert_eq!(
+            answer(
+                Some(RequestedStart::Pending(pending.clone())),
+                SessionStart::Starting
+            )
+            .await,
+            Ok(serde_json::json!({ "task": { "key": "PLA-1" }, "session": "starting" }))
+        );
+        assert_eq!(
+            answer(Some(RequestedStart::Pending(pending)), SessionStart::Exists).await,
+            Ok(serde_json::json!({ "task": { "key": "PLA-1" }, "session": "exists" }))
+        );
+        assert_eq!(
+            answer(Some(RequestedStart::Started), SessionStart::Starting).await,
+            Ok(serde_json::json!({ "task": { "key": "PLA-1" }, "session": "exists" }))
+        );
+        assert_eq!(
+            answer(
+                Some(RequestedStart::Failed {
+                    error: "Unknown provider: x".into()
+                }),
+                SessionStart::Starting
+            )
+            .await,
+            Ok(serde_json::json!({
+                "task": { "key": "PLA-1" },
+                "session": "failed",
+                "session_error": "Unknown provider: x",
+            }))
+        );
+        assert_eq!(answer(None, SessionStart::Starting).await, Ok(task.clone()));
+    }
+
+    #[test]
+    fn a_requested_start_travels_in_the_reply_until_the_host_takes_it() {
+        let failed = RequestedStart::Failed {
+            error: "Unknown provider: x".into(),
+        };
+        let mut reply = task_reply(
+            serde_json::json!({ "task": { "key": "PLA-1" } }),
+            Some(&failed),
+        );
+
+        assert_eq!(take_requested_start(&mut reply), Some(failed));
+        assert_eq!(reply, serde_json::json!({ "task": { "key": "PLA-1" } }));
+        assert_eq!(take_requested_start(&mut reply), None);
+    }
+
+    #[tokio::test]
+    async fn the_provider_list_requires_sessions_start() {
+        let catalog = || async {
+            Ok(crate::task_start::ProviderCatalog {
+                default: "claude".into(),
+                providers: vec![crate::task_start::ProviderOption {
+                    key: "chat:claude".into(),
+                    label: "Claude Chat".into(),
+                    auto_approve: false,
+                }],
+            })
+        };
+
+        let denied = sessions_providers(
+            &HashSet::from([PluginHostCapability::TasksCreate]),
+            || async { panic!("the catalog is not read without the capability") },
+        )
+        .await;
+        assert_eq!(denied, Err(CallbackError::NotGranted));
+        assert_eq!(
+            sessions_providers(
+                &HashSet::from([PluginHostCapability::SessionsStart]),
+                catalog
+            )
+            .await
+            .unwrap(),
+            serde_json::json!({
+                "default": "claude",
+                "providers": [{ "key": "chat:claude", "label": "Claude Chat", "auto_approve": false }],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn starting_a_session_requires_the_sessions_start_capability() {
+        let data = tempfile::TempDir::new().unwrap();
+        let params = serde_json::json!({
+            "project_path": "/p",
+            "operation_id": "o",
+            "title": "t",
+            "start": {},
+        });
+        let create_only = HashSet::from([PluginHostCapability::TasksCreate]);
+        let error = execute_host_task(
+            "routines",
+            &create_only,
+            data.path(),
+            "host.tasks.create",
+            params.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, CallbackError::NotGranted);
+
+        let both = HashSet::from([
+            PluginHostCapability::TasksCreate,
+            PluginHostCapability::SessionsStart,
+        ]);
+        let mut child = params;
+        child["parent_key"] = "K-1".into();
+        let error = execute_host_task(
+            "routines",
+            &both,
+            data.path(),
+            "host.tasks.createChild",
+            child,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error,
+            CallbackError::InvalidParams("only host.tasks.create can start a session".into())
+        );
+    }
+
+    #[test]
+    fn plugin_task_params_reject_malformed_priority_and_tags() {
+        let base = serde_json::json!({
+            "project_path": "/p",
+            "operation_id": "op",
+            "title": "Retro",
+        });
+        let with = |field: &str, value: Value| {
+            let mut params = base.clone();
+            params[field] = value;
+            PluginTaskRequest::from_params(&params).unwrap_err()
+        };
+
+        assert_eq!(
+            with("priority", serde_json::json!("high")),
+            "plugin task priority must be an integer between 0 and 5"
+        );
+        assert_eq!(
+            with("tags", serde_json::json!(["ok", 3])),
+            "plugin task tags must be an array of strings"
+        );
+    }
+
+    #[test]
+    fn a_repeated_operation_id_returns_the_same_top_level_task() {
+        let (mut conn, _checkout, project) = task_database();
+        let operation = "routine:r1:2026-10-05T13:00:00Z";
+        let first = insert_plugin_task(
+            &mut conn,
+            "routines",
+            top_level_request(&project.path, operation),
+        )
+        .unwrap();
+        let second = insert_plugin_task(
+            &mut conn,
+            "routines",
+            top_level_request(&project.path, operation),
+        )
+        .unwrap();
+        let other_plugin = insert_plugin_task(
+            &mut conn,
+            "other",
+            top_level_request(&project.path, operation),
+        )
+        .unwrap();
+
+        let key = format!("{}-1", project.prefix);
+        assert_eq!(first.task["task"]["key"], key.as_str());
+        assert_eq!(second.task["task"]["key"], key.as_str());
+        assert_eq!(
+            other_plugin.task["task"]["key"],
+            format!("{}-2", project.prefix).as_str()
+        );
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn a_top_level_plugin_task_needs_a_visible_known_project() {
+        let (mut conn, _checkout, project) = task_database();
+        let unknown = insert_plugin_task(&mut conn, "routines", top_level_request("/nowhere", "a"))
+            .unwrap_err();
+        assert_eq!(
+            unknown,
+            CallbackError::InvalidParams("project was not found or is hidden".into())
+        );
+
+        crate::db::hide_project(&conn, &project.id).unwrap();
+        let hidden =
+            insert_plugin_task(&mut conn, "routines", top_level_request(&project.path, "b"))
+                .unwrap_err();
+        assert_eq!(
+            hidden,
+            CallbackError::InvalidParams("project was not found or is hidden".into())
+        );
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn a_child_plugin_task_needs_a_parent_in_its_project() {
+        let (mut conn, _checkout, project) = task_database();
+        let other_checkout = tempfile::TempDir::new().unwrap();
+        let other =
+            crate::db::create_project(&conn, "Other", &other_checkout.path().to_string_lossy())
+                .unwrap();
+        let foreign =
+            insert_plugin_task(&mut conn, "routines", top_level_request(&other.path, "p")).unwrap();
+        let child = |parent_key: &str, operation_id: &str| {
+            PluginTaskRequest::from_params(&serde_json::json!({
+                "project_path": project.path,
+                "operation_id": operation_id,
+                "title": "Child",
+                "parent_key": parent_key,
+            }))
+            .unwrap()
+        };
+
+        let missing = insert_plugin_task(&mut conn, "routines", child("NOPE-1", "a")).unwrap_err();
+        let mismatched = insert_plugin_task(
+            &mut conn,
+            "routines",
+            child(foreign.task["task"]["key"].as_str().unwrap(), "b"),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            (missing, mismatched),
+            (
+                CallbackError::InvalidParams("parent task was not found".into()),
+                CallbackError::InvalidParams(
+                    "parent task does not belong to the selected project".into()
+                ),
+            )
+        );
+    }
+
+    #[test]
+    fn a_child_plugin_task_reports_its_first_child_assignment() {
+        let (mut conn, _checkout, project) = task_database();
+        let parent =
+            insert_plugin_task(&mut conn, "routines", top_level_request(&project.path, "p"))
+                .unwrap();
+        let parent_key = parent.task["task"]["key"].as_str().unwrap().to_string();
+        let mut params = serde_json::json!({
+            "project_path": project.path,
+            "operation_id": "c",
+            "title": "Child",
+            "parent_key": parent_key,
+        });
+        let child = insert_plugin_task(
+            &mut conn,
+            "routines",
+            PluginTaskRequest::from_params(&params).unwrap(),
+        )
+        .unwrap();
+        let child_key = format!("{}-2", project.prefix);
+        assert_eq!(child.task["task"]["parent_key"], parent_key.as_str());
+        assert_eq!(
+            child.lifecycle.unwrap().events,
+            vec![crate::task_lifecycle::TaskLifecycleEvent::ChildAssigned {
+                child_key,
+                parent_key: parent_key.clone(),
+                is_first_child_assignment: true,
+            }]
+        );
+        params["operation_id"] = "c2".into();
+        let second = insert_plugin_task(
+            &mut conn,
+            "routines",
+            PluginTaskRequest::from_params(&params).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            second.lifecycle.unwrap().events.as_slice(),
+            [crate::task_lifecycle::TaskLifecycleEvent::ChildAssigned {
+                is_first_child_assignment: false,
+                ..
+            }]
+        ));
     }
 
     #[tokio::test]
