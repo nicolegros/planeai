@@ -118,16 +118,15 @@ impl DaemonSession {
     }
 
     pub fn buffer_snapshot(&self) -> Vec<u8> {
-        self.output.buffer.lock().unwrap().snapshot()
+        self.output.lock().buffer.snapshot()
     }
 
     /// Read buffer content written after `after_offset`, up to `max_bytes` (0 = unlimited).
     /// Returns (raw_bytes, new_write_offset, truncated).
     pub fn buffer_read_after(&self, after_offset: u64, max_bytes: usize) -> (Vec<u8>, u64, bool) {
         self.output
-            .buffer
             .lock()
-            .unwrap()
+            .buffer
             .read_after(after_offset, max_bytes)
     }
 
@@ -148,39 +147,48 @@ impl DaemonSession {
 // ─── SessionOutput ───────────────────────────────────────────────────────────
 
 /// A session's output: the replay buffer and the live stream that continues it.
-struct SessionOutput {
-    buffer: Mutex<RingBuffer>,
+///
+/// One lock covers both, so an attach's snapshot ends exactly where its stream starts.
+struct SessionOutput(Mutex<OutputState>);
+
+struct OutputState {
+    buffer: RingBuffer,
     /// Dropped when the session's output ends, which closes every subscriber's stream.
-    tx: Mutex<Option<broadcast::Sender<Vec<u8>>>>,
+    tx: Option<broadcast::Sender<Vec<u8>>>,
 }
 
 impl SessionOutput {
     fn new(buffer_capacity: usize) -> Self {
-        Self {
-            buffer: Mutex::new(RingBuffer::new(buffer_capacity)),
-            tx: Mutex::new(Some(broadcast::channel(64).0)),
-        }
+        Self(Mutex::new(OutputState {
+            buffer: RingBuffer::new(buffer_capacity),
+            tx: Some(broadcast::channel(64).0),
+        }))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, OutputState> {
+        self.0.lock().unwrap()
     }
 
     fn publish(&self, bytes: Vec<u8>) {
-        self.buffer.lock().unwrap().write(&bytes);
-        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+        let mut state = self.lock();
+        state.buffer.write(&bytes);
+        if let Some(tx) = &state.tx {
             let _ = tx.send(bytes);
         }
     }
 
     fn close(&self) {
-        self.tx.lock().unwrap().take();
+        self.lock().tx.take();
     }
 
     /// The receiver yields `Closed` once the output ends, immediately if it already has.
     fn snapshot_and_subscribe(&self) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
-        let snapshot = self.buffer.lock().unwrap().snapshot();
-        let rx = match self.tx.lock().unwrap().as_ref() {
+        let state = self.lock();
+        let rx = match &state.tx {
             Some(tx) => tx.subscribe(),
             None => broadcast::channel(1).1,
         };
-        (snapshot, rx)
+        (state.buffer.snapshot(), rx)
     }
 }
 
