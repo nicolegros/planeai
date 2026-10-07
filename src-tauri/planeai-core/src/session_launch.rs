@@ -88,46 +88,6 @@ pub const BUILTIN_PROVIDERS: [BuiltinProvider; 4] = [
     },
 ];
 
-/// Earlier built-in values that ran no interactive session on the task prompt: claude's `-p`
-/// printed one answer and exited, and copilot's `--resume` read the prompt as a session name.
-const SUPERSEDED_DEFAULTS: [(&str, ProviderField, &str); 5] = [
-    ("kiro", ProviderField::PromptCommand, "{prompt}"),
-    ("claude", ProviderField::PromptCommand, "-p {prompt}"),
-    ("copilot", ProviderField::Command, "copilot --resume"),
-    ("copilot", ProviderField::PromptCommand, "{prompt}"),
-    ("codex", ProviderField::PromptCommand, "{prompt}"),
-];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProviderField {
-    Command,
-    PromptCommand,
-}
-
-/// Replace a built-in provider's field that still holds a superseded default with today's
-/// default; a value the user changed is kept. Returns whether anything changed.
-pub fn upgrade_builtin_provider(
-    key: &str,
-    command: &mut String,
-    prompt_command: &mut Option<String>,
-) -> bool {
-    let Some(builtin) = BUILTIN_PROVIDERS.iter().find(|builtin| builtin.key == key) else {
-        return false;
-    };
-    let mut changed = false;
-    for (_, field, superseded) in SUPERSEDED_DEFAULTS.iter().filter(|(k, ..)| *k == key) {
-        let (value, current) = match field {
-            ProviderField::Command => (Some(&mut *command), builtin.command),
-            ProviderField::PromptCommand => (prompt_command.as_mut(), builtin.prompt_command),
-        };
-        if let Some(value) = value.filter(|value| value.as_str() == *superseded) {
-            *value = current.to_string();
-            changed = true;
-        }
-    }
-    changed
-}
-
 impl Default for LaunchConfig {
     fn default() -> Self {
         let providers = BUILTIN_PROVIDERS
@@ -180,12 +140,8 @@ pub fn load_launch_config(path: &std::path::Path) -> Result<LaunchConfig, String
     // Merge user values over defaults
     let default_val = serde_json::to_value(LaunchConfig::default()).unwrap();
     let merged = merge_values(default_val, user_val);
-    let mut config: LaunchConfig = serde_json::from_value(merged)
-        .map_err(|e| format!("cannot deserialize config {}: {e}", path.display()))?;
-    for (key, provider) in &mut config.providers {
-        upgrade_builtin_provider(key, &mut provider.command, &mut provider.prompt_command);
-    }
-    Ok(config)
+    serde_json::from_value(merged)
+        .map_err(|e| format!("cannot deserialize config {}: {e}", path.display()))
 }
 
 /// Shallow merge: user keys override default keys at the top level.

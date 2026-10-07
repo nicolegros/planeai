@@ -487,7 +487,7 @@ fn every_default_provider_restarts_by_resuming() {
 }
 
 #[test]
-fn load_upgrades_superseded_provider_defaults_and_keeps_changed_values() {
+fn load_keeps_stored_provider_commands_as_written() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("config.json"),
@@ -495,10 +495,7 @@ fn load_upgrades_superseded_provider_defaults_and_keeps_changed_values() {
             "default_provider": "claude",
             "providers": {
                 "claude": { "command": "claude", "prompt_command": "-p {prompt}" },
-                "copilot": { "command": "copilot --resume", "prompt_command": "{prompt}" },
-                "codex": { "command": "codex", "prompt_command": "--full-auto {prompt}" },
-                "kiro": { "command": "kiro-cli chat --agent dev", "prompt_command": "{prompt}" },
-                "mine": { "command": "agent", "prompt_command": "-p {prompt}" }
+                "copilot": { "command": "copilot --resume", "prompt_command": "{prompt}" }
             }
         }"#,
     )
@@ -508,23 +505,8 @@ fn load_upgrades_superseded_provider_defaults_and_keeps_changed_values() {
 
     assert!(warnings.is_empty(), "{warnings:?}");
     let launch = |key: &str| config.providers[key].first_launch_command(false, Some("Go"));
-    assert_eq!(launch("claude"), "claude -- 'Go'");
-    assert_eq!(launch("copilot"), "copilot --interactive='Go'");
-    assert_eq!(
-        restart_command_for_provider(&config.providers["copilot"]),
-        "copilot --continue"
-    );
-    assert_eq!(
-        launch("codex"),
-        "codex --full-auto 'Go'",
-        "a changed value is kept"
-    );
-    assert_eq!(launch("kiro"), "kiro-cli chat --agent dev -- 'Go'");
-    assert_eq!(
-        launch("mine"),
-        "agent -p 'Go'",
-        "only built-in providers are upgraded"
-    );
+    assert_eq!(launch("claude"), "claude -p 'Go'");
+    assert_eq!(launch("copilot"), "copilot --resume 'Go'");
 }
 
 #[test]

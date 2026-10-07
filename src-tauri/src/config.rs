@@ -435,18 +435,10 @@ fn migrate_legacy_task_managers(val: &mut serde_json::Value) {
     obj.remove("default_task_manager");
 }
 
-/// Bring built-in providers up to today's defaults: fill fields added since the file was
-/// written, and replace superseded defaults the user never changed. Runs on every load, so
-/// the file needs no rewrite.
 fn backfill_provider_defaults(config: &mut Config) {
     let defaults = Config::default();
-    for (key, provider) in &mut config.providers {
-        planeai_core::session_launch::upgrade_builtin_provider(
-            key,
-            &mut provider.command,
-            &mut provider.prompt_command,
-        );
-        if let Some(default_provider) = defaults.providers.get(key) {
+    for (key, default_provider) in &defaults.providers {
+        if let Some(provider) = config.providers.get_mut(key) {
             if provider.resume_command.is_none() {
                 provider.resume_command = default_provider.resume_command.clone();
             }
