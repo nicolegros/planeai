@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Session, TaskItem } from "../lib/types";
   import { Button } from "./ui";
+  import MarkdownView from "./MarkdownView.svelte";
 
   interface Props {
     task: TaskItem;
@@ -44,7 +45,7 @@
     <section class="min-h-0 overflow-y-auto pr-4">
       <h3 class="text-sm font-medium text-t1">Description</h3>
       {#if task.description}
-        <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-t2">{task.description}</p>
+        <MarkdownView class="mt-3" source={task.description} />
       {:else}
         <p class="mt-3 text-sm text-t3">No description has been added to this task.</p>
       {/if}

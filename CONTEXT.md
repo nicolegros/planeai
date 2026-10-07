@@ -244,6 +244,7 @@ It owns the layout, which workspace it belongs to, and loading and saving it; it
 - **Reconciliation**: when the workspace's sessions change, each new agent gets a tab in the focused pane and every tab of a session that left is dropped. The front tab only moves for the session the workspace was shown for.
 - **Single pane vs split**: a single pane shows its tabs in the titlebar; once split, each pane has its own tab bar. Both render the same pane tabs and call the same operations.
 - **Split shortcuts**: they act only on a visible layout, never behind a loop dashboard, a plugin page or an empty TaskWorkspace.
+- **Empty TaskWorkspace description**: rendered as markdown by `MarkdownView.svelte` (`src/lib/markdown.ts`, markdown-it). Descriptions come from agents and plugins, so raw HTML is escaped, images render as links and never load, and link clicks open in the system browser (`http`, `https`, `mailto` only) instead of navigating the webview.
 - **Dragging tabs**: a tab dropped on a tab bar is inserted at that position; dropped on a pane, it moves into that pane, or splits it when dropped within a quarter of an edge. Tab dragging uses pointer events (`src/lib/tab-drag.svelte.ts`), because Tauri's native drag-drop handler swallows HTML5 drag events.
 - **Dropping files**: a file dragged from the OS onto a pane types its shell-escaped path into the terminal in front of that pane, as terminal apps do. The paths come from Tauri's native drag-drop event.
 
