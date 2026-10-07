@@ -115,8 +115,31 @@ impl SessionBackend for DaemonBackend {
 }
 
 /// The bytes a daemon data frame puts in the terminal, if any.
-fn daemon_frame_output(_session_id: &str, _frame_type: u8, payload: Vec<u8>) -> Option<Vec<u8>> {
-    Some(payload)
+fn daemon_frame_output(session_id: &str, frame_type: u8, payload: Vec<u8>) -> Option<Vec<u8>> {
+    use planeai_daemon::protocol::{FRAME_ERROR, FRAME_GAP, FRAME_OUTPUT};
+    match frame_type {
+        FRAME_OUTPUT if !payload.is_empty() => Some(payload),
+        FRAME_GAP => {
+            let lagged = serde_json::from_slice::<serde_json::Value>(&payload)
+                .ok()
+                .and_then(|gap| gap["lagged"].as_u64());
+            tracing::warn!(session_id, ?lagged, "daemon output gap");
+            let dropped = lagged.map_or("Output".to_string(), |n| format!("{n} output event(s)"));
+            // Shown in the terminal, like an rmux gap, so the scrollback never jumps silently.
+            Some(
+                format!(
+                    "\r\n\x1b[2m[planeai] output gap: {dropped} dropped by the PlaneAI daemon - \
+                     this session fell behind\x1b[0m\r\n"
+                )
+                .into_bytes(),
+            )
+        }
+        FRAME_ERROR => {
+            tracing::error!(session_id, error = %String::from_utf8_lossy(&payload), "daemon data error");
+            None
+        }
+        _ => None,
+    }
 }
 
 // ─── Rmux Backend ────────────────────────────────────────────────────────────
