@@ -414,24 +414,29 @@ describe("PluginContributionHost", () => {
     ["session.panel", true],
     ["sidebar.header", true],
     ["main-pane", false],
-  ] as const)("lets a local %s frame show the host surface and shrink to its content: %s", async (placement, contentSized) => {
-    target = document.createElement("div");
-    document.body.append(target);
-    component = mount(PluginContributionHostLocalHarness, {
-      target,
-      props: { placement },
-    }) as typeof component;
+  ] as const)(
+    "lets a local %s frame show the host surface and shrink to its content: %s",
+    async (placement, contentSized) => {
+      target = document.createElement("div");
+      document.body.append(target);
+      component = mount(PluginContributionHostLocalHarness, {
+        target,
+        props: { placement },
+      }) as typeof component;
 
-    const frame = await vi.waitFor(() => {
-      const next = target
-        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
-        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
-      expect(next).toBeTruthy();
-      return next!;
-    });
-    expect(frame.style.backgroundColor).toBe(contentSized ? "transparent" : "");
-    expect(frame.srcdoc.includes("html,body{height:auto;min-height:0;background:transparent}")).toBe(contentSized);
-  });
+      const frame = await vi.waitFor(() => {
+        const next = target
+          .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+          ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+        expect(next).toBeTruthy();
+        return next!;
+      });
+      expect(frame.style.backgroundColor).toBe(contentSized ? "transparent" : "");
+      expect(
+        frame.srcdoc.includes("html,body{height:auto;min-height:0;background:transparent}"),
+      ).toBe(contentSized);
+    },
+  );
 
   it("uses an unfocusable, pointer-inert transparent iframe for local session indicators", async () => {
     target = document.createElement("div");
