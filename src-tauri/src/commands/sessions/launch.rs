@@ -145,7 +145,9 @@ pub(crate) async fn launch(
     })
     .await?;
     let workspace_project_id = task_project_id.as_deref().unwrap_or(&project_id);
-    tracing::info!(task_prompt = ?task_prompt, auto_approve, provider = ?provider, task_key = ?task_key, "launch_session called");
+    // The prompt is task content: log its size, never its text.
+    let prompt_chars = task_prompt.as_deref().map(|prompt| prompt.chars().count());
+    tracing::info!(prompt_chars = ?prompt_chars, auto_approve, provider = ?provider, task_key = ?task_key, "launch_session called");
     // Plugin providers have no command: their sidecar runs the agent (ADR-0014).
     let runtime_provider = match provider.as_deref() {
         Some(key) if plugin_providers::parse_provider_key(key).is_some() => {
@@ -155,32 +157,33 @@ pub(crate) async fn launch(
         _ => None,
     };
     // Phase 1: gather params from config (holding config lock briefly)
-    let (cmd, provider_key, backend, scrollback_bytes, extra_path_dirs) =
-        if let Some(key) = runtime_provider {
-            let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-            (
-                String::new(),
-                key,
-                PLUGIN_BACKEND.to_string(),
-                0,
-                cfg.resolved_extra_path_dirs(),
-            )
-        } else {
-            let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-            let pk = provider.unwrap_or_else(|| cfg.default_provider.clone());
-            let provider_def = cfg
-                .providers
-                .get(&pk)
-                .ok_or_else(|| format!("Unknown provider: {pk}"))?;
+    let (cmd, provider_key, backend, scrollback_bytes, extra_path_dirs) = if let Some(key) =
+        runtime_provider
+    {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        (
+            String::new(),
+            key,
+            PLUGIN_BACKEND.to_string(),
+            0,
+            cfg.resolved_extra_path_dirs(),
+        )
+    } else {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        let pk = provider.unwrap_or_else(|| cfg.default_provider.clone());
+        let provider_def = cfg
+            .providers
+            .get(&pk)
+            .ok_or_else(|| format!("Unknown provider: {pk}"))?;
 
-            let c = provider_def.first_launch_command(auto_approve, task_prompt.as_deref());
-            tracing::info!(command = %c, "launch command built");
+        let c = provider_def.first_launch_command(auto_approve, task_prompt.as_deref());
+        tracing::info!(provider_command = %provider_def.command, auto_approve, prompt_chars = ?prompt_chars, "launch command built");
 
-            let be = config::resolve_backend(&cfg).to_string();
-            let sb = 1_048_576;
-            let epd = cfg.resolved_extra_path_dirs();
-            (c, pk, be, sb, epd)
-        };
+        let be = config::resolve_backend(&cfg).to_string();
+        let sb = 1_048_576;
+        let epd = cfg.resolved_extra_path_dirs();
+        (c, pk, be, sb, epd)
+    };
 
     // Phase 2: async work — detect base branch, git worktree/checkout
     let effective_base_branch = {

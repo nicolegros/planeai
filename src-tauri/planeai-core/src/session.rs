@@ -146,13 +146,13 @@ impl SessionDispatcher {
             self.dispatch_config.prompt_wrapper.as_deref(),
         );
         let cmd = launch_result.command;
+        // The prompt is task content: log its size, never its text.
         tracing::info!(
-            command = %cmd,
+            provider_command = %self.dispatch_config.provider_command,
             prompt_injected = launch_result.prompt_was_injected,
             approve_applied = launch_result.auto_approve_was_applied,
-            prompt_template = ?self.dispatch_config.prompt_template,
             prompt_command = ?self.dispatch_config.prompt_command,
-            rendered_prompt = ?rendered_prompt,
+            prompt_chars = ?rendered_prompt.as_deref().map(|prompt| prompt.chars().count()),
             "dispatch command built"
         );
 
