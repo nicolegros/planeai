@@ -424,7 +424,7 @@ Ownership rules:
 - rmux applies no backpressure to the child: a consumer that stops draining loses output (reported via lag notices with a resume point). So the adapter drains continuously into its own bounded buffer and implements `pause()`/`resume()` PlaneAI-side, like the existing `DaemonBackend`. The read loop is performance-critical — a debug-build consumer lost 97.6% of a 6.29 MiB burst that a release build delivered intact.
 - A pane does not inherit the client's environment: rmux gives it a minimal PATH of its own. Every spawn passes PlaneAI's augmented PATH and TERM explicitly (`build_daemon_env`), or tools like the agent CLI are not found.
 - Agent and shell commands use explicit argv, never `.shell()`, which would run the user's login shell (fish, nu) instead of `sh`.
-- `rmux-daemon` is a separate binary from `rmux` and is what gets spawned; ship it as a sidecar and point `RMUX_SDK_DAEMON_BINARY` at its absolute path.
+- `rmux-daemon` is a separate binary from `rmux` and is what gets spawned. PlaneAI finds it through its augmented PATH and points `RMUX_SDK_DAEMON_BINARY` at the absolute path, since a launchd-started app only has the system PATH.
 - xterm remains the renderer, replaying the recovery stream's `keyframe` then following its live byte events; snapshots are additive for AXI/automation only.
 - The AXI cursor is capture-based (like tmux), not a byte offset: rmux has no "resume at sequence N" input.
 - Agent state continues to come from provider hooks, identically to the local, tmux, and daemon backends. rmux events are used for exit detection only.

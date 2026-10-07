@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 /// Environment variable the SDK honours to locate the daemon executable.
 ///
 /// rmux ships `rmux-daemon` separately from the `rmux` CLI, and that is what
-/// `connect_or_start` spawns. Pointing this at a bundled sidecar avoids relying
-/// on the user's PATH entirely.
+/// `connect_or_start` spawns. Pointing this at an absolute path avoids relying on
+/// the process's PATH, which is minimal for an app launched by launchd.
 pub const DAEMON_BINARY_ENV: &str = "RMUX_SDK_DAEMON_BINARY";
 
 /// Overrides the endpoint for development and tests.
@@ -48,7 +48,7 @@ impl RmuxConfig {
         }
     }
 
-    /// Point the SDK at a bundled `rmux-daemon` sidecar instead of PATH lookup.
+    /// Point the SDK at an absolute `rmux-daemon` path instead of PATH lookup.
     pub fn with_daemon_binary(mut self, path: impl Into<PathBuf>) -> Self {
         self.daemon_binary = Some(path.into());
         self
@@ -127,14 +127,14 @@ mod tests {
     }
 
     #[test]
-    fn daemon_binary_is_absent_until_a_sidecar_is_supplied() {
+    fn daemon_binary_is_absent_until_one_is_supplied() {
         let config = RmuxConfig::app_private(Path::new("/tmp/planeai-42"));
         assert_eq!(config.daemon_binary(), None);
 
-        let config = config.with_daemon_binary("/Applications/planeai.app/rmux-daemon");
+        let config = config.with_daemon_binary("/opt/homebrew/bin/rmux-daemon");
         assert_eq!(
             config.daemon_binary(),
-            Some(Path::new("/Applications/planeai.app/rmux-daemon"))
+            Some(Path::new("/opt/homebrew/bin/rmux-daemon"))
         );
     }
 

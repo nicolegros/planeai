@@ -115,7 +115,7 @@ impl RmuxClient {
             }
         }
         if let Some(binary) = config.daemon_binary() {
-            // Prefer the bundled sidecar over anything on PATH.
+            // The SDK would otherwise search only this process's own PATH.
             std::env::set_var(crate::config::DAEMON_BINARY_ENV, binary);
         }
 
