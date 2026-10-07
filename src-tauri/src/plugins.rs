@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use crate::commands;
 use crate::plugin_rpc::*;
 use crate::task_lifecycle::TaskLifecycleBatch;
-use crate::task_start::{PendingTaskStart, StartOptions};
+use crate::task_start::{PendingTaskStart, RequestedStart, SessionStart, StartOptions};
 use planeai_plugin_contract::provider::is_host_controlled_method as is_host_controlled_plugin_method;
 use planeai_plugin_contract::supports_host_api_version;
 pub use planeai_plugin_contract::ProviderFeature;
@@ -598,6 +598,28 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY (plugin_id, operation_id)
         );",
     )?;
+    // The session the operation's request asked for: `start_options` while it is wanted,
+    // `start_state` pending until a session row exists or the start fails for good.
+    for (column, definition) in [
+        ("start_options", "TEXT"),
+        (
+            "start_state",
+            "TEXT CHECK (start_state IN ('pending', 'started', 'failed'))",
+        ),
+        ("start_error", "TEXT"),
+    ] {
+        let has_column = conn
+            .prepare("PRAGMA table_info(plugin_task_operations)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|existing| existing == column);
+        if !has_column {
+            conn.execute_batch(&format!(
+                "ALTER TABLE plugin_task_operations ADD COLUMN {column} {definition}"
+            ))?;
+        }
+    }
     for (column, definition) in [
         ("installed_hash", "TEXT"),
         ("installed_path", "TEXT"),
@@ -1863,12 +1885,20 @@ async fn execute_app_host_task(
     }
     let mut reply = execute_host_task(plugin_id, capabilities, data_dir, method, params).await?;
     announce_created_task(app, method);
-    if let Some(pending) = take_pending_start(&mut reply) {
-        let session = crate::task_start::start_in_background(app, pending)
-            .await
-            .map_err(CallbackError::Internal)?;
-        reply["session"] = serde_json::json!(session);
-    }
+    let session = match take_requested_start(&mut reply) {
+        None => return Ok(reply),
+        Some(RequestedStart::Pending(pending)) => {
+            crate::task_start::start_in_background(app, pending)
+                .await
+                .map_err(CallbackError::Internal)?
+        }
+        Some(RequestedStart::Started) => SessionStart::Exists,
+        Some(RequestedStart::Failed { error }) => {
+            reply["session_error"] = Value::String(error);
+            SessionStart::Failed
+        }
+    };
+    reply["session"] = serde_json::json!(session);
     Ok(reply)
 }
 
@@ -2463,8 +2493,9 @@ struct InsertedPluginTask {
     task: Value,
     /// Present only when this call created a child task.
     lifecycle: Option<TaskLifecycleBatch>,
-    /// The session the request asked for, on every retry too, so a lost start still happens.
-    start: Option<PendingTaskStart>,
+    /// The session the operation's first request asked for and where it stands, on every
+    /// retry too.
+    start: Option<RequestedStart>,
 }
 
 fn create_plugin_task(plugin_id: &str, request: PluginTaskRequest) -> Result<Value, CallbackError> {
@@ -2476,19 +2507,19 @@ fn create_plugin_task(plugin_id: &str, request: PluginTaskRequest) -> Result<Val
     Ok(task_reply(inserted.task, inserted.start.as_ref()))
 }
 
-/// Where a pending session start rides in a host task's reply until the app takes it.
-const PENDING_START_FIELD: &str = "start";
+/// Where a requested session start rides in a host task's reply until the app takes it.
+const REQUESTED_START_FIELD: &str = "start";
 
-fn task_reply(mut reply: Value, start: Option<&PendingTaskStart>) -> Value {
+fn task_reply(mut reply: Value, start: Option<&RequestedStart>) -> Value {
     if let Some(start) = start {
-        reply[PENDING_START_FIELD] = serde_json::json!(start);
+        reply[REQUESTED_START_FIELD] = serde_json::json!(start);
     }
     reply
 }
 
-fn take_pending_start(reply: &mut Value) -> Option<PendingTaskStart> {
-    let pending = reply.as_object_mut()?.remove(PENDING_START_FIELD)?;
-    serde_json::from_value(pending).ok()
+fn take_requested_start(reply: &mut Value) -> Option<RequestedStart> {
+    let requested = reply.as_object_mut()?.remove(REQUESTED_START_FIELD)?;
+    serde_json::from_value(requested).ok()
 }
 
 /// Creates a task at most once per (plugin, operation id), so a retried request returns the
@@ -2508,38 +2539,67 @@ fn insert_plugin_task(
         tags,
         start,
     } = request;
-    let pending_start = |project: &crate::db::Project, task_key: &str| {
-        start.clone().map(|options| PendingTaskStart {
-            project_id: project.id.clone(),
-            task_key: task_key.to_string(),
-            options,
-        })
-    };
     // Immediate: two requests with one operation id serialize on the write lock instead of
     // both reading "absent" and one failing with SQLITE_BUSY when it upgrades to write.
     let transaction = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(internal)?;
     let projects = crate::db::list_projects(&transaction).map_err(internal)?;
-    if let Some((task_key, prefix)) = transaction
+    let plugin = transaction
         .query_row(
-            "SELECT o.task_key, t.project_prefix FROM plugin_task_operations o JOIN tasks t ON t.key = o.task_key WHERE o.plugin_id = ?1 AND o.operation_id = ?2",
+            "SELECT name FROM plugin_inventory WHERE id = ?1",
+            [plugin_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(internal)?
+        .unwrap_or_else(|| plugin_id.to_string());
+    if let Some(stored) = transaction
+        .query_row(
+            "SELECT o.task_key, t.project_prefix, o.start_state, o.start_options, o.start_error FROM plugin_task_operations o JOIN tasks t ON t.key = o.task_key WHERE o.plugin_id = ?1 AND o.operation_id = ?2",
             rusqlite::params![plugin_id, operation_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
         )
         .optional()
         .map_err(internal)?
     {
         transaction.commit().map_err(internal)?;
-        // The retry's own project may differ: the task, and its session, stay where they are.
-        let project = projects
-            .iter()
-            .find(|project| project.prefix == prefix)
-            .ok_or_else(|| internal(format!("task {task_key} has no project")))?;
+        let (task_key, prefix, state, options, error) = stored;
+        // The first request decides the session, so a retry with other params changes nothing,
+        // and the task, with its session, stays in its own project.
+        let start = match state.as_deref() {
+            None => None,
+            Some("started") => Some(RequestedStart::Started),
+            Some("failed") => Some(RequestedStart::Failed {
+                error: error.unwrap_or_default(),
+            }),
+            Some(_) => {
+                let project = projects
+                    .iter()
+                    .find(|project| project.prefix == prefix)
+                    .ok_or_else(|| internal(format!("task {task_key} has no project")))?;
+                let options = serde_json::from_str(options.as_deref().unwrap_or("{}"))
+                    .map_err(internal)?;
+                Some(RequestedStart::Pending(PendingTaskStart {
+                    plugin,
+                    project_id: project.id.clone(),
+                    task_key: task_key.clone(),
+                    options,
+                }))
+            }
+        };
         return Ok(InsertedPluginTask {
             task: plugin_task_value(conn, &task_key).map_err(CallbackError::Internal)?,
             lifecycle: None,
-            start: pending_start(project, &task_key),
+            start,
         });
     }
     let project = projects
@@ -2577,14 +2637,32 @@ fn insert_plugin_task(
     .map_err(internal)?;
     let task_key = created.key;
     let first_child = created.first_child;
+    let start_options = start
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(internal)?;
     transaction
         .execute(
-            "INSERT OR REPLACE INTO plugin_task_operations (plugin_id, operation_id, task_key) VALUES (?1, ?2, ?3)",
-            rusqlite::params![plugin_id, operation_id, task_key],
+            "INSERT INTO plugin_task_operations (plugin_id, operation_id, task_key, start_options, start_state) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                plugin_id,
+                operation_id,
+                task_key,
+                start_options,
+                start.as_ref().map(|_| "pending")
+            ],
         )
         .map_err(internal)?;
     transaction.commit().map_err(internal)?;
-    let start = pending_start(&project, &task_key);
+    let start = start.map(|options| {
+        RequestedStart::Pending(PendingTaskStart {
+            plugin,
+            project_id: project.id.clone(),
+            task_key: task_key.clone(),
+            options,
+        })
+    });
     let lifecycle = parent_key
         .zip(first_child)
         .map(|(parent_key, first_child)| {
@@ -5310,29 +5388,35 @@ mod tests {
     #[test]
     fn a_plugin_task_asking_for_a_session_carries_its_start_even_on_retry() {
         let (mut conn, _checkout, project) = task_database();
-        let request = || {
+        let request = |start: Value| {
             PluginTaskRequest::from_params(&serde_json::json!({
                 "project_path": project.path,
                 "operation_id": "routine:r1:2026-10-05T13:00:00Z",
                 "title": "Retro",
-                "start": { "provider": "claude" },
+                "start": start,
             }))
             .unwrap()
         };
-        let expected = PendingTaskStart {
+        let expected = RequestedStart::Pending(PendingTaskStart {
+            plugin: "routines".into(),
             project_id: project.id.clone(),
             task_key: format!("{}-1", project.prefix),
             options: StartOptions {
                 provider: Some("claude".into()),
                 ..StartOptions::default()
             },
-        };
+        });
 
-        let first = insert_plugin_task(&mut conn, "routines", request()).unwrap();
-        let retried = insert_plugin_task(&mut conn, "routines", request()).unwrap();
+        let first = insert_plugin_task(
+            &mut conn,
+            "routines",
+            request(serde_json::json!({ "provider": "claude" })),
+        )
+        .unwrap();
+        let retried = insert_plugin_task(&mut conn, "routines", request(Value::Null)).unwrap();
 
         assert_eq!(first.start, Some(expected.clone()));
-        assert_eq!(retried.start, Some(expected));
+        assert_eq!(retried.start, Some(expected), "the first request decides");
         let plain = insert_plugin_task(
             &mut conn,
             "routines",
@@ -5365,29 +5449,111 @@ mod tests {
 
         assert_eq!(
             retried.start,
-            Some(PendingTaskStart {
+            Some(RequestedStart::Pending(PendingTaskStart {
+                plugin: "routines".into(),
                 project_id: project.id.clone(),
                 task_key: format!("{}-1", project.prefix),
                 options: StartOptions::default(),
-            })
+            }))
         );
     }
 
     #[test]
-    fn a_pending_start_travels_in_the_reply_until_the_host_takes_it() {
-        let pending = PendingTaskStart {
-            project_id: "p".into(),
-            task_key: "PLA-1".into(),
-            options: StartOptions::default(),
+    fn a_requested_start_survives_a_restart_until_it_settles_once() {
+        use crate::task_start::{finish_start, pending_starts};
+        let (mut conn, _checkout, project) = task_database();
+        conn.execute(
+            "INSERT INTO plugin_inventory (id, name, version, host_api_version, source_kind, backend_entrypoint) VALUES ('routines', 'Routines', '1', 'v', 'local', 'bin/r')",
+            [],
+        )
+        .unwrap();
+        let request = |operation_id: &str| {
+            PluginTaskRequest::from_params(&serde_json::json!({
+                "project_path": project.path,
+                "operation_id": operation_id,
+                "title": "Retro",
+                "start": { "provider": "claude" },
+            }))
+            .unwrap()
+        };
+        let pending = |start: Option<RequestedStart>| match start {
+            Some(RequestedStart::Pending(pending)) => pending,
+            other => panic!("expected a pending start, got {other:?}"),
+        };
+        let first = pending(
+            insert_plugin_task(&mut conn, "routines", request("a"))
+                .unwrap()
+                .start,
+        );
+        let second = pending(
+            insert_plugin_task(&mut conn, "routines", request("b"))
+                .unwrap()
+                .start,
+        );
+        let third = pending(
+            insert_plugin_task(&mut conn, "routines", request("c"))
+                .unwrap()
+                .start,
+        );
+        assert_eq!(first.plugin, "Routines");
+
+        // What the app resumes after quitting before any session row existed.
+        assert_eq!(
+            pending_starts(&conn).unwrap(),
+            vec![first.clone(), second.clone(), third.clone()]
+        );
+
+        assert_eq!(finish_start(&conn, &first, Ok(None)), Ok(None));
+        assert_eq!(
+            finish_start(
+                &conn,
+                &second,
+                Ok(Some("Branch is already in a worktree".into()))
+            ),
+            Ok(Some(format!(
+                "Routines started a session for {}: Branch is already in a worktree",
+                second.task_key
+            )))
+        );
+        assert_eq!(
+            finish_start(&conn, &third, Err("Unknown provider: claude".into())),
+            Ok(Some(format!(
+                "Routines created {}, but its session could not start: Unknown provider: claude",
+                third.task_key
+            )))
+        );
+        assert_eq!(pending_starts(&conn).unwrap(), Vec::new());
+        finish_start(&conn, &third, Ok(None)).unwrap();
+
+        let mut retried = |operation_id| {
+            insert_plugin_task(&mut conn, "routines", request(operation_id))
+                .unwrap()
+                .start
+        };
+        assert_eq!(retried("a"), Some(RequestedStart::Started));
+        assert_eq!(retried("b"), Some(RequestedStart::Started));
+        assert_eq!(
+            retried("c"),
+            Some(RequestedStart::Failed {
+                error: "Unknown provider: claude".into()
+            }),
+            "a failed start stays failed rather than starting a second time"
+        );
+    }
+
+    #[test]
+    fn a_requested_start_travels_in_the_reply_until_the_host_takes_it() {
+        let failed = RequestedStart::Failed {
+            error: "Unknown provider: x".into(),
         };
         let mut reply = task_reply(
             serde_json::json!({ "task": { "key": "PLA-1" } }),
-            Some(&pending),
+            Some(&failed),
         );
 
-        assert_eq!(take_pending_start(&mut reply), Some(pending));
+        assert_eq!(take_requested_start(&mut reply), Some(failed));
         assert_eq!(reply, serde_json::json!({ "task": { "key": "PLA-1" } }));
-        assert_eq!(take_pending_start(&mut reply), None);
+        assert_eq!(take_requested_start(&mut reply), None);
     }
 
     #[tokio::test]

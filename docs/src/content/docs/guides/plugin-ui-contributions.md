@@ -97,8 +97,9 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
   PlaneAI renders the branch, session name, and prompt from the configured task templates (or their defaults), launches the session, and moves the task to `in_progress`.
   Auto-approve is turned off for a plugin provider that does not support it.
   The reply does not wait for the launch: it is `{ "task": ..., "session": "starting" }`, or `"exists"` when the task already has a session.
-  Retrying the same `operationId` never starts a second session: PlaneAI starts one only when the task has no session and no start is in flight, so a retry after a crash starts the missing session once.
-  A failed start is logged and shown to the user as "Routine task KEY was created but its session failed: ...".
+  PlaneAI records the requested start with the operation until a session exists or the start fails, and resumes a start still pending when it next launches, so quitting mid-start loses nothing.
+  Retrying the same `operationId` never starts a second session, and the first request's `start` decides: a retry answers `"starting"` while the start is pending, `"exists"` once it succeeded, and `"failed"` with `"session_error"` once it failed.
+  A failed start, or one that succeeded with a warning, is shown to the user naming the plugin, as in "Routines created KEY, but its session could not start: ...".
   `sessions.start` also permits `host.sessions.providers`, returning `{ "default": "claude", "providers": [{ "key", "label", "auto_approve" }] }`: the configured providers, then those of running plugins, as the task form lists them.
   `auto_approve` is `false` for a plugin provider that does not support it.
   With the `local` session backend the agent spawns only when a terminal view attaches, so a session started this way waits until the user opens it.

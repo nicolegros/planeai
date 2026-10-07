@@ -255,9 +255,21 @@ pub async fn start(
 /// A created task whose session a plugin asked for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingTaskStart {
+    /// The asking plugin's name, for the messages the user sees.
+    pub plugin: String,
     pub project_id: String,
     pub task_key: String,
     pub options: StartOptions,
+}
+
+/// Where a plugin task's requested session stands. Stored with the plugin's task operation,
+/// so it outlives an app restart and each task's session is started at most once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+pub enum RequestedStart {
+    Pending(PendingTaskStart),
+    Started,
+    Failed { error: String },
 }
 
 /// Where a plugin's session start stands when the plugin is answered.
@@ -266,6 +278,7 @@ pub struct PendingTaskStart {
 pub enum SessionStart {
     Starting,
     Exists,
+    Failed,
 }
 
 /// Task keys whose session is starting in the background.
@@ -326,7 +339,8 @@ impl StartClaims {
 static IN_FLIGHT: LazyLock<StartClaims> = LazyLock::new(StartClaims::default);
 
 /// Start the task's session unless it has one or one is starting, without waiting for it, so
-/// a retried request converges on one session. A failure reaches the user as `app-error`.
+/// a retried request converges on one session. The outcome is recorded with the plugin's task
+/// operation and a failure or warning reaches the user as `app-error`.
 pub async fn start_in_background(
     app: &AppHandle,
     pending: PendingTaskStart,
@@ -336,7 +350,11 @@ pub async fn start_in_background(
     let admission = crate::commands::blocking(move || {
         IN_FLIGHT.admit(&task_key, || {
             let conn = db.lock().map_err(|e| e.to_string())?;
-            has_session(&conn, &task_key)
+            let exists = has_session(&conn, &task_key)?;
+            if exists {
+                record_start(&conn, &task_key, &Ok(()))?;
+            }
+            Ok(exists)
         })
     })
     .await?;
@@ -349,25 +367,138 @@ pub async fn start_in_background(
     Ok(SessionStart::Starting)
 }
 
+/// Start every session a plugin asked for that has not started or failed yet, as after the
+/// app quit between creating a task and creating its session.
+pub async fn resume_pending_starts(app: &AppHandle) {
+    let db = app.state::<crate::state::DbState>().0.clone();
+    let pending = crate::commands::blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        pending_starts(&conn)
+    })
+    .await;
+    match pending {
+        Ok(pending) => {
+            for start in pending {
+                let task_key = start.task_key.clone();
+                if let Err(error) = start_in_background(app, start).await {
+                    tracing::warn!(task_key, %error, "could not resume a task session start");
+                }
+            }
+        }
+        Err(error) => tracing::warn!(%error, "could not read pending task session starts"),
+    }
+}
+
 // Not async: `start` reaches plugin RPC, which serves the callbacks that call
 // `start_in_background`, so its future type must not contain this one.
 fn spawn_start(app: AppHandle, pending: PendingTaskStart, claim: StartClaim) {
     tauri::async_runtime::spawn(async move {
-        let PendingTaskStart {
+        let outcome = start(
+            &app,
+            &pending.project_id,
+            &pending.task_key,
+            pending.options.clone(),
+        )
+        .await;
+        let db = app.state::<crate::state::DbState>().0.clone();
+        let message = crate::commands::blocking(move || {
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            finish_start(&conn, &pending, outcome.map(|result| result.warning))
+        })
+        .await;
+        drop(claim);
+        match message {
+            Ok(Some(message)) => {
+                if let Err(error) = app.emit("app-error", message) {
+                    tracing::warn!(%error, "failed to report a task session start");
+                }
+            }
+            Ok(None) => {}
+            Err(error) => tracing::warn!(%error, "failed to record a task session start"),
+        }
+    });
+}
+
+/// Record how a background start ended and say what the user should hear about it: a
+/// failure, or a session that started with a warning.
+pub(crate) fn finish_start(
+    conn: &rusqlite::Connection,
+    pending: &PendingTaskStart,
+    outcome: Result<Option<String>, String>,
+) -> Result<Option<String>, String> {
+    let PendingTaskStart {
+        plugin, task_key, ..
+    } = pending;
+    record_start(
+        conn,
+        task_key,
+        &outcome.as_ref().map(|_| ()).map_err(String::as_str),
+    )?;
+    Ok(match outcome {
+        Ok(None) => None,
+        Ok(Some(warning)) => Some(format!(
+            "{plugin} started a session for {task_key}: {warning}"
+        )),
+        Err(error) => {
+            tracing::warn!(task_key, %error, "background task session start failed");
+            Some(format!(
+                "{plugin} created {task_key}, but its session could not start: {error}"
+            ))
+        }
+    })
+}
+
+/// Settle a requested start; one already settled stays as it is.
+fn record_start(
+    conn: &rusqlite::Connection,
+    task_key: &str,
+    outcome: &Result<(), &str>,
+) -> Result<(), String> {
+    let (state, error) = match outcome {
+        Ok(()) => ("started", None),
+        Err(error) => ("failed", Some(*error)),
+    };
+    conn.execute(
+        "UPDATE plugin_task_operations SET start_state = ?2, start_error = ?3 WHERE task_key = ?1 AND start_state = 'pending'",
+        rusqlite::params![task_key, state, error],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// The requested starts still pending, in the order their tasks were created.
+pub(crate) fn pending_starts(conn: &rusqlite::Connection) -> Result<Vec<PendingTaskStart>, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT COALESCE(i.name, o.plugin_id), p.id, o.task_key, o.start_options
+             FROM plugin_task_operations o
+             JOIN tasks t ON t.key = o.task_key
+             JOIN projects p ON p.prefix = t.project_prefix
+             LEFT JOIN plugin_inventory i ON i.id = o.plugin_id
+             WHERE o.start_state = 'pending'
+             ORDER BY t.created_at",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.map(|row| {
+        let (plugin, project_id, task_key, options) = row.map_err(|e| e.to_string())?;
+        Ok(PendingTaskStart {
+            plugin,
             project_id,
             task_key,
-            options,
-        } = pending;
-        if let Err(error) = start(&app, &project_id, &task_key, options).await {
-            tracing::warn!(task_key, %error, "background task session start failed");
-            let message =
-                format!("Routine task {task_key} was created but its session failed: {error}");
-            if let Err(error) = app.emit("app-error", message) {
-                tracing::warn!(%error, "failed to report a failed task session start");
-            }
-        }
-        drop(claim);
-    });
+            options: serde_json::from_str(&options).map_err(|e| e.to_string())?,
+        })
+    })
+    .collect()
 }
 
 /// Whether any session, whatever its status, was ever started for the task.

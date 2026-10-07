@@ -269,10 +269,6 @@ fn main() {
                 db_arc.clone(),
                 app.handle().clone(),
             ));
-            let plugin_runtime = app.state::<plugins::PluginRuntimeHandle>().0.clone();
-            tauri::async_runtime::spawn(async move {
-                plugin_runtime.start_enabled().await;
-            });
 
             // Notification system
             let notify_state: notify::SharedNotifyState =
@@ -341,6 +337,15 @@ fn main() {
             // Symphony orchestrator
             let symphony_state = startup::init_symphony(app, &app_dir, &db_arc);
             app.manage(SymphonyHandle(Mutex::new(symphony_state)));
+
+            // Last, so every state a session launch reads is managed. Plugin providers run
+            // before starts the app quit during are resumed, so those starts can name them.
+            let plugin_runtime = app.state::<plugins::PluginRuntimeHandle>().0.clone();
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                plugin_runtime.start_enabled().await;
+                task_start::resume_pending_starts(&handle).await;
+            });
 
             // Auto-update check (fire-and-forget on startup)
             updater::check_for_updates(app.handle());
