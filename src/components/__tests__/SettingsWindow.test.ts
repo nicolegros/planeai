@@ -380,7 +380,7 @@ describe("agents", () => {
           command: "codex",
           yolo_flag: "--dangerously-bypass-approvals-and-sandbox",
           resume_command: "codex resume --last",
-          prompt_command: "{prompt}",
+          prompt_command: "-- {prompt}",
         },
       },
     });

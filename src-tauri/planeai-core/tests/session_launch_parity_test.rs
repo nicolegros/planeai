@@ -438,7 +438,7 @@ fn kiro_provider() -> ProviderConfig {
     ProviderConfig {
         command: "kiro-cli chat".to_string(),
         yolo_flag: Some("--trust-all-tools".to_string()),
-        prompt_command: Some("{prompt}".to_string()),
+        prompt_command: Some("-- {prompt}".to_string()),
     }
 }
 
@@ -446,7 +446,7 @@ fn claude_provider() -> ProviderConfig {
     ProviderConfig {
         command: "claude".to_string(),
         yolo_flag: Some("--dangerously-skip-permissions".to_string()),
-        prompt_command: Some("-p {prompt}".to_string()),
+        prompt_command: Some("-- {prompt}".to_string()),
     }
 }
 
@@ -515,15 +515,15 @@ fn kiro_task_prompt_injected() {
 }
 
 #[test]
-fn claude_task_prompt_uses_dash_p() {
+fn claude_task_prompt_starts_an_interactive_session() {
     let result = build_provider_launch_command(
         &claude_provider(),
         false,
-        Some("Fix the login bug"),
+        Some("- Fix the login bug"),
         false,
         None,
     );
-    assert!(result.command.contains("-p 'Fix the login bug'"));
+    assert_eq!(result.command, "claude -- '- Fix the login bug'");
     assert!(result.prompt_was_injected);
 }
 
@@ -699,7 +699,7 @@ fn task_prompt_plus_auto_approve_autonomous_true() {
 
 #[test]
 fn resolve_task_prompt_injected_via_config() {
-    let config = LaunchConfig::default(); // has kiro with prompt_command: "{prompt}"
+    let config = LaunchConfig::default(); // has kiro with prompt_command: "-- {prompt}"
     let overrides = SessionLaunchOverrides {
         cwd: Some(std::env::temp_dir()),
         task_prompt: Some("Implement PLA-42".to_string()),

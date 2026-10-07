@@ -194,14 +194,7 @@ pub fn resolve_attach_plan(
         } else {
             // This spawn is the launch, so it carries the task prompt `launch` kept for it.
             let prompt = db::pending_prompt(conn, session_id).map_err(|e| e.to_string())?;
-            planeai_core::session_launch::build_provider_launch_command(
-                &provider_def.launch_config(),
-                session.auto_approve,
-                prompt.as_deref(),
-                false,
-                None,
-            )
-            .command
+            provider_def.first_launch_command(session.auto_approve, prompt.as_deref())
         };
 
         let target = pty::PtyTarget::Shell {
@@ -551,7 +544,7 @@ mod tests {
 
         // The app may restart before anyone opens the session.
         let conn = open();
-        assert_eq!(command(&conn), "kiro-cli chat 'Fix the login redirect'");
+        assert_eq!(command(&conn), "kiro-cli chat -- 'Fix the login redirect'");
 
         db::mark_attached(&conn, "session-1").unwrap();
         assert_eq!(command(&conn), "kiro-cli chat --resume");
@@ -563,6 +556,47 @@ mod tests {
             command(&conn),
             "kiro-cli chat --resume",
             "a restored session resumes without replaying the prompt"
+        );
+    }
+
+    #[test]
+    fn every_default_provider_starts_its_local_session_interactively_on_the_prompt() {
+        let worktree = tempfile::tempdir().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "demo", "/repos/demo").unwrap();
+        let first_attach = |provider: &str| {
+            db::create_session_with_params(
+                &conn,
+                &planeai_core::services::CreateSessionParams {
+                    id: provider.into(),
+                    project_id: project.id.clone(),
+                    branch: "feature".into(),
+                    worktree_path: Some(worktree.path().display().to_string()),
+                    provider: Some(provider.into()),
+                    backend: "local".into(),
+                    task_key: Some("PLA-1".into()),
+                    pending_prompt: Some("- Fix the login redirect".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            match resolve_attach_plan(&conn, &config_with_provider(), provider, None)
+                .unwrap()
+                .pty_target
+            {
+                pty::PtyTarget::Shell { command, .. } => command,
+                other => panic!("expected a shell target, got {other:?}"),
+            }
+        };
+        assert_eq!(
+            ["kiro", "claude", "copilot", "codex"].map(first_attach),
+            [
+                "kiro-cli chat -- '- Fix the login redirect'",
+                "claude -- '- Fix the login redirect'",
+                "copilot --interactive='- Fix the login redirect'",
+                "codex -- '- Fix the login redirect'",
+            ]
         );
     }
 

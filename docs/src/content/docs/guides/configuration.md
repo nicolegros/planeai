@@ -20,8 +20,8 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
     "kiro": {
       // Command to start the agent
       "command": "kiro-cli chat",
-      // Command to send a prompt to an existing session
-      "prompt_command": "kiro-cli chat --message \"{{prompt}}\"",
+      // Arguments appended to `command` to start the session on a task prompt
+      "prompt_command": "-- {prompt}",
       // Template for autonomous prompts (task dispatch)
       "autonomous_prompt_template": "Complete this task: {{task.title}}\n\n{{task.description}}",
       // Flag to enable autonomous/yolo mode (no confirmations)
@@ -31,13 +31,13 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
     },
     "claude": {
       "command": "claude",
-      "prompt_command": "claude --message \"{{prompt}}\"",
+      "prompt_command": "-- {prompt}",
       "autonomous_prompt_template": "{{task.title}}: {{task.description}}",
       "yolo_flag": "--dangerously-skip-permissions",
     },
     "codex": {
       "command": "codex --no-daemon",
-      "prompt_command": "{prompt}",
+      "prompt_command": "-- {prompt}",
       "yolo_flag": "--dangerously-bypass-approvals-and-sandbox",
       "resume_command": "codex --no-daemon resume --last",
     },
@@ -48,10 +48,14 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
 | Field                        | Description                                                       |
 | ---------------------------- | ----------------------------------------------------------------- |
 | `command`                    | Shell command to start a new agent session                        |
-| `prompt_command`             | Command to send a prompt to a running session                     |
+| `prompt_command`             | Arguments appended to `command` to start on the task prompt       |
 | `autonomous_prompt_template` | Template rendered when auto-dispatch sends a task                 |
 | `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations            |
 | `resume_command`             | Command to resume interactively when restarting an exited session |
+
+`prompt_command` must keep the agent interactive: `{prompt}` becomes the shell-quoted task prompt, and `--` ends option parsing so a prompt starting with `-` stays a prompt.
+The built-in agents use `-- {prompt}`, except Copilot, which uses `--interactive={prompt}`.
+A built-in agent still holding an earlier default (`-p {prompt}` for Claude Code, `copilot --resume` for Copilot) is upgraded when the config loads; a value you changed is kept.
 
 Kiro, Claude Code, Copilot and Codex are always listed under **Preferences → Agents**. Turn one on to add its preset entry, or off to remove it. The default agent cannot be turned off. Each agent shows whether its binary was found on the session PATH, and **Search paths** adds folders to `extra_path_dirs`.
 

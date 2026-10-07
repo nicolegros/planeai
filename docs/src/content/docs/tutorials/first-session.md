@@ -24,7 +24,7 @@ Open (or create) your config file at `~/.config/planeai/config.json`:
   "providers": {
     "claude": {
       "command": "claude",
-      "prompt_command": "claude --message \"{{prompt}}\"",
+      "prompt_command": "-- {prompt}",
       "yolo_flag": "--dangerously-skip-permissions",
     },
   },
@@ -38,7 +38,7 @@ Alternatively, configure this in **Preferences** (⌘, / Ctrl+,) on the **Agents
 This tells planeai:
 
 - **command** — launch Claude by running `claude`
-- **prompt_command** — send messages to a running Claude session
+- **prompt_command** - start Claude on a task's prompt, as `claude -- '<prompt>'`
 - **yolo_flag** — the flag for autonomous mode (used by auto-dispatch; not needed for manual sessions)
 - **session_backend** — use the local backend (no tmux required, sessions run in-process)
 

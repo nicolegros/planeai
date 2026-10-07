@@ -441,41 +441,90 @@ fn default_config_kiro_provider_has_resume_fields() {
     );
 }
 
+/// The command each built-in provider starts with on every backend: `launch` runs it on
+/// daemon, rmux and tmux, and a local session's first attach runs it.
 #[test]
-fn default_config_includes_copilot_provider() {
+fn every_default_provider_starts_an_interactive_session_on_the_task_prompt() {
     let config = Config::default();
-    let copilot = config.providers.get("copilot").unwrap();
-    assert_eq!(copilot.command, "copilot --resume");
-    assert_eq!(copilot.yolo_flag, Some("--allow-all-tools".to_string()));
-    assert_eq!(copilot.prompt_command, Some("{prompt}".to_string()));
+    let first_launch = |key: &str| {
+        config.providers[key].first_launch_command(true, Some("- Fix the user's login"))
+    };
+    assert_eq!(
+        first_launch("kiro"),
+        "kiro-cli chat --trust-all-tools -- '- Fix the user'\\''s login'"
+    );
+    assert_eq!(
+        first_launch("claude"),
+        "claude --dangerously-skip-permissions -- '- Fix the user'\\''s login'"
+    );
+    assert_eq!(
+        first_launch("copilot"),
+        "copilot --allow-all-tools --interactive='- Fix the user'\\''s login'"
+    );
+    assert_eq!(
+        first_launch("codex"),
+        "codex --dangerously-bypass-approvals-and-sandbox -- '- Fix the user'\\''s login'"
+    );
+    assert_eq!(
+        config.providers["copilot"].first_launch_command(false, None),
+        "copilot"
+    );
 }
 
 #[test]
-fn default_config_includes_codex_provider() {
+fn every_default_provider_restarts_by_resuming() {
     let config = Config::default();
-    let codex = config.providers.get("codex").unwrap();
-    assert_eq!(codex.command, "codex");
+    let restart = |key: &str| restart_command_for_provider(&config.providers[key]);
     assert_eq!(
-        codex.yolo_flag,
-        Some("--dangerously-bypass-approvals-and-sandbox".to_string())
+        ["kiro", "claude", "copilot", "codex"].map(restart),
+        [
+            "kiro-cli chat --resume",
+            "claude --resume",
+            "copilot --continue",
+            "codex resume --last"
+        ]
     );
-    assert_eq!(
-        codex.resume_command,
-        Some("codex resume --last".to_string())
-    );
-    assert_eq!(codex.prompt_command, Some("{prompt}".to_string()));
 }
 
 #[test]
-fn default_config_includes_claude_provider() {
-    let config = Config::default();
-    let claude = config.providers.get("claude").unwrap();
-    assert_eq!(claude.command, "claude");
+fn load_upgrades_superseded_provider_defaults_and_keeps_changed_values() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{
+            "default_provider": "claude",
+            "providers": {
+                "claude": { "command": "claude", "prompt_command": "-p {prompt}" },
+                "copilot": { "command": "copilot --resume", "prompt_command": "{prompt}" },
+                "codex": { "command": "codex", "prompt_command": "--full-auto {prompt}" },
+                "kiro": { "command": "kiro-cli chat --agent dev", "prompt_command": "{prompt}" },
+                "mine": { "command": "agent", "prompt_command": "-p {prompt}" }
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let (config, warnings) = load(dir.path());
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let launch = |key: &str| config.providers[key].first_launch_command(false, Some("Go"));
+    assert_eq!(launch("claude"), "claude -- 'Go'");
+    assert_eq!(launch("copilot"), "copilot --interactive='Go'");
     assert_eq!(
-        claude.yolo_flag,
-        Some("--dangerously-skip-permissions".to_string())
+        restart_command_for_provider(&config.providers["copilot"]),
+        "copilot --continue"
     );
-    assert_eq!(claude.prompt_command, Some("-p {prompt}".to_string()));
+    assert_eq!(
+        launch("codex"),
+        "codex --full-auto 'Go'",
+        "a changed value is kept"
+    );
+    assert_eq!(launch("kiro"), "kiro-cli chat --agent dev -- 'Go'");
+    assert_eq!(
+        launch("mine"),
+        "agent -p 'Go'",
+        "only built-in providers are upgraded"
+    );
 }
 
 #[test]

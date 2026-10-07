@@ -152,40 +152,32 @@ pub(crate) async fn launch(
         _ => None,
     };
     // Phase 1: gather params from config (holding config lock briefly)
-    let (cmd, provider_key, backend, scrollback_bytes, extra_path_dirs) = if let Some(key) =
-        runtime_provider
-    {
-        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-        (
-            String::new(),
-            key,
-            PLUGIN_BACKEND.to_string(),
-            0,
-            cfg.resolved_extra_path_dirs(),
-        )
-    } else {
-        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-        let pk = provider.unwrap_or_else(|| cfg.default_provider.clone());
-        let provider_def = cfg
-            .providers
-            .get(&pk)
-            .ok_or_else(|| format!("Unknown provider: {pk}"))?;
+    let (cmd, provider_key, backend, scrollback_bytes, extra_path_dirs) =
+        if let Some(key) = runtime_provider {
+            let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+            (
+                String::new(),
+                key,
+                PLUGIN_BACKEND.to_string(),
+                0,
+                cfg.resolved_extra_path_dirs(),
+            )
+        } else {
+            let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+            let pk = provider.unwrap_or_else(|| cfg.default_provider.clone());
+            let provider_def = cfg
+                .providers
+                .get(&pk)
+                .ok_or_else(|| format!("Unknown provider: {pk}"))?;
 
-        let launch_cmd = planeai_core::session_launch::build_provider_launch_command(
-            &provider_def.launch_config(),
-            auto_approve,
-            task_prompt.as_deref(),
-            false, // manual launches are not autonomous
-            None,  // autonomous_prompt_template not used for manual launches
-        );
-        let c = launch_cmd.command;
-        tracing::info!(command = %c, prompt_injected = launch_cmd.prompt_was_injected, approve_applied = launch_cmd.auto_approve_was_applied, "launch command built");
+            let c = provider_def.first_launch_command(auto_approve, task_prompt.as_deref());
+            tracing::info!(command = %c, "launch command built");
 
-        let be = config::resolve_backend(&cfg).to_string();
-        let sb = 1_048_576;
-        let epd = cfg.resolved_extra_path_dirs();
-        (c, pk, be, sb, epd)
-    };
+            let be = config::resolve_backend(&cfg).to_string();
+            let sb = 1_048_576;
+            let epd = cfg.resolved_extra_path_dirs();
+            (c, pk, be, sb, epd)
+        };
 
     // Phase 2: async work — detect base branch, git worktree/checkout
     let effective_base_branch = {

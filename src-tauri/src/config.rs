@@ -221,6 +221,18 @@ impl Provider {
             prompt_command: self.prompt_command.clone(),
         }
     }
+
+    /// The command a new session's agent starts with, carrying the task prompt if any.
+    pub fn first_launch_command(&self, auto_approve: bool, task_prompt: Option<&str>) -> String {
+        planeai_core::session_launch::build_provider_launch_command(
+            &self.launch_config(),
+            auto_approve,
+            task_prompt,
+            false,
+            None,
+        )
+        .command
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -341,47 +353,19 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        let mut providers = HashMap::new();
-        providers.insert(
-            "kiro".to_string(),
-            Provider {
-                command: "kiro-cli chat".to_string(),
-                yolo_flag: Some("--trust-all-tools".to_string()),
-                resume_command: Some("kiro-cli chat --resume".to_string()),
-                prompt_command: Some("{prompt}".to_string()),
-                autonomous_prompt_template: None, // deprecated: now on auto_dispatch
-            },
-        );
-        providers.insert(
-            "claude".to_string(),
-            Provider {
-                command: "claude".to_string(),
-                yolo_flag: Some("--dangerously-skip-permissions".to_string()),
-                resume_command: Some("claude --resume".to_string()),
-                prompt_command: Some("-p {prompt}".to_string()),
-                autonomous_prompt_template: None, // deprecated: now on auto_dispatch
-            },
-        );
-        providers.insert(
-            "copilot".to_string(),
-            Provider {
-                command: "copilot --resume".to_string(),
-                yolo_flag: Some("--allow-all-tools".to_string()),
-                resume_command: None,
-                prompt_command: Some("{prompt}".to_string()),
-                autonomous_prompt_template: None, // deprecated: now on auto_dispatch
-            },
-        );
-        providers.insert(
-            "codex".to_string(),
-            Provider {
-                command: "codex".to_string(),
-                yolo_flag: Some("--dangerously-bypass-approvals-and-sandbox".to_string()),
-                resume_command: Some("codex resume --last".to_string()),
-                prompt_command: Some("{prompt}".to_string()),
-                autonomous_prompt_template: None, // deprecated: now on auto_dispatch
-            },
-        );
+        let providers = planeai_core::session_launch::BUILTIN_PROVIDERS
+            .iter()
+            .map(|builtin| {
+                let provider = Provider {
+                    command: builtin.command.to_string(),
+                    yolo_flag: Some(builtin.yolo_flag.to_string()),
+                    resume_command: Some(builtin.resume_command.to_string()),
+                    prompt_command: Some(builtin.prompt_command.to_string()),
+                    autonomous_prompt_template: None,
+                };
+                (builtin.key.to_string(), provider)
+            })
+            .collect();
         Config {
             appearance: Appearance {
                 mode: "system".to_string(),
@@ -451,12 +435,18 @@ fn migrate_legacy_task_managers(val: &mut serde_json::Value) {
     obj.remove("default_task_manager");
 }
 
-/// Backfill new provider fields from defaults for known providers.
-/// This ensures existing config files get resume support without manual editing.
+/// Bring built-in providers up to today's defaults: fill fields added since the file was
+/// written, and replace superseded defaults the user never changed. Runs on every load, so
+/// the file needs no rewrite.
 fn backfill_provider_defaults(config: &mut Config) {
     let defaults = Config::default();
-    for (key, default_provider) in &defaults.providers {
-        if let Some(provider) = config.providers.get_mut(key) {
+    for (key, provider) in &mut config.providers {
+        planeai_core::session_launch::upgrade_builtin_provider(
+            key,
+            &mut provider.command,
+            &mut provider.prompt_command,
+        );
+        if let Some(default_provider) = defaults.providers.get(key) {
             if provider.resume_command.is_none() {
                 provider.resume_command = default_provider.resume_command.clone();
             }

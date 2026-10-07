@@ -44,25 +44,105 @@ fn default_provider() -> String {
     "kiro".to_string()
 }
 
+/// A provider PlaneAI configures out of the box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltinProvider {
+    pub key: &'static str,
+    pub command: &'static str,
+    pub yolo_flag: &'static str,
+    pub resume_command: &'static str,
+    /// Starts an interactive session on the prompt. `--` ends option parsing, so a prompt
+    /// starting with `-` stays a prompt.
+    pub prompt_command: &'static str,
+}
+
+pub const BUILTIN_PROVIDERS: [BuiltinProvider; 4] = [
+    BuiltinProvider {
+        key: "kiro",
+        command: "kiro-cli chat",
+        yolo_flag: "--trust-all-tools",
+        resume_command: "kiro-cli chat --resume",
+        prompt_command: "-- {prompt}",
+    },
+    BuiltinProvider {
+        key: "claude",
+        command: "claude",
+        yolo_flag: "--dangerously-skip-permissions",
+        resume_command: "claude --resume",
+        prompt_command: "-- {prompt}",
+    },
+    BuiltinProvider {
+        key: "copilot",
+        command: "copilot",
+        yolo_flag: "--allow-all-tools",
+        resume_command: "copilot --continue",
+        // `-i` reads a prompt starting with `-` as a flag; the `=` form never does.
+        prompt_command: "--interactive={prompt}",
+    },
+    BuiltinProvider {
+        key: "codex",
+        command: "codex",
+        yolo_flag: "--dangerously-bypass-approvals-and-sandbox",
+        resume_command: "codex resume --last",
+        prompt_command: "-- {prompt}",
+    },
+];
+
+/// Earlier built-in values that ran no interactive session on the task prompt: claude's `-p`
+/// printed one answer and exited, and copilot's `--resume` read the prompt as a session name.
+const SUPERSEDED_DEFAULTS: [(&str, ProviderField, &str); 5] = [
+    ("kiro", ProviderField::PromptCommand, "{prompt}"),
+    ("claude", ProviderField::PromptCommand, "-p {prompt}"),
+    ("copilot", ProviderField::Command, "copilot --resume"),
+    ("copilot", ProviderField::PromptCommand, "{prompt}"),
+    ("codex", ProviderField::PromptCommand, "{prompt}"),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderField {
+    Command,
+    PromptCommand,
+}
+
+/// Replace a built-in provider's field that still holds a superseded default with today's
+/// default; a value the user changed is kept. Returns whether anything changed.
+pub fn upgrade_builtin_provider(
+    key: &str,
+    command: &mut String,
+    prompt_command: &mut Option<String>,
+) -> bool {
+    let Some(builtin) = BUILTIN_PROVIDERS.iter().find(|builtin| builtin.key == key) else {
+        return false;
+    };
+    let mut changed = false;
+    for (_, field, superseded) in SUPERSEDED_DEFAULTS.iter().filter(|(k, ..)| *k == key) {
+        let (value, current) = match field {
+            ProviderField::Command => (Some(&mut *command), builtin.command),
+            ProviderField::PromptCommand => (prompt_command.as_mut(), builtin.prompt_command),
+        };
+        if let Some(value) = value.filter(|value| value.as_str() == *superseded) {
+            *value = current.to_string();
+            changed = true;
+        }
+    }
+    changed
+}
+
 impl Default for LaunchConfig {
     fn default() -> Self {
-        let mut providers = HashMap::new();
-        providers.insert(
-            "kiro".to_string(),
-            ProviderConfig {
-                command: "kiro-cli chat".to_string(),
-                yolo_flag: Some("--trust-all-tools".to_string()),
-                prompt_command: Some("{prompt}".to_string()),
-            },
-        );
-        providers.insert(
-            "claude".to_string(),
-            ProviderConfig {
-                command: "claude".to_string(),
-                yolo_flag: Some("--dangerously-skip-permissions".to_string()),
-                prompt_command: Some("-p {prompt}".to_string()),
-            },
-        );
+        let providers = BUILTIN_PROVIDERS
+            .iter()
+            .map(|builtin| {
+                (
+                    builtin.key.to_string(),
+                    ProviderConfig {
+                        command: builtin.command.to_string(),
+                        yolo_flag: Some(builtin.yolo_flag.to_string()),
+                        prompt_command: Some(builtin.prompt_command.to_string()),
+                    },
+                )
+            })
+            .collect();
         Self {
             providers,
             default_provider: "kiro".to_string(),
@@ -100,8 +180,12 @@ pub fn load_launch_config(path: &std::path::Path) -> Result<LaunchConfig, String
     // Merge user values over defaults
     let default_val = serde_json::to_value(LaunchConfig::default()).unwrap();
     let merged = merge_values(default_val, user_val);
-    serde_json::from_value(merged)
-        .map_err(|e| format!("cannot deserialize config {}: {e}", path.display()))
+    let mut config: LaunchConfig = serde_json::from_value(merged)
+        .map_err(|e| format!("cannot deserialize config {}: {e}", path.display()))?;
+    for (key, provider) in &mut config.providers {
+        upgrade_builtin_provider(key, &mut provider.command, &mut provider.prompt_command);
+    }
+    Ok(config)
 }
 
 /// Shallow merge: user keys override default keys at the top level.
