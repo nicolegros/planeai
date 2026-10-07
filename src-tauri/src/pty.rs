@@ -114,6 +114,11 @@ impl SessionBackend for DaemonBackend {
     }
 }
 
+/// The bytes a daemon data frame puts in the terminal, if any.
+fn daemon_frame_output(_session_id: &str, _frame_type: u8, payload: Vec<u8>) -> Option<Vec<u8>> {
+    Some(payload)
+}
+
 // ─── Rmux Backend ────────────────────────────────────────────────────────────
 
 /// Writes and resizes for an rmux-hosted session.
@@ -402,7 +407,11 @@ impl PtyManager {
                     break;
                 }
                 match planeai_daemon::protocol::read_frame(&mut reader).await {
-                    Ok((_frame_type, payload)) => {
+                    Ok((frame_type, payload)) => {
+                        let Some(payload) = daemon_frame_output(&sid_clone, frame_type, payload)
+                        else {
+                            continue;
+                        };
                         observer.on_output(&sid_clone, payload.len());
                         let (lock, cv) = &*pending;
                         let mut g = lock.lock().unwrap();
