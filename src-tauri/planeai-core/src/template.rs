@@ -18,6 +18,79 @@ pub fn render(template: &str, vars: &HashMap<&str, &str>) -> String {
     .into_owned()
 }
 
+/// What a task template sees, the same for every template PlaneAI renders from a task and
+/// as the desktop UI's `renderTemplate` sees it. An empty parent renders as the task's key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskVars {
+    pub key: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub priority: i32,
+    pub blocked_by: Vec<String>,
+    pub tags: Vec<String>,
+    pub parent_key: Option<String>,
+    pub base_branch: String,
+}
+
+impl TaskVars {
+    pub fn render(&self, template: &str) -> String {
+        let parent_key = self
+            .parent_key
+            .as_deref()
+            .filter(|key| !key.trim().is_empty())
+            .unwrap_or(&self.key);
+        let priority = self.priority.to_string();
+        let blocked_by = self.blocked_by.join(", ");
+        // A JavaScript array renders comma-joined.
+        let tags = self.tags.join(",");
+        let vars = HashMap::from([
+            ("key", self.key.as_str()),
+            ("title", self.title.as_str()),
+            ("description", self.description.as_str()),
+            ("status", self.status.as_str()),
+            ("priority", priority.as_str()),
+            ("blocked_by", blocked_by.as_str()),
+            ("tags", tags.as_str()),
+            ("parent_key", parent_key),
+            ("base_branch", self.base_branch.as_str()),
+        ]);
+        render(template, &vars)
+    }
+}
+
+impl From<&planeai_tasks::model::Task> for TaskVars {
+    fn from(task: &planeai_tasks::model::Task) -> Self {
+        Self {
+            key: task.key.clone(),
+            title: task.title.clone(),
+            description: task.description.clone(),
+            status: task.status.as_str().to_string(),
+            priority: task.priority,
+            blocked_by: task.blocked_by.clone(),
+            tags: task.tags.clone(),
+            parent_key: task.parent_key.clone(),
+            base_branch: task.base_branch.clone(),
+        }
+    }
+}
+
+impl From<&crate::task::Task> for TaskVars {
+    fn from(task: &crate::task::Task) -> Self {
+        Self {
+            key: task.key.clone(),
+            title: task.title.clone(),
+            description: task.description.clone(),
+            status: task.status.clone(),
+            priority: task.priority,
+            blocked_by: task.blocked_by.clone(),
+            tags: Vec::new(),
+            parent_key: task.parent_key.clone(),
+            base_branch: task.base_branch.clone(),
+        }
+    }
+}
+
 fn slugify(s: &str) -> String {
     let mut slug = String::new();
     for c in s.to_lowercase().chars() {

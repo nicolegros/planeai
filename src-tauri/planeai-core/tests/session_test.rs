@@ -335,6 +335,26 @@ fn dispatch_skips_prompt_when_prompt_command_is_none() {
     assert_eq!(session.command, "kiro-cli chat");
 }
 
+#[test]
+fn dispatch_renders_name_and_prompt_with_every_task_variable() {
+    let backend = RecordingBackend::default();
+    let mut dispatcher = make_dispatcher("claude", "claude", Some("-- {prompt}"));
+    dispatcher.dispatch_config.name_template = Some("{key} p{priority} {base_branch}".to_string());
+    dispatcher.dispatch_config.prompt_template =
+        Some("{title:slug} after {blocked_by} ({status})".to_string());
+    let task = Task {
+        blocked_by: vec!["T-0".to_string()],
+        ..make_task()
+    };
+
+    let session = dispatcher.dispatch(&task, &backend).unwrap();
+
+    assert_eq!(
+        (session.name.as_str(), session.command.as_str()),
+        ("T-1 p1 main", "claude -- 'fix-bug after T-0 (todo)'")
+    );
+}
+
 fn make_dispatcher(
     provider: &str,
     command: &str,

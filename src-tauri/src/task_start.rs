@@ -1,7 +1,7 @@
 //! Starting a session for a task, the one owner of what "Start session immediately" means:
 //! the desktop task form and plugin-created routine tasks both go through here.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use planeai_tasks::model::{Status, Task};
@@ -136,16 +136,12 @@ pub fn plan_task_session(
     if provider.is_empty() {
         return Err(NO_PROVIDER.to_string());
     }
-    let vars = template_vars(task);
-    let vars = vars
-        .iter()
-        .map(|(name, value)| (*name, value.as_str()))
-        .collect::<HashMap<_, _>>();
+    let vars = planeai_core::template::TaskVars::from(task);
     // An empty template counts as unset, as the forms have always read it.
     let render = |template: Option<&String>| {
         template
             .filter(|template| !template.is_empty())
-            .map(|template| planeai_core::template::render(template, &vars))
+            .map(|template| vars.render(template))
     };
     let set = |value: &Option<String>| value.clone().filter(|value| !value.is_empty());
 
@@ -551,27 +547,6 @@ fn move_in_progress(
         ));
     }
     Ok(())
-}
-
-/// The task as `renderTemplate` sees it: an empty parent renders as the task's own key.
-fn template_vars(task: &Task) -> [(&'static str, String); 9] {
-    let parent_key = task
-        .parent_key
-        .clone()
-        .filter(|key| !key.is_empty())
-        .unwrap_or_else(|| task.key.clone());
-    [
-        ("key", task.key.clone()),
-        ("title", task.title.clone()),
-        ("description", task.description.clone()),
-        ("priority", task.priority.to_string()),
-        ("blocked_by", task.blocked_by.join(", ")),
-        // A JavaScript array renders comma-joined.
-        ("tags", task.tags.join(",")),
-        ("parent_key", parent_key),
-        ("base_branch", task.base_branch.clone()),
-        ("status", task.status.as_str().to_string()),
-    ]
 }
 
 /// The task form's branch slug, laxer than the template `slug` transform.

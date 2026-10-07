@@ -1079,18 +1079,12 @@ impl TaskService {
         repo.get(key).map_err(|e| e.to_string())
     }
 
-    /// Resolve the task prompt from task title + description using a template.
-    /// Template uses {key}, {title}, {description} placeholders.
+    /// Resolve the task prompt from a template over the task's template variables.
     pub fn resolve_task_prompt(
         task: &planeai_tasks::model::Task,
         template: Option<&str>,
     ) -> String {
-        let tmpl = template.unwrap_or("{title}\n\n{description}");
-        let mut vars = std::collections::HashMap::new();
-        vars.insert("key", task.key.as_str());
-        vars.insert("title", task.title.as_str());
-        vars.insert("description", task.description.as_str());
-        crate::template::render(tmpl, &vars)
+        crate::template::TaskVars::from(task).render(template.unwrap_or("{title}\n\n{description}"))
     }
 
     /// Link a session to a task and optionally move task to a new status (on_start hook).
