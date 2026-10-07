@@ -148,9 +148,11 @@ Binary framed protocol on data connections (type byte `0x01`).
 1. Client sends `FRAME_HELLO` with protocol version byte
 2. Client sends `FRAME_ATTACH` with session_id as payload
 3. Daemon replays buffer snapshot as `FRAME_OUTPUT` chunks
-4. Daemon streams live output as `FRAME_OUTPUT`
-5. On session exit: daemon sends `FRAME_EOF`
+4. Daemon streams live output as `FRAME_OUTPUT`, starting exactly where the snapshot ends
+5. On session exit or kill: daemon sends `FRAME_EOF` and closes the connection
 6. On error: daemon sends `FRAME_ERROR`
+
+The snapshot and the live subscription are taken under the lock the PTY sink holds while it appends to the buffer and broadcasts, so a client attaching mid-output neither misses nor repeats bytes.
 
 ### Legacy Attach (backward compatible)
 
@@ -162,7 +164,7 @@ Binary framed protocol on data connections (type byte `0x01`).
 When a slow client causes broadcast lag:
 
 - Daemon sends `FRAME_GAP` with JSON payload: `{"lagged": N}`
-- Client should display a gap indicator or request reconnect
+- The desktop client logs it and prints a dim `[planeai] output gap` line in the terminal, as it does for an rmux gap
 
 ## Command Spawning (argv preservation)
 
@@ -253,10 +255,11 @@ desktop client
     → daemon process
       → SessionRegistry (HashMap<String, RegistryEntry>)
         → DaemonSession
-          → DaemonPtySink (PtyEventSink)
-            → planeai_pty::LocalPtySession (portable-pty)
-          → RingBuffer (scrollback)
-          → broadcast::Sender (live output fan-out)
+          → planeai_pty::LocalPtySession (portable-pty)
+            → DaemonPtySink (PtyEventSink): appends output, drops the sender on exit
+          → SessionOutput (one lock, shared with the sink)
+            → RingBuffer (scrollback)
+            → Option<broadcast::Sender> (live output fan-out; None once the session exits)
       → poll_exits() loop (500ms, transitions Running→Exited)
       → gc() loop (60s, removes expired sessions)
       → shutdown_timer (30s grace, exits when no clients + no live sessions)

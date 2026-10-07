@@ -457,12 +457,20 @@ mod tests {
         .unwrap()
     }
 
+    fn wait_for_exit(reg: &mut SessionRegistry, id: &str) -> Vec<String> {
+        let mut exited = Vec::new();
+        crate::test_support::wait_until(&format!("{id} exits"), || {
+            exited.extend(reg.poll_exits());
+            exited.iter().any(|candidate| candidate == id)
+        });
+        exited
+    }
+
     #[test]
     fn running_to_exited_via_poll() {
         let mut reg = SessionRegistry::new();
         spawn_echo(&mut reg, "s1");
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let exited = reg.poll_exits();
+        let exited = wait_for_exit(&mut reg, "s1");
         assert!(exited.contains(&"s1".to_string()));
         assert_eq!(reg.list()[0].status, "exited");
         // Session is still in registry
@@ -485,8 +493,7 @@ mod tests {
         spawn_echo(&mut reg, "exited");
         spawn_sleep(&mut reg, "killed");
 
-        std::thread::sleep(Duration::from_millis(500));
-        reg.poll_exits();
+        wait_for_exit(&mut reg, "exited");
         let exited_before = reg
             .sessions
             .get("exited")
@@ -513,8 +520,7 @@ mod tests {
     fn exited_retained_until_gc() {
         let mut reg = SessionRegistry::new().with_gc_ttl(Duration::from_millis(50));
         spawn_echo(&mut reg, "s1");
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        reg.poll_exits();
+        wait_for_exit(&mut reg, "s1");
         // Not yet GC'd
         assert_eq!(reg.list().len(), 1);
         // Wait for GC TTL
@@ -529,8 +535,7 @@ mod tests {
         let mut reg = SessionRegistry::new();
         spawn_sleep(&mut reg, "live");
         spawn_echo(&mut reg, "dead");
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        reg.poll_exits();
+        wait_for_exit(&mut reg, "dead");
         assert_eq!(reg.live_count(), 1);
         assert_eq!(reg.list().len(), 2);
         reg.kill("live").unwrap();
@@ -559,8 +564,7 @@ mod tests {
     fn replace_exited_works() {
         let mut reg = SessionRegistry::new();
         spawn_echo(&mut reg, "s1");
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        reg.poll_exits();
+        wait_for_exit(&mut reg, "s1");
         let outcome = reg
             .spawn(
                 "s1",
@@ -639,8 +643,7 @@ mod tests {
     fn attach_if_running_errors_when_exited() {
         let mut reg = SessionRegistry::new();
         spawn_echo(&mut reg, "s1");
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        reg.poll_exits();
+        wait_for_exit(&mut reg, "s1");
         let err = reg
             .spawn(
                 "s1",
@@ -659,8 +662,7 @@ mod tests {
     fn buffer_snapshot_available_after_exit() {
         let mut reg = SessionRegistry::new();
         spawn_echo(&mut reg, "s1");
-        std::thread::sleep(std::time::Duration::from_millis(1000));
-        reg.poll_exits();
+        wait_for_exit(&mut reg, "s1");
         let session = reg.get("s1").unwrap();
         let snap = session.buffer_snapshot();
         assert!(

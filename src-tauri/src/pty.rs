@@ -114,6 +114,34 @@ impl SessionBackend for DaemonBackend {
     }
 }
 
+/// The bytes a daemon data frame puts in the terminal, if any.
+fn daemon_frame_output(session_id: &str, frame_type: u8, payload: Vec<u8>) -> Option<Vec<u8>> {
+    use planeai_daemon::protocol::{FRAME_ERROR, FRAME_GAP, FRAME_OUTPUT};
+    match frame_type {
+        FRAME_OUTPUT if !payload.is_empty() => Some(payload),
+        FRAME_GAP => {
+            let lagged = serde_json::from_slice::<serde_json::Value>(&payload)
+                .ok()
+                .and_then(|gap| gap["lagged"].as_u64());
+            tracing::warn!(session_id, ?lagged, "daemon output gap");
+            let dropped = lagged.map_or("Output".to_string(), |n| format!("{n} output event(s)"));
+            // Shown in the terminal, like an rmux gap, so the scrollback never jumps silently.
+            Some(
+                format!(
+                    "\r\n\x1b[2m[planeai] output gap: {dropped} dropped by the PlaneAI daemon - \
+                     this session fell behind\x1b[0m\r\n"
+                )
+                .into_bytes(),
+            )
+        }
+        FRAME_ERROR => {
+            tracing::error!(session_id, error = %String::from_utf8_lossy(&payload), "daemon data error");
+            None
+        }
+        _ => None,
+    }
+}
+
 // ─── Rmux Backend ────────────────────────────────────────────────────────────
 
 /// Writes and resizes for an rmux-hosted session.
@@ -402,7 +430,11 @@ impl PtyManager {
                     break;
                 }
                 match planeai_daemon::protocol::read_frame(&mut reader).await {
-                    Ok((_frame_type, payload)) => {
+                    Ok((frame_type, payload)) => {
+                        let Some(payload) = daemon_frame_output(&sid_clone, frame_type, payload)
+                        else {
+                            continue;
+                        };
                         observer.on_output(&sid_clone, payload.len());
                         let (lock, cv) = &*pending;
                         let mut g = lock.lock().unwrap();
@@ -700,8 +732,9 @@ impl PtyManager {
 
 #[cfg(test)]
 mod tests {
-    use super::PtyManager;
+    use super::{daemon_frame_output, PtyManager};
     use crate::session_backend::{SessionBackend, WriteAck};
+    use planeai_daemon::protocol::{FRAME_EOF, FRAME_GAP, FRAME_OUTPUT};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -757,5 +790,28 @@ mod tests {
         manager.detach("s1:2");
         assert!(detached.load(Ordering::SeqCst));
         assert!(!manager.is_running("s1:2"));
+    }
+
+    #[test]
+    fn daemon_output_frames_reach_the_terminal_unchanged() {
+        assert_eq!(
+            daemon_frame_output("s1", FRAME_OUTPUT, b"hello".to_vec()),
+            Some(b"hello".to_vec())
+        );
+        assert_eq!(daemon_frame_output("s1", FRAME_EOF, Vec::new()), None);
+    }
+
+    #[test]
+    fn a_daemon_gap_frame_shows_a_notice_instead_of_its_json() {
+        let shown = daemon_frame_output("s1", FRAME_GAP, br#"{"lagged":7}"#.to_vec());
+
+        assert_eq!(
+            shown.map(String::from_utf8),
+            Some(Ok(
+                "\r\n\x1b[2m[planeai] output gap: 7 output event(s) dropped by the \
+                     PlaneAI daemon - this session fell behind\x1b[0m\r\n"
+                    .to_string()
+            ))
+        );
     }
 }
