@@ -51,11 +51,20 @@ describe("EmptyTaskWorkspace", () => {
     expect(target.querySelector("button")?.textContent).toContain("Restore Archived agent");
   });
 
-  it("labels a higher priority number as more urgent", () => {
+  it("labels priorities on the 0-5 scale plugins such as Jira write", () => {
     const label = (priority: number) =>
       render([], { ...task, priority }).target.querySelectorAll("dd")[1]?.textContent;
 
-    expect([0, 1, 2, 3, 7].map(label)).toEqual(["None", "Low", "Medium", "High", "High"]);
+    expect([-1, 0, 1, 2, 3, 4, 5, 9].map(label)).toEqual([
+      "None",
+      "None",
+      "Lowest",
+      "Low",
+      "Medium",
+      "High",
+      "Highest",
+      "Highest",
+    ]);
   });
 
   it("routes N, R, and E shortcuts while active", () => {
