@@ -2438,7 +2438,11 @@ fn insert_plugin_task(
             start: pending_start(&task_key),
         })
     };
-    let transaction = conn.transaction().map_err(|error| error.to_string())?;
+    // Immediate: two requests with one operation id serialize on the write lock instead of
+    // both reading "absent" and one failing with SQLITE_BUSY when it upgrades to write.
+    let transaction = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
     if let Some(task_key) = transaction
         .query_row(
             "SELECT task_key FROM plugin_task_operations WHERE plugin_id = ?1 AND operation_id = ?2",
@@ -2450,24 +2454,6 @@ fn insert_plugin_task(
         .flatten()
     {
         transaction.commit().map_err(|error| error.to_string())?;
-        return existing(task_key, conn);
-    }
-    let reserved = transaction
-        .execute(
-            "INSERT OR IGNORE INTO plugin_task_operations (plugin_id, operation_id, task_key) VALUES (?1, ?2, NULL)",
-            rusqlite::params![plugin_id, operation_id],
-        )
-        .map_err(|error| error.to_string())?;
-    if reserved == 0 {
-        transaction.commit().map_err(|error| error.to_string())?;
-        let task_key = conn
-            .query_row(
-                "SELECT task_key FROM plugin_task_operations WHERE plugin_id = ?1 AND operation_id = ?2",
-                rusqlite::params![plugin_id, operation_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .map_err(|error| error.to_string())?
-            .ok_or("plugin task operation is still in progress")?;
         return existing(task_key, conn);
     }
     if let Some(parent_key) = &parent_key {
@@ -2501,7 +2487,7 @@ fn insert_plugin_task(
     let first_child = created.first_child;
     transaction
         .execute(
-            "UPDATE plugin_task_operations SET task_key = ?3 WHERE plugin_id = ?1 AND operation_id = ?2",
+            "INSERT OR REPLACE INTO plugin_task_operations (plugin_id, operation_id, task_key) VALUES (?1, ?2, ?3)",
             rusqlite::params![plugin_id, operation_id, task_key],
         )
         .map_err(|error| error.to_string())?;
@@ -5014,6 +5000,44 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, (project.prefix.clone(), None));
+    }
+
+    #[test]
+    fn concurrent_requests_with_one_operation_id_all_get_the_one_task() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("planeai.db");
+        let project_path = {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+            crate::db::migrate(&conn).unwrap();
+            planeai_tasks::sqlite::migrate(&conn).unwrap();
+            migrate(&conn).unwrap();
+            crate::db::create_project(&conn, "Demo", "/repos/demo")
+                .unwrap()
+                .path
+        };
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let keys = (0..8)
+            .map(|_| {
+                let (db_path, project_path, barrier) =
+                    (db_path.clone(), project_path.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let mut conn = Connection::open(&db_path).unwrap();
+                    barrier.wait();
+                    insert_plugin_task(
+                        &mut conn,
+                        "routines",
+                        top_level_request(&project_path, "routine:r1:2026-10-05T13:00:00Z"),
+                    )
+                    .map(|created| created.task["task"]["key"].clone())
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(keys, vec![Ok(serde_json::json!("DEM-1")); 8]);
     }
 
     #[test]
