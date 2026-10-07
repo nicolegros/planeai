@@ -1888,6 +1888,11 @@ fn invalid_params(message: &str) -> CallbackError {
     CallbackError::InvalidParams(message.to_string())
 }
 
+/// A failure the request did not cause, so retrying it may succeed.
+fn internal(error: impl std::fmt::Display) -> CallbackError {
+    CallbackError::Internal(error.to_string())
+}
+
 /// Runs a host task's storage work off the async runtime; its failures are internal.
 async fn blocking_host_task<F>(work: F) -> Result<Value, CallbackError>
 where
@@ -2022,7 +2027,10 @@ async fn run_host_task(
             }
             _ => {}
         }
-        return blocking_host_task(move || create_plugin_task(&plugin_id, request)).await;
+        // A request the host refuses answers -32602, so the plugin stops retrying it.
+        return commands::blocking(move || Ok(create_plugin_task(&plugin_id, request)))
+            .await
+            .map_err(CallbackError::Internal)?;
     }
 
     if matches!(
@@ -2378,8 +2386,8 @@ struct InsertedPluginTask {
     start: Option<PendingTaskStart>,
 }
 
-fn create_plugin_task(plugin_id: &str, request: PluginTaskRequest) -> Result<Value, String> {
-    let mut conn = Connection::open(planeai_paths::db_path()).map_err(|error| error.to_string())?;
+fn create_plugin_task(plugin_id: &str, request: PluginTaskRequest) -> Result<Value, CallbackError> {
+    let mut conn = Connection::open(planeai_paths::db_path()).map_err(internal)?;
     let inserted = insert_plugin_task(&mut conn, plugin_id, request)?;
     if let Some(batch) = &inserted.lifecycle {
         planeai::task_cli::notify_task_lifecycle(batch);
@@ -2408,7 +2416,7 @@ fn insert_plugin_task(
     conn: &mut Connection,
     plugin_id: &str,
     request: PluginTaskRequest,
-) -> Result<InsertedPluginTask, String> {
+) -> Result<InsertedPluginTask, CallbackError> {
     let PluginTaskRequest {
         project_path,
         parent_key,
@@ -2420,10 +2428,10 @@ fn insert_plugin_task(
         start,
     } = request;
     let project = crate::db::list_projects(conn)
-        .map_err(|error| error.to_string())?
+        .map_err(internal)?
         .into_iter()
         .find(|project| project.path == project_path && !project.hidden)
-        .ok_or("project was not found or is hidden")?;
+        .ok_or_else(|| invalid_params("project was not found or is hidden"))?;
     let pending_start = |task_key: &str| {
         start.clone().map(|options| PendingTaskStart {
             project_id: project.id.clone(),
@@ -2432,17 +2440,19 @@ fn insert_plugin_task(
         })
     };
     let existing = |task_key: String, conn: &Connection| {
-        plugin_task_value(conn, &task_key).map(|task| InsertedPluginTask {
-            task,
-            lifecycle: None,
-            start: pending_start(&task_key),
-        })
+        plugin_task_value(conn, &task_key)
+            .map_err(CallbackError::Internal)
+            .map(|task| InsertedPluginTask {
+                task,
+                lifecycle: None,
+                start: pending_start(&task_key),
+            })
     };
     // Immediate: two requests with one operation id serialize on the write lock instead of
     // both reading "absent" and one failing with SQLITE_BUSY when it upgrades to write.
     let transaction = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(|error| error.to_string())?;
+        .map_err(internal)?;
     if let Some(task_key) = transaction
         .query_row(
             "SELECT task_key FROM plugin_task_operations WHERE plugin_id = ?1 AND operation_id = ?2",
@@ -2450,10 +2460,10 @@ fn insert_plugin_task(
             |row| row.get::<_, Option<String>>(0),
         )
         .optional()
-        .map_err(|error| error.to_string())?
+        .map_err(internal)?
         .flatten()
     {
-        transaction.commit().map_err(|error| error.to_string())?;
+        transaction.commit().map_err(internal)?;
         return existing(task_key, conn);
     }
     if let Some(parent_key) = &parent_key {
@@ -2464,10 +2474,12 @@ fn insert_plugin_task(
                 |row| row.get::<_, String>(0),
             )
             .optional()
-            .map_err(|error| error.to_string())?
-            .ok_or("parent task was not found")?;
+            .map_err(internal)?
+            .ok_or_else(|| invalid_params("parent task was not found"))?;
         if parent_prefix != project.prefix {
-            return Err("parent task does not belong to the selected project".to_string());
+            return Err(invalid_params(
+                "parent task does not belong to the selected project",
+            ));
         }
     }
     let created = planeai_tasks::sqlite::insert_task(
@@ -2482,7 +2494,7 @@ fn insert_plugin_task(
             ..Default::default()
         },
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(internal)?;
     let task_key = created.key;
     let first_child = created.first_child;
     transaction
@@ -2490,8 +2502,8 @@ fn insert_plugin_task(
             "INSERT OR REPLACE INTO plugin_task_operations (plugin_id, operation_id, task_key) VALUES (?1, ?2, ?3)",
             rusqlite::params![plugin_id, operation_id, task_key],
         )
-        .map_err(|error| error.to_string())?;
-    transaction.commit().map_err(|error| error.to_string())?;
+        .map_err(internal)?;
+    transaction.commit().map_err(internal)?;
     let start = pending_start(&task_key);
     let lifecycle = parent_key
         .zip(first_child)
@@ -2508,7 +2520,7 @@ fn insert_plugin_task(
             )
         });
     Ok(InsertedPluginTask {
-        task: plugin_task_value(conn, &task_key)?,
+        task: plugin_task_value(conn, &task_key).map_err(CallbackError::Internal)?,
         lifecycle,
         start,
     })
@@ -5306,17 +5318,61 @@ mod tests {
         let (mut conn, _checkout, project) = task_database();
         let unknown = insert_plugin_task(&mut conn, "routines", top_level_request("/nowhere", "a"))
             .unwrap_err();
-        assert_eq!(unknown, "project was not found or is hidden");
+        assert_eq!(
+            unknown,
+            CallbackError::InvalidParams("project was not found or is hidden".into())
+        );
 
         crate::db::hide_project(&conn, &project.id).unwrap();
         let hidden =
             insert_plugin_task(&mut conn, "routines", top_level_request(&project.path, "b"))
                 .unwrap_err();
-        assert_eq!(hidden, "project was not found or is hidden");
+        assert_eq!(
+            hidden,
+            CallbackError::InvalidParams("project was not found or is hidden".into())
+        );
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn a_child_plugin_task_needs_a_parent_in_its_project() {
+        let (mut conn, _checkout, project) = task_database();
+        let other_checkout = tempfile::TempDir::new().unwrap();
+        let other =
+            crate::db::create_project(&conn, "Other", &other_checkout.path().to_string_lossy())
+                .unwrap();
+        let foreign =
+            insert_plugin_task(&mut conn, "routines", top_level_request(&other.path, "p")).unwrap();
+        let child = |parent_key: &str, operation_id: &str| {
+            PluginTaskRequest::from_params(&serde_json::json!({
+                "project_path": project.path,
+                "operation_id": operation_id,
+                "title": "Child",
+                "parent_key": parent_key,
+            }))
+            .unwrap()
+        };
+
+        let missing = insert_plugin_task(&mut conn, "routines", child("NOPE-1", "a")).unwrap_err();
+        let mismatched = insert_plugin_task(
+            &mut conn,
+            "routines",
+            child(foreign.task["task"]["key"].as_str().unwrap(), "b"),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            (missing, mismatched),
+            (
+                CallbackError::InvalidParams("parent task was not found".into()),
+                CallbackError::InvalidParams(
+                    "parent task does not belong to the selected project".into()
+                ),
+            )
+        );
     }
 
     #[test]
