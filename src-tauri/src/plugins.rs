@@ -965,11 +965,9 @@ pub fn get_inventory(
 
 /// The enabled plugins, read so a row written by a newer PlaneAI cannot block shutdown or updates.
 fn enabled_plugin_ids(conn: &Connection) -> rusqlite::Result<Vec<String>> {
-    Ok(list_inventory(conn)?
-        .into_iter()
-        .filter(|plugin| plugin.enabled)
-        .map(|plugin| plugin.id)
-        .collect())
+    conn.prepare("SELECT id FROM plugin_inventory WHERE enabled = 1 ORDER BY name COLLATE NOCASE")?
+        .query_map([], |row| row.get(0))?
+        .collect()
 }
 
 /// `enabled` and `last_error`, read so a row written by a newer PlaneAI cannot block shutdown or updates.
@@ -977,7 +975,12 @@ fn runtime_flags(
     conn: &Connection,
     plugin_id: &str,
 ) -> rusqlite::Result<Option<(bool, Option<String>)>> {
-    Ok(get_inventory(conn, plugin_id)?.map(|plugin| (plugin.enabled, plugin.last_error)))
+    conn.query_row(
+        "SELECT enabled, last_error FROM plugin_inventory WHERE id = ?1",
+        [plugin_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
 }
 
 pub fn delete_local_inventory(conn: &Connection, plugin_id: &str) -> Result<(), String> {
