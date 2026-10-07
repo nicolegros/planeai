@@ -2484,47 +2484,21 @@ fn insert_plugin_task(
             return Err("parent task does not belong to the selected project".to_string());
         }
     }
-    transaction
-        .execute(
-            "INSERT OR IGNORE INTO task_projects (prefix, next_seq) VALUES (?1, 1)",
-            rusqlite::params![project.prefix],
-        )
-        .map_err(|error| error.to_string())?;
-    let sequence: i64 = transaction
-        .query_row(
-            "UPDATE task_projects SET next_seq = next_seq + 1 WHERE prefix = ?1 RETURNING next_seq - 1",
-            rusqlite::params![project.prefix],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())?;
-    let task_key = format!("{}-{sequence}", project.prefix);
-    let first_child = match &parent_key {
-        Some(parent_key) => Some(
-            !transaction
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM tasks WHERE parent_key = ?1)",
-                    rusqlite::params![parent_key],
-                    |row| row.get::<_, bool>(0),
-                )
-                .map_err(|error| error.to_string())?,
-        ),
-        None => None,
-    };
-    let now = chrono::Utc::now().to_rfc3339();
-    transaction
-        .execute(
-            "INSERT INTO tasks (key, project_prefix, title, description, status, priority, parent_key, base_branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'todo', ?5, ?6, 'main', ?7, ?7)",
-            rusqlite::params![task_key, project.prefix, title, description, priority, parent_key, now],
-        )
-        .map_err(|error| error.to_string())?;
-    for tag in &tags {
-        transaction
-            .execute(
-                "INSERT INTO task_tags (task_key, tag) VALUES (?1, ?2)",
-                rusqlite::params![task_key, tag],
-            )
-            .map_err(|error| error.to_string())?;
-    }
+    let created = planeai_tasks::sqlite::insert_task(
+        &transaction,
+        &project.prefix,
+        &CreateParams {
+            title,
+            description,
+            priority,
+            parent_key: parent_key.clone(),
+            tags,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let task_key = created.key;
+    let first_child = created.first_child;
     transaction
         .execute(
             "UPDATE plugin_task_operations SET task_key = ?3 WHERE plugin_id = ?1 AND operation_id = ?2",
