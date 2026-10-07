@@ -709,8 +709,9 @@ impl PtyManager {
 
 #[cfg(test)]
 mod tests {
-    use super::PtyManager;
+    use super::{daemon_frame_output, PtyManager};
     use crate::session_backend::{SessionBackend, WriteAck};
+    use planeai_daemon::protocol::{FRAME_EOF, FRAME_GAP, FRAME_OUTPUT};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -766,5 +767,28 @@ mod tests {
         manager.detach("s1:2");
         assert!(detached.load(Ordering::SeqCst));
         assert!(!manager.is_running("s1:2"));
+    }
+
+    #[test]
+    fn daemon_output_frames_reach_the_terminal_unchanged() {
+        assert_eq!(
+            daemon_frame_output("s1", FRAME_OUTPUT, b"hello".to_vec()),
+            Some(b"hello".to_vec())
+        );
+        assert_eq!(daemon_frame_output("s1", FRAME_EOF, Vec::new()), None);
+    }
+
+    #[test]
+    fn a_daemon_gap_frame_shows_a_notice_instead_of_its_json() {
+        let shown = daemon_frame_output("s1", FRAME_GAP, br#"{"lagged":7}"#.to_vec());
+
+        assert_eq!(
+            shown.map(String::from_utf8),
+            Some(Ok(
+                "\r\n\x1b[2m[planeai] output gap: 7 output event(s) dropped by the \
+                     PlaneAI daemon - this session fell behind\x1b[0m\r\n"
+                    .to_string()
+            ))
+        );
     }
 }
