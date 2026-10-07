@@ -119,6 +119,9 @@ pub(crate) async fn launch(
     let config_state = app.state::<ConfigState>();
     let operations = app.state::<ProjectOperationState>();
     let task_key = require_task_key(task_key)?;
+    if let Some(prompt) = &task_prompt {
+        planeai_core::session_launch::check_task_prompt(prompt)?;
+    }
     let operation_lock = operations.lock_for(&project_id);
     let _operation_guard = operation_lock.lock_owned().await;
     let (project_name, repo_path) = crate::commands::blocking({

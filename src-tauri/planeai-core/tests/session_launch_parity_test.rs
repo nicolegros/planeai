@@ -956,3 +956,17 @@ fn hostile_prompts_reach_the_agent_as_one_unchanged_argument() {
     }
     assert!(!std::path::Path::new("/tmp/planeai-pwned").exists());
 }
+
+#[test]
+fn a_task_prompt_must_fit_one_command_line_argument() {
+    use planeai_core::session_launch::check_task_prompt;
+    assert_eq!(check_task_prompt(&"é".repeat(100_000)), Ok(()));
+    assert_eq!(
+        check_task_prompt(&"x".repeat(100_001)),
+        Err("The task prompt is longer than 100000 characters.".to_string())
+    );
+    assert_eq!(
+        check_task_prompt("before\0after"),
+        Err("The task prompt contains a NUL character.".to_string())
+    );
+}

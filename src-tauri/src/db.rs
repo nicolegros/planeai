@@ -420,6 +420,14 @@ pub fn pending_prompt(conn: &Connection, id: &str) -> Result<Option<String>> {
     planeai_core::services::SessionService::pending_prompt(conn, id)
 }
 
+pub fn take_pending_prompt(conn: &Connection, id: &str) -> Result<()> {
+    planeai_core::services::SessionService::take_pending_prompt(conn, id)
+}
+
+pub fn return_pending_prompt(conn: &Connection, id: &str, prompt: &str) -> Result<()> {
+    planeai_core::services::SessionService::return_pending_prompt(conn, id, prompt)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

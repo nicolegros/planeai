@@ -265,6 +265,23 @@ pub struct ProviderLaunchCommand {
     pub auto_approve_was_applied: bool,
 }
 
+/// Characters a task prompt may have: it travels as one command-line argument, and the
+/// system bounds a command line (macOS `ARG_MAX` is 1 MiB) with the environment included.
+pub const MAX_TASK_PROMPT_CHARS: usize = 100_000;
+
+/// Refuse a task prompt no agent command line can carry, before anything is created for it.
+pub fn check_task_prompt(prompt: &str) -> Result<(), String> {
+    if prompt.contains('\0') {
+        return Err("The task prompt contains a NUL character.".to_string());
+    }
+    if prompt.chars().count() > MAX_TASK_PROMPT_CHARS {
+        return Err(format!(
+            "The task prompt is longer than {MAX_TASK_PROMPT_CHARS} characters."
+        ));
+    }
+    Ok(())
+}
+
 /// Build the provider launch command from provider config + launch parameters.
 ///
 /// This is Layer A (provider/task command assembly), separate from Layer B

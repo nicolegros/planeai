@@ -57,12 +57,13 @@ pub async fn attach_session(
         pty_target,
         env,
         notification,
+        first_prompt,
     } = crate::commands::blocking({
         let db = db_state.0.clone();
         let session_id = session_id.clone();
         move || {
             let conn = db.lock().map_err(|e| e.to_string())?;
-            resolve_attach_plan(&conn, &cfg, &session_id, dark_mode)
+            claim_attach_plan(&conn, &cfg, &session_id, dark_mode)
         }
     })
     .await?;
@@ -75,7 +76,18 @@ pub async fn attach_session(
         "attach_session"
     );
 
-    state.0.attach(&session_id, pty_target, on_data, env)?;
+    if let Err(error) = state.0.attach(&session_id, pty_target, on_data, env) {
+        if let Some(prompt) = first_prompt {
+            let db = db_state.0.clone();
+            let session_id = session_id.clone();
+            crate::commands::blocking(move || {
+                let conn = db.lock().map_err(|e| e.to_string())?;
+                release_first_prompt(&conn, &session_id, prompt)
+            })
+            .await?;
+        }
+        return Err(error);
+    }
 
     {
         let (display_name, project_name, hook_enabled) = &notification;
@@ -119,6 +131,32 @@ pub struct AttachPlan {
     pub env: Vec<(String, String)>,
     /// Display name, project name, and whether the provider has a notify hook.
     pub notification: (String, String, bool),
+    /// The task prompt this spawn delivers: a local session's first spawn carries it.
+    pub first_prompt: Option<String>,
+}
+
+/// `resolve_attach_plan`, claiming the prompt its spawn delivers in the same database pass:
+/// the prompt reaches the agent at most once, even if the app quits before the attach is
+/// recorded. A spawn that fails gives it back with `release_first_prompt`.
+pub fn claim_attach_plan(
+    conn: &rusqlite::Connection,
+    cfg: &config::Config,
+    session_id: &str,
+    dark_mode: Option<bool>,
+) -> Result<AttachPlan, String> {
+    let plan = resolve_attach_plan(conn, cfg, session_id, dark_mode)?;
+    if plan.first_prompt.is_some() {
+        db::take_pending_prompt(conn, session_id).map_err(|e| e.to_string())?;
+    }
+    Ok(plan)
+}
+
+pub fn release_first_prompt(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    prompt: String,
+) -> Result<(), String> {
+    db::return_pending_prompt(conn, session_id, &prompt).map_err(|e| e.to_string())
 }
 
 /// Resolve the PTY target, environment, and notification data for a session.
@@ -135,6 +173,7 @@ pub fn resolve_attach_plan(
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
 
+    let mut first_prompt = None;
     // Resolve pty_target and agent_command based on backend type
     let (pty_target, resolved_agent_command) = if session.backend == "tmux" {
         let tmux_name = session
@@ -193,8 +232,8 @@ pub fn resolve_attach_plan(
             config::restart_command_for_provider(provider_def)
         } else {
             // This spawn is the launch, so it carries the task prompt `launch` kept for it.
-            let prompt = db::pending_prompt(conn, session_id).map_err(|e| e.to_string())?;
-            provider_def.first_launch_command(session.auto_approve, prompt.as_deref())
+            first_prompt = db::pending_prompt(conn, session_id).map_err(|e| e.to_string())?;
+            provider_def.first_launch_command(session.auto_approve, first_prompt.as_deref())
         };
 
         let target = pty::PtyTarget::Shell {
@@ -262,6 +301,7 @@ pub fn resolve_attach_plan(
         pty_target,
         env,
         notification: (display_name, project_name, hook_enabled),
+        first_prompt,
     })
 }
 
@@ -556,6 +596,51 @@ mod tests {
             command(&conn),
             "kiro-cli chat --resume",
             "a restored session resumes without replaying the prompt"
+        );
+    }
+
+    #[test]
+    fn a_claimed_task_prompt_is_never_spawned_twice_and_returns_if_the_spawn_fails() {
+        let worktree = tempfile::tempdir().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "demo", "/repos/demo").unwrap();
+        db::create_session_with_params(
+            &conn,
+            &planeai_core::services::CreateSessionParams {
+                id: "session-1".into(),
+                project_id: project.id,
+                branch: "feature".into(),
+                worktree_path: Some(worktree.path().display().to_string()),
+                backend: "local".into(),
+                task_key: Some("PLA-1".into()),
+                pending_prompt: Some("Fix the login redirect".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let claim = || {
+            let plan =
+                claim_attach_plan(&conn, &config_with_provider(), "session-1", None).unwrap();
+            let command = match plan.pty_target {
+                pty::PtyTarget::Shell { command, .. } => command,
+                other => panic!("expected a shell target, got {other:?}"),
+            };
+            (command, plan.first_prompt)
+        };
+
+        let (first, prompt) = claim();
+        assert_eq!(first, "kiro-cli chat -- 'Fix the login redirect'");
+        release_first_prompt(&conn, "session-1", prompt.unwrap()).unwrap();
+        assert_eq!(
+            claim().0,
+            "kiro-cli chat -- 'Fix the login redirect'",
+            "a spawn that failed gives its prompt back"
+        );
+        assert_eq!(
+            claim(),
+            ("kiro-cli chat".to_string(), None),
+            "the app quit after a spawn, before recording the attach"
         );
     }
 

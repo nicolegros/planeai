@@ -825,6 +825,28 @@ impl SessionService {
         )
     }
 
+    /// Remove the prompt a spawn is about to deliver, so no later spawn delivers it again.
+    pub fn take_pending_prompt(conn: &Connection, session_id: &str) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET pending_prompt = NULL WHERE id = ?1",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Give a taken prompt back after its spawn failed, unless an attach already happened.
+    pub fn return_pending_prompt(
+        conn: &Connection,
+        session_id: &str,
+        prompt: &str,
+    ) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET pending_prompt = ?2 WHERE id = ?1 AND attached_once = 0",
+            params![session_id, prompt],
+        )?;
+        Ok(())
+    }
+
     /// Return direct child sessions of the given parent session ID.
     /// Includes all statuses (active, exited, archived, destroyed) for observability.
     pub fn children(conn: &Connection, parent_id: &str) -> SqlResult<Vec<SessionRecord>> {

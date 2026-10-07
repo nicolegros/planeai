@@ -95,6 +95,9 @@ pub fn build_session_plan(
         .get(provider_key)
         .ok_or_else(|| format!("unknown provider: {provider_key}"))?;
 
+    if let Some(prompt) = &opts.prompt {
+        planeai_core::session_launch::check_task_prompt(prompt)?;
+    }
     let mut cmd = config::launch_command(provider_def, opts.yolo);
 
     if let (Some(prompt), Some(prompt_tpl)) = (&opts.prompt, &provider_def.prompt_command) {
