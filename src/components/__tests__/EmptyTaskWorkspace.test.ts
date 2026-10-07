@@ -79,6 +79,12 @@ describe("EmptyTaskWorkspace", () => {
     expect(onEdit).toHaveBeenCalledOnce();
   });
 
+  it("renders the description as markdown", () => {
+    const { target } = render([], { ...task, description: "Ship **bold** changes." });
+
+    expect(target.querySelector("[data-markdown-view] strong")?.textContent).toBe("bold");
+  });
+
   it("ignores workspace shortcuts while a text input is focused", () => {
     const { onNewSession } = render();
     const input = document.body.appendChild(document.createElement("input"));
