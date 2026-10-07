@@ -1848,6 +1848,19 @@ async fn execute_app_host_task(
     if method == "host.sessions.providers" {
         return sessions_providers(capabilities, || crate::task_start::provider_catalog(app)).await;
     }
+    // Without these capabilities `execute_host_task` refuses the call as not granted.
+    let may_start = [
+        PluginHostCapability::TasksCreate,
+        PluginHostCapability::SessionsStart,
+    ]
+    .iter()
+    .all(|capability| capabilities.contains(capability));
+    if let Some(provider) = start_provider(method, &params).filter(|_| may_start) {
+        let catalog = crate::task_start::provider_catalog(app)
+            .await
+            .map_err(CallbackError::Internal)?;
+        check_start_provider(&provider, &catalog)?;
+    }
     let mut reply = execute_host_task(plugin_id, capabilities, data_dir, method, params).await?;
     announce_created_task(app, method);
     if let Some(pending) = take_pending_start(&mut reply) {
@@ -1857,6 +1870,33 @@ async fn execute_app_host_task(
         reply["session"] = serde_json::json!(session);
     }
     Ok(reply)
+}
+
+/// The provider a task create's `start` names; unset or empty means the default.
+fn start_provider(method: &str, params: &Value) -> Option<String> {
+    (method == "host.tasks.create")
+        .then(|| params.get("start")?.get("provider")?.as_str())
+        .flatten()
+        .filter(|provider| !provider.is_empty())
+        .map(str::to_string)
+}
+
+/// Refused before the task exists, so a typo does not leave a task whose session never starts.
+fn check_start_provider(
+    provider: &str,
+    catalog: &crate::task_start::ProviderCatalog,
+) -> Result<(), CallbackError> {
+    if catalog
+        .providers
+        .iter()
+        .any(|option| option.key == provider)
+    {
+        Ok(())
+    } else {
+        Err(CallbackError::InvalidParams(format!(
+            "plugin task start.provider is not an available provider: {provider}"
+        )))
+    }
 }
 
 /// The providers a `start` may name, as the task form lists them.
@@ -2309,22 +2349,29 @@ impl PluginTaskRequest {
         let required = |names: &[&str], what: &str| {
             text(names).ok_or_else(|| format!("plugin task create requires {what}"))
         };
+        let title = bounded_text("title", required(&["title"], "title")?, MAX_TITLE_CHARS)?;
+        let description = params
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         Ok(Self {
             project_path: required(&["project_path", "projectPath"], "project_path")?,
             parent_key: text(&["parent_key", "parentKey"]),
-            operation_id: required(&["operation_id", "operationId"], "operation_id")?,
-            title: required(&["title"], "title")?,
-            description: params
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            operation_id: bounded_text(
+                "operation_id",
+                required(&["operation_id", "operationId"], "operation_id")?,
+                MAX_OPERATION_ID_CHARS,
+            )?,
+            title,
+            description: bounded_text("description", description, MAX_DESCRIPTION_CHARS)?,
             priority: match params.get("priority") {
                 None | Some(Value::Null) => 0,
                 Some(value) => value
                     .as_i64()
-                    .and_then(|value| i32::try_from(value).ok())
-                    .ok_or("plugin task priority must be an integer")?,
+                    .filter(|priority| (0..=5).contains(priority))
+                    .ok_or("plugin task priority must be an integer between 0 and 5")?
+                    as i32,
             },
             tags: match params.get("tags") {
                 None | Some(Value::Null) => Vec::new(),
@@ -2336,6 +2383,27 @@ impl PluginTaskRequest {
             },
         })
     }
+}
+
+const MAX_TITLE_CHARS: usize = 255;
+const MAX_DESCRIPTION_CHARS: usize = 65_536;
+const MAX_OPERATION_ID_CHARS: usize = 256;
+const MAX_TAGS: usize = 20;
+const MAX_TAG_CHARS: usize = 64;
+
+/// A plugin-supplied text the task stores and its session prompt may carry.
+fn bounded_text(what: &str, value: String, max_chars: usize) -> Result<String, String> {
+    if value.contains('\0') {
+        return Err(format!(
+            "plugin task {what} must not contain NUL characters"
+        ));
+    }
+    if value.chars().count() > max_chars {
+        return Err(format!(
+            "plugin task {what} must be at most {max_chars} characters"
+        ));
+    }
+    Ok(value)
 }
 
 /// The session a created task starts with; unset fields take the task form's defaults.
@@ -2370,9 +2438,22 @@ fn plugin_task_tags(value: &Value) -> Result<Vec<String>, String> {
     let mut tags = Vec::new();
     for tag in value.as_array().ok_or_else(malformed)? {
         let tag = tag.as_str().ok_or_else(malformed)?.trim();
+        if tag.contains('\0') {
+            return Err("plugin task tags must not contain NUL characters".to_string());
+        }
+        if tag.chars().count() > MAX_TAG_CHARS {
+            return Err(format!(
+                "plugin task tags must be at most {MAX_TAG_CHARS} characters each"
+            ));
+        }
         if !tag.is_empty() && !tags.iter().any(|known| known == tag) {
             tags.push(tag.to_string());
         }
+    }
+    if tags.len() > MAX_TAGS {
+        return Err(format!(
+            "plugin task create accepts at most {MAX_TAGS} tags"
+        ));
     }
     Ok(tags)
 }
@@ -5074,6 +5155,106 @@ mod tests {
     }
 
     #[test]
+    fn a_start_must_name_an_available_provider() {
+        let catalog = crate::task_start::ProviderCatalog {
+            default: "claude".into(),
+            providers: vec![crate::task_start::ProviderOption {
+                key: "claude".into(),
+                label: "claude".into(),
+                auto_approve: true,
+            }],
+        };
+        let checked = |method: &str, start: Value| {
+            start_provider(method, &serde_json::json!({ "title": "t", "start": start }))
+                .map(|provider| check_start_provider(&provider, &catalog))
+        };
+
+        assert_eq!(
+            checked(
+                "host.tasks.create",
+                serde_json::json!({ "provider": "claude" })
+            ),
+            Some(Ok(()))
+        );
+        assert_eq!(
+            checked(
+                "host.tasks.create",
+                serde_json::json!({ "provider": "cluade" })
+            ),
+            Some(Err(CallbackError::InvalidParams(
+                "plugin task start.provider is not an available provider: cluade".into()
+            )))
+        );
+        assert_eq!(
+            checked("host.tasks.create", serde_json::json!({ "provider": "" })),
+            None
+        );
+        assert_eq!(checked("host.tasks.create", serde_json::json!({})), None);
+        assert_eq!(
+            checked(
+                "host.tasks.createChild",
+                serde_json::json!({ "provider": "x" })
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn plugin_task_params_are_bounded() {
+        let refused = |field: &str, value: Value| {
+            let mut params = serde_json::json!({
+                "project_path": "/p",
+                "operation_id": "op",
+                "title": "Retro",
+            });
+            params[field] = value;
+            PluginTaskRequest::from_params(&params).err()
+        };
+        let long = |n: usize| Value::String("x".repeat(n));
+
+        assert_eq!(refused("title", long(255)), None);
+        assert_eq!(
+            refused("title", long(256)),
+            Some("plugin task title must be at most 255 characters".into())
+        );
+        assert_eq!(refused("description", long(65_536)), None);
+        assert_eq!(
+            refused("description", long(65_537)),
+            Some("plugin task description must be at most 65536 characters".into())
+        );
+        assert_eq!(
+            refused("operation_id", long(257)),
+            Some("plugin task operation_id must be at most 256 characters".into())
+        );
+        assert_eq!(
+            refused("operation_id", serde_json::json!("  ")),
+            Some("plugin task create requires operation_id".into())
+        );
+        assert_eq!(
+            refused("description", serde_json::json!("a\0b")),
+            Some("plugin task description must not contain NUL characters".into())
+        );
+        assert_eq!(
+            refused("tags", serde_json::json!([long(65)])),
+            Some("plugin task tags must be at most 64 characters each".into())
+        );
+        assert_eq!(
+            refused(
+                "tags",
+                Value::Array((0..21).map(|i| i.to_string().into()).collect())
+            ),
+            Some("plugin task create accepts at most 20 tags".into())
+        );
+        assert_eq!(refused("priority", serde_json::json!(5)), None);
+        for priority in [-1, 6] {
+            assert_eq!(
+                refused("priority", serde_json::json!(priority)),
+                Some("plugin task priority must be an integer between 0 and 5".into())
+            );
+        }
+    }
+
+    #[test]
     fn plugin_task_params_read_the_session_start() {
         let base = serde_json::json!({
             "project_path": "/p",
@@ -5269,7 +5450,7 @@ mod tests {
 
         assert_eq!(
             with("priority", serde_json::json!("high")),
-            "plugin task priority must be an integer"
+            "plugin task priority must be an integer between 0 and 5"
         );
         assert_eq!(
             with("tags", serde_json::json!(["ok", 3])),
