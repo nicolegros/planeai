@@ -2508,45 +2508,44 @@ fn insert_plugin_task(
         tags,
         start,
     } = request;
-    let project = crate::db::list_projects(conn)
-        .map_err(internal)?
-        .into_iter()
-        .find(|project| project.path == project_path && !project.hidden)
-        .ok_or_else(|| invalid_params("project was not found or is hidden"))?;
-    let pending_start = |task_key: &str| {
+    let pending_start = |project: &crate::db::Project, task_key: &str| {
         start.clone().map(|options| PendingTaskStart {
             project_id: project.id.clone(),
             task_key: task_key.to_string(),
             options,
         })
     };
-    let existing = |task_key: String, conn: &Connection| {
-        plugin_task_value(conn, &task_key)
-            .map_err(CallbackError::Internal)
-            .map(|task| InsertedPluginTask {
-                task,
-                lifecycle: None,
-                start: pending_start(&task_key),
-            })
-    };
     // Immediate: two requests with one operation id serialize on the write lock instead of
     // both reading "absent" and one failing with SQLITE_BUSY when it upgrades to write.
     let transaction = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(internal)?;
-    if let Some(task_key) = transaction
+    let projects = crate::db::list_projects(&transaction).map_err(internal)?;
+    if let Some((task_key, prefix)) = transaction
         .query_row(
-            "SELECT task_key FROM plugin_task_operations WHERE plugin_id = ?1 AND operation_id = ?2",
+            "SELECT o.task_key, t.project_prefix FROM plugin_task_operations o JOIN tasks t ON t.key = o.task_key WHERE o.plugin_id = ?1 AND o.operation_id = ?2",
             rusqlite::params![plugin_id, operation_id],
-            |row| row.get::<_, Option<String>>(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()
         .map_err(internal)?
-        .flatten()
     {
         transaction.commit().map_err(internal)?;
-        return existing(task_key, conn);
+        // The retry's own project may differ: the task, and its session, stay where they are.
+        let project = projects
+            .iter()
+            .find(|project| project.prefix == prefix)
+            .ok_or_else(|| internal(format!("task {task_key} has no project")))?;
+        return Ok(InsertedPluginTask {
+            task: plugin_task_value(conn, &task_key).map_err(CallbackError::Internal)?,
+            lifecycle: None,
+            start: pending_start(project, &task_key),
+        });
     }
+    let project = projects
+        .into_iter()
+        .find(|project| project.path == project_path && !project.hidden)
+        .ok_or_else(|| invalid_params("project was not found or is hidden"))?;
     if let Some(parent_key) = &parent_key {
         let parent_prefix = transaction
             .query_row(
@@ -2585,7 +2584,7 @@ fn insert_plugin_task(
         )
         .map_err(internal)?;
     transaction.commit().map_err(internal)?;
-    let start = pending_start(&task_key);
+    let start = pending_start(&project, &task_key);
     let lifecycle = parent_key
         .zip(first_child)
         .map(|(parent_key, first_child)| {
@@ -5341,6 +5340,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plain.start, None);
+    }
+
+    #[test]
+    fn a_retried_start_targets_the_project_of_the_task_the_first_attempt_created() {
+        let (mut conn, _checkout, project) = task_database();
+        let other_checkout = tempfile::TempDir::new().unwrap();
+        let other =
+            crate::db::create_project(&conn, "Other", &other_checkout.path().to_string_lossy())
+                .unwrap();
+        let request = |project_path: &str| {
+            PluginTaskRequest::from_params(&serde_json::json!({
+                "project_path": project_path,
+                "operation_id": "routine:r1:2026-10-05T13:00:00Z",
+                "title": "Retro",
+                "start": {},
+            }))
+            .unwrap()
+        };
+        insert_plugin_task(&mut conn, "routines", request(&project.path)).unwrap();
+        crate::db::hide_project(&conn, &project.id).unwrap();
+
+        let retried = insert_plugin_task(&mut conn, "routines", request(&other.path)).unwrap();
+
+        assert_eq!(
+            retried.start,
+            Some(PendingTaskStart {
+                project_id: project.id.clone(),
+                task_key: format!("{}-1", project.prefix),
+                options: StartOptions::default(),
+            })
+        );
     }
 
     #[test]
