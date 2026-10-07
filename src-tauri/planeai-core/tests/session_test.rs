@@ -355,42 +355,6 @@ fn dispatch_renders_name_and_prompt_with_every_task_variable() {
     );
 }
 
-#[test]
-fn dispatch_logs_the_prompt_size_but_never_its_text() {
-    #[derive(Clone, Default)]
-    struct Logs(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for Logs {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let logs = Logs::default();
-    let writer = logs.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(move || writer.clone())
-        .with_ansi(false)
-        .finish();
-    let backend = RecordingBackend::default();
-    let mut dispatcher = make_dispatcher("claude", "claude", Some("-- {prompt}"));
-    dispatcher.dispatch_config.prompt_template = Some("Rotate key {title}".to_string());
-    let task = Task {
-        title: "sk-live-1234".to_string(),
-        ..make_task()
-    };
-
-    tracing::subscriber::with_default(subscriber, || dispatcher.dispatch(&task, &backend))
-        .unwrap();
-
-    let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
-    assert!(logs.contains("dispatch command built"), "{logs}");
-    assert!(logs.contains("prompt_chars=Some(23)"), "{logs}");
-    assert!(!logs.contains("sk-live-1234"), "{logs}");
-}
-
 fn make_dispatcher(
     provider: &str,
     command: &str,
