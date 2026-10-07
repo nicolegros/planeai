@@ -87,13 +87,14 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
 - `tasks.read` permits the keyed single-task lookup aliases `host.tasks.read` and `host.task.get`. Each accepts `{ "key": "TASK-123" }` and returns `{ "task": ... }` (or `{ "task": null }` when no task matches).
 - `tasks.create` permits `host.tasks.create` and `host.tasks.createChild`.
   `host.tasks.create` creates a top-level `todo` task.
-  It requires `projectPath`, `title`, and a plugin-scoped `operationId`, accepts an optional `description`, integer `priority` (default `0`) and `tags` array, and rejects `parentKey`.
-  `title` is at most 255 characters, `description` at most 65,536, `operationId` at most 256, `tags` at most 20 of 64 characters each, none may contain NUL, and `priority` is 0 (none) to 5 (highest), the scale the Jira plugin writes.
+  It requires `project_path`, `title`, and a plugin-scoped `operation_id`, accepts an optional `description`, integer `priority` (default `0`) and `tags` array, and rejects `parent_key`.
+  Every two-word param also accepts its camelCase spelling (`projectPath`, `operationId`, `parentKey`).
+  `title` is at most 255 characters, `description` at most 65,536, `operation_id` at most 256, `tags` at most 20 of 64 characters each, none may contain NUL, and `priority` is 0 (none) to 5 (highest), the scale the Jira plugin writes.
   PlaneAI rejects hidden or unknown projects, returns the originally created task when the same operation is retried, and refreshes the task list.
   A request PlaneAI refuses (bad params, an unknown or hidden project, a missing or foreign parent, a `start` naming a provider nothing configured or installed provides) answers `-32602`, which retrying cannot fix.
   A `start` naming the provider of an installed plugin that is not running, as right after PlaneAI launches, answers `-32004` and creates nothing, so retry it later.
   `-32603` is a host failure worth retrying.
-  `host.tasks.createChild` requires `projectPath`, `parentKey`, `title`, `description`, and a plugin-scoped `operationId`; PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
+  `host.tasks.createChild` requires `project_path` (or `projectPath`), `parent_key` (or `parentKey`), `title`, `description`, and a plugin-scoped `operation_id` (or `operationId`); PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
   Both return `{ "task": ... }`.
 - `sessions.start` lets `host.tasks.create` start the new task's session, as the task form's "Start session immediately" does.
   Add `start: { "provider"?: string | null, "use_worktree"?: boolean, "auto_approve"?: boolean }` to the request; omitted fields default to the configured default provider, a worktree, and auto-approve.
