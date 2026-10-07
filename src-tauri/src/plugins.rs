@@ -1878,10 +1878,10 @@ async fn execute_app_host_task(
     .iter()
     .all(|capability| capabilities.contains(capability));
     if let Some(provider) = start_provider(method, &params).filter(|_| may_start) {
-        let catalog = crate::task_start::provider_catalog(app)
+        let availability = crate::task_start::provider_availability(app, &provider)
             .await
             .map_err(CallbackError::Internal)?;
-        check_start_provider(&provider, &catalog)?;
+        check_start_provider(&provider, availability)?;
     }
     let reply = execute_host_task(plugin_id, capabilities, data_dir, method, params).await?;
     announce_created_task(app, method);
@@ -1925,21 +1925,21 @@ fn start_provider(method: &str, params: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Refused before the task exists, so a typo does not leave a task whose session never starts.
+/// Refused before the task exists, so a typo does not leave a task whose session never starts,
+/// and a plugin provider still starting up is retried rather than given up on.
 fn check_start_provider(
     provider: &str,
-    catalog: &crate::task_start::ProviderCatalog,
+    availability: crate::task_start::ProviderAvailability,
 ) -> Result<(), CallbackError> {
-    if catalog
-        .providers
-        .iter()
-        .any(|option| option.key == provider)
-    {
-        Ok(())
-    } else {
-        Err(CallbackError::InvalidParams(format!(
+    use crate::task_start::ProviderAvailability;
+    match availability {
+        ProviderAvailability::Available => Ok(()),
+        ProviderAvailability::NotRunning => Err(CallbackError::Unavailable(format!(
+            "plugin task start.provider is not running yet: {provider}"
+        ))),
+        ProviderAvailability::Unknown => Err(CallbackError::InvalidParams(format!(
             "plugin task start.provider is not an available provider: {provider}"
-        )))
+        ))),
     }
 }
 
@@ -2111,7 +2111,8 @@ async fn run_host_task(
             }
             _ => {}
         }
-        // A request the host refuses answers -32602, so the plugin stops retrying it.
+        // A request the host refuses answers -32602, so the plugin stops retrying it;
+        // `execute_app_host_task` answers -32004 for a start provider not running yet.
         return commands::blocking(move || Ok(create_plugin_task(&plugin_id, request)))
             .await
             .map_err(CallbackError::Internal)?;
@@ -5247,44 +5248,64 @@ mod tests {
 
     #[test]
     fn a_start_must_name_an_available_provider() {
-        let catalog = crate::task_start::ProviderCatalog {
-            default: "claude".into(),
-            providers: vec![crate::task_start::ProviderOption {
-                key: "claude".into(),
-                label: "claude".into(),
-                auto_approve: true,
-            }],
-        };
-        let checked = |method: &str, start: Value| {
+        use crate::task_start::ProviderAvailability;
+        let checked = |method: &str, start: Value, availability| {
             start_provider(method, &serde_json::json!({ "title": "t", "start": start }))
-                .map(|provider| check_start_provider(&provider, &catalog))
+                .map(|provider| check_start_provider(&provider, availability))
         };
+        let named = |provider: &str| serde_json::json!({ "provider": provider });
 
         assert_eq!(
             checked(
                 "host.tasks.create",
-                serde_json::json!({ "provider": "claude" })
+                named("claude"),
+                ProviderAvailability::Available
             ),
             Some(Ok(()))
         );
         assert_eq!(
             checked(
                 "host.tasks.create",
-                serde_json::json!({ "provider": "cluade" })
+                named("cluade"),
+                ProviderAvailability::Unknown
             ),
             Some(Err(CallbackError::InvalidParams(
                 "plugin task start.provider is not an available provider: cluade".into()
             )))
         );
         assert_eq!(
-            checked("host.tasks.create", serde_json::json!({ "provider": "" })),
+            checked(
+                "host.tasks.create",
+                named("claude-chat:claude"),
+                ProviderAvailability::NotRunning
+            )
+            .map(|checked| checked.map_err(|error| (error.code(), error.to_string()))),
+            Some(Err((
+                -32004,
+                "plugin task start.provider is not running yet: claude-chat:claude".into()
+            )))
+        );
+        assert_eq!(
+            checked(
+                "host.tasks.create",
+                named(""),
+                ProviderAvailability::Unknown
+            ),
             None
         );
-        assert_eq!(checked("host.tasks.create", serde_json::json!({})), None);
+        assert_eq!(
+            checked(
+                "host.tasks.create",
+                serde_json::json!({}),
+                ProviderAvailability::Unknown
+            ),
+            None
+        );
         assert_eq!(
             checked(
                 "host.tasks.createChild",
-                serde_json::json!({ "provider": "x" })
+                named("x"),
+                ProviderAvailability::Unknown
             ),
             None
         );

@@ -64,6 +64,8 @@ pub(crate) enum CallbackError {
     NotFound,
     NotGranted,
     InvalidParams(String),
+    /// The request is valid but cannot be served now; the plugin should retry it later.
+    Unavailable(String),
     Internal(String),
 }
 
@@ -73,6 +75,7 @@ impl CallbackError {
             Self::NotFound => -32601,
             Self::NotGranted => -32003,
             Self::InvalidParams(_) => -32602,
+            Self::Unavailable(_) => -32004,
             Self::Internal(_) => -32603,
         }
     }
@@ -83,7 +86,9 @@ impl std::fmt::Display for CallbackError {
         match self {
             Self::NotFound => f.write_str("host method not found"),
             Self::NotGranted => f.write_str("plugin capability is not granted"),
-            Self::InvalidParams(message) | Self::Internal(message) => f.write_str(message),
+            Self::InvalidParams(message) | Self::Unavailable(message) | Self::Internal(message) => {
+                f.write_str(message)
+            }
         }
     }
 }
@@ -433,6 +438,7 @@ mod tests {
         assert_eq!(code(CallbackError::NotFound), -32601);
         assert_eq!(code(CallbackError::NotGranted), -32003);
         assert_eq!(code(CallbackError::InvalidParams("bad".into())), -32602);
+        assert_eq!(code(CallbackError::Unavailable("later".into())), -32004);
         assert_eq!(code(CallbackError::Internal("locked".into())), -32603);
         assert_eq!(
             CallbackError::NotGranted.to_string(),

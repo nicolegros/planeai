@@ -78,6 +78,44 @@ impl ProviderCatalog {
     }
 }
 
+/// Whether a session can start on a provider, as a plugin asking for one needs to know.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderAvailability {
+    Available,
+    /// An installed plugin provides it but is not running, as right after launch.
+    NotRunning,
+    /// Nothing configured or installed provides it.
+    Unknown,
+}
+
+impl ProviderAvailability {
+    pub fn of(cfg: &Config, inventory: &[PluginInventory], key: &str) -> Self {
+        let catalog = ProviderCatalog::new(cfg, inventory);
+        if catalog.providers.iter().any(|option| option.key == key) {
+            return Self::Available;
+        }
+        let installed = inventory
+            .iter()
+            .filter(|plugin| {
+                plugin
+                    .capabilities
+                    .contains(&PluginHostCapability::Providers)
+            })
+            .flat_map(|plugin| {
+                plugin
+                    .providers
+                    .iter()
+                    .map(move |provider| format!("{}:{}", plugin.id, provider.id))
+            })
+            .any(|installed| installed == key);
+        if installed {
+            Self::NotRunning
+        } else {
+            Self::Unknown
+        }
+    }
+}
+
 /// What the caller chose; everything else comes from the task and the configured templates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartOptions {
@@ -565,6 +603,24 @@ fn has_session(conn: &rusqlite::Connection, task_key: &str) -> Result<bool, Stri
 
 /// The providers `start` accepts, as the session and task forms list them.
 pub async fn provider_catalog(app: &AppHandle) -> Result<ProviderCatalog, String> {
+    with_provider_sources(app, ProviderCatalog::new).await
+}
+
+/// Whether a session can start on `key` now.
+pub async fn provider_availability(
+    app: &AppHandle,
+    key: &str,
+) -> Result<ProviderAvailability, String> {
+    with_provider_sources(app, |cfg, inventory| {
+        ProviderAvailability::of(cfg, inventory, key)
+    })
+    .await
+}
+
+async fn with_provider_sources<T>(
+    app: &AppHandle,
+    read: impl FnOnce(&Config, &[PluginInventory]) -> T,
+) -> Result<T, String> {
     let inventory = app
         .state::<crate::plugins::PluginRuntimeHandle>()
         .0
@@ -572,7 +628,7 @@ pub async fn provider_catalog(app: &AppHandle) -> Result<ProviderCatalog, String
         .await?;
     let config = app.state::<crate::state::ConfigState>();
     let cfg = config.0.lock().map_err(|e| e.to_string())?;
-    Ok(ProviderCatalog::new(&cfg, &inventory))
+    Ok(read(&cfg, &inventory))
 }
 
 fn task_repository(prefix: &str) -> Result<SqliteRepository, String> {
@@ -1076,6 +1132,40 @@ mod tests {
             last_error: None,
             log_path: None,
         }
+    }
+
+    #[test]
+    fn a_provider_of_an_installed_plugin_that_is_not_running_is_only_unavailable_for_now() {
+        let cfg = Config {
+            providers: ["kiro", "chat:reserved"]
+                .into_iter()
+                .map(|key| (key.to_string(), Default::default()))
+                .collect(),
+            ..Default::default()
+        };
+        let inventory = [
+            plugin("chat", PluginRuntimeState::Running, true),
+            plugin("starting", PluginRuntimeState::Starting, true),
+            plugin("off", PluginRuntimeState::Disabled, true),
+            plugin("plain", PluginRuntimeState::Running, false),
+        ];
+        let availability = |key: &str| ProviderAvailability::of(&cfg, &inventory, key);
+
+        assert_eq!(availability("kiro"), ProviderAvailability::Available);
+        assert_eq!(availability("chat:echo"), ProviderAvailability::Available);
+        assert_eq!(
+            availability("starting:claude"),
+            ProviderAvailability::NotRunning
+        );
+        assert_eq!(availability("off:echo"), ProviderAvailability::NotRunning);
+        assert_eq!(availability("cluade"), ProviderAvailability::Unknown);
+        assert_eq!(availability("chat:reserved"), ProviderAvailability::Unknown);
+        assert_eq!(availability("starting:gpt"), ProviderAvailability::Unknown);
+        assert_eq!(availability("plain:claude"), ProviderAvailability::Unknown);
+        assert_eq!(
+            availability("removed:claude"),
+            ProviderAvailability::Unknown
+        );
     }
 
     #[test]

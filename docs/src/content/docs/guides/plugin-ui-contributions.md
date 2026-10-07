@@ -90,7 +90,9 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
   It requires `projectPath`, `title`, and a plugin-scoped `operationId`, accepts an optional `description`, integer `priority` (default `0`) and `tags` array, and rejects `parentKey`.
   `title` is at most 255 characters, `description` at most 65,536, `operationId` at most 256, `tags` at most 20 of 64 characters each, none may contain NUL, and `priority` is 0 (none) to 5 (highest), the scale the Jira plugin writes.
   PlaneAI rejects hidden or unknown projects, returns the originally created task when the same operation is retried, and refreshes the task list.
-  A request PlaneAI refuses (bad params, an unknown or hidden project, a missing or foreign parent, a `start` naming an unavailable provider) answers `-32602`, which retrying cannot fix; `-32603` is a host failure worth retrying.
+  A request PlaneAI refuses (bad params, an unknown or hidden project, a missing or foreign parent, a `start` naming a provider nothing configured or installed provides) answers `-32602`, which retrying cannot fix.
+  A `start` naming the provider of an installed plugin that is not running, as right after PlaneAI launches, answers `-32004` and creates nothing, so retry it later.
+  `-32603` is a host failure worth retrying.
   `host.tasks.createChild` requires `projectPath`, `parentKey`, `title`, `description`, and a plugin-scoped `operationId`; PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
   Both return `{ "task": ... }`.
 - `sessions.start` lets `host.tasks.create` start the new task's session, as the task form's "Start session immediately" does.
@@ -140,7 +142,7 @@ Ignore params and features you do not know; newer hosts add them.
 Response IDs must exactly correlate with the request ID. Return either `result` or a JSON-RPC `error`, not both. PlaneAI sends the reserved `plugin.shutdown` during disable/reload/app shutdown; acknowledge it and exit promptly. Do not expose or invoke `plugin.handshake` or `plugin.shutdown` from plugin UI.
 
 A sidecar may make a host callback while PlaneAI is waiting for its response. Send a normal JSON-RPC request on stdout, wait for the correlated host response on stdin, then finish the original request.
-A failed callback answers with a JSON-RPC error code: `-32601` for an unknown host method, `-32003` for a capability the plugin was not granted, `-32602` for invalid params, and `-32603` for anything else. `fixture.persistSettings` demonstrates `host.settings.get` followed by `host.settings.replace`. Keep callback IDs distinct from the active request ID and continue reading until the matching response arrives.
+A failed callback answers with a JSON-RPC error code: `-32601` for an unknown host method, `-32003` for a capability the plugin was not granted, `-32602` for invalid params, `-32004` for a valid request PlaneAI cannot serve yet and the plugin should retry later, and `-32603` for anything else. `fixture.persistSettings` demonstrates `host.settings.get` followed by `host.settings.replace`. Keep callback IDs distinct from the active request ID and continue reading until the matching response arrives.
 
 Handshake and ordinary RPC calls have a five-second deadline; provider methods have [their own](#providers). On deadline expiry, PlaneAI sends the JSON-RPC `$/cancelRequest` notification with `{ "id": <original request ID> }`. Keep reading stdin while work is active; cancel cooperatively and return the original request's JSON-RPC error `{ "code": -32800, "message": "request cancelled" }` within three seconds. PlaneAI treats any other response or no cancellation response as a failed runtime and stops it. `plugin.shutdown` also has a three-second grace period before the process is killed. Do not define a competing cancellation wire format in v1.
 
