@@ -21,7 +21,7 @@ my-plugin/
     └── entry.js
 ```
 
-`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, or the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
+`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers), or `planeai.plugin-host.v4` for plugins that use the `sessions.start` capability or the `dialog` placement (each version includes the ones before it); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
 
 Every backend and UI path must be a package-relative file path: no absolute paths and no `..`. The active platform's backend must exist and be executable. On Unix, its executable mode is preserved in the imported copy.
 
@@ -88,7 +88,9 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
 - `tasks.create` permits `host.tasks.create` and `host.tasks.createChild`.
   `host.tasks.create` creates a top-level `todo` task.
   It requires `projectPath`, `title`, and a plugin-scoped `operationId`, accepts an optional `description`, integer `priority` (default `0`) and `tags` array, and rejects `parentKey`.
+  `title` is at most 255 characters, `description` at most 65,536, `operationId` at most 256, `tags` at most 20 of 64 characters each, none may contain NUL, and `priority` is 0 (none) to 5 (highest), the scale the Jira plugin writes.
   PlaneAI rejects hidden or unknown projects, returns the originally created task when the same operation is retried, and refreshes the task list.
+  A request PlaneAI refuses (bad params, an unknown or hidden project, a missing or foreign parent, a `start` naming an unavailable provider) answers `-32602`, which retrying cannot fix; `-32603` is a host failure worth retrying.
   `host.tasks.createChild` requires `projectPath`, `parentKey`, `title`, `description`, and a plugin-scoped `operationId`; PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
   Both return `{ "task": ... }`.
 - `sessions.start` lets `host.tasks.create` start the new task's session, as the task form's "Start session immediately" does.

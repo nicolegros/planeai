@@ -48,11 +48,34 @@ pub const RECIPIENT_HOST_API_VERSION: &str = "planeai.plugin-host.v2";
 /// Unstable until plugin-provided session runtimes ship; see ADR-0014.
 pub const PROVIDER_HOST_API_VERSION: &str = "planeai.plugin-host.v3";
 
+/// Plugin-created tasks that start sessions (`sessions.start`, `host.tasks.create`,
+/// `host.sessions.providers`) and the `dialog` placement.
+pub const TASK_SESSION_HOST_API_VERSION: &str = "planeai.plugin-host.v4";
+
+/// Every host API this host serves, oldest first; each includes the ones before it.
+const HOST_API_VERSIONS: [&str; 4] = [
+    HOST_API_VERSION,
+    RECIPIENT_HOST_API_VERSION,
+    PROVIDER_HOST_API_VERSION,
+    TASK_SESSION_HOST_API_VERSION,
+];
+
 pub fn supports_host_api_version(version: &str) -> bool {
-    matches!(
-        version,
-        HOST_API_VERSION | RECIPIENT_HOST_API_VERSION | PROVIDER_HOST_API_VERSION
-    )
+    HOST_API_VERSIONS.contains(&version)
+}
+
+/// Whether a manifest's host API includes the features `required` introduced.
+fn includes_host_api(object: &Map<String, Value>, required: &str) -> bool {
+    let position = |version| HOST_API_VERSIONS.iter().position(|known| *known == version);
+    let declared = object.get("host_api_version").and_then(Value::as_str);
+    declared.and_then(position) >= position(required)
+}
+
+fn require_host_api(object: &Map<String, Value>, feature: &str, required: &str) -> Result<()> {
+    if !includes_host_api(object, required) {
+        bail!("{feature} requires host API {required}");
+    }
+    Ok(())
 }
 
 const MANIFEST_FIELDS: &[&str] = &[
@@ -193,6 +216,13 @@ fn validate_capabilities(object: &Map<String, Value>) -> Result<()> {
         if !seen.insert(capability) {
             bail!("plugin manifest declares duplicate capabilities");
         }
+        if capability == "sessions.start" {
+            require_host_api(
+                object,
+                "the sessions.start capability",
+                TASK_SESSION_HOST_API_VERSION,
+            )?;
+        }
     }
     Ok(())
 }
@@ -241,6 +271,13 @@ fn validate_ui_contributions(object: &Map<String, Value>, plugin_id: &str) -> Re
         let placement = required_string(contribution, "placement")?;
         if !UI_PLACEMENTS.contains(&placement) {
             bail!("UI contribution placement is unsupported: {placement}");
+        }
+        if placement == "dialog" {
+            require_host_api(
+                object,
+                "the dialog placement",
+                TASK_SESSION_HOST_API_VERSION,
+            )?;
         }
         let has_order = match contribution.get("order") {
             None | Some(Value::Null) => false,
@@ -296,7 +333,7 @@ fn validate_providers(object: &Map<String, Value>, plugin_id: &str) -> Result<()
     if !declares_capability {
         bail!("declared providers require the providers capability");
     }
-    if object.get("host_api_version").and_then(Value::as_str) != Some(PROVIDER_HOST_API_VERSION) {
+    if !includes_host_api(object, PROVIDER_HOST_API_VERSION) {
         bail!("declared providers require host API {PROVIDER_HOST_API_VERSION}");
     }
     let mut ids = HashSet::new();
@@ -410,7 +447,7 @@ mod tests {
             "id": "integration",
             "name": "Integration",
             "version": "0.1.0",
-            "host_api_version": "planeai.plugin-host.v1",
+            "host_api_version": "planeai.plugin-host.v4",
             "source_kind": "local",
             "backend_entrypoints": { "macos-arm64": "bin/plugin" },
             "capabilities": [
@@ -511,6 +548,42 @@ mod tests {
         let mut manifest = provider_manifest();
         manifest["host_api_version"] = json!("planeai.plugin-host.v2");
         assert!(provider_error(manifest).contains("require host API"));
+    }
+
+    #[test]
+    fn task_session_features_require_host_api_v4() {
+        let older = |change: fn(&mut Value)| {
+            let mut manifest = manifest();
+            change(&mut manifest);
+            manifest["host_api_version"] = json!("planeai.plugin-host.v3");
+            validate_local_manifest(&manifest, "macos-arm64").map_err(|error| error.to_string())
+        };
+
+        assert_eq!(
+            older(|_| {}),
+            Err("the sessions.start capability requires host API planeai.plugin-host.v4".into())
+        );
+        assert_eq!(
+            older(|manifest| {
+                manifest["capabilities"] = json!(["settings"]);
+                manifest["ui_contributions"][0]["placement"] = json!("dialog");
+            }),
+            Err("the dialog placement requires host API planeai.plugin-host.v4".into())
+        );
+        assert_eq!(
+            older(|manifest| manifest["capabilities"] = json!(["settings"])),
+            Ok("bin/plugin".into())
+        );
+    }
+
+    #[test]
+    fn providers_stay_available_on_later_host_apis() {
+        let mut manifest = provider_manifest();
+        manifest["host_api_version"] = json!(TASK_SESSION_HOST_API_VERSION);
+        assert_eq!(
+            validate_local_manifest(&manifest, "macos-arm64").unwrap(),
+            "bin/plugin"
+        );
     }
 
     #[test]

@@ -4548,7 +4548,7 @@ mod tests {
             "id": "dialog-test",
             "name": "Dialog test",
             "version": "1.0.0",
-            "host_api_version": HOST_API_VERSION,
+            "host_api_version": planeai_plugin_contract::TASK_SESSION_HOST_API_VERSION,
             "source_kind": "local",
             "backend_entrypoints": { crate::plugin_packages::current_platform_key(): "bin/plugin" },
             "ui_contributions": [
