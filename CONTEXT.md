@@ -266,7 +266,8 @@ Each agent session can have shell tabs (pty keys `<sessionId>:<index>`).
 ### Exit detection
 
 - **tmux**: PTY reader thread gets EOF → emit `pty-exited` → mark session as `exited` in DB.
-- **daemon**: daemon broadcasts an `exited` event on the control socket → GUI marks session exited.
+- **daemon**: an exit reaches the GUI two ways: the `exited` event on the control socket, and `FRAME_EOF` plus close on each attached data connection.
+  Both feed the `PtyManager` exit sink, whose consumers are idempotent (`pty-exited` sets the status again, a closing terminal tab only records the exit), so whichever arrives second changes nothing.
 
 ### Startup reconciliation (one-time, not polling)
 
