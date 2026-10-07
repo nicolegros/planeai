@@ -347,8 +347,7 @@ pub(crate) async fn launch(
         e.to_string()
     })?;
 
-    // Nothing ran the agent yet on such a backend: its first attach does, with this prompt.
-    let pending_prompt = task_prompt.filter(|_| crate::session_ops::spawns_on_attach(&backend));
+    let pending_prompt = crate::session_ops::pending_prompt(&backend, task_prompt);
     let session = db::create_session_with_params(
         &conn,
         &planeai_core::services::CreateSessionParams {

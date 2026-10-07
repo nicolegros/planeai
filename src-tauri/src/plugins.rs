@@ -1883,15 +1883,29 @@ async fn execute_app_host_task(
             .map_err(CallbackError::Internal)?;
         check_start_provider(&provider, &catalog)?;
     }
-    let mut reply = execute_host_task(plugin_id, capabilities, data_dir, method, params).await?;
+    let reply = execute_host_task(plugin_id, capabilities, data_dir, method, params).await?;
     announce_created_task(app, method);
+    answer_requested_start(reply, |pending| {
+        crate::task_start::start_in_background(app, pending)
+    })
+    .await
+}
+
+/// Replace the requested start riding in a task reply with where the session stands,
+/// starting it in the background while it is pending.
+async fn answer_requested_start<F, Fut>(
+    mut reply: Value,
+    start_in_background: F,
+) -> Result<Value, CallbackError>
+where
+    F: FnOnce(PendingTaskStart) -> Fut,
+    Fut: std::future::Future<Output = Result<SessionStart, String>>,
+{
     let session = match take_requested_start(&mut reply) {
         None => return Ok(reply),
-        Some(RequestedStart::Pending(pending)) => {
-            crate::task_start::start_in_background(app, pending)
-                .await
-                .map_err(CallbackError::Internal)?
-        }
+        Some(RequestedStart::Pending(pending)) => start_in_background(pending)
+            .await
+            .map_err(CallbackError::Internal)?,
         Some(RequestedStart::Started) => SessionStart::Exists,
         Some(RequestedStart::Failed { error }) => {
             reply["session_error"] = Value::String(error);
@@ -5539,6 +5553,53 @@ mod tests {
             }),
             "a failed start stays failed rather than starting a second time"
         );
+    }
+
+    #[tokio::test]
+    async fn a_task_reply_says_where_its_session_stands() {
+        let task = serde_json::json!({ "task": { "key": "PLA-1" } });
+        let pending = PendingTaskStart {
+            plugin: "Routines".into(),
+            project_id: "p".into(),
+            task_key: "PLA-1".into(),
+            options: StartOptions::default(),
+        };
+        let answer = |requested: Option<RequestedStart>, outcome: SessionStart| {
+            let reply = task_reply(task.clone(), requested.as_ref());
+            async move { answer_requested_start(reply, |_| async move { Ok(outcome) }).await }
+        };
+
+        assert_eq!(
+            answer(
+                Some(RequestedStart::Pending(pending.clone())),
+                SessionStart::Starting
+            )
+            .await,
+            Ok(serde_json::json!({ "task": { "key": "PLA-1" }, "session": "starting" }))
+        );
+        assert_eq!(
+            answer(Some(RequestedStart::Pending(pending)), SessionStart::Exists).await,
+            Ok(serde_json::json!({ "task": { "key": "PLA-1" }, "session": "exists" }))
+        );
+        assert_eq!(
+            answer(Some(RequestedStart::Started), SessionStart::Starting).await,
+            Ok(serde_json::json!({ "task": { "key": "PLA-1" }, "session": "exists" }))
+        );
+        assert_eq!(
+            answer(
+                Some(RequestedStart::Failed {
+                    error: "Unknown provider: x".into()
+                }),
+                SessionStart::Starting
+            )
+            .await,
+            Ok(serde_json::json!({
+                "task": { "key": "PLA-1" },
+                "session": "failed",
+                "session_error": "Unknown provider: x",
+            }))
+        );
+        assert_eq!(answer(None, SessionStart::Starting).await, Ok(task.clone()));
     }
 
     #[test]

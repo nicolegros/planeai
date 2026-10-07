@@ -175,19 +175,36 @@ pub fn plan_task_session(
     })
 }
 
-/// Start the task's session the way the task form always has: launch it, move the task to
-/// `in_progress` whatever `on_start` says, and refresh the windows' session and task lists.
-pub async fn start(
-    app: &AppHandle,
-    project_id: &str,
-    task_key: &str,
-    options: StartOptions,
-) -> Result<LaunchResult, String> {
-    let (project, task, branches) = crate::commands::blocking({
-        let db = app.state::<crate::state::DbState>().0.clone();
+/// What `start` needs from the running app, apart so its orchestration can be tested.
+pub(crate) trait StartHost {
+    /// The task's project, the task, and the project's branches (`list_branches` output).
+    async fn task(
+        &self,
+        project_id: &str,
+        task_key: &str,
+    ) -> Result<(planeai_core::services::Project, Task, Vec<String>), String>;
+    async fn catalog(&self) -> Result<ProviderCatalog, String>;
+    fn templates(&self) -> Result<Option<TaskManagerTemplates>, String>;
+    async fn launch(&self, request: LaunchRequest) -> Result<LaunchResult, String>;
+    async fn move_in_progress(
+        &self,
+        project: planeai_core::services::Project,
+        task_key: String,
+    ) -> Result<(), String>;
+    /// Tell the windows their session or task lists changed.
+    fn announce(&self, event: &str);
+}
+
+impl StartHost for AppHandle {
+    async fn task(
+        &self,
+        project_id: &str,
+        task_key: &str,
+    ) -> Result<(planeai_core::services::Project, Task, Vec<String>), String> {
+        let db = self.state::<crate::state::DbState>().0.clone();
         let project_id = project_id.to_string();
         let task_key = task_key.to_string();
-        move || {
+        crate::commands::blocking(move || {
             let project = {
                 let conn = db.lock().map_err(|e| e.to_string())?;
                 crate::db::get_project(&conn, &project_id)
@@ -200,23 +217,66 @@ pub async fn start(
             // Unknown branches only make the branch read as new, as in the task form.
             let branches = crate::git::list_branches(&project.path).unwrap_or_default();
             Ok((project, task, branches))
-        }
-    })
-    .await?;
-    let catalog = provider_catalog(app).await?;
-    let templates = {
-        let cfg = app
+        })
+        .await
+    }
+
+    async fn catalog(&self) -> Result<ProviderCatalog, String> {
+        provider_catalog(self).await
+    }
+
+    fn templates(&self) -> Result<Option<TaskManagerTemplates>, String> {
+        let cfg = self
             .state::<crate::state::ConfigState>()
             .0
             .lock()
             .map_err(|e| e.to_string())?
             .clone();
-        cfg.task_management.and_then(|tm| tm.templates)
-    };
+        Ok(cfg.task_management.and_then(|tm| tm.templates))
+    }
+
+    async fn launch(&self, request: LaunchRequest) -> Result<LaunchResult, String> {
+        launch(self, request).await
+    }
+
+    async fn move_in_progress(
+        &self,
+        project: planeai_core::services::Project,
+        task_key: String,
+    ) -> Result<(), String> {
+        crate::commands::blocking(move || move_in_progress(&project, &task_key)).await
+    }
+
+    fn announce(&self, event: &str) {
+        if let Err(error) = self.emit(event, ()) {
+            tracing::warn!(event, %error, "failed to announce a started task session");
+        }
+    }
+}
+
+/// Start the task's session the way the task form always has: launch it, move the task to
+/// `in_progress` whatever `on_start` says, and refresh the windows' session and task lists.
+pub async fn start(
+    app: &AppHandle,
+    project_id: &str,
+    task_key: &str,
+    options: StartOptions,
+) -> Result<LaunchResult, String> {
+    start_with(app, project_id, task_key, options).await
+}
+
+pub(crate) async fn start_with(
+    host: &impl StartHost,
+    project_id: &str,
+    task_key: &str,
+    options: StartOptions,
+) -> Result<LaunchResult, String> {
+    let (project, task, branches) = host.task(project_id, task_key).await?;
+    let catalog = host.catalog().await?;
+    let templates = host.templates()?;
     let plan = plan_task_session(templates.as_ref(), &catalog, &task, &branches, &options)?;
-    let mut result = launch(
-        app,
-        LaunchRequest {
+    let mut result = host
+        .launch(LaunchRequest {
             project_id: project.id.clone(),
             branch: plan.branch,
             is_new_branch: plan.is_new_branch,
@@ -228,11 +288,9 @@ pub async fn start(
             task_key: Some(task.key.clone()),
             task_project_id: None,
             task_prompt: Some(plan.prompt),
-        },
-    )
-    .await?;
-    let moved = crate::commands::blocking(move || move_in_progress(&project, &task.key)).await;
-    if let Err(error) = moved {
+        })
+        .await?;
+    if let Err(error) = host.move_in_progress(project, task.key.clone()).await {
         tracing::warn!(task_key, %error, "started a task session but could not move its task");
         let failed = "Session started but failed to update task status.";
         result.warning = Some(match result.warning {
@@ -241,9 +299,7 @@ pub async fn start(
         });
     }
     for event in ["sessions-changed", "tasks-changed"] {
-        if let Err(error) = app.emit(event, ()) {
-            tracing::warn!(event, %error, "failed to announce a started task session");
-        }
+        host.announce(event);
     }
     Ok(result)
 }
@@ -770,6 +826,158 @@ mod tests {
         };
         let error = plan_task_session(None, &catalog, &task(""), &[], &StartOptions::default());
         assert_eq!(error, Err(NO_PROVIDER.to_string()));
+    }
+
+    /// A `StartHost` whose launch and move outcomes the test picks, recording what ran.
+    struct FakeHost {
+        launch: Result<Option<String>, String>,
+        moved: Result<(), String>,
+        launched: Mutex<Vec<LaunchRequest>>,
+        moves: Mutex<Vec<String>>,
+        events: Mutex<Vec<String>>,
+    }
+
+    impl FakeHost {
+        fn new(launch: Result<Option<String>, String>, moved: Result<(), String>) -> Self {
+            Self {
+                launch,
+                moved,
+                launched: Mutex::default(),
+                moves: Mutex::default(),
+                events: Mutex::default(),
+            }
+        }
+    }
+
+    impl StartHost for FakeHost {
+        async fn task(
+            &self,
+            project_id: &str,
+            _task_key: &str,
+        ) -> Result<(planeai_core::services::Project, Task, Vec<String>), String> {
+            let project = planeai_core::services::Project {
+                id: project_id.into(),
+                name: "Demo".into(),
+                path: "/repos/demo".into(),
+                status: "active".into(),
+                prefix: "PLA".into(),
+                hidden: false,
+            };
+            Ok((project, task("Users land on /home."), vec!["main".into()]))
+        }
+
+        async fn catalog(&self) -> Result<ProviderCatalog, String> {
+            Ok(catalog())
+        }
+
+        fn templates(&self) -> Result<Option<TaskManagerTemplates>, String> {
+            Ok(None)
+        }
+
+        async fn launch(&self, request: LaunchRequest) -> Result<LaunchResult, String> {
+            let warning = self.launch.clone()?;
+            let session = crate::db::Session {
+                id: "s1".into(),
+                project_id: request.project_id.clone(),
+                name: request.name.clone(),
+                tmux_name: None,
+                branch: request.branch.clone(),
+                status: "active".into(),
+                created_at: String::new(),
+                worktree_path: None,
+                provider: request.provider.clone(),
+                backend: "local".into(),
+                provider_session_id: None,
+                auto_approve: request.auto_approve,
+                task_key: request.task_key.clone(),
+                base_branch: request.base_branch.clone(),
+                pr_url: None,
+                pr_state: None,
+                attached_once: false,
+                parent_session_id: None,
+                task_project_id: None,
+            };
+            self.launched.lock().unwrap().push(request);
+            Ok(LaunchResult { session, warning })
+        }
+
+        async fn move_in_progress(
+            &self,
+            _project: planeai_core::services::Project,
+            task_key: String,
+        ) -> Result<(), String> {
+            self.moves.lock().unwrap().push(task_key);
+            self.moved.clone()
+        }
+
+        fn announce(&self, event: &str) {
+            self.events.lock().unwrap().push(event.into());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_started_session_moves_its_task_and_refreshes_the_lists() {
+        let host = FakeHost::new(Ok(None), Ok(()));
+
+        let result = start_with(&host, "p1", "PLA-12", StartOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(result.warning, None);
+        let launched = host.launched.lock().unwrap();
+        assert_eq!(
+            (
+                launched[0].project_id.as_str(),
+                launched[0].branch.as_str(),
+                launched[0].name.as_str(),
+                launched[0].provider.as_deref(),
+                launched[0].task_prompt.as_deref(),
+            ),
+            (
+                "p1",
+                "pla-12/fix-login-redirect",
+                "PLA-12: Fix Login Redirect",
+                Some("claude"),
+                Some("Implement task PLA-12: Fix Login Redirect\n\nUsers land on /home."),
+            )
+        );
+        assert_eq!(*host.moves.lock().unwrap(), ["PLA-12"]);
+        assert_eq!(
+            *host.events.lock().unwrap(),
+            ["sessions-changed", "tasks-changed"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_launch_leaves_the_task_where_it_was() {
+        let host = FakeHost::new(Err("Failed to launch session: no agent".into()), Ok(()));
+
+        let result = start_with(&host, "p1", "PLA-12", StartOptions::default()).await;
+
+        assert_eq!(result.unwrap_err(), "Failed to launch session: no agent");
+        assert!(host.moves.lock().unwrap().is_empty());
+        assert!(host.events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_move_becomes_a_warning_on_the_started_session() {
+        let host = FakeHost::new(
+            Ok(Some("Branch 'x' is already in a worktree".into())),
+            Err("database is locked".into()),
+        );
+
+        let result = start_with(&host, "p1", "PLA-12", StartOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.warning.as_deref(),
+            Some("Branch 'x' is already in a worktree Session started but failed to update task status.")
+        );
+        assert_eq!(
+            *host.events.lock().unwrap(),
+            ["sessions-changed", "tasks-changed"]
+        );
     }
 
     #[test]

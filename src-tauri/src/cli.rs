@@ -313,10 +313,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             task_project_id: plan.task_project_id.clone(),
             base_branch: plan.base_branch.clone(),
             parent_session_id: plan.parent_session_id.clone(),
-            pending_prompt: plan
-                .prompt
-                .clone()
-                .filter(|_| crate::session_ops::spawns_on_attach(&plan.backend)),
+            pending_prompt: crate::session_ops::pending_prompt(&plan.backend, plan.prompt.clone()),
             ..Default::default()
         },
     )

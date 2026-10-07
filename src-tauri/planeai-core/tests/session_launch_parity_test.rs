@@ -919,3 +919,40 @@ fn daemon_shell_tab_and_local_shell_tab_have_same_path() {
         "daemon and local shell tabs must produce the same PATH"
     );
 }
+
+/// The shell that runs a launch command hands the agent the prompt byte for byte.
+#[cfg(unix)]
+#[test]
+fn hostile_prompts_reach_the_agent_as_one_unchanged_argument() {
+    let provider = ProviderConfig {
+        command: "printf '[%s]'".to_string(),
+        yolo_flag: None,
+        prompt_command: Some("-- {prompt}".to_string()),
+    };
+    let long = "x".repeat(65_536);
+    for prompt in [
+        "it's \"quoted\" and `ticked`",
+        "$(touch /tmp/planeai-pwned) ${HOME} $HOME",
+        "line one\nline two\n",
+        "- a markdown bullet",
+        "--model opus",
+        "semi; colon && amp | pipe > redirect",
+        "émoji ✓ and tab\tend",
+        long.as_str(),
+    ] {
+        let command =
+            build_provider_launch_command(&provider, false, Some(prompt), false, None).command;
+        let (shell, args) = planeai_core::command::shell_args(&command);
+        let output = std::process::Command::new(shell)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{prompt:?}");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("[--][{prompt}]"),
+            "{prompt:?}"
+        );
+    }
+    assert!(!std::path::Path::new("/tmp/planeai-pwned").exists());
+}
