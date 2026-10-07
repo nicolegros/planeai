@@ -457,21 +457,13 @@ mod tests {
         .unwrap()
     }
 
-    /// Polls until `id` has exited: a fixed sleep flakes when the whole workspace's tests load the machine.
     fn wait_for_exit(reg: &mut SessionRegistry, id: &str) -> Vec<String> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut exited = Vec::new();
-        loop {
+        crate::test_support::wait_until(&format!("{id} exits"), || {
             exited.extend(reg.poll_exits());
-            if exited.iter().any(|candidate| candidate == id) {
-                return exited;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "{id} did not exit within 10s"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+            exited.iter().any(|candidate| candidate == id)
+        });
+        exited
     }
 
     #[test]
@@ -501,8 +493,7 @@ mod tests {
         spawn_echo(&mut reg, "exited");
         spawn_sleep(&mut reg, "killed");
 
-        std::thread::sleep(Duration::from_millis(500));
-        reg.poll_exits();
+        wait_for_exit(&mut reg, "exited");
         let exited_before = reg
             .sessions
             .get("exited")
@@ -671,8 +662,7 @@ mod tests {
     fn buffer_snapshot_available_after_exit() {
         let mut reg = SessionRegistry::new();
         spawn_echo(&mut reg, "s1");
-        std::thread::sleep(std::time::Duration::from_millis(1000));
-        reg.poll_exits();
+        wait_for_exit(&mut reg, "s1");
         let session = reg.get("s1").unwrap();
         let snap = session.buffer_snapshot();
         assert!(

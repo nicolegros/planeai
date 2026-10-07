@@ -1,5 +1,6 @@
 use planeai_daemon::registry::SessionRegistry;
 use planeai_daemon::session::DaemonSession;
+use planeai_daemon::test_support::wait_until;
 use planeai_daemon::types::{SpawnMode, SpawnOutcome};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -68,11 +69,7 @@ fn eof_detection() {
         4096,
     )
     .unwrap();
-    std::thread::sleep(Duration::from_millis(1000));
-    assert!(
-        !session.is_alive(),
-        "session should be dead after echo exits"
-    );
+    wait_until("session dies after echo exits", || !session.is_alive());
 }
 
 #[test]
@@ -167,10 +164,11 @@ fn registry_poll_exits_retains_sessions() {
     )
     .unwrap();
 
-    std::thread::sleep(Duration::from_millis(1000));
-
-    let exited = reg.poll_exits();
-    assert!(exited.contains(&"dead".to_string()));
+    let mut exited = Vec::new();
+    wait_until("dead exits", || {
+        exited.extend(reg.poll_exits());
+        exited.contains(&"dead".to_string())
+    });
     assert!(!exited.contains(&"alive".to_string()));
     // Both sessions still in registry (exited one retained)
     assert_eq!(reg.list().len(), 2);
