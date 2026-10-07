@@ -287,6 +287,9 @@ export default {
 
 PlaneAI injects a host-owned baseline stylesheet into every local UI iframe. It resets document sizing and box sizing, applies PlaneAI's default font/background/text colors, and provides low-specificity typography, borders, and focus styles for native controls. Your module's styles load afterwards, so you can override those defaults normally.
 
+Frames sized to their content (`dialog`, `session.panel` and `sidebar.header`) get an auto-height, transparent document instead, so they shrink as their content does and show the host surface around them.
+Measure your content rather than the viewport there: an element at `height: 100%` resolves to its content height.
+
 Use only these stable semantic custom properties, never PlaneAI's internal `--color-*` or `--font-*` variables: `--planeai-font-sans`, `--planeai-font-mono`, `--planeai-canvas`, `--planeai-main`, `--planeai-surface`, `--planeai-surface-raised`, `--planeai-text`, `--planeai-text-muted`, `--planeai-text-subtle`, `--planeai-border`, `--planeai-border-strong`, `--planeai-accent`, `--planeai-on-accent`, `--planeai-accent-subtle`, `--planeai-success`, `--planeai-warning`, `--planeai-danger`, `--planeai-radius`, and `--planeai-space-1` through `--planeai-space-6`. PlaneAI updates those properties in place whenever its active theme or appearance changes; it does not remount your UI.
 
 The theme fonts are available in every local UI iframe, so text set in `var(--planeai-font-sans)` or `var(--planeai-font-mono)` renders in the same IBM Plex Sans and IBM Plex Mono as PlaneAI.

@@ -409,12 +409,17 @@ describe("PluginContributionHost", () => {
     expect(frame.srcdoc).toContain("html,body{background:transparent}");
   });
 
-  it("lets a local dialog frame show the dialog's surface and shrink to its content", async () => {
+  it.each([
+    ["dialog", true],
+    ["session.panel", true],
+    ["sidebar.header", true],
+    ["main-pane", false],
+  ] as const)("lets a local %s frame show the host surface and shrink to its content: %s", async (placement, contentSized) => {
     target = document.createElement("div");
     document.body.append(target);
     component = mount(PluginContributionHostLocalHarness, {
       target,
-      props: { placement: "dialog" },
+      props: { placement },
     }) as typeof component;
 
     const frame = await vi.waitFor(() => {
@@ -424,10 +429,8 @@ describe("PluginContributionHost", () => {
       expect(next).toBeTruthy();
       return next!;
     });
-    expect(frame.style.backgroundColor).toBe("transparent");
-    expect(frame.srcdoc).toContain(
-      '<style id="planeai-plugin-dialog">html,body{height:auto;min-height:0;background:transparent}</style>',
-    );
+    expect(frame.style.backgroundColor).toBe(contentSized ? "transparent" : "");
+    expect(frame.srcdoc.includes("html,body{height:auto;min-height:0;background:transparent}")).toBe(contentSized);
   });
 
   it("uses an unfocusable, pointer-inert transparent iframe for local session indicators", async () => {
