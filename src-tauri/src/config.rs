@@ -524,9 +524,7 @@ pub fn tmux_available() -> bool {
         let mut cmd = std::process::Command::new("wsl");
         cmd.args(["--", "which", "tmux"]);
         planeai_core::command::no_window(&mut cmd);
-        cmd.output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        cmd.output().map(|o| o.status.success()).unwrap_or(false)
     })
 }
 

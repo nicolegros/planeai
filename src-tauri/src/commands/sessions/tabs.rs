@@ -84,7 +84,13 @@ pub fn spawn_tab(
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect();
-            crate::daemon::spawn_session(&pty_key, &effective_shell, &["-l"], &cwd, Some(&env_ref))?;
+            crate::daemon::spawn_session(
+                &pty_key,
+                &effective_shell,
+                &["-l"],
+                &cwd,
+                Some(&env_ref),
+            )?;
         }
         let socket_path = planeai_ipc::daemon_socket_path();
         pty::PtyTarget::Daemon {
@@ -93,10 +99,7 @@ pub fn spawn_tab(
         }
     } else if let Some(ref wsl) = wsl_config {
         // WSL mode: spawn login shell inside the distro
-        let distro = wsl
-            .distro
-            .clone()
-            .unwrap_or_else(|| "".to_string());
+        let distro = wsl.distro.clone().unwrap_or_else(|| "".to_string());
         pty::PtyTarget::WslShell {
             command: shell_cmd.clone(),
             distro,

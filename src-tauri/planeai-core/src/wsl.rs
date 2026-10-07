@@ -497,12 +497,20 @@ mod tests {
 
     #[test]
     fn build_wsl_shell_command_wraps_in_sh() {
-        let (program, args) =
-            build_wsl_shell_command("Ubuntu", Some("/tmp"), "echo hello && ls");
+        let (program, args) = build_wsl_shell_command("Ubuntu", Some("/tmp"), "echo hello && ls");
         assert_eq!(program, "wsl.exe");
         assert_eq!(
             args,
-            vec!["-d", "Ubuntu", "--cd", "/tmp", "--", "sh", "-c", "echo hello && ls"]
+            vec![
+                "-d",
+                "Ubuntu",
+                "--cd",
+                "/tmp",
+                "--",
+                "sh",
+                "-c",
+                "echo hello && ls"
+            ]
         );
     }
 
@@ -512,7 +520,15 @@ mod tests {
         assert_eq!(program, "wsl.exe");
         assert_eq!(
             args,
-            vec!["-d", "Ubuntu", "--cd", "/home/user/project", "--", "bash", "-l"]
+            vec![
+                "-d",
+                "Ubuntu",
+                "--cd",
+                "/home/user/project",
+                "--",
+                "bash",
+                "-l"
+            ]
         );
     }
 

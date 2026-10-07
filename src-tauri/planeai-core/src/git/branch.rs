@@ -51,7 +51,13 @@ pub fn checkout_branch(
     create: bool,
     start_point: Option<&str>,
 ) -> Result<(), String> {
-    checkout_branch_in(repo_path, branch, create, start_point, &GitContext::native())
+    checkout_branch_in(
+        repo_path,
+        branch,
+        create,
+        start_point,
+        &GitContext::native(),
+    )
 }
 
 /// Checkout branch with explicit git context (supports WSL).
@@ -94,7 +100,13 @@ pub fn worktree_add(
     new_branch: &str,
     base_branch: &str,
 ) -> Result<(), String> {
-    worktree_add_in(repo_path, worktree_path, new_branch, base_branch, &GitContext::native())
+    worktree_add_in(
+        repo_path,
+        worktree_path,
+        new_branch,
+        base_branch,
+        &GitContext::native(),
+    )
 }
 
 /// Create a git worktree with explicit git context (supports WSL).
@@ -133,7 +145,11 @@ pub fn resolve_base_branch(repo_path: &str, base: &str) -> Result<String, String
 }
 
 /// Resolve base branch with explicit git context (supports WSL).
-pub fn resolve_base_branch_in(repo_path: &str, base: &str, ctx: &GitContext) -> Result<String, String> {
+pub fn resolve_base_branch_in(
+    repo_path: &str,
+    base: &str,
+    ctx: &GitContext,
+) -> Result<String, String> {
     let name = base.strip_prefix("remote:").unwrap_or(base);
 
     let output = git_cmd_in_dir(ctx, repo_path)
@@ -163,7 +179,11 @@ pub fn worktree_remove(repo_path: &str, worktree_path: &str) -> Result<(), Strin
 }
 
 /// Remove a git worktree with explicit git context (supports WSL).
-pub fn worktree_remove_in(repo_path: &str, worktree_path: &str, ctx: &GitContext) -> Result<(), String> {
+pub fn worktree_remove_in(
+    repo_path: &str,
+    worktree_path: &str,
+    ctx: &GitContext,
+) -> Result<(), String> {
     let output = git_cmd_in_dir(ctx, repo_path)
         .args(["worktree", "remove", "--force", worktree_path])
         .output()
@@ -212,7 +232,11 @@ pub fn find_worktree_for_branch(repo_path: &str, branch: &str) -> Option<String>
 }
 
 /// Find worktree for branch with explicit git context (supports WSL).
-pub fn find_worktree_for_branch_in(repo_path: &str, branch: &str, ctx: &GitContext) -> Option<String> {
+pub fn find_worktree_for_branch_in(
+    repo_path: &str,
+    branch: &str,
+    ctx: &GitContext,
+) -> Option<String> {
     let output = git_cmd_in_dir(ctx, repo_path)
         .args(["worktree", "list", "--porcelain"])
         .output()

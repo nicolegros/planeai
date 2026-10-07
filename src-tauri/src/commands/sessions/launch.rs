@@ -108,12 +108,8 @@ pub async fn launch_session(
 
             // Derive Linux home directory via wsl.exe
             let linux_home = get_wsl_home(distro)?;
-            let wt_path = format!(
-                "{linux_home}/.planeai/worktrees/{sanitized_project}/{short_id}"
-            );
-            let wt_parent = format!(
-                "{linux_home}/.planeai/worktrees/{sanitized_project}"
-            );
+            let wt_path = format!("{linux_home}/.planeai/worktrees/{sanitized_project}/{short_id}");
+            let wt_parent = format!("{linux_home}/.planeai/worktrees/{sanitized_project}");
 
             // Create parent directory inside WSL
             let mkdir_output = {

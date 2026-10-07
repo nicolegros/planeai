@@ -54,7 +54,11 @@ pub fn build_command_wsl(cmd_str: &str, wsl: &WslSpawnConfig) -> CommandBuilder 
 /// Build a CommandBuilder that spawns a program with explicit args inside WSL.
 ///
 /// The resulting command is: `wsl.exe -d <distro> [--cd <cwd>] -- <program> [args...]`
-pub fn build_command_argv_wsl(program: &str, args: &[&str], wsl: &WslSpawnConfig) -> CommandBuilder {
+pub fn build_command_argv_wsl(
+    program: &str,
+    args: &[&str],
+    wsl: &WslSpawnConfig,
+) -> CommandBuilder {
     let mut c = CommandBuilder::new("wsl.exe");
     c.args(["-d", &wsl.distro]);
     if let Some(ref cwd) = wsl.cwd {
