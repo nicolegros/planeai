@@ -963,6 +963,23 @@ pub fn get_inventory(
     .optional()
 }
 
+/// The enabled plugins, read so a row written by a newer PlaneAI cannot block shutdown or updates.
+fn enabled_plugin_ids(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    Ok(list_inventory(conn)?
+        .into_iter()
+        .filter(|plugin| plugin.enabled)
+        .map(|plugin| plugin.id)
+        .collect())
+}
+
+/// `enabled` and `last_error`, read so a row written by a newer PlaneAI cannot block shutdown or updates.
+fn runtime_flags(
+    conn: &Connection,
+    plugin_id: &str,
+) -> rusqlite::Result<Option<(bool, Option<String>)>> {
+    Ok(get_inventory(conn, plugin_id)?.map(|plugin| (plugin.enabled, plugin.last_error)))
+}
+
 pub fn delete_local_inventory(conn: &Connection, plugin_id: &str) -> Result<(), String> {
     let changed = conn
         .execute(
@@ -3384,12 +3401,11 @@ impl PluginRuntimeSupervisor {
 
     pub async fn shutdown_for_update(&self) -> Result<Vec<String>, String> {
         let _lifecycle = self.lifecycle.lock().await;
-        let enabled_plugin_ids = match self.list().await {
-            Ok(inventory) => inventory
-                .into_iter()
-                .filter(|plugin| plugin.enabled)
-                .map(|plugin| plugin.id)
-                .collect::<Vec<_>>(),
+        let enabled_plugin_ids = match self
+            .with_db(|conn| enabled_plugin_ids(conn).map_err(|error| error.to_string()))
+            .await
+        {
+            Ok(plugin_ids) => plugin_ids,
             Err(error) => {
                 self.shutting_down.store(false, Ordering::Release);
                 return Err(error);
@@ -3449,23 +3465,19 @@ impl PluginRuntimeSupervisor {
     }
 
     async fn stop_for_shutdown_inner(&self, plugin_id: &str) -> Result<(), String> {
-        let inventory = self
-            .inventory(plugin_id)
+        let id = plugin_id.to_string();
+        let (enabled, last_error) = self
+            .with_db(move |conn| runtime_flags(conn, &id).map_err(|error| error.to_string()))
             .await?
             .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
-        self.update_state(
-            plugin_id,
-            inventory.enabled,
-            PluginRuntimeState::Stopping,
-            inventory.last_error.clone(),
-        )
-        .await?;
+        self.update_state(plugin_id, enabled, PluginRuntimeState::Stopping, last_error)
+            .await?;
         self.stop_background_worker(plugin_id).await;
         if let Some(process) = self.processes.lock().await.remove(plugin_id) {
             if let Err(error) = stop_process(process).await {
                 self.update_state(
                     plugin_id,
-                    inventory.enabled,
+                    enabled,
                     PluginRuntimeState::Error,
                     Some(error.clone()),
                 )
@@ -3473,13 +3485,8 @@ impl PluginRuntimeSupervisor {
                 return Err(error);
             }
         }
-        self.update_state(
-            plugin_id,
-            inventory.enabled,
-            PluginRuntimeState::Disabled,
-            None,
-        )
-        .await?;
+        self.update_state(plugin_id, enabled, PluginRuntimeState::Disabled, None)
+            .await?;
         Ok(())
     }
 
@@ -4287,6 +4294,30 @@ mod tests {
         migrate(&conn).unwrap();
         sync_inventory(&conn, &bundled_manifests().unwrap()).unwrap();
         conn
+    }
+
+    #[test]
+    fn update_shutdown_reads_rows_written_by_a_newer_plugin_contract() {
+        let conn = database();
+        conn.execute(
+            "INSERT INTO plugin_inventory (
+                id, name, version, host_api_version, source_kind, backend_entrypoint,
+                ui_contributions, capabilities, enabled, runtime_state, last_error
+            ) VALUES ('future', 'Future', '2.0.0', 'planeai.plugin-host.v99', 'local', 'bin/plugin',
+                '[{\"id\":\"next\",\"label\":\"Next\",\"placement\":\"future-placement\",\"entrypoint\":\"ui/next.js\"}]',
+                '[\"host.future.capability\"]', 1, 'error', 'boom')",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            enabled_plugin_ids(&conn).unwrap(),
+            vec!["future".to_string()]
+        );
+        assert_eq!(
+            runtime_flags(&conn, "future").unwrap(),
+            Some((true, Some("boom".to_string())))
+        );
     }
 
     #[test]
