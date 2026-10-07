@@ -334,3 +334,61 @@ impl DurableLogSink {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::broadcast::error::RecvError;
+
+    fn last_line(snapshot: &[u8]) -> Option<u64> {
+        let text = std::str::from_utf8(snapshot).ok()?;
+        text.trim_end().rsplit('\n').next()?.parse().ok()
+    }
+
+    #[test]
+    fn an_attach_mid_output_continues_the_replay_exactly() {
+        let output = Arc::new(SessionOutput::new(64));
+        let stop = Arc::new(AtomicBool::new(false));
+        let publisher = {
+            let output = Arc::clone(&output);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let mut n: u64 = 0;
+                while !stop.load(Ordering::Relaxed) {
+                    output.publish(format!("{n}\n").into_bytes());
+                    n += 1;
+                }
+            })
+        };
+
+        let mut broken = Vec::new();
+        let mut checked = 0;
+        for _ in 0..20_000 {
+            let (snapshot, mut rx) = output.snapshot_and_subscribe();
+            let Some(replayed) = last_line(&snapshot) else {
+                continue;
+            };
+            let live = match rx.blocking_recv() {
+                Ok(bytes) => String::from_utf8(bytes).unwrap(),
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => unreachable!("output never closes here"),
+            };
+            checked += 1;
+            let live: u64 = live.trim_end().parse().unwrap();
+            if live != replayed + 1 {
+                broken.push((replayed, live));
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        publisher.join().unwrap();
+
+        assert!(checked > 1_000, "only {checked} attaches were checked");
+        assert_eq!(
+            broken.len(),
+            0,
+            "{} of {checked} attaches did not continue the replay, (replayed, first live): {:?}",
+            broken.len(),
+            &broken[..broken.len().min(5)]
+        );
+    }
+}
