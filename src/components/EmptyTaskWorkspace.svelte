@@ -2,6 +2,7 @@
   import type { Session, TaskItem } from "../lib/types";
   import { Button } from "./ui";
   import MarkdownView from "./MarkdownView.svelte";
+  import { getActiveZone } from "../lib/focus.svelte";
 
   interface Props {
     task: TaskItem;
@@ -15,7 +16,7 @@
   let { task, archivedSessions, active = true, onNewSession, onRestore, onEdit }: Props = $props();
 
   function onKeydown(event: KeyboardEvent): void {
-    if (!active || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (!active || getActiveZone() === "sidebar" || event.metaKey || event.ctrlKey || event.altKey) return;
     const target = event.target;
     if (target instanceof Element && target.closest("input, textarea, [role='combobox'], [role='dialog']")) return;
     const key = event.key.toLowerCase();
