@@ -102,7 +102,7 @@ function baseConfig(overrides: Record<string, unknown> = {}) {
 
 const noop = () => {};
 
-async function mountSidebar(config: Record<string, unknown>) {
+async function mountSidebar(config: Record<string, unknown>, props: Record<string, unknown> = {}) {
   configGet.mockResolvedValue(baseConfig(config));
   await loadSettings();
   await loadProjects();
@@ -125,6 +125,7 @@ async function mountSidebar(config: Record<string, unknown>) {
       onDeleteProject: noop,
       onEditProject: noop,
       onPickTask: noop,
+      ...props,
     },
   });
   flushSync();
@@ -237,6 +238,27 @@ describe("UnifiedSidebar grouped by status", () => {
 
     expect(document.querySelector("[role='menuitemradio'], [role='menuitemcheckbox']")).toBeNull();
     expect(texts(document.body, "[role='menuitem']")).toContain("Edit task");
+  });
+
+  it("hands task edits from the keyboard and context menu to the host dialog", async () => {
+    const onEditTask = vi.fn();
+    mounted = await mountSidebar({ sidebar_group_by: "status" }, { onEditTask });
+    focusSidebar();
+    flushSync();
+    setSelectedIndex(navButtons(mounted.target).findIndex((b) => b.textContent!.includes("A-2")));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true, cancelable: true }));
+
+    const row = navButtons(mounted.target).find((b) => b.textContent!.includes("B-1"))!;
+    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    flushSync();
+    [...document.querySelectorAll<HTMLElement>("[role='menuitem']")].find((el) => el.textContent === "Edit task")!.click();
+    flushSync();
+
+    expect(onEditTask.mock.calls.map(([t, p]) => [t.key, p.path])).toEqual([
+      ["A-2", alpha.path],
+      ["B-1", beta.path],
+    ]);
+    expect(document.querySelector("[aria-label='Edit Task']")).toBeNull();
   });
 
   it("keeps the keyboard selection on a task after its status changes", async () => {
