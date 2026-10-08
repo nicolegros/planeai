@@ -107,6 +107,7 @@ pub(crate) fn build_local_env(
         cols: 80,
         rows: 24,
         durable_logs: std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok(),
+        wsl: None,
     };
     let result = prepare_session(&req).map_err(|e| e.to_string())?;
     Ok(result.env.into_iter().collect())

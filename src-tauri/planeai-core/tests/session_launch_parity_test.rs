@@ -23,6 +23,7 @@ fn tauri_style_request(cwd: PathBuf) -> CreateSessionRequest {
         cols: 80,
         rows: 24,
         durable_logs: true,
+        wsl: None,
     }
 }
 
@@ -37,6 +38,7 @@ fn iced_style_request(cwd: PathBuf) -> CreateSessionRequest {
         cols: 80,
         rows: 24,
         durable_logs: true,
+        wsl: None,
     }
 }
 
@@ -137,6 +139,7 @@ fn tmux_target_is_explicit_not_default() {
         cols: 80,
         rows: 24,
         durable_logs: false,
+        wsl: None,
     };
     let result = prepare_session(&req).unwrap();
     assert_eq!(result.target, SessionTarget::Tmux);
@@ -830,6 +833,7 @@ fn local_target_gets_augmented_path() {
         cols: 80,
         rows: 24,
         durable_logs: false,
+        wsl: None,
     };
     let result = prepare_session(&req).unwrap();
     assert!(
@@ -857,6 +861,7 @@ fn local_and_daemon_targets_produce_same_path() {
         cols: 80,
         rows: 24,
         durable_logs: false,
+        wsl: None,
     };
 
     let daemon_req = CreateSessionRequest {
@@ -869,6 +874,7 @@ fn local_and_daemon_targets_produce_same_path() {
         cols: 80,
         rows: 24,
         durable_logs: false,
+        wsl: None,
     };
 
     let local_result = prepare_session(&local_req).unwrap();

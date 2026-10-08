@@ -143,47 +143,82 @@ pub fn to_linux_path(windows_path: &str) -> Option<String> {
     }
 }
 
-// ─── Command building ────────────────────────────────────────────────────────
+// ─── Launching ───────────────────────────────────────────────────────────────
 
-/// Build command arguments for spawning a process inside WSL.
-///
-/// Returns `("wsl.exe", ["-d", distro, "--cd", cwd, "--", ...cmd_args])`.
-pub fn build_wsl_command(
-    distro: &str,
-    cwd: Option<&str>,
-    program: &str,
-    args: &[&str],
-) -> (String, Vec<String>) {
-    let mut wsl_args = vec!["-d".to_string(), distro.to_string()];
-
-    if let Some(dir) = cwd {
-        wsl_args.push("--cd".to_string());
-        wsl_args.push(dir.to_string());
-    }
-
-    wsl_args.push("--".to_string());
-    wsl_args.push(program.to_string());
-    for arg in args {
-        wsl_args.push((*arg).to_string());
-    }
-
-    ("wsl.exe".to_string(), wsl_args)
+/// A distro that sessions run inside.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WslTarget {
+    pub distro: String,
 }
 
-/// Build command arguments for running a shell command string inside WSL.
-///
-/// Wraps the command in `sh -c "<cmd>"` inside WSL.
-pub fn build_wsl_shell_command(
-    distro: &str,
-    cwd: Option<&str>,
-    cmd_str: &str,
-) -> (String, Vec<String>) {
-    build_wsl_command(distro, cwd, "sh", &["-c", cmd_str])
+impl WslTarget {
+    /// The target `config` asks for; `None` when WSL is off or there is no host to run it.
+    pub fn from_config(config: &WslConfig) -> Option<Self> {
+        if !cfg!(windows) || !config.enabled {
+            return None;
+        }
+        resolve_distro(config)
+            .inspect_err(|error| tracing::warn!(%error, "WSL is enabled but has no distro"))
+            .ok()
+            .map(|distro| Self { distro })
+    }
+
+    /// The cwd for the host-side `wsl.exe` process, and the Linux cwd it enters.
+    ///
+    /// A Linux path is reached from Windows through its `\\wsl.localhost` share, and a
+    /// Windows path from Linux through its `/mnt` mount.
+    pub fn cwds(&self, cwd: &str) -> (String, String) {
+        if cwd.starts_with('/') {
+            let host = to_windows_path(cwd, &self.distro).unwrap_or_else(|| cwd.to_string());
+            (host, cwd.to_string())
+        } else {
+            let linux = to_linux_path(cwd).unwrap_or_else(|| cwd.to_string());
+            (cwd.to_string(), linux)
+        }
+    }
+
+    /// Run a shell command line inside the distro, from `cwd`.
+    pub fn shell_argv(&self, command: &str, cwd: &str) -> Vec<String> {
+        let mut argv = self.enter(cwd);
+        argv.extend(["--", "sh", "-c", command].map(String::from));
+        argv
+    }
+
+    /// The user's own login shell inside the distro, from `cwd`.
+    pub fn login_shell_argv(&self, cwd: &str) -> Vec<String> {
+        self.enter(cwd)
+    }
+
+    fn enter(&self, cwd: &str) -> Vec<String> {
+        let (_, linux_cwd) = self.cwds(cwd);
+        ["wsl.exe", "-d", &self.distro, "--cd", &linux_cwd]
+            .map(String::from)
+            .to_vec()
+    }
 }
 
-/// Build command for spawning an interactive login shell inside WSL.
-pub fn build_wsl_login_shell(distro: &str, cwd: Option<&str>) -> (String, Vec<String>) {
-    build_wsl_command(distro, cwd, "bash", &["-l"])
+/// `WSLENV` forwarding every variable PlaneAI sets into the distro, after any the host
+/// already forwards. `PATH` is left to WSL, which translates and appends the Windows one.
+pub fn forwarded_env(
+    existing: Option<&str>,
+    keys: impl IntoIterator<Item = impl AsRef<str>>,
+) -> String {
+    let mut entries: Vec<String> = existing
+        .unwrap_or_default()
+        .split(':')
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_string)
+        .collect();
+    for key in keys {
+        let key = key.as_ref();
+        let forwarded = entries
+            .iter()
+            .any(|entry| entry.split('/').next() == Some(key));
+        if key != "PATH" && key != "WSLENV" && !forwarded {
+            entries.push(key.to_string());
+        }
+    }
+    entries.join(":")
 }
 
 // ─── Process lifecycle ────────────────────────────────────────────────────────
@@ -218,26 +253,6 @@ pub fn warm_distro(distro: &str) -> Result<(), WslError> {
 pub fn warm_distro(_distro: &str) -> Result<(), WslError> {
     Ok(())
 }
-
-/// The ETX byte (Ctrl+C) — writing this to a PTY stdin sends SIGINT to the
-/// foreground process group inside WSL.
-pub const ETX: u8 = 0x03;
-
-/// Graceful shutdown sequence for WSL sessions:
-/// 1. Write ETX (Ctrl+C) to the PTY to signal the Linux foreground process
-/// 2. Wait briefly for the process to handle the signal
-/// 3. If still alive, the caller should kill the `wsl.exe` process
-///
-/// This prevents orphaned Linux processes inside WSL when sessions are destroyed.
-///
-/// Returns the ETX byte that should be written to the PTY writer before killing.
-pub fn graceful_shutdown_bytes() -> &'static [u8] {
-    &[ETX]
-}
-
-/// Duration to wait after sending ETX before force-killing the process.
-/// This gives the Linux process time to handle SIGINT and exit cleanly.
-pub const GRACEFUL_SHUTDOWN_DELAY_MS: u64 = 100;
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
@@ -476,60 +491,83 @@ mod tests {
         assert_eq!(result, None);
     }
 
-    // ── Command building ──
+    // ── Launching ──
+
+    fn ubuntu() -> WslTarget {
+        WslTarget {
+            distro: "Ubuntu".to_string(),
+        }
+    }
 
     #[test]
-    fn build_wsl_command_basic() {
-        let (program, args) = build_wsl_command("Ubuntu", Some("/home/user"), "bash", &["-l"]);
-        assert_eq!(program, "wsl.exe");
+    fn a_linux_cwd_is_entered_directly_and_reached_from_windows_through_its_share() {
         assert_eq!(
-            args,
-            vec!["-d", "Ubuntu", "--cd", "/home/user", "--", "bash", "-l"]
+            ubuntu().cwds("/home/user/project"),
+            (
+                "\\\\wsl.localhost\\Ubuntu\\home\\user\\project".to_string(),
+                "/home/user/project".to_string()
+            )
         );
     }
 
     #[test]
-    fn build_wsl_command_no_cwd() {
-        let (program, args) = build_wsl_command("Debian", None, "echo", &["hello"]);
-        assert_eq!(program, "wsl.exe");
-        assert_eq!(args, vec!["-d", "Debian", "--", "echo", "hello"]);
+    fn a_windows_cwd_is_entered_through_its_mount() {
+        assert_eq!(
+            ubuntu().cwds("C:\\code\\app"),
+            ("C:\\code\\app".to_string(), "/mnt/c/code/app".to_string())
+        );
     }
 
     #[test]
-    fn build_wsl_shell_command_wraps_in_sh() {
-        let (program, args) = build_wsl_shell_command("Ubuntu", Some("/tmp"), "echo hello && ls");
-        assert_eq!(program, "wsl.exe");
+    fn a_command_runs_under_sh_inside_the_distro() {
         assert_eq!(
-            args,
-            vec![
+            ubuntu().shell_argv("claude --resume && echo done", "C:\\code\\app"),
+            [
+                "wsl.exe",
                 "-d",
                 "Ubuntu",
                 "--cd",
-                "/tmp",
+                "/mnt/c/code/app",
                 "--",
                 "sh",
                 "-c",
-                "echo hello && ls"
+                "claude --resume && echo done",
             ]
         );
     }
 
     #[test]
-    fn build_wsl_login_shell_basic() {
-        let (program, args) = build_wsl_login_shell("Ubuntu", Some("/home/user/project"));
-        assert_eq!(program, "wsl.exe");
+    fn a_login_shell_is_the_users_own_default_shell() {
         assert_eq!(
-            args,
-            vec![
-                "-d",
-                "Ubuntu",
-                "--cd",
-                "/home/user/project",
-                "--",
-                "bash",
-                "-l"
-            ]
+            ubuntu().login_shell_argv("/home/user"),
+            ["wsl.exe", "-d", "Ubuntu", "--cd", "/home/user"]
         );
+    }
+
+    #[test]
+    fn a_target_is_only_offered_on_windows_when_enabled() {
+        let config = WslConfig {
+            enabled: true,
+            distro: Some("Ubuntu".to_string()),
+        };
+        assert_eq!(WslTarget::from_config(&config), cfg!(windows).then(ubuntu));
+        let disabled = WslConfig {
+            enabled: false,
+            ..config
+        };
+        assert_eq!(WslTarget::from_config(&disabled), None);
+    }
+
+    #[test]
+    fn forwarded_env_adds_planeai_variables_after_the_hosts_own() {
+        assert_eq!(
+            forwarded_env(
+                Some("USERPROFILE/p:TERM/u"),
+                ["TERM", "PATH", "PLANEAI_SESSION_ID", "WSLENV"]
+            ),
+            "USERPROFILE/p:TERM/u:PLANEAI_SESSION_ID"
+        );
+        assert_eq!(forwarded_env(None, ["COLORFGBG"]), "COLORFGBG");
     }
 
     // ── resolve_distro ──
@@ -556,25 +594,6 @@ mod tests {
     }
 
     // ── Process lifecycle ──
-
-    #[test]
-    fn etx_constant_is_ctrl_c() {
-        assert_eq!(ETX, 0x03);
-    }
-
-    #[test]
-    fn graceful_shutdown_bytes_returns_etx() {
-        let bytes = graceful_shutdown_bytes();
-        assert_eq!(bytes, &[0x03]);
-    }
-
-    #[test]
-    fn graceful_shutdown_delay_is_reasonable() {
-        // Should be long enough for signal propagation but not so long it blocks UX
-        let delay = GRACEFUL_SHUTDOWN_DELAY_MS;
-        assert!(delay >= 50, "delay too short: {delay}ms");
-        assert!(delay <= 500, "delay too long: {delay}ms");
-    }
 
     #[test]
     fn warm_distro_on_non_windows_is_noop() {

@@ -445,6 +445,7 @@ async fn spawn_in_daemon(
         cols: 80,
         rows: 24,
         durable_logs: std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok(),
+        wsl: None,
     };
     let launch_result =
         planeai_core::session_launch::prepare_session(&launch_req).map_err(|e| e.to_string())?;
@@ -517,6 +518,7 @@ async fn spawn_in_rmux(
         cols: crate::rmux_ops::DEFAULT_COLS,
         rows: crate::rmux_ops::DEFAULT_ROWS,
         durable_logs: std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok(),
+        wsl: None,
     };
     let launch_result =
         planeai_core::session_launch::prepare_session(&launch_req).map_err(|e| e.to_string())?;

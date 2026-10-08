@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::command::{augmented_path, shell_args};
+use crate::command::{augmented_path, launch_argv};
 
 /// Target backend for session launch.
 #[derive(Debug, Clone, PartialEq)]
@@ -376,6 +376,7 @@ pub fn resolve_from_config(
         cols: overrides.cols.unwrap_or(120),
         rows: overrides.rows.unwrap_or(40),
         durable_logs,
+        wsl: None,
     };
 
     Ok(ResolvedLaunchConfig {
@@ -400,6 +401,8 @@ pub struct CreateSessionRequest {
     pub cols: u16,
     pub rows: u16,
     pub durable_logs: bool,
+    /// Run inside this WSL distro instead of on the host.
+    pub wsl: Option<crate::wsl::WslTarget>,
 }
 
 /// Result of a successful session launch.
@@ -437,7 +440,9 @@ impl std::error::Error for CreateSessionError {}
 pub fn prepare_session(
     req: &CreateSessionRequest,
 ) -> Result<CreateSessionResult, CreateSessionError> {
-    if !req.project_cwd.is_dir() {
+    // Under WSL the host only sees a share of the distro's filesystem; `wsl.exe --cd`
+    // reports a missing directory itself.
+    if req.wsl.is_none() && !req.project_cwd.is_dir() {
         return Err(CreateSessionError::InvalidCwd(
             req.project_cwd.display().to_string(),
         ));
@@ -448,20 +453,26 @@ pub fn prepare_session(
         return Err(CreateSessionError::CommandEmpty);
     }
 
-    let (program, args) = shell_args(cmd);
+    let (mut argv, cwd) = launch_argv(cmd, &req.project_cwd.to_string_lossy(), req.wsl.as_ref());
+    let program = argv.remove(0);
 
     let mut env = req.env.clone();
     env.insert("TERM".to_string(), "xterm-256color".to_string());
     env.insert("PLANEAI_SESSION_ID".to_string(), req.session_id.clone());
     env.insert("PATH".to_string(), augmented_path(&req.extra_path_dirs));
+    if req.wsl.is_some() {
+        let forwarded =
+            crate::wsl::forwarded_env(std::env::var("WSLENV").ok().as_deref(), env.keys());
+        env.insert("WSLENV".to_string(), forwarded);
+    }
 
     Ok(CreateSessionResult {
         session_id: req.session_id.clone(),
         target: req.session_target.clone(),
         command_label: cmd.to_string(),
-        cwd: req.project_cwd.clone(),
-        program: program.to_string(),
-        args,
+        cwd: PathBuf::from(cwd),
+        program,
+        args: argv,
         env,
     })
 }
@@ -482,6 +493,7 @@ mod tests {
             cols: 80,
             rows: 24,
             durable_logs: false,
+            wsl: None,
         }
     }
 
@@ -595,5 +607,41 @@ mod tests {
             assert_eq!(result.program, "cmd");
             assert_eq!(result.args[0], "/C");
         }
+    }
+
+    #[test]
+    fn under_wsl_the_command_runs_inside_the_distro_with_planeai_variables_forwarded() {
+        let req = CreateSessionRequest {
+            project_cwd: PathBuf::from("/home/dev/.planeai/worktrees/app/1a2b3c4d"),
+            wsl: Some(crate::wsl::WslTarget {
+                distro: "Ubuntu".to_string(),
+            }),
+            ..valid_request()
+        };
+        let result = prepare_session(&req).unwrap();
+        assert_eq!(result.program, "wsl.exe");
+        assert_eq!(
+            result.args,
+            [
+                "-d",
+                "Ubuntu",
+                "--cd",
+                "/home/dev/.planeai/worktrees/app/1a2b3c4d",
+                "--",
+                "sh",
+                "-c",
+                "kiro-cli chat"
+            ]
+        );
+        assert_eq!(
+            result.cwd,
+            PathBuf::from(
+                "\\\\wsl.localhost\\Ubuntu\\home\\dev\\.planeai\\worktrees\\app\\1a2b3c4d"
+            )
+        );
+        let forwarded: Vec<&str> = result.env["WSLENV"].split(':').collect();
+        assert!(forwarded.contains(&"PLANEAI_SESSION_ID"), "{forwarded:?}");
+        assert!(forwarded.contains(&"TERM"), "{forwarded:?}");
+        assert!(!forwarded.contains(&"PATH"), "{forwarded:?}");
     }
 }

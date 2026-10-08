@@ -133,6 +133,23 @@ pub fn build_daemon_env<'a>(
     env
 }
 
+/// The argv running `cmd` from `cwd`, and the cwd its host process starts in: the
+/// platform shell natively, `sh` inside the distro under WSL.
+pub fn launch_argv(
+    cmd: &str,
+    cwd: &str,
+    wsl: Option<&crate::wsl::WslTarget>,
+) -> (Vec<String>, String) {
+    match wsl {
+        Some(target) => (target.shell_argv(cmd, cwd), target.cwds(cwd).0),
+        None => {
+            let (program, args) = shell_args(cmd);
+            let argv = std::iter::once(program.to_string()).chain(args).collect();
+            (argv, cwd.to_string())
+        }
+    }
+}
+
 /// Return the shell program and args needed to execute a command string.
 /// On Unix: `("/bin/sh", ["-c", cmd])`. On Windows: `("cmd", ["/C", cmd])`.
 #[cfg(not(windows))]
