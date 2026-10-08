@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, unmount } from "svelte";
 import EmptyTaskWorkspace from "../EmptyTaskWorkspace.svelte";
+import { setActiveZone } from "../../lib/focus.svelte";
 import type { Session, TaskItem } from "../../lib/types";
 
 const task: TaskItem = {
@@ -24,6 +25,7 @@ const archived = {
 
 const mounted: Array<ReturnType<typeof mount>> = [];
 afterEach(() => {
+  setActiveZone("terminal");
   for (const component of mounted.splice(0)) unmount(component);
   document.body.replaceChildren();
 });
@@ -77,6 +79,17 @@ describe("EmptyTaskWorkspace", () => {
     expect(onNewSession).toHaveBeenCalledOnce();
     expect(onRestore).toHaveBeenCalledWith(archived);
     expect(onEdit).toHaveBeenCalledOnce();
+  });
+
+  it("leaves shortcuts to the sidebar while it has focus", () => {
+    const { onNewSession, onRestore, onEdit } = render([archived]);
+    setActiveZone("sidebar");
+
+    for (const key of ["n", "r", "e"]) {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    }
+
+    expect([onNewSession, onRestore, onEdit].map((fn) => fn.mock.calls.length)).toEqual([0, 0, 0]);
   });
 
   it("renders the description as markdown", () => {
