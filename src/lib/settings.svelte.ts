@@ -94,6 +94,8 @@ export interface AppConfig {
   extra_path_dirs?: string[];
   /** `false` until first-run setup is finished or skipped; existing configs load as `true`. */
   onboarding_completed?: boolean | null;
+  /** Windows only: run sessions inside a WSL distro; no `distro` means the system default. */
+  wsl?: { enabled: boolean; distro?: string | null } | null;
 }
 
 const INITIAL_THEME = "default";

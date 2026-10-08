@@ -173,6 +173,26 @@ fn main() {
             }
             tracing::info!("config loaded");
 
+            // The first WSL call after boot takes seconds; pay it before the first session does.
+            if let Some(wsl) = cfg.wsl.clone().filter(|wsl| wsl.enabled) {
+                std::thread::spawn(move || {
+                    let Some(target) = planeai_core::wsl::WslTarget::from_config(&wsl) else {
+                        return;
+                    };
+                    let started = std::time::Instant::now();
+                    match planeai_core::wsl::warm_distro(&target.distro) {
+                        Ok(()) => tracing::info!(
+                            distro = %target.distro,
+                            elapsed_ms = started.elapsed().as_millis(),
+                            "WSL distro warmed"
+                        ),
+                        Err(error) => {
+                            tracing::warn!(distro = %target.distro, %error, "failed to warm WSL distro")
+                        }
+                    }
+                });
+            }
+
             // Revive sessions
             #[cfg(not(windows))]
             let _ = startup::revive_sessions(
@@ -419,6 +439,7 @@ fn main() {
             is_program_running,
             check_tmux_available,
             check_rmux_available,
+            list_wsl_distros,
             save_session_layout,
             get_session_layout,
             save_task_workspace_layout,

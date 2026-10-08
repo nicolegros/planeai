@@ -77,6 +77,23 @@ describe("searchSettings", () => {
     expect(searchSettings("branch", [], withTasks).map((r) => r.id)).toContain("branch-template");
   });
 
+  it("offers WSL only on Windows, and its distro only once WSL is on", () => {
+    const platform = Object.getOwnPropertyDescriptor(Navigator.prototype, "platform")!;
+    const onPlatform = (value: string) =>
+      Object.defineProperty(navigator, "platform", { value, configurable: true });
+    try {
+      onPlatform("MacIntel");
+      expect(searchSettings("wsl", [], defaults)).toEqual([]);
+      onPlatform("Win32");
+      expect(searchSettings("wsl", [], defaults).map((r) => r.id)).toEqual(["wsl"]);
+      const enabled = config({ wsl: { enabled: true } });
+      expect(searchSettings("wsl", [], enabled).map((r) => r.id)).toEqual(["wsl", "wsl-distro"]);
+    } finally {
+      delete (navigator as { platform?: string }).platform;
+      Object.defineProperty(Navigator.prototype, "platform", platform);
+    }
+  });
+
   it("returns nothing for a blank query", () => {
     expect(searchSettings("   ", [], defaults)).toEqual([]);
   });
