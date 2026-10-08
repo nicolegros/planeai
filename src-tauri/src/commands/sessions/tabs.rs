@@ -25,7 +25,7 @@ enum TabLaunch {
     Rmux {
         session_id: String,
         workspace: planeai_rmux::WorkspaceName,
-        command: String,
+        argv: Vec<String>,
         cwd: String,
     },
 }
@@ -243,7 +243,7 @@ impl TabHost for PtyTabHost {
             TabLaunch::Rmux {
                 session_id,
                 workspace,
-                command,
+                argv,
                 cwd,
             } => {
                 let (key, pane_workspace, pane_env) =
@@ -257,7 +257,7 @@ impl TabHost for PtyTabHost {
                         &key,
                         &session_id,
                         &pane_workspace,
-                        &command,
+                        argv,
                         &cwd,
                         &env,
                     )
@@ -374,6 +374,20 @@ fn prepare_tab_spawn(
         TabSpec::Command { command } => shell_command(&shell, Some(command)),
         TabSpec::Program { argv } => argv.join(" "),
     };
+    // Under WSL a shell or command tab runs in the distro, whatever the backend. Programs are
+    // handed off by plugins on the host, so they stay there.
+    let wsl = config
+        .wsl_target()
+        .filter(|_| !matches!(spec, TabSpec::Program { .. }));
+    let in_wsl = wsl.as_ref().map(|target| {
+        let argv = match spec {
+            TabSpec::Command { command } => {
+                target.shell_argv(&format!("{command}; exec \"${{SHELL:-/bin/sh}}\" -l"), &cwd)
+            }
+            _ => target.login_shell_argv(&cwd),
+        };
+        (argv, target.cwds(&cwd).0)
+    });
     // The same env (augmented PATH, TERM, COLORFGBG, PLANEAI_SOCKET) for every backend.
     let env = {
         let extra_path_dirs = config.resolved_extra_path_dirs();
@@ -383,6 +397,7 @@ fn prepare_tab_spawn(
             &shell_cmd,
             dark_mode,
             extra_path_dirs,
+            wsl,
         )?
     };
 
@@ -402,56 +417,74 @@ fn prepare_tab_spawn(
         )
     };
     let runs_program = matches!(spec, TabSpec::Program { .. });
-    let launch = match TabBackend::of(&session) {
-        TabBackend::Daemon | TabBackend::Rmux { .. } if runs_program => {
-            return Err(no_program_here());
-        }
-        TabBackend::Daemon => {
-            #[cfg(not(windows))]
-            let (command, args): (String, Vec<String>) = match spec {
-                TabSpec::Command { .. } => (
-                    "/bin/sh".to_string(),
-                    vec!["-c".to_string(), shell_cmd.clone()],
-                ),
-                _ => (
-                    shell.clone(),
-                    shell_args().iter().map(|arg| (*arg).to_string()).collect(),
-                ),
-            };
-            #[cfg(windows)]
-            let (command, args): (String, Vec<String>) = {
-                let command_shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
-                match spec {
-                    TabSpec::Command { command } => {
-                        (command_shell, vec!["/K".to_string(), command.clone()])
-                    }
-                    _ => (shell.clone(), Vec::new()),
-                }
-            };
-            TabLaunch::Daemon(DaemonShellTabSpawn {
-                command,
-                args,
-                cwd,
-                env: env.iter().cloned().collect(),
-            })
-        }
-        TabBackend::Rmux { workspace } => TabLaunch::Rmux {
+    let launch = match (TabBackend::of(&session), in_wsl) {
+        (TabBackend::Daemon, Some((mut argv, cwd))) => TabLaunch::Daemon(DaemonShellTabSpawn {
+            command: argv.remove(0),
+            args: argv,
+            cwd,
+            env: env.iter().cloned().collect(),
+        }),
+        (TabBackend::Rmux { workspace }, Some((argv, cwd))) => TabLaunch::Rmux {
             session_id: session.id.clone(),
             workspace,
-            command: shell_cmd,
+            argv,
             cwd,
         },
-        TabBackend::Local => TabLaunch::Local(match spec {
-            TabSpec::Program { argv } => {
-                let mut argv = argv.clone();
-                resolve_program(&mut argv, &env);
-                pty::PtyTarget::Program { argv, cwd }
+        (TabBackend::Local, Some((argv, cwd))) => {
+            TabLaunch::Local(pty::PtyTarget::Program { argv, cwd })
+        }
+        (backend, None) => match backend {
+            TabBackend::Daemon | TabBackend::Rmux { .. } if runs_program => {
+                return Err(no_program_here());
             }
-            _ => pty::PtyTarget::Shell {
-                command: shell_cmd,
+            TabBackend::Daemon => {
+                #[cfg(not(windows))]
+                let (command, args): (String, Vec<String>) = match spec {
+                    TabSpec::Command { .. } => (
+                        "/bin/sh".to_string(),
+                        vec!["-c".to_string(), shell_cmd.clone()],
+                    ),
+                    _ => (
+                        shell.clone(),
+                        shell_args().iter().map(|arg| (*arg).to_string()).collect(),
+                    ),
+                };
+                #[cfg(windows)]
+                let (command, args): (String, Vec<String>) = {
+                    let command_shell =
+                        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
+                    match spec {
+                        TabSpec::Command { command } => {
+                            (command_shell, vec!["/K".to_string(), command.clone()])
+                        }
+                        _ => (shell.clone(), Vec::new()),
+                    }
+                };
+                TabLaunch::Daemon(DaemonShellTabSpawn {
+                    command,
+                    args,
+                    cwd,
+                    env: env.iter().cloned().collect(),
+                })
+            }
+            TabBackend::Rmux { workspace } => TabLaunch::Rmux {
+                session_id: session.id.clone(),
+                workspace,
+                argv: planeai_rmux::shell_argv(&shell_cmd),
                 cwd,
             },
-        }),
+            TabBackend::Local => TabLaunch::Local(match spec {
+                TabSpec::Program { argv } => {
+                    let mut argv = argv.clone();
+                    resolve_program(&mut argv, &env);
+                    pty::PtyTarget::Program { argv, cwd }
+                }
+                _ => pty::PtyTarget::Shell {
+                    command: shell_cmd,
+                    cwd,
+                },
+            }),
+        },
     };
 
     Ok(PreparedTab {

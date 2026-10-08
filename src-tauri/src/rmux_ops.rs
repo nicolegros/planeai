@@ -65,14 +65,11 @@ where
 }
 
 /// Spawn a resource and record which pane hosts it.
-///
-/// `env` is borrowed as `&str` pairs because callers build it with
-/// `planeai_core::command::build_daemon_env`, which returns borrowed values.
 pub fn spawn_resource_blocking(
     pty_key: &str,
     session_id: &str,
     workspace: &WorkspaceName,
-    command: &str,
+    argv: Vec<String>,
     cwd: &str,
     env: &HashMap<&str, &str>,
 ) -> Result<ResourceHandle, String> {
@@ -84,7 +81,7 @@ pub fn spawn_resource_blocking(
     let spawn = ResourceSpawn {
         workspace: workspace.clone(),
         pty_key: pty_key.to_string(),
-        command: command.to_string(),
+        argv,
         cwd: cwd.to_string(),
         env: env
             .iter()

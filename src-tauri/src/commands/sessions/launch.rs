@@ -185,6 +185,23 @@ pub(crate) async fn launch(
         (c, pk, be, sb, epd)
     };
 
+    let wsl = {
+        let wsl_config = config_state
+            .0
+            .lock()
+            .map_err(|e| e.to_string())?
+            .wsl
+            .clone();
+        let plugin_owned = backend == PLUGIN_BACKEND;
+        crate::commands::blocking(move || {
+            Ok(wsl_config
+                .filter(|_| !plugin_owned)
+                .as_ref()
+                .and_then(planeai_core::wsl::WslTarget::from_config))
+        })
+        .await?
+    };
+
     // Phase 2: async work — detect base branch, git worktree/checkout
     let effective_base_branch = {
         let repo_path = repo_path.clone();
@@ -218,16 +235,29 @@ pub(crate) async fn launch(
         let base = base_branch.as_deref().unwrap_or(DEFAULT_BASE_BRANCH);
         let short_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
         let sanitized_project = sanitize_project_name(&project_name);
-        let home = config::home_dir();
+        // Under WSL the worktree lives on the distro's own filesystem, where git is fast.
+        let (home, git_ctx) = match &wsl {
+            Some(target) => {
+                let distro = target.distro.clone();
+                let home = crate::commands::blocking(move || {
+                    planeai_core::wsl::home_dir(&distro).map_err(|e| e.to_string())
+                })
+                .await?;
+                (home, git::GitContext::wsl(&target.distro))
+            }
+            None => (config::home_dir(), git::GitContext::native()),
+        };
         let wt_path = format!("{home}/.planeai/worktrees/{sanitized_project}/{short_id}");
-        std::fs::create_dir_all(std::path::Path::new(&wt_path).parent().unwrap())
-            .map_err(|e| format!("failed to create worktree dir: {e}"))?;
-        match git::worktree_add(&repo_path, &wt_path, &branch, base) {
+        if wsl.is_none() {
+            std::fs::create_dir_all(std::path::Path::new(&wt_path).parent().unwrap())
+                .map_err(|e| format!("failed to create worktree dir: {e}"))?;
+        }
+        match git::worktree_add_in(&repo_path, &wt_path, &branch, base, &git_ctx) {
             Ok(()) => (wt_path.clone(), Some(wt_path), true, true),
             Err(e) if is_worktree_conflict(&e) => {
                 // Branch already checked out in an existing worktree — reuse it
-                let existing_wt =
-                    git::find_worktree_for_branch(&repo_path, &branch).ok_or_else(|| e.clone())?;
+                let existing_wt = git::find_worktree_for_branch_in(&repo_path, &branch, &git_ctx)
+                    .ok_or_else(|| e.clone())?;
                 tracing::info!(
                     branch = %branch,
                     worktree = %existing_wt,
@@ -294,6 +324,7 @@ pub(crate) async fn launch(
                 &working_dir,
                 &cmd,
                 &extra_path_dirs,
+                wsl.clone(),
             )
             .await
         } else {
@@ -304,6 +335,7 @@ pub(crate) async fn launch(
                 &cmd,
                 &extra_path_dirs,
                 scrollback_bytes,
+                wsl.clone(),
             )
             .await
         };
@@ -427,6 +459,7 @@ async fn spawn_in_daemon(
     cmd: &str,
     extra_path_dirs: &[String],
     scrollback_bytes: usize,
+    wsl: Option<planeai_core::wsl::WslTarget>,
 ) -> Result<(), String> {
     let daemon_state = app.state::<DaemonState>();
     let socket_path = planeai_ipc::daemon_socket_path();
@@ -445,7 +478,7 @@ async fn spawn_in_daemon(
         cols: 80,
         rows: 24,
         durable_logs: std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok(),
-        wsl: None,
+        wsl,
     };
     let launch_result =
         planeai_core::session_launch::prepare_session(&launch_req).map_err(|e| e.to_string())?;
@@ -478,7 +511,7 @@ async fn spawn_in_daemon(
             &launch_result.session_id,
             &launch_result.program,
             &launch_result.args,
-            working_dir,
+            &launch_result.cwd.to_string_lossy(),
             Some(&launch_result.env),
         )
         .await;
@@ -507,6 +540,7 @@ async fn spawn_in_rmux(
     working_dir: &str,
     cmd: &str,
     extra_path_dirs: &[String],
+    wsl: Option<planeai_core::wsl::WslTarget>,
 ) -> Result<(), String> {
     let launch_req = planeai_core::session_launch::CreateSessionRequest {
         session_id: session_id.to_string(),
@@ -518,7 +552,7 @@ async fn spawn_in_rmux(
         cols: crate::rmux_ops::DEFAULT_COLS,
         rows: crate::rmux_ops::DEFAULT_ROWS,
         durable_logs: std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok(),
-        wsl: None,
+        wsl,
     };
     let launch_result =
         planeai_core::session_launch::prepare_session(&launch_req).map_err(|e| e.to_string())?;
@@ -537,30 +571,23 @@ async fn spawn_in_rmux(
         "session created via shared launch service"
     );
 
-    let env: std::collections::HashMap<&str, &str> = launch_result
-        .env
-        .iter()
-        .map(|(key, value)| (key.as_str(), value.as_str()))
-        .collect();
     let session_id = session_id.to_string();
-    let command = cmd.to_string();
-    let working_dir = working_dir.to_string();
-    let owned_env: Vec<(String, String)> = env
-        .iter()
-        .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-        .collect();
-
     crate::commands::blocking(move || {
-        let env: std::collections::HashMap<&str, &str> = owned_env
+        let cwd = launch_result.cwd.to_string_lossy().into_owned();
+        let env = launch_result
+            .env
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        let argv = std::iter::once(launch_result.program.clone())
+            .chain(launch_result.args.iter().cloned())
             .collect();
         crate::rmux_ops::spawn_resource_blocking(
             &session_id,
             &session_id,
             &workspace,
-            &command,
-            &working_dir,
+            argv,
+            &cwd,
             &env,
         )
         .map(|_| ())

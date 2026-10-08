@@ -87,6 +87,7 @@ pub(crate) fn build_local_env(
     agent_command: &str,
     dark_mode: bool,
     extra_path_dirs: Vec<String>,
+    wsl: Option<planeai_core::wsl::WslTarget>,
 ) -> Result<Vec<(String, String)>, String> {
     let mut pre_env = std::collections::HashMap::new();
     pre_env.insert(
@@ -107,7 +108,7 @@ pub(crate) fn build_local_env(
         cols: 80,
         rows: 24,
         durable_logs: std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok(),
-        wsl: None,
+        wsl,
     };
     let result = prepare_session(&req).map_err(|e| e.to_string())?;
     Ok(result.env.into_iter().collect())

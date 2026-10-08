@@ -146,6 +146,9 @@ pub struct Config {
     /// Configs written before this field existed count as completed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub onboarding_completed: Option<bool>,
+    /// On Windows, runs sessions inside a WSL distro.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wsl: Option<planeai_core::wsl::WslConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -342,6 +345,13 @@ pub fn config_dir(app_name: &str) -> PathBuf {
 }
 
 impl Config {
+    /// The distro sessions run inside, when WSL is enabled on Windows.
+    pub fn wsl_target(&self) -> Option<planeai_core::wsl::WslTarget> {
+        self.wsl
+            .as_ref()
+            .and_then(planeai_core::wsl::WslTarget::from_config)
+    }
+
     /// Return extra_path_dirs with tildes expanded.
     pub fn resolved_extra_path_dirs(&self) -> Vec<String> {
         self.extra_path_dirs
@@ -403,6 +413,7 @@ impl Default for Config {
             language_servers: None,
             editor: None,
             onboarding_completed: None,
+            wsl: None,
         }
     }
 }

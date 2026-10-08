@@ -221,6 +221,32 @@ pub fn forwarded_env(
     entries.join(":")
 }
 
+/// The home directory of the distro's default user.
+#[cfg(windows)]
+pub fn home_dir(distro: &str) -> Result<String, WslError> {
+    let mut cmd = std::process::Command::new("wsl.exe");
+    cmd.args(["-d", distro, "--", "sh", "-c", "printf %s \"$HOME\""]);
+    crate::command::no_window(&mut cmd);
+    let output = cmd
+        .output()
+        .map_err(|e| WslError::SpawnFailed(e.to_string()))?;
+    if !output.status.success() {
+        return Err(WslError::CommandFailed(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+    let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if home.is_empty() {
+        return Err(WslError::CommandFailed("$HOME is empty".to_string()));
+    }
+    Ok(home)
+}
+
+#[cfg(not(windows))]
+pub fn home_dir(_distro: &str) -> Result<String, WslError> {
+    Err(WslError::NotAvailable)
+}
+
 // ─── Process lifecycle ────────────────────────────────────────────────────────
 
 /// Pre-warm a WSL distro by running a no-op command.

@@ -156,20 +156,19 @@ impl Backend for TauriBackend {
         let socket_path = planeai_ipc::daemon_socket_path();
         let daemon_bin = crate::paths::resolve_daemon_binary(&self.app_handle);
         let scrollback = 1_048_576;
-        let extra_path_dirs = {
+        let (extra_path_dirs, wsl) = {
             let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
             let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
-            cfg.resolved_extra_path_dirs()
+            (cfg.resolved_extra_path_dirs(), cfg.wsl.clone())
         };
+        let wsl = wsl
+            .as_ref()
+            .and_then(planeai_core::wsl::WslTarget::from_config);
 
         crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
-        let mut path_buf = String::new();
-        let env =
-            planeai_core::command::build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
-        let (program, args) = planeai_core::command::shell_args(cmd);
-        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        crate::daemon::spawn_session(session_id, program, &args_refs, cwd, Some(&env))
+        crate::session_ops::agent_spawn(session_id, cmd, cwd, &extra_path_dirs, wsl)?
+            .in_daemon(session_id)
     }
 
     fn create_rmux_session(
@@ -181,16 +180,16 @@ impl Backend for TauriBackend {
     ) -> Result<(), String> {
         let workspace = planeai_rmux::WorkspaceName::from_stored(workspace)
             .ok_or_else(|| format!("not a PlaneAI rmux workspace: {workspace}"))?;
-        let extra_path_dirs = {
+        let (extra_path_dirs, wsl) = {
             let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
             let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
-            cfg.resolved_extra_path_dirs()
+            (cfg.resolved_extra_path_dirs(), cfg.wsl.clone())
         };
-        let mut path_buf = String::new();
-        let env =
-            planeai_core::command::build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
-        crate::rmux_ops::spawn_resource_blocking(session_id, session_id, &workspace, cmd, cwd, &env)
-            .map(|_| ())
+        let wsl = wsl
+            .as_ref()
+            .and_then(planeai_core::wsl::WslTarget::from_config);
+        crate::session_ops::agent_spawn(session_id, cmd, cwd, &extra_path_dirs, wsl)?
+            .in_rmux(session_id, &workspace)
     }
 
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
