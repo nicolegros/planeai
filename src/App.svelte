@@ -1219,7 +1219,7 @@
     {/if}
 
     {#if showTaskForm}
-    <FormDialog title={taskWorkspaceToEdit ? "Edit Task" : "New Task"} onClose={() => { taskWorkspaceToEdit = null; showTaskForm = false; tick().then(() => refocusTerminal()); }}>
+    <FormDialog title={taskWorkspaceToEdit ? "Edit Task" : "New Task"} size="wide" onClose={() => { taskWorkspaceToEdit = null; showTaskForm = false; tick().then(() => refocusTerminal()); }}>
       <TaskForm
         mode={taskWorkspaceToEdit ? "edit" : "create"}
         {projects}
