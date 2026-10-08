@@ -109,6 +109,7 @@
   onStartRename={noop}
   onDeleteProject={noop}
   onEditProject={noop}
+  onEditTask={noop}
   onPickTask={noop}
   pluginContributions={[
     { plugin: precedingPlugin, contribution: precedingPlugin.ui_contributions[0] },

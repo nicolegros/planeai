@@ -1,6 +1,6 @@
 /**
  * Global task store — single source of truth for task state across all components.
- * Replaces independent fetching in TaskPanel, UnifiedSidebar, and App.svelte.
+ * Replaces independent fetching in UnifiedSidebar and App.svelte.
  */
 import { listen } from "@tauri-apps/api/event";
 import { tasks as tasksApi } from "./api";

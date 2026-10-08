@@ -124,6 +124,7 @@ async function mountSidebar(config: Record<string, unknown>, props: Record<strin
       onStartRename: noop,
       onDeleteProject: noop,
       onEditProject: noop,
+      onEditTask: noop,
       onPickTask: noop,
       ...props,
     },
@@ -251,7 +252,7 @@ describe("UnifiedSidebar grouped by status", () => {
     const row = navButtons(mounted.target).find((b) => b.textContent!.includes("B-1"))!;
     row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     flushSync();
-    [...document.querySelectorAll<HTMLElement>("[role='menuitem']")].find((el) => el.textContent === "Edit task")!.click();
+    [...document.querySelectorAll<HTMLElement>("[role='menuitem']")].find((el) => el.textContent!.trim() === "Edit task")!.click();
     flushSync();
 
     expect(onEditTask.mock.calls.map(([t, p]) => [t.key, p.path])).toEqual([

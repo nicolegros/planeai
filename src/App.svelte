@@ -1167,6 +1167,7 @@
         onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
         onDeleteProject={(p) => (projectToDelete = p)}
         onEditProject={openEditProject}
+        onEditTask={(task, project) => { taskWorkspaceToEdit = { task, project }; showTaskForm = true; }}
         onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); if (proj) openSessionForTask(task, proj); }}
         onSelectTask={selectWorkspaceTask}
         onAddProject={openAddProject}
