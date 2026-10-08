@@ -1,0 +1,872 @@
+<script lang="ts">
+  import { onDestroy, onMount, untrack } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import { openUrl } from "@tauri-apps/plugin-opener";
+  import { jiraDepartedInteractionEntrypoint, jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
+  import { plugins, projects as projectsApi, tasks as tasksApi } from "../lib/api";
+  import { frameFailure } from "../lib/provider-session-error";
+  import { showSnackbar } from "../lib/snackbar.svelte";
+  import * as taskStore from "../lib/task-store.svelte";
+  import { getAllTasks } from "../lib/task-store.svelte";
+  import { openPluginModal, openProjectForm } from "../lib/plugin-modal-manager";
+  import type { PluginProviderContext, PluginUiDisposer, PluginUiEntrypoint, PluginUiHost, PluginSessionContext } from "../lib/plugin-sdk";
+  import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
+  import { focusSidebar } from "../lib/focus.svelte";
+  import { PROVIDER_FRAME_ATTRIBUTE } from "../lib/terminal-focus";
+  import { hostKeyReplay, isTextEditingChord, shouldForwardHostChord } from "../lib/plugin-shortcuts";
+  import { isDark } from "../lib/settings.svelte";
+  import type { PluginInventory, PluginProvider, PluginUiContribution } from "../lib/types";
+  import { isSessionRequest, serveSessionRequest, type ProviderSessionBridge } from "../lib/provider-session-bridge";
+  import { pluginFrameFonts } from "../lib/plugin-frame-fonts";
+
+  interface Props {
+    plugin: PluginInventory;
+    contribution: PluginUiContribution;
+    onNavigate: (pluginId: string, contributionId: string) => void;
+    onClose: () => void;
+    onOpenPreferences?: () => void;
+    onFailure?: (error: unknown) => void;
+    autofocus?: boolean;
+    closeOnEscape?: boolean;
+    session?: PluginSessionContext;
+    /** Present for a provider session's UI: its session's controls and events. */
+    providerSession?: ProviderSessionBridge;
+    /** Provider session UIs only: their frame received focus, as when the user clicks into it. */
+    onFocused?: () => void;
+    /** Resolves the focused session at action time for local plugin recipients. */
+    getFocusedAgentSession?: () => PluginSessionContext | undefined;
+  }
+
+  type LocalPluginFrameMessage = {
+    type: string;
+    requestId?: number;
+    method?: string;
+    params?: unknown;
+    action?: string;
+    pluginId?: string;
+    contributionId?: string;
+    url?: string;
+    registrationId?: string;
+    rows?: Array<{ id?: unknown }>;
+    rowId?: string;
+    key?: string;
+    altKey?: boolean;
+    ctrlKey?: boolean;
+    metaKey?: boolean;
+    shiftKey?: boolean;
+    kind?: "success" | "error";
+    message?: string;
+    phase?: unknown;
+    code?: unknown;
+    repeat?: unknown;
+    height?: number;
+    width?: number;
+    text?: unknown;
+  };
+
+  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, providerSession, onFocused, getFocusedAgentSession = () => undefined }: Props = $props();
+  const serializedSession = $derived(session ? JSON.stringify(session) : "");
+  let container = $state<HTMLElement>();
+  let disposer: PluginUiDisposer | null = null;
+  let generation = 0;
+  const dataChangeListeners = new Set<() => void>();
+  const taskDataChangeListeners = new Set<() => void>();
+  let refreshLocalPluginTheme: (() => void) | null = null;
+  let refreshLocalPluginData: (() => void) | null = null;
+  /**
+   * Whether a newly mounted UI takes focus. Read untracked: mounting runs inside the
+   * mount effect, and tracking it would rebuild the frame, and lose its state, on every focus change.
+   */
+  const initialFocus = (): boolean => untrack(() => autofocus);
+  /** Focuses the mounted provider session frame, if any. */
+  let focusProviderFrame: (() => void) | null = null;
+
+  function subscribe(listeners: Set<() => void>, listener: () => void): () => void {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+
+  function notify(listeners: Set<() => void>): void {
+    for (const listener of listeners) listener();
+  }
+
+  const pluginThemeTokens = [
+    ["font-sans", "--font-sans"],
+    ["font-mono", "--font-mono"],
+    ["canvas", "--color-canvas"],
+    ["main", "--color-main"],
+    ["surface", "--color-panel"],
+    ["surface-raised", "--color-panel-hi"],
+    ["text", "--color-t1"],
+    ["text-muted", "--color-t2"],
+    ["text-subtle", "--color-t3"],
+    ["border", "--color-border"],
+    ["border-strong", "--color-border-s"],
+    ["accent", "--color-accent"],
+    ["on-accent", "--color-on-accent"],
+    ["accent-subtle", "--color-accent-bg"],
+    ["success", "--color-status-running"],
+    ["warning", "--color-status-review"],
+    ["danger", "--color-status-exited"],
+  ] as const;
+
+  function escapePluginThemeValue(value: string): string {
+    return value.replace(/[<>{};]/g, (character) => `\\${character.codePointAt(0)!.toString(16)} `);
+  }
+
+  // color-scheme must match the host's, otherwise WebKit paints an opaque canvas behind transparent frames.
+  function localPluginThemeCss(): string {
+    const styles = getComputedStyle(document.documentElement);
+    const tokens = pluginThemeTokens
+      .map(([name, source]) => `--planeai-${name}:${escapePluginThemeValue(styles.getPropertyValue(source).trim())}`)
+      .join(";");
+    return `:root{color-scheme:${isDark() ? "dark" : "light"};${tokens};--planeai-radius:8px;--planeai-space-1:4px;--planeai-space-2:8px;--planeai-space-3:12px;--planeai-space-4:16px;--planeai-space-5:20px;--planeai-space-6:24px}`;
+  }
+
+  const localPluginBaseCss = "html{font-size:13px;line-height:1.45}html,body{margin:0;height:100%;min-height:100%;background:var(--planeai-main);color:var(--planeai-text);font-family:var(--planeai-font-sans)}*,*::before,*::after{box-sizing:border-box}h1,h2,h3,p{margin:0}h1{font-size:20px;line-height:28px;font-weight:600}h2{font-size:15px;line-height:20px;font-weight:600}h3{font-size:13px;line-height:18px;font-weight:600}p{font-size:13px;line-height:19px}button,input,select,textarea{font:inherit;line-height:18px}button{min-height:32px;border:1px solid var(--planeai-border);border-radius:var(--planeai-radius);padding:6px 10px;background:var(--planeai-surface-raised);color:var(--planeai-text);cursor:pointer}button:hover:not(:disabled){background:var(--planeai-accent-subtle)}button:disabled{cursor:not-allowed;opacity:.55}input,select,textarea{border:1px solid var(--planeai-border);border-radius:var(--planeai-radius);padding:7px 9px;background-color:var(--planeai-main);color:var(--planeai-text)}select{appearance:none;padding-right:28px;background-image:linear-gradient(45deg,transparent 50%,var(--planeai-text-muted) 50%),linear-gradient(135deg,var(--planeai-text-muted) 50%,transparent 50%);background-position:calc(100% - 13px) 50%,calc(100% - 9px) 50%;background-size:4px 4px,4px 4px;background-repeat:no-repeat}textarea{min-height:72px}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--planeai-accent);outline-offset:2px}";
+
+  const bundledEntries: Record<string, () => Promise<PluginUiEntrypoint>> = {
+    "jira:jira-status": async () => jiraStatusEntrypoint,
+    "jira:jira-preferences": async () => jiraPreferencesEntrypoint,
+    "jira:jira-sidebar-section": async () => jiraSidebarSectionEntrypoint,
+    "jira:jira-departed-interaction": async () => jiraDepartedInteractionEntrypoint,
+  };
+
+  /** Placements whose frame is as tall as the plugin's content, reported from inside the frame. */
+  const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "dialog", "sidebar.header"];
+
+  /** Local placements told about their plugin's data changes in place, since remounting them would flash. */
+  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "sidebar.header", "main-pane", "dialog"];
+
+  /** Placements the host shows in its dialog chrome. */
+  function inDialog(placement: PluginUiContribution["placement"]): boolean {
+    return placement === "session.panel" || placement === "dialog";
+  }
+
+  /** Placements whose frame takes the whole area the host gives it. */
+  function fillsContainer(placement: PluginUiContribution["placement"]): boolean {
+    return placement === "interaction" || placement === "main-pane" || placement === "session.main" || placement === "titlebar";
+  }
+
+  function disposeCurrent(): void {
+    const current = disposer;
+    disposer = null;
+    try {
+      current?.();
+    } catch (error) {
+      console.error("Plugin UI disposer failed", error);
+    }
+  }
+
+  function getJiraChildCounts(): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const task of getAllTasks()) {
+      if (task.parent_key) counts.set(task.parent_key, (counts.get(task.parent_key) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  async function callPlugin<T>(method: string, params: unknown = null): Promise<T> {
+    const value = await plugins.call<T>(plugin.id, method, params);
+    if (plugin.id !== "jira" || method !== "jira.sidebar.items") return value;
+    const sidebar = value as { items?: Array<{ key: string; child_count?: number }> };
+    if (!sidebar.items) return value;
+    const counts = getJiraChildCounts();
+    return {
+      ...sidebar,
+      items: sidebar.items.map((item) => ({ ...item, child_count: counts.get(item.key) ?? 0 })),
+    } as T;
+  }
+
+  async function loadBundledEntrypoint(): Promise<PluginUiEntrypoint> {
+    const loader = bundledEntries[`${plugin.id}:${contribution.entrypoint}`];
+    if (!loader) throw new Error("This bundled contribution has no trusted UI entrypoint.");
+    return loader();
+  }
+
+  function sessionContextFromSerialized(): PluginSessionContext | undefined {
+    return serializedSession ? JSON.parse(serializedSession) as PluginSessionContext : undefined;
+  }
+
+  function retry(): void {
+    if (!container) return;
+    const version = ++generation;
+    void mountContribution(container, version, sessionContextFromSerialized());
+  }
+
+  function showLoadFailure(root: ShadowRoot, error: unknown): void {
+    const message = document.createElement("p");
+    message.setAttribute("role", "alert");
+    message.textContent = `Failed to load ${contribution.label}: ${String(error)}`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Retry";
+    button.addEventListener("click", retry);
+    root.replaceChildren(message, button);
+    if (contribution.placement.startsWith("sidebar.")) onFailure(error);
+  }
+
+  /** The provider as its session UI sees it; the bundle's entrypoint is the host's business. */
+  function providerContextOf({ id, label, supports }: PluginProvider): PluginProviderContext {
+    return { id, label, supports: [...supports] };
+  }
+
+  function createLocalPluginFrame(root: ShadowRoot, sessionContext?: PluginSessionContext): PluginUiDisposer {
+    const isTitlebar = contribution.placement === "titlebar";
+    const bridge = providerSession;
+    const isSessionIndicator = contribution.placement === "session.indicator";
+    const frame = document.createElement("iframe");
+    frame.title = contribution.label;
+    frame.setAttribute("sandbox", "allow-scripts");
+    frame.className = fillsContainer(contribution.placement) || inDialog(contribution.placement)
+        ? "block h-full w-full border-0"
+        : isSessionIndicator
+          ? "block h-4 w-4 border-0"
+          : "block w-full border-0";
+    frame.style.display = "block";
+    frame.style.width = isTitlebar ? "88px" : isSessionIndicator ? "16px" : "100%";
+    frame.style.border = "0";
+    // A content-sized frame shows the host surface around it, and its auto-height document lets it shrink.
+    const isContentSized = contentSizedPlacements.includes(contribution.placement);
+    if (isTitlebar || isSessionIndicator || isContentSized) frame.style.backgroundColor = "transparent";
+    if (bridge) {
+      // App releases this frame's keyboard like a terminal's, and a click into it claims the keyboard back.
+      frame.setAttribute(PROVIDER_FRAME_ATTRIBUTE, "");
+      frame.addEventListener("focus", () => onFocused?.());
+    }
+    if (isSessionIndicator) {
+      frame.style.height = "16px";
+      frame.style.pointerEvents = "none";
+      frame.tabIndex = -1;
+    } else if (fillsContainer(contribution.placement)) {
+      frame.style.height = "100%";
+    } else if (inDialog(contribution.placement)) {
+      frame.style.height = "360px";
+      frame.style.outline = "none";
+    }
+    if (contribution.placement.startsWith("sidebar.")) {
+      frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : contribution.placement === "sidebar.header" ? "0px" : "160px";
+      frame.addEventListener("focus", focusSidebar);
+      frame.addEventListener("pointerdown", focusSidebar);
+    }
+    frame.srcdoc = `<!doctype html>
+      <meta charset="utf-8">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'">
+      <style id="planeai-plugin-theme">${localPluginThemeCss()}</style>
+      <style id="planeai-plugin-base">${localPluginBaseCss}</style>
+      ${isTitlebar ? '<style id="planeai-plugin-titlebar">html,body{background:transparent}</style>' : isSessionIndicator ? '<style id="planeai-plugin-indicator">html,body{background:transparent}</style>' : isContentSized ? '<style id="planeai-plugin-content-sized">html,body{height:auto;min-height:0;background:transparent}</style>' : ""}
+      <script>
+        let cleanup = null;
+        let nextRequestId = 0;
+        const pending = new Map();
+        const registrations = new Map();
+        const dataChangeListeners = new Set();
+        const sessionEventListeners = new Set();
+        const send = (message) => parent.postMessage(message, "*");
+        let contentHeightObserver = null;
+        let contentHeightPending = false;
+        const reportContentHeight = () => {
+          if (contentHeightPending || !document.body) return;
+          contentHeightPending = true;
+          requestAnimationFrame(() => {
+            contentHeightPending = false;
+            const height = Math.max(
+              document.body.scrollHeight,
+              ...Array.from(document.body.children).map((child) => child.scrollHeight),
+            );
+            if (height > 0) send({ type: "content-height", height });
+          });
+        };
+        const observeContentHeight = (contribution) => {
+          if (!${JSON.stringify(contentSizedPlacements)}.includes(contribution?.placement) || !document.body) return;
+          contentHeightObserver?.disconnect();
+          contentHeightObserver = new MutationObserver(reportContentHeight);
+          contentHeightObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+          reportContentHeight();
+        };
+        const request = (type, payload = {}) => new Promise((resolve, reject) => {
+          const requestId = ++nextRequestId;
+          pending.set(requestId, { resolve, reject });
+          send({ type, requestId, ...payload });
+        });
+        const closeOnEscape = ${closeOnEscape};
+        const forwardEscapeToHost = (event) => {
+          if (closeOnEscape && event.key === "Escape" && !event.defaultPrevented && !event.altKey && !event.ctrlKey && !event.metaKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            send({ type: "navigation", action: "close" });
+          }
+        };
+        addEventListener("keydown", forwardEscapeToHost);
+        let sidebarKeydownRoutingEnabled = false;
+        const sidebarNavigationKeys = new Set([
+          "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "j", "k", "h", "l", "a", "r", "E", "e", "o", "R", "d", "s",
+        ]);
+        const isEditableTarget = (target) =>
+          target instanceof Element && target.closest("input, textarea, select, [contenteditable='true']");
+        const sendSidebarKeydown = (event) => {
+          send({
+            type: "sidebar-keydown",
+            key: event.key,
+            altKey: event.altKey,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            shiftKey: event.shiftKey,
+          });
+        };
+        const forwardSidebarKeydown = (event) => {
+          if (
+            !sidebarKeydownRoutingEnabled ||
+            !sidebarNavigationKeys.has(event.key) ||
+            event.altKey ||
+            event.ctrlKey ||
+            event.metaKey ||
+            isEditableTarget(event.target)
+          ) return;
+          sendSidebarKeydown(event);
+          event.preventDefault();
+          event.stopPropagation();
+        };
+        addEventListener("keydown", forwardSidebarKeydown);
+        // App chords never reach the host window from this frame, so it replays them there.
+        // A plugin claims a chord with preventDefault, except the host-reserved Ctrl+Tab and Mod+N.
+        const sendHostKey = (event) => {
+          send({
+            type: "host-key",
+            phase: event.type,
+            key: event.key,
+            code: event.code,
+            altKey: event.altKey,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            shiftKey: event.shiftKey,
+            repeat: event.repeat,
+          });
+        };
+        const isTextEditingChord = ${isTextEditingChord.toString()};
+        const shouldForwardHostChord = ${shouldForwardHostChord.toString()};
+        const forwardHostChord = (event) => {
+          if (shouldForwardHostChord(event, isEditableTarget(event.target), isTextEditingChord)) sendHostKey(event);
+        };
+        // The tab switcher commits when its modifier is released.
+        const forwardModifierRelease = (event) => {
+          if (event.key === "Control" || event.key === "Meta") sendHostKey(event);
+        };
+        addEventListener("keydown", forwardHostChord);
+        addEventListener("keyup", forwardModifierRelease);
+        const host = {
+          call: (method, params = null) => request("call", { method, params }),
+          recipient: {
+            getFocusedAgentSession: () => request("focused-agent-session"),
+          },
+          rpc: {
+            call: (method, params = null) => request("host-rpc", { method, params }),
+          },
+          settings: {
+            get: () => request("settings-get"),
+            replace: (settings) => request("settings-replace", { params: settings }),
+          },
+          navigation: {
+            open: (pluginId, contributionId) => send({ type: "navigation", action: "open", pluginId, contributionId }),
+            close: () => send({ type: "navigation", action: "close" }),
+            openPreferences: () => send({ type: "navigation", action: "preferences" }),
+            openExternal: (url) => send({ type: "navigation", action: "external", url }),
+          },
+          sidebar: {
+            register: (rows) => {
+              const registrationId = "registration:" + ++nextRequestId;
+              registrations.set(registrationId, rows);
+              send({ type: "sidebar-register", registrationId, rows: rows.map(({ id }) => ({ id })) });
+              return () => {
+                registrations.delete(registrationId);
+                send({ type: "sidebar-unregister", registrationId });
+              };
+            },
+            select: (rowId) => send({ type: "sidebar-select", rowId }),
+            handleKeydown: (event) => {
+              if (isEditableTarget(event.target)) return;
+              sendSidebarKeydown(event);
+              event.preventDefault();
+              event.stopPropagation();
+            },
+          },
+          data: {
+            changed: () => request("data-changed"),
+            onChanged: (listener) => {
+              dataChangeListeners.add(listener);
+              return () => dataChangeListeners.delete(listener);
+            },
+            notify: (message, kind = "error") => send({ type: "notify", message, kind }),
+          },
+        };
+        // Only a provider's session UI controls its session, and hands it off only when its provider can.
+        const sessionControls = (controls) => ({
+          send: (text) => request("session-send", { text }),
+          interrupt: () => request("session-interrupt"),
+          onEvent: (listener) => {
+            sessionEventListeners.add(listener);
+            return () => sessionEventListeners.delete(listener);
+          },
+          ...(controls.handoff
+            ? { handoff: () => request("session-handoff"), handback: () => request("session-handback") }
+            : {}),
+        });
+        addEventListener("message", async (event) => {
+          if (event.source !== parent) return;
+          const message = event.data;
+          if (!message || typeof message.type !== "string") return;
+          if (message.type === "theme") {
+            const theme = document.getElementById("planeai-plugin-theme");
+            if (theme && typeof message.css === "string") theme.textContent = message.css;
+            return;
+          }
+          if (message.type === "data-changed") {
+            for (const listener of dataChangeListeners) listener();
+            return;
+          }
+          if (message.type === "session-event") {
+            for (const listener of sessionEventListeners) listener(message.event);
+            return;
+          }
+          if (message.type === "response") {
+            const pendingRequest = pending.get(message.requestId);
+            if (!pendingRequest) return;
+            pending.delete(message.requestId);
+            if (message.ok) pendingRequest.resolve(message.value);
+            else pendingRequest.reject(Object.assign(new Error(message.error), message.code ? { code: message.code } : {}));
+            return;
+          }
+          if (message.type === "sidebar-event") {
+            const rows = registrations.get(message.registrationId);
+            const row = rows && rows.find((candidate) => candidate.id === message.rowId);
+            const callback = row && row[message.action];
+            if (typeof callback === "function") callback(message.selected);
+            return;
+          }
+          if (message.type === "dispose") {
+            if (typeof cleanup === "function") cleanup();
+            cleanup = null;
+            sessionEventListeners.clear();
+            contentHeightObserver?.disconnect();
+            contentHeightObserver = null;
+            removeEventListener("keydown", forwardEscapeToHost);
+            return;
+          }
+          if (message.type !== "init") return;
+          sidebarKeydownRoutingEnabled = message.contribution?.placement?.startsWith("sidebar.") ?? false;
+          try {
+            // The UI mounts once the theme fonts are in, so it never lays out in a fallback font first.
+            const fonts = message.fonts.map(({ family, data, descriptors }) => new FontFace(family, data, descriptors));
+            for (const font of fonts) document.fonts.add(font);
+            await Promise.allSettled(fonts.map((font) => font.loaded));
+            const url = URL.createObjectURL(new Blob([message.source], { type: "text/javascript" }));
+            const module = await import(url);
+            URL.revokeObjectURL(url);
+            const entrypoint = module.default || module.pluginEntrypoint;
+            if (!entrypoint || typeof entrypoint.mount !== "function") throw new Error("local UI bundle must default-export a PluginUiEntrypoint");
+            if (message.sessionControls) host.session = sessionControls(message.sessionControls);
+            const context = { plugin: message.plugin, contribution: message.contribution, session: message.session, host };
+            if (message.provider) context.provider = message.provider;
+            cleanup = entrypoint.mount(document.body, context);
+            observeContentHeight(message.contribution);
+            send({ type: "mounted" });
+          } catch (error) {
+            send({ type: "load-error", message: String(error) });
+          }
+        });
+      </scr${"ipt"}>`;
+
+    const focusFrame = (): void => {
+      requestAnimationFrame(() => {
+        if (frame.isConnected) frame.focus();
+      });
+    };
+    const refreshTheme = (): void => {
+      frame.contentWindow?.postMessage({ type: "theme", css: localPluginThemeCss() }, "*");
+    };
+    refreshLocalPluginTheme = refreshTheme;
+    const registrations = new Map<string, string[]>();
+    let unregisterSidebarRows = () => {};
+    const rebuildSidebarRows = (): void => {
+      unregisterSidebarRows();
+      unregisterSidebarRows = registerPluginSidebarContribution(
+        `${plugin.id}:${contribution.id}`,
+        [...registrations].flatMap(([registrationId, rows]) =>
+          rows.map((id) => ({
+            id,
+            onSelect: () => frame.contentWindow?.postMessage({ type: "sidebar-event", registrationId, rowId: id, action: "onSelect" }, "*"),
+            onCollapse: () => frame.contentWindow?.postMessage({ type: "sidebar-event", registrationId, rowId: id, action: "onCollapse" }, "*"),
+            onExpand: () => frame.contentWindow?.postMessage({ type: "sidebar-event", registrationId, rowId: id, action: "onExpand" }, "*"),
+            onFocus: (selected) => frame.contentWindow?.postMessage({ type: "sidebar-event", registrationId, rowId: id, action: "onFocus", selected }, "*"),
+          })),
+        ),
+      );
+    };
+    const respond = (requestId: number | undefined, ok: boolean, value?: unknown): void => {
+      if (requestId === undefined) return;
+      frame.contentWindow?.postMessage(
+        ok ? { type: "response", requestId, ok: true, value } : { type: "response", requestId, ok: false, ...frameFailure(value) },
+        "*",
+      );
+    };
+    const onMessage = (event: MessageEvent<LocalPluginFrameMessage>): void => {
+      if (event.source !== frame.contentWindow) return;
+      const message = event.data;
+      if (!message || typeof message.type !== "string") return;
+      if (message.type === "mounted") {
+        if (autofocus) focusFrame();
+        return;
+      }
+      if (message.type === "focused-agent-session") {
+        respond(message.requestId, true, getFocusedAgentSession() ?? null);
+      } else if (message.type === "call" && typeof message.method === "string") {
+        void callPlugin(message.method, message.params)
+          .then((value) => respond(message.requestId, true, value))
+          .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "host-rpc" && typeof message.method === "string") {
+        void plugins
+          .hostCall(plugin.id, message.method, message.params)
+          .then((value) => respond(message.requestId, true, value))
+          .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "settings-get") {
+        if (!plugin.capabilities.includes("settings")) {
+          respond(message.requestId, false, "plugin settings capability is not granted");
+          return;
+        }
+        void plugins
+          .settings(plugin.id)
+          .then((value) => respond(message.requestId, true, value))
+          .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "settings-replace") {
+        if (!plugin.capabilities.includes("settings")) {
+          respond(message.requestId, false, "plugin settings capability is not granted");
+          return;
+        }
+        if (!message.params || typeof message.params !== "object" || Array.isArray(message.params)) {
+          respond(message.requestId, false, "plugin settings must be a JSON object");
+          return;
+        }
+        void plugins
+          .updateSettings(plugin.id, message.params as Record<string, unknown>)
+          .then((value) => respond(message.requestId, true, value))
+          .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "host-key") {
+        const replay = hostKeyReplay(message);
+        if (replay && root.activeElement === frame) window.dispatchEvent(replay);
+      } else if (isSessionRequest(message.type)) {
+        void serveSessionRequest(bridge, message)
+          .then(() => respond(message.requestId, true, null))
+          .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "data-changed") {
+        void plugins
+          .dataChanged(plugin.id)
+          .then((value) => respond(message.requestId, true, value))
+          .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "content-height" && contentSizedPlacements.includes(contribution.placement) && typeof message.height === "number" && Number.isFinite(message.height)) {
+        frame.style.height = `${Math.min(Math.max(Math.ceil(message.height), 1), 10_000)}px`;
+      } else if (message.type === "content-width" && contribution.placement === "session.indicator" && typeof message.width === "number" && Number.isFinite(message.width)) {
+        container?.setAttribute("data-plugin-indicator-visible", message.width > 0 ? "true" : "false");
+      } else if (message.type === "navigation") {
+        if (message.action === "open" && message.pluginId && message.contributionId) {
+          onNavigate(message.pluginId, message.contributionId);
+        } else if (message.action === "close") onClose();
+        else if (message.action === "preferences") onOpenPreferences();
+        else if (message.action === "external" && typeof message.url === "string") {
+          try {
+            const url = new URL(message.url);
+            if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("only http(s) URLs are supported");
+            void openUrl(url.toString()).catch((error) => showSnackbar(`Failed to open URL: ${String(error)}`));
+          } catch (error) {
+            showSnackbar(`Invalid plugin URL: ${String(error)}`);
+          }
+        }
+      } else if (message.type === "notify" && typeof message.message === "string") {
+        const notification = message.message.trim();
+        if (notification) showSnackbar(notification, message.kind ?? "error");
+      } else if (message.type === "sidebar-select" && typeof message.rowId === "string") {
+        container?.dispatchEvent(
+          new CustomEvent("plugin-sidebar-select", { bubbles: true, detail: { rowId: message.rowId } }),
+        );
+      } else if (message.type === "sidebar-keydown" && typeof message.key === "string") {
+        const detail: { event: KeyboardEvent; handled: boolean } = {
+          event: new KeyboardEvent("keydown", {
+            key: message.key,
+            altKey: message.altKey,
+            ctrlKey: message.ctrlKey,
+            metaKey: message.metaKey,
+            shiftKey: message.shiftKey,
+            bubbles: true,
+            cancelable: true,
+          }),
+          handled: false,
+        };
+        container?.dispatchEvent(
+          new CustomEvent("plugin-sidebar-keydown", { bubbles: true, detail }),
+        );
+      } else if (message.type === "sidebar-register" && message.registrationId && message.rows) {
+        registrations.set(
+          message.registrationId,
+          message.rows.flatMap((row) => (typeof row.id === "string" ? [row.id] : [])),
+        );
+        rebuildSidebarRows();
+      } else if (message.type === "sidebar-unregister" && message.registrationId) {
+        if (registrations.delete(message.registrationId)) rebuildSidebarRows();
+      } else if (message.type === "load-error") {
+        showLoadFailure(root, message.message ?? "local UI bundle failed to load");
+      }
+    };
+    // A provider UI mounts only once its session is driven by the current sidecar.
+    const loadSource = (): Promise<string> => (bridge ? bridge.loadSource() : plugins.localUiSource(plugin.id, contribution.id));
+    const initialise = (): void => {
+      void Promise.all([loadSource(), pluginFrameFonts()])
+        .then(([source, fonts]) => {
+          const context = JSON.parse(JSON.stringify({ plugin, contribution, session: sessionContext })) as {
+            plugin: PluginInventory;
+            contribution: PluginUiContribution;
+            session?: PluginSessionContext;
+          };
+          const providerContext = bridge
+            ? { provider: providerContextOf(bridge.provider), sessionControls: { handoff: Boolean(bridge.handoff) } }
+            : {};
+          frame.contentWindow?.postMessage({ type: "init", source, fonts, ...context, ...providerContext }, "*");
+        })
+        .catch((error) => showLoadFailure(root, error));
+    };
+
+    const refreshData = (): void => frame.contentWindow?.postMessage({ type: "data-changed" }, "*");
+    if (refreshedInPlacePlacements.includes(contribution.placement)) refreshLocalPluginData = refreshData;
+    let framed = true;
+    let unlistenSessionEvents: (() => void) | undefined;
+    if (bridge) {
+      void bridge.subscribe((event) => frame.contentWindow?.postMessage({ type: "session-event", event }, "*")).then((unlisten) => {
+        if (framed) unlistenSessionEvents = unlisten;
+        else unlisten();
+      });
+    }
+    window.addEventListener("message", onMessage);
+    frame.addEventListener("load", initialise, { once: true });
+    root.replaceChildren(frame);
+    if (initialFocus()) focusFrame();
+    if (bridge) focusProviderFrame = focusFrame;
+    return () => {
+      framed = false;
+      if (focusProviderFrame === focusFrame) focusProviderFrame = null;
+      unlistenSessionEvents?.();
+      if (refreshLocalPluginTheme === refreshTheme) refreshLocalPluginTheme = null;
+      if (refreshLocalPluginData === refreshData) refreshLocalPluginData = null;
+      window.removeEventListener("message", onMessage);
+      unregisterSidebarRows();
+      registrations.clear();
+      frame.contentWindow?.postMessage({ type: "dispose" }, "*");
+      frame.remove();
+    };
+  }
+
+  async function mountContribution(target: HTMLElement, version: number, sessionContext?: PluginSessionContext): Promise<void> {
+    disposeCurrent();
+    const root = target.shadowRoot ?? target.attachShadow({ mode: "open" });
+    if (plugin.state !== "running") {
+      root.replaceChildren();
+      return;
+    }
+    try {
+      if (plugin.source_kind !== "builtin") {
+        const cleanup = createLocalPluginFrame(root, sessionContext);
+        if (version !== generation) {
+          cleanup();
+          return;
+        }
+        disposer = cleanup;
+        if (initialFocus()) target.focus();
+        return;
+      }
+      const entrypoint = await loadBundledEntrypoint();
+      if (version !== generation) return;
+      const data: PluginUiHost["data"] = {
+        changed: () => plugins.dataChanged(plugin.id),
+        notify: (message, kind = "error") => showSnackbar(message, kind),
+      };
+      const host: PluginUiHost = {
+        call: <T>(method: string, params: unknown = null) => callPlugin<T>(method, params),
+        recipient: {
+          getFocusedAgentSession: async () => getFocusedAgentSession() ?? null,
+        },
+        rpc: {
+          call: <T>(_method: string, _params: unknown = null) =>
+            Promise.reject(new Error("direct host RPC is available only to local plugins")),
+        },
+        settings: {
+          get: <T extends Record<string, unknown>>() => {
+            if (!plugin.capabilities.includes("settings")) {
+              return Promise.reject(new Error("plugin settings capability is not granted"));
+            }
+            return plugins.settings<T>(plugin.id);
+          },
+          replace: <T extends Record<string, unknown>>(settings: T) => {
+            if (!plugin.capabilities.includes("settings")) {
+              return Promise.reject(new Error("plugin settings capability is not granted"));
+            }
+            return plugins.updateSettings<T>(plugin.id, settings);
+          },
+        },
+        navigation: {
+          open: onNavigate,
+          close: onClose,
+          openPreferences: onOpenPreferences,
+          openExternal: (url) => {
+            try {
+              const parsed = new URL(url);
+              if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("only http(s) URLs are supported");
+              void openUrl(parsed.toString()).catch((error) => showSnackbar(`Failed to open URL: ${String(error)}`));
+            } catch (error) {
+              showSnackbar(`Invalid plugin URL: ${String(error)}`);
+            }
+          },
+        },
+        sidebar: {
+          register: (rows) => registerPluginSidebarContribution(`${plugin.id}:${contribution.id}`, rows),
+          select: (rowId) => {
+            container?.dispatchEvent(
+              new CustomEvent("plugin-sidebar-select", { bubbles: true, detail: { rowId } }),
+            );
+          },
+          handleKeydown: (event) => {
+            const detail: { event: KeyboardEvent; handled: boolean } = { event, handled: false };
+            container?.dispatchEvent(
+              new CustomEvent("plugin-sidebar-keydown", { bubbles: true, detail }),
+            );
+            if (detail.handled) event.stopPropagation();
+          },
+        },
+        data,
+      };
+      data.refreshAssignment = async (project) => {
+        try {
+          await Promise.all([taskStore.refresh([project.path]), plugins.dataChanged(plugin.id)]);
+        } catch (error) {
+          showSnackbar(`Child task created, but refresh failed: ${String(error)}`);
+        }
+      };
+      data.onChanged = (listener) => subscribe(dataChangeListeners, listener);
+      data.onTaskDataChanged = (listener) => subscribe(taskDataChangeListeners, listener);
+      host.projects = {
+        list: async () => (await projectsApi.list()).filter((project) => !project.hidden),
+      };
+      host.tasks = {
+        createChild: ({ project, title, description, parentKey }) =>
+          tasksApi.create({
+            repoPath: project.path,
+            title,
+            description,
+            priority: 0,
+            tags: [],
+            blockedBy: [],
+            parentKey,
+          }),
+      };
+      host.interaction = {
+        openModal: openPluginModal,
+        openProjectForm,
+      };
+      const cleanup = entrypoint.mount(root, { plugin, contribution, session: sessionContext, host });
+      if (typeof cleanup !== "function") {
+        throw new Error("plugin UI entrypoint mount must return a disposer function");
+      }
+
+      if (version !== generation) {
+        cleanup();
+        return;
+      }
+      disposer = cleanup;
+      if (autofocus) target.focus();
+    } catch (error) {
+      if (version === generation) showLoadFailure(root, error);
+    }
+  }
+
+  $effect(() => {
+    const sessionContext = sessionContextFromSerialized();
+    if (!container) return;
+    const version = ++generation;
+    void mountContribution(container, version, sessionContext);
+    return () => {
+      if (generation === version) generation += 1;
+      disposeCurrent();
+    };
+  });
+
+  // A provider session's frame takes the keyboard back whenever its pane owns it again, as a terminal does.
+  $effect(() => {
+    if (autofocus) untrack(() => focusProviderFrame?.());
+  });
+
+  $effect(() => {
+    if (plugin.id !== "jira" || contribution.placement !== "sidebar.section") return;
+    getAllTasks();
+    notify(taskDataChangeListeners);
+  });
+
+  onMount(() => {
+    let disposed = false;
+    let unlistenDataChange: (() => void) | undefined;
+    let unlistenSettingsChange: (() => void) | undefined;
+    const refreshTheme = (): void => refreshLocalPluginTheme?.();
+    window.addEventListener("planeai-theme-changed", refreshTheme);
+    void listen<string>("plugin-data-changed", (event) => {
+      if (event.payload !== plugin.id) return;
+      if (refreshLocalPluginData) {
+        refreshLocalPluginData();
+        return;
+      }
+      if (!["sidebar.section", "interaction", "session.panel", "session.indicator"].includes(contribution.placement)) return;
+      if (plugin.source_kind === "builtin" && dataChangeListeners.size > 0) {
+        notify(dataChangeListeners);
+      } else {
+        retry();
+      }
+    }).then((cleanup) => {
+      if (disposed) cleanup();
+      else unlistenDataChange = cleanup;
+    });
+    void listen("settings-changed", refreshTheme).then((cleanup) => {
+      if (disposed) cleanup();
+      else unlistenSettingsChange = cleanup;
+    });
+    return () => {
+      disposed = true;
+      window.removeEventListener("planeai-theme-changed", refreshTheme);
+      unlistenDataChange?.();
+      unlistenSettingsChange?.();
+    };
+  });
+
+  onDestroy(() => {
+    generation += 1;
+    disposeCurrent();
+  });
+</script>
+
+<div
+  class={
+    contribution.placement === "interaction"
+      ? plugin.source_kind === "builtin"
+        ? "pointer-events-none"
+        : "h-full w-full pointer-events-auto"
+      : fillsContainer(contribution.placement) || inDialog(contribution.placement)
+        ? "h-full w-full"
+        : contribution.placement === "session.indicator"
+          ? "h-4 w-4 shrink-0 pointer-events-none"
+          : "w-full"
+  }
+  tabindex="-1"
+  role={contribution.placement === "session.indicator" ? undefined : "region"}
+  aria-label={`${plugin.name} · ${contribution.label}`}
+  data-plugin-ui-contribution={`${plugin.id}:${contribution.id}`}
+  data-plugin-sidebar-contribution={contribution.placement.startsWith("sidebar.") ? "" : undefined}
+  bind:this={container}
+  onfocus={() => {
+    if (contribution.placement === "interaction") {
+      container?.shadowRoot?.querySelector<HTMLElement>("[data-plugin-interaction]")?.focus();
+    }
+  }}
+></div>

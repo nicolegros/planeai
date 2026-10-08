@@ -21,7 +21,11 @@
     "active": true,
     "icon": ["icons/icon.icns", "icons/icon.ico", "icons/icon.png"],
     "createUpdaterArtifacts": "v1Compatible",
-    "externalBin": ["binaries/planeai-cli", "binaries/planeai-daemon"],
+    "externalBin": [
+      "binaries/planeai-cli",
+      "binaries/planeai-daemon",
+      "binaries/planeai-plugin-jira"
+    ],
     "windows": {
       "nsis": {
         "installerHooks": "./windows/hooks.nsh"

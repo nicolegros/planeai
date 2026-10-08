@@ -92,3 +92,17 @@ Confirm with the user before deleting unless they were explicit (e.g., "delete P
 - After any operation, briefly confirm what happened (e.g., "Moved **PLA-3** to done.").
 - If a command fails, report the error and suggest a fix.
 - Use `--project <name>` only when the user names a specific project or context makes it clear.
+
+## Create a sibling agent session in the current TaskWorkspace
+
+When you are running inside a PlaneAI agent session and need parallel work on the same task, create a sibling session through AXI instead of creating an unlinked manual session:
+
+```bash
+planeai-cli axi session spawn --prompt "Investigate the historical data and report the impact"
+```
+
+The command reads `PLANEAI_SESSION_ID` and inherits the current agent session's project and task key. It creates a new isolated worktree and branch, records the current session as its parent, and defaults the new session name to the current task session name.
+
+Optional controls: `--name`, `--branch`, `--base-branch`, `--provider`, `--yolo`, and `--pretty`. `axi session spawn` defaults to yolo; use `--yolo false` to opt out.
+
+Do not use this command outside a task-linked PlaneAI agent session. It fails rather than creating an unlinked session.

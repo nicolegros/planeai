@@ -1,6 +1,15 @@
 use super::*;
 use std::fs;
 
+/// Serializes tests in this file that mutate or depend on `HOME`, which is process-global.
+static HOME_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn lock_home_env() -> std::sync::MutexGuard<'static, ()> {
+    HOME_ENV
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[test]
 fn load_creates_default_config_when_no_file_exists() {
     let dir = tempfile::tempdir().unwrap();
@@ -8,7 +17,13 @@ fn load_creates_default_config_when_no_file_exists() {
 
     let (config, warnings) = load(config_dir);
 
-    assert_eq!(config, Config::default());
+    assert_eq!(
+        config,
+        Config {
+            onboarding_completed: Some(false),
+            ..Config::default()
+        }
+    );
     assert!(warnings.is_empty());
     assert!(config_dir.join("config.json").exists());
 }
@@ -50,9 +65,12 @@ fn load_reads_existing_config_file() {
         vim_mode: None,
         task_management: None,
         projects_base_path: None,
-        pr_status: None,
         hide_done_tasks: None,
         hide_empty_projects: None,
+        sidebar_group_by: None,
+        hide_task_keys: None,
+        hide_project_labels: None,
+        post_merge_action: None,
         daemon_scrollback_bytes: None,
         scrollback_lines: None,
         web_links: None,
@@ -61,7 +79,9 @@ fn load_reads_existing_config_file() {
         auto_open_review: Some(true),
         sound_enabled: Some(true),
         integrations: None,
-        wsl: None,
+        language_servers: None,
+        editor: None,
+        onboarding_completed: Some(true),
     };
 
     let json = serde_json::to_string_pretty(&custom).unwrap();
@@ -103,7 +123,10 @@ fn load_returns_defaults_with_warning_on_invalid_json() {
 
     let (config, warnings) = load(config_dir);
 
-    assert_eq!(config, Config::default());
+    assert_eq!(
+        config.editor.as_ref().map(|editor| editor.mode.as_str()),
+        Some("__invalid__")
+    );
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("parse"));
 }
@@ -160,6 +183,7 @@ fn round_trip_save_then_load() {
         },
     );
     config.default_provider = "aider".to_string();
+    config.onboarding_completed = Some(true);
 
     save(config_dir, &config).unwrap();
     let (loaded, warnings) = load(config_dir);
@@ -200,7 +224,10 @@ fn migrate_from_db_does_nothing_when_config_exists() {
     let config_dir = dir.path();
 
     // Create an existing config
-    let existing = Config::default();
+    let existing = Config {
+        onboarding_completed: Some(true),
+        ..Config::default()
+    };
     save(config_dir, &existing).unwrap();
 
     // Try to migrate with different settings
@@ -220,36 +247,36 @@ fn migrate_from_db_does_nothing_when_config_exists() {
 }
 
 #[test]
-fn launch_command_returns_base_when_yolo_false() {
+fn first_launch_command_returns_base_when_yolo_false() {
     let provider = Provider {
         command: "kiro-cli chat".to_string(),
         yolo_flag: Some("--trust-all-tools".to_string()),
         ..Default::default()
     };
-    assert_eq!(launch_command(&provider, false), "kiro-cli chat");
+    assert_eq!(provider.first_launch_command(false, None), "kiro-cli chat");
 }
 
 #[test]
-fn launch_command_appends_yolo_flag_when_yolo_true() {
+fn first_launch_command_appends_yolo_flag_when_yolo_true() {
     let provider = Provider {
         command: "kiro-cli chat".to_string(),
         yolo_flag: Some("--trust-all-tools".to_string()),
         ..Default::default()
     };
     assert_eq!(
-        launch_command(&provider, true),
+        provider.first_launch_command(true, None),
         "kiro-cli chat --trust-all-tools"
     );
 }
 
 #[test]
-fn launch_command_ignores_yolo_when_no_flag() {
+fn first_launch_command_ignores_yolo_when_no_flag() {
     let provider = Provider {
         command: "aider".to_string(),
         yolo_flag: None,
         ..Default::default()
     };
-    assert_eq!(launch_command(&provider, true), "aider");
+    assert_eq!(provider.first_launch_command(true, None), "aider");
 }
 
 #[test]
@@ -273,6 +300,105 @@ fn resolve_backend_falls_back_to_local_when_unset() {
     assert!(config.session_backend.is_none());
     let result = resolve_backend(&config);
     assert_eq!(result, "local");
+}
+
+#[test]
+fn resolve_backend_selects_rmux_when_configured() {
+    // The rmux backend is opt-in through config only, the way daemon was
+    // introduced; the launch and attach paths key off this exact value.
+    let config = Config {
+        session_backend: Some(planeai_rmux::BACKEND.to_string()),
+        ..Default::default()
+    };
+    assert_eq!(resolve_backend(&config), "rmux");
+}
+
+#[test]
+fn executable_on_path_finds_a_file_in_a_path_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let binary = dir.path().join("planeai-fake-rmux-daemon");
+    fs::write(&binary, b"#!/bin/sh\n").unwrap();
+
+    // `rmux_available` caches per process, so the reusable lookup is what is
+    // worth testing: the Preferences warning depends on it finding real files.
+    // The PATH is passed explicitly: mutating the process PATH breaks concurrent tests that spawn `sh`.
+    let path = dir.path().to_string_lossy().into_owned();
+    let found = find_executable_in("planeai-fake-rmux-daemon", &path);
+    let missing = find_executable_in("planeai-definitely-not-installed", &path);
+
+    assert_eq!(
+        found,
+        Some(binary),
+        "a file present in a PATH directory must be found"
+    );
+    assert!(
+        missing.is_none(),
+        "an absent binary must not be reported as present"
+    );
+}
+
+#[test]
+fn executable_on_path_finds_a_binary_missing_from_the_processs_own_path() {
+    // A GUI app launched from Finder/Dock/Spotlight is started by launchd, which
+    // does not source the user's shell profile: this process's raw `PATH` can be
+    // as narrow as `/usr/bin:/bin:/usr/sbin:/sbin`, missing Homebrew, cargo, and
+    // every other conventional install directory a session launch would still
+    // find. If the availability check used that raw PATH, it would report a
+    // backend unavailable when a real launch — which goes through
+    // `augmented_path` — would succeed. This reproduces that gap directly: the
+    // binary sits somewhere `augmented_path` searches but the raw PATH does not.
+    let _home = lock_home_env();
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap();
+    let cargo_bin = std::path::PathBuf::from(&home).join(".cargo").join("bin");
+    fs::create_dir_all(&cargo_bin).unwrap();
+    let binary = cargo_bin.join("planeai-fake-conventional-dir-binary");
+    fs::write(&binary, b"#!/bin/sh\n").unwrap();
+
+    let launchd_path = "/usr/bin:/bin:/usr/sbin:/sbin";
+    let raw = find_executable_in("planeai-fake-conventional-dir-binary", launchd_path);
+    let augmented = find_executable_in(
+        "planeai-fake-conventional-dir-binary",
+        &planeai_core::command::augmented_path(&[]),
+    );
+    let _ = fs::remove_file(&binary);
+
+    assert!(
+        raw.is_none(),
+        "the narrow launchd PATH must not contain the binary"
+    );
+    assert!(
+        augmented.is_some(),
+        "a binary in a conventional install directory must be found even when \
+         the process's own PATH does not include it"
+    );
+}
+
+#[test]
+fn rmux_daemon_binary_resolves_outside_the_processs_own_path() {
+    // After a reboot the app is launched by launchd with only the system PATH.
+    // The rmux SDK searches that raw PATH when starting its daemon, so the
+    // client must hand it an absolute path found through `augmented_path`.
+    let dir = tempfile::tempdir().unwrap();
+    let binary = dir.path().join("rmux-daemon");
+    fs::write(&binary, b"#!/bin/sh\n").unwrap();
+
+    let previous_path = std::env::var_os("PATH");
+    let previous_extra = std::env::var_os("PLANEAI_EXTRA_PATH");
+    std::env::set_var("PATH", "/usr/bin:/bin:/usr/sbin:/sbin");
+    std::env::set_var("PLANEAI_EXTRA_PATH", dir.path());
+    let found = rmux_daemon_binary();
+    match previous_path {
+        Some(value) => std::env::set_var("PATH", value),
+        None => std::env::remove_var("PATH"),
+    }
+    match previous_extra {
+        Some(value) => std::env::set_var("PLANEAI_EXTRA_PATH", value),
+        None => std::env::remove_var("PLANEAI_EXTRA_PATH"),
+    }
+
+    assert_eq!(found, Some(binary));
 }
 
 #[test]
@@ -341,25 +467,72 @@ fn default_config_kiro_provider_has_resume_fields() {
     );
 }
 
+/// The command each built-in provider starts with on every backend: `launch` runs it on
+/// daemon, rmux and tmux, and a local session's first attach runs it.
 #[test]
-fn default_config_includes_copilot_provider() {
+fn every_default_provider_starts_an_interactive_session_on_the_task_prompt() {
     let config = Config::default();
-    let copilot = config.providers.get("copilot").unwrap();
-    assert_eq!(copilot.command, "copilot --resume");
-    assert_eq!(copilot.yolo_flag, Some("--allow-all-tools".to_string()));
-    assert_eq!(copilot.prompt_command, Some("{prompt}".to_string()));
+    let first_launch = |key: &str| {
+        config.providers[key].first_launch_command(true, Some("- Fix the user's login"))
+    };
+    assert_eq!(
+        first_launch("kiro"),
+        "kiro-cli chat --trust-all-tools -- '- Fix the user'\\''s login'"
+    );
+    assert_eq!(
+        first_launch("claude"),
+        "claude --dangerously-skip-permissions -- '- Fix the user'\\''s login'"
+    );
+    assert_eq!(
+        first_launch("copilot"),
+        "copilot --allow-all-tools --interactive='- Fix the user'\\''s login'"
+    );
+    assert_eq!(
+        first_launch("codex"),
+        "codex --dangerously-bypass-approvals-and-sandbox -- '- Fix the user'\\''s login'"
+    );
+    assert_eq!(
+        config.providers["copilot"].first_launch_command(false, None),
+        "copilot"
+    );
 }
 
 #[test]
-fn default_config_includes_claude_provider() {
+fn every_default_provider_restarts_by_resuming() {
     let config = Config::default();
-    let claude = config.providers.get("claude").unwrap();
-    assert_eq!(claude.command, "claude");
+    let restart = |key: &str| restart_command_for_provider(&config.providers[key]);
     assert_eq!(
-        claude.yolo_flag,
-        Some("--dangerously-skip-permissions".to_string())
+        ["kiro", "claude", "copilot", "codex"].map(restart),
+        [
+            "kiro-cli chat --resume",
+            "claude --resume",
+            "copilot --continue",
+            "codex resume --last"
+        ]
     );
-    assert_eq!(claude.prompt_command, Some("-p {prompt}".to_string()));
+}
+
+#[test]
+fn load_keeps_stored_provider_commands_as_written() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{
+            "default_provider": "claude",
+            "providers": {
+                "claude": { "command": "claude", "prompt_command": "-p {prompt}" },
+                "copilot": { "command": "copilot --resume", "prompt_command": "{prompt}" }
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let (config, warnings) = load(dir.path());
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let launch = |key: &str| config.providers[key].first_launch_command(false, Some("Go"));
+    assert_eq!(launch("claude"), "claude -p 'Go'");
+    assert_eq!(launch("copilot"), "copilot --resume 'Go'");
 }
 
 #[test]
@@ -414,6 +587,7 @@ fn load_backfills_resume_fields_for_known_providers() {
 
 #[test]
 fn home_dir_prefers_home_and_falls_back_to_userprofile() {
+    let _home = lock_home_env();
     let original_home = std::env::var("HOME").ok();
 
     // When HOME is set, it's returned
@@ -434,6 +608,7 @@ fn home_dir_prefers_home_and_falls_back_to_userprofile() {
 #[test]
 #[cfg(unix)]
 fn config_dir_uses_app_name_for_directory() {
+    let _home = lock_home_env();
     // Test the structure: config_dir returns <base>/<app_name>
     let path = config_dir("planeai");
     assert!(path.ends_with("planeai"));
@@ -443,6 +618,7 @@ fn config_dir_uses_app_name_for_directory() {
 #[test]
 #[cfg(unix)]
 fn config_dir_isolates_dev_bundle_by_name() {
+    let _home = lock_home_env();
     let original_home = std::env::var("HOME").ok();
     std::env::set_var("HOME", "/mock/home");
     std::env::remove_var("XDG_CONFIG_HOME");
@@ -458,6 +634,7 @@ fn config_dir_isolates_dev_bundle_by_name() {
 #[test]
 #[cfg(unix)]
 fn normalize_base_path_expands_tilde() {
+    let _home = lock_home_env();
     let original_home = std::env::var("HOME").ok();
     std::env::set_var("HOME", "/Users/testuser");
 
@@ -489,21 +666,6 @@ fn config_dir_isolates_dev_bundle_on_windows() {
 fn normalize_base_path_strips_trailing_slash() {
     let result = normalize_base_path("/Users/testuser/Developer/");
     assert_eq!(result, "/Users/testuser/Developer");
-}
-
-#[test]
-fn pr_status_round_trips_through_config() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = Config {
-        pr_status: Some("gh pr view {branch} --json url,state".to_string()),
-        ..Config::default()
-    };
-
-    save(dir.path(), &config).unwrap();
-    let (loaded, warnings) = load(dir.path());
-
-    assert_eq!(loaded.pr_status, config.pr_status);
-    assert!(warnings.is_empty());
 }
 
 #[test]
@@ -579,7 +741,7 @@ fn config_without_integrations_field_deserializes() {
 }
 
 #[test]
-fn config_with_integrations_jira_deserializes() {
+fn config_with_legacy_jira_payload_deserializes() {
     let dir = tempfile::tempdir().unwrap();
     let json = r#"{
         "providers": {"kiro": {"command": "kiro-cli chat"}},
@@ -602,12 +764,471 @@ fn config_with_integrations_jira_deserializes() {
     let (config, warnings) = load(dir.path());
     assert!(warnings.is_empty());
     let jira = config.integrations.unwrap().jira.unwrap();
-    assert_eq!(jira.site, "https://test.atlassian.net");
-    assert_eq!(jira.sync_interval_ms, 60_000);
-    let source = jira.sources.get("myapp").unwrap();
+    assert_eq!(jira["site"], "https://test.atlassian.net");
+    let source = &jira["sources"]["myapp"];
+    assert_eq!(source["writeback"]["on_start"], "In Progress");
+    assert_eq!(source["writeback"]["comment"], true);
+}
+
+#[test]
+fn editor_defaults_to_embedded_when_omitted() {
+    let config = Config::default();
+    assert_eq!(config.editor, None);
+
+    let parsed: Config = serde_json::from_str(
+        r#"{"appearance":{"mode":"system"},"terminal":{"font_family":"Menlo","font_size":14},"providers":{},"default_provider":"kiro"}"#,
+    )
+    .unwrap();
+    assert_eq!(parsed.editor, None);
+}
+
+#[test]
+fn editor_settings_round_trip_through_config_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path();
+    let config = Config {
+        editor: Some(EditorConfig {
+            mode: "external".to_string(),
+            command: "code".to_string(),
+            args: vec!["--goto".to_string(), "{file}".to_string()],
+        }),
+        ..Config::default()
+    };
+
+    save(config_dir, &config).unwrap();
+    let (loaded, warnings) = load(config_dir);
+    assert!(warnings.is_empty());
+    assert_eq!(loaded.editor, config.editor);
+    assert!(validate(&loaded).is_ok());
+}
+
+#[test]
+fn editor_validation_rejects_invalid_non_embedded_settings() {
+    let config = Config {
+        editor: Some(EditorConfig {
+            mode: "terminal".to_string(),
+            command: "nvim".to_string(),
+            args: vec![],
+        }),
+        ..Config::default()
+    };
     assert_eq!(
-        source.writeback.as_ref().unwrap().on_start,
-        Some("In Progress".to_string())
+        validate(&config),
+        Err("Editor arguments must include {file}".to_string())
     );
-    assert!(source.writeback.as_ref().unwrap().comment);
+}
+
+#[test]
+fn load_returns_defaults_with_warning_for_malformed_editor_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path();
+    fs::write(config_dir.join("config.json"), r#"{ "editor": "code" }"#).unwrap();
+
+    let (config, warnings) = load(config_dir);
+
+    assert_eq!(
+        config.editor.as_ref().map(|editor| editor.mode.as_str()),
+        Some("__invalid__")
+    );
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Failed to deserialize config.json"));
+}
+
+#[test]
+fn load_marks_editor_invalid_when_a_non_editor_field_is_malformed() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path();
+    fs::write(
+        config_dir.join("config.json"),
+        r#"{ "terminal": { "font_size": "large" } }"#,
+    )
+    .unwrap();
+
+    let (config, warnings) = load(config_dir);
+
+    assert_eq!(
+        config.editor.as_ref().map(|editor| editor.mode.as_str()),
+        Some("__invalid__")
+    );
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Failed to deserialize config.json"));
+}
+#[test]
+fn refresh_rejects_invalid_editor_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = dir.path();
+    fs::write(
+        config_dir.join("config.json"),
+        r#"{ "editor": { "mode": "terminal", "command": "", "args": [] } }"#,
+    )
+    .unwrap();
+
+    let error = refresh(config_dir).unwrap_err();
+
+    assert!(error.contains("Editor executable is required"));
+}
+
+#[test]
+fn sidebar_view_options_round_trip_through_config_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config {
+        sidebar_group_by: Some(SidebarGroupBy::Status),
+        hide_task_keys: Some(true),
+        hide_project_labels: Some(false),
+        ..Config::default()
+    };
+    save(dir.path(), &config).unwrap();
+
+    let content = fs::read_to_string(dir.path().join("config.json")).unwrap();
+    assert!(content.contains(r#""sidebar_group_by": "status""#));
+
+    let (loaded, warnings) = load(dir.path());
+    assert!(warnings.is_empty());
+    assert_eq!(loaded.sidebar_group_by, Some(SidebarGroupBy::Status));
+    assert_eq!(loaded.hide_task_keys, Some(true));
+    assert_eq!(loaded.hide_project_labels, Some(false));
+}
+
+#[test]
+fn sidebar_view_options_default_to_unset() {
+    let config = Config::default();
+    assert_eq!(config.sidebar_group_by, None);
+    assert_eq!(config.hide_task_keys, None);
+    assert_eq!(config.hide_project_labels, None);
+    let json = serde_json::to_string(&config).unwrap();
+    assert!(!json.contains("sidebar_group_by"));
+}
+
+#[test]
+fn unknown_sidebar_group_by_is_reported_as_a_config_error() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{ "sidebar_group_by": "statu" }"#,
+    )
+    .unwrap();
+
+    let (_, warnings) = load(dir.path());
+
+    assert_eq!(warnings.len(), 1);
+    assert!(
+        warnings[0].contains("unknown variant `statu`"),
+        "{}",
+        warnings[0]
+    );
+}
+
+#[test]
+fn first_launch_requires_onboarding_and_persists_the_flag() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (config, _) = load(dir.path());
+
+    assert_eq!(config.onboarding_completed, Some(false));
+    let raw = fs::read_to_string(dir.path().join("config.json")).unwrap();
+    assert!(raw.contains("\"onboarding_completed\": false"));
+    // A relaunch before finishing onboarding must still show it.
+    let (relaunched, _) = load(dir.path());
+    assert_eq!(relaunched.onboarding_completed, Some(false));
+}
+
+#[test]
+fn existing_config_without_flag_counts_as_onboarded() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"default_provider": "claude"}"#,
+    )
+    .unwrap();
+
+    let (config, warnings) = load(dir.path());
+
+    assert!(warnings.is_empty());
+    assert_eq!(config.onboarding_completed, Some(true));
+}
+
+#[test]
+fn completed_onboarding_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut config, _) = load(dir.path());
+    config.onboarding_completed = Some(true);
+    save(dir.path(), &config).unwrap();
+
+    let (reloaded, _) = load(dir.path());
+
+    assert_eq!(reloaded.onboarding_completed, Some(true));
+}
+
+#[test]
+fn unparseable_config_does_not_trigger_onboarding() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("config.json"), "{ not json").unwrap();
+
+    let (config, warnings) = load(dir.path());
+
+    assert!(!warnings.is_empty());
+    assert_eq!(config.onboarding_completed, Some(true));
+}
+
+#[test]
+fn first_launch_through_db_migration_still_requires_onboarding() {
+    // Startup runs `migrate_from_db` before `load`, and a fresh database always seeds a
+    // settings row, so this is the real first-launch path, not only a legacy one.
+    let dir = tempfile::tempdir().unwrap();
+    let settings = crate::db::Settings {
+        terminal_theme_dark: String::new(),
+        terminal_theme_light: String::new(),
+        font_size: 14,
+        font_family: "Menlo".to_string(),
+        appearance_mode: "system".to_string(),
+    };
+    migrate_from_db(dir.path(), &settings).unwrap();
+
+    let (config, _) = load(dir.path());
+
+    assert_eq!(config.onboarding_completed, Some(false));
+}
+
+#[test]
+fn defaults_leave_onboarding_unset() {
+    assert_eq!(Config::default().onboarding_completed, None);
+}
+
+#[test]
+fn provider_binary_takes_the_first_command_word() {
+    assert_eq!(
+        provider_binary("kiro-cli chat").as_deref(),
+        Some("kiro-cli")
+    );
+    assert_eq!(provider_binary("  claude  ").as_deref(), Some("claude"));
+    assert_eq!(
+        provider_binary("FOO=1 BAR=x codex --full-auto").as_deref(),
+        Some("codex")
+    );
+    assert_eq!(
+        provider_binary("/opt/tools/agent run").as_deref(),
+        Some("/opt/tools/agent")
+    );
+    assert_eq!(provider_binary("   "), None);
+    assert_eq!(provider_binary("A=1"), None);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn find_executable_in_searches_each_path_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("fake-agent");
+    fs::write(&bin, "#!/bin/sh\n").unwrap();
+    let path = format!("/nonexistent-planeai-dir:{}", dir.path().display());
+
+    assert_eq!(find_executable_in("fake-agent", &path), Some(bin));
+    assert_eq!(find_executable_in("missing-agent", &path), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn find_executable_in_prefers_a_runnable_shim_on_windows() {
+    // npm installs an extensionless shell script beside the `.cmd` shim Windows can run.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("claude"), "#!/bin/sh\n").unwrap();
+    let shim = dir.path().join("claude.cmd");
+    fs::write(&shim, "@echo off\r\n").unwrap();
+    let path = dir.path().display().to_string();
+    let found = find_executable_in("claude", &path).unwrap();
+    assert!(found
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&shim.to_string_lossy()));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn find_executable_in_accepts_explicit_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("agent");
+    fs::write(&bin, "").unwrap();
+    let explicit = bin.to_string_lossy().into_owned();
+
+    assert_eq!(find_executable_in(&explicit, ""), Some(bin.clone()));
+    assert_eq!(find_executable_in(&format!("{explicit}-nope"), ""), None);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn detect_provider_binaries_covers_configured_and_preset_agents() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("my-agent"), "").unwrap();
+    let mut config = Config::default();
+    config.providers.remove("kiro");
+    config.providers.insert(
+        "custom".to_string(),
+        Provider {
+            command: "my-agent --fast".to_string(),
+            yolo_flag: None,
+            resume_command: None,
+            prompt_command: None,
+            autonomous_prompt_template: None,
+        },
+    );
+    let path = dir.path().to_string_lossy().into_owned();
+
+    let found = detect_provider_binaries_in(&config, &path);
+
+    assert_eq!(
+        found.get("custom").cloned().flatten(),
+        Some(dir.path().join("my-agent").to_string_lossy().into_owned())
+    );
+    // Presets removed from config are still reported so they can be offered.
+    assert_eq!(found.get("kiro"), Some(&None));
+    assert!(found.contains_key("claude"));
+    assert!(found.contains_key("codex"));
+    assert!(found.contains_key("copilot"));
+}
+
+#[test]
+fn post_merge_action_survives_a_settings_update_round_trip() {
+    // `update_config` deserializes the frontend payload into `Config`; an unknown field is
+    // silently dropped, which used to discard the user's post-merge choice.
+    let mut payload = serde_json::to_value(Config::default()).unwrap();
+    payload["post_merge_action"] = serde_json::json!("destroy");
+    let config: Config = serde_json::from_value(payload).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    save(dir.path(), &config).unwrap();
+
+    let (reloaded, warnings) = load(dir.path());
+
+    assert!(warnings.is_empty());
+    assert_eq!(reloaded.post_merge_action, Some(PostMergeAction::Destroy));
+}
+
+#[test]
+fn unknown_post_merge_action_is_reported_as_a_config_error() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"post_merge_action": "explode"}"#,
+    )
+    .unwrap();
+
+    let (_, warnings) = load(dir.path());
+
+    assert_eq!(warnings.len(), 1);
+}
+
+#[test]
+fn new_installs_start_with_review_auto_open_off_and_tasks_on() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (config, _) = load(dir.path());
+
+    assert_eq!(config.auto_open_review, Some(false));
+    assert_eq!(config.task_management, Some(TaskManager::recommended()));
+}
+
+#[test]
+fn existing_config_without_task_management_keeps_tasks_off() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"default_provider": "kiro"}"#,
+    )
+    .unwrap();
+
+    let (config, warnings) = load(dir.path());
+
+    assert!(warnings.is_empty());
+    assert_eq!(config.task_management, None);
+}
+
+#[test]
+fn turning_task_management_off_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut config, _) = load(dir.path());
+    config.task_management = None;
+    save(dir.path(), &config).unwrap();
+
+    let (reloaded, _) = load(dir.path());
+
+    assert_eq!(reloaded.task_management, None);
+}
+
+#[test]
+fn recommended_task_management_moves_tasks_through_the_standard_statuses() {
+    let tm = TaskManager::recommended();
+    fn hook(h: &Option<LifecycleHook>) -> Option<&str> {
+        h.as_ref().map(|h| h.move_to.as_str())
+    }
+
+    assert_eq!(hook(&tm.on_start), Some("in_progress"));
+    assert_eq!(hook(&tm.on_notify), Some("in_review"));
+    assert_eq!(hook(&tm.on_resume), Some("in_progress"));
+    assert_eq!(hook(&tm.on_restart), Some("in_progress"));
+    assert_eq!(hook(&tm.on_complete), Some("done"));
+    assert!(tm.auto_dispatch.is_none());
+    let templates = tm.templates.unwrap();
+    assert_eq!(
+        templates.branch.as_deref(),
+        Some("{key:lower}/{title:slug}")
+    );
+    assert_eq!(templates.name.as_deref(), Some("{key:upper}: {title}"));
+}
+
+#[test]
+fn existing_config_without_auto_open_review_keeps_it_on() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"default_provider": "kiro"}"#,
+    )
+    .unwrap();
+
+    let (config, _) = load(dir.path());
+
+    assert_eq!(config.auto_open_review, Some(true));
+}
+
+#[test]
+fn existing_config_with_null_auto_open_review_keeps_it_on() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{"auto_open_review": null}"#,
+    )
+    .unwrap();
+
+    let (config, _) = load(dir.path());
+
+    assert_eq!(config.auto_open_review, Some(true));
+}
+
+#[test]
+fn broken_config_falls_back_to_existing_user_behavior() {
+    for content in ["{ not json", r#"{"post_merge_action": "explode"}"#] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("config.json"), content).unwrap();
+
+        let (config, warnings) = load(dir.path());
+
+        assert_eq!(warnings.len(), 1, "{content}");
+        assert_eq!(config.task_management, None, "{content}");
+        assert_eq!(config.auto_open_review, Some(true), "{content}");
+        assert_eq!(config.onboarding_completed, Some(true), "{content}");
+    }
+}
+
+#[test]
+fn provider_keys_with_a_colon_are_reserved_for_plugins() {
+    // A hand-edited config still loads unchanged, so nothing the user wrote is lost.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{ "providers": { "team:claude": { "command": "claude" } } }"#,
+    )
+    .unwrap();
+    let (config, warnings) = load(dir.path());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(config.providers.contains_key("team:claude"));
+    // Saving asks for it to be renamed first.
+    assert!(validate(&config)
+        .unwrap_err()
+        .contains("reserved for plugin providers"));
 }

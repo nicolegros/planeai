@@ -9,7 +9,9 @@ use crate::db;
 pub fn home(conn: &rusqlite::Connection, cwd: &str, bin_path: &str) -> (String, i32) {
     let projects = db::list_projects(conn).unwrap_or_default();
 
-    let project = projects.iter().find(|p| cwd.starts_with(&p.path));
+    let project = projects
+        .iter()
+        .find(|p| crate::util::is_project_path_or_descendant(cwd, &p.path));
 
     let mut fields: Vec<Field> = vec![
         field("bin", str_val(bin_path)),

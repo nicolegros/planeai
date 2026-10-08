@@ -9,11 +9,13 @@ use planeai_core::orchestrator::{AutoProject, OrchestratorConfig};
 use planeai_core::session::{Backend, DispatchConfig, NewSession, OnStartHook};
 use planeai_core::task::{Task, TaskSource};
 
-use planeai_tasks::model::{Status, DEFAULT_BASE_BRANCH};
+use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::SqliteRepository;
 
+use crate::commands::sessions::lifecycle::session_transition;
 use crate::config::{self, Config};
+use crate::plugins::PluginRuntimeHandle;
 
 // ─── SymphonyState (managed as Tauri state) ───
 
@@ -116,9 +118,10 @@ impl Backend for TauriBackend {
         branch: &str,
         base: &str,
     ) -> Result<(), String> {
-        let mut cmd = std::process::Command::new("git");
+        let mut cmd = std::process::Command::new(crate::command::resolve("git"));
         cmd.args(["worktree", "add", "-b", branch, path, base])
             .current_dir(repo);
+        cmd.env("PATH", planeai_core::command::augmented_path(&[]));
         planeai_core::command::no_window(&mut cmd);
         let output = cmd.output().map_err(|e| format!("git worktree add: {e}"))?;
         if !output.status.success() {
@@ -169,6 +172,27 @@ impl Backend for TauriBackend {
         crate::daemon::spawn_session(session_id, program, &args_refs, cwd, Some(&env))
     }
 
+    fn create_rmux_session(
+        &self,
+        session_id: &str,
+        workspace: &str,
+        cmd: &str,
+        cwd: &str,
+    ) -> Result<(), String> {
+        let workspace = planeai_rmux::WorkspaceName::from_stored(workspace)
+            .ok_or_else(|| format!("not a PlaneAI rmux workspace: {workspace}"))?;
+        let extra_path_dirs = {
+            let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
+            let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
+            cfg.resolved_extra_path_dirs()
+        };
+        let mut path_buf = String::new();
+        let env =
+            planeai_core::command::build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+        crate::rmux_ops::spawn_resource_blocking(session_id, session_id, &workspace, cmd, cwd, &env)
+            .map(|_| ())
+    }
+
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| e.to_string())?;
         crate::db::create_session_with_id(
@@ -205,12 +229,20 @@ impl Backend for TauriBackend {
         if let Some(tmux_name) = &session.tmux_name {
             let _ = crate::tmux::kill_session(tmux_name);
         }
-        let conn = self.db.lock().map_err(|e| e.to_string())?;
-        conn.execute(
-            "UPDATE sessions SET status = 'exited' WHERE id = ?1",
-            params![session.id],
-        )
-        .map_err(|e| e.to_string())?;
+        let lifecycle_event = {
+            let conn = self.db.lock().map_err(|e| e.to_string())?;
+            let previous = crate::db::get_session(&conn, &session.id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("session {} not found", session.id))?;
+            crate::db::mark_session_exited(&conn, &session.id).map_err(|e| e.to_string())?;
+            (previous.status == "active").then(|| session_transition(&previous, "active", "exited"))
+        };
+        if let Some(event) = lifecycle_event {
+            self.app_handle
+                .state::<PluginRuntimeHandle>()
+                .0
+                .dispatch_session_lifecycle(event);
+        }
         Ok(())
     }
 
@@ -300,13 +332,24 @@ impl Backend for TauriBackend {
 pub struct SqliteTaskSource {
     repo: SqliteRepository,
     terminal_states: Vec<String>,
+    lifecycle_context: planeai::task_cli::TaskLifecycleContext,
 }
 
 impl SqliteTaskSource {
-    pub fn new(repo: SqliteRepository, terminal_states: Vec<String>) -> Self {
+    pub fn new(
+        repo: SqliteRepository,
+        terminal_states: Vec<String>,
+        project_id: String,
+        project_prefix: String,
+    ) -> Self {
         Self {
             repo,
             terminal_states,
+            lifecycle_context: planeai::task_cli::TaskLifecycleContext {
+                origin: planeai_core::task_lifecycle::TaskLifecycleOrigin::Symphony,
+                project_id,
+                project_prefix,
+            },
         }
     }
 }
@@ -347,18 +390,13 @@ impl TaskSource for SqliteTaskSource {
 
     fn move_task(&self, key: &str, status: &str) -> Result<(), String> {
         tracing::info!(task_key = %key, status = %status, "moving task via internal provider");
-        let new_status =
-            Status::parse(status).ok_or_else(|| format!("invalid status: {status}"))?;
-        self.repo
-            .update(
-                key,
-                planeai_tasks::model::UpdateParams {
-                    status: Some(new_status),
-                    ..Default::default()
-                },
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(())
+        planeai::task_cli::run_task_move_with_lifecycle(
+            &self.repo,
+            key,
+            status,
+            &self.lifecycle_context,
+        )
+        .map(|_| ())
     }
 
     fn is_terminal(&self, status: &str) -> bool {
@@ -432,7 +470,12 @@ pub fn build_orchestrator_config(
             Err(_) => continue,
         };
 
-        let task_source = Arc::new(SqliteTaskSource::new(task_repo, terminal_states));
+        let task_source = Arc::new(SqliteTaskSource::new(
+            task_repo,
+            terminal_states,
+            project.id.clone(),
+            project.prefix.clone(),
+        ));
 
         let on_start = tm.on_start.as_ref().map(|h| OnStartHook {
             move_to: h.move_to.clone(),
@@ -526,9 +569,8 @@ mod tests {
                 }),
                 on_notify: None,
                 on_restart: None,
+                on_resume: None,
                 on_complete: None,
-                on_pr_open: None,
-                on_pr_merge: None,
                 auto_dispatch: Some(AutoDispatchConfig {
                     poll_interval_ms: 30000,
                     max_concurrent: 2,
@@ -669,7 +711,8 @@ mod tests {
             })
             .unwrap();
 
-        let source = SqliteTaskSource::new(repo, vec!["done".into()]);
+        let source =
+            SqliteTaskSource::new(repo, vec!["done".into()], "project-1".into(), "TST".into());
         let tasks = source.list_tasks().unwrap();
 
         let parent_task = tasks.iter().find(|t| t.key == parent.key).unwrap();

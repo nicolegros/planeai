@@ -1,0 +1,165 @@
+//! Process-wide access to PlaneAI's private rmux daemon.
+//!
+//! The client is created on first use and shared. It is **not** assumed to stay
+//! usable: the daemon exits with its last session, and an idle connection can be
+//! closed underneath us, so a cached client can be dead by the time the next
+//! operation runs (ADR-0012). Every operation therefore goes through
+//! [`with_retry`], which reconnects and tries again once when the transport has
+//! gone away.
+
+use std::sync::Arc;
+
+use planeai_rmux::{RmuxClient, RmuxConfig};
+use tokio::sync::Mutex;
+
+static CLIENT: tokio::sync::OnceCell<Mutex<Option<Arc<RmuxClient>>>> =
+    tokio::sync::OnceCell::const_new();
+
+/// Resolve the endpoint and the user's installed rmux daemon binary.
+fn config() -> RmuxConfig {
+    // Share the runtime directory with the existing daemon socket so both
+    // backends inherit the same location and permissions.
+    let runtime_dir = planeai_ipc::daemon_socket_path()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(std::env::temp_dir);
+    let config = RmuxConfig::app_private(&runtime_dir);
+    match crate::config::rmux_daemon_binary() {
+        Some(binary) => config.with_daemon_binary(binary),
+        None => config,
+    }
+}
+
+/// Get the shared client.
+///
+/// Prefer [`with_retry`] over calling this directly: a cached client can be dead
+/// by the time it is used.
+async fn client() -> Result<Arc<RmuxClient>, String> {
+    let cell = CLIENT.get_or_init(|| async { Mutex::new(None) }).await;
+    {
+        // Fast path: reading a cached client is an in-memory clone, so the lock is
+        // held only for that.
+        let guard = cell.lock().await;
+        if let Some(existing) = guard.as_ref() {
+            return Ok(existing.clone());
+        }
+    }
+
+    // Connecting can start the daemon, which is slow. Doing it with the lock
+    // released keeps one slow start from serialising every other caller behind it
+    // (AGENTS.md: release Mutex locks before `.await`).
+    let connected = Arc::new(
+        RmuxClient::connect(config())
+            .await
+            .map_err(|error| error.to_string())?,
+    );
+
+    // Two callers that both missed the fast path each connect. The first to
+    // publish wins and the loser's connection is simply dropped: the daemon
+    // accepts many clients, whereas replacing an already-published client would
+    // leave callers holding different connections to the same daemon.
+    let mut guard = cell.lock().await;
+    match guard.as_ref() {
+        Some(existing) => Ok(existing.clone()),
+        None => {
+            *guard = Some(connected.clone());
+            Ok(connected)
+        }
+    }
+}
+
+/// Drop the cached connection so the next call reconnects and restarts the daemon.
+pub async fn invalidate() {
+    if let Some(cell) = CLIENT.get() {
+        *cell.lock().await = None;
+    }
+}
+
+/// Run an rmux operation, reconnecting once if the transport has gone away.
+///
+/// A cached client dies for ordinary reasons — the daemon exits with its last
+/// session, or an idle connection is closed — and the failure only surfaces when
+/// the next operation runs. Retrying here keeps every call site free of that
+/// concern instead of each one rediscovering it.
+pub async fn with_retry<T, Operation, Fut>(operation: Operation) -> Result<T, String>
+where
+    Operation: Fn(Arc<RmuxClient>) -> Fut,
+    Fut: std::future::Future<Output = planeai_rmux::Result<T>>,
+{
+    let current = client().await?;
+    match operation(current).await {
+        Ok(value) => Ok(value),
+        Err(error) if error.is_daemon_gone() => {
+            tracing::info!(%error, "rmux transport was gone; reconnecting and retrying once");
+            invalidate().await;
+            let reconnected = client().await?;
+            operation(reconnected)
+                .await
+                .map_err(|error| error.to_string())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// As [`with_retry`], connecting afresh rather than through the shared client: for callers on
+/// a runtime of their own, whose connection dies with it and must not be cached.
+pub async fn with_fresh<T, Operation, Fut>(operation: Operation) -> Result<T, String>
+where
+    Operation: Fn(Arc<RmuxClient>) -> Fut,
+    Fut: std::future::Future<Output = planeai_rmux::Result<T>>,
+{
+    let connect = || async {
+        RmuxClient::connect(config())
+            .await
+            .map(Arc::new)
+            .map_err(|error| error.to_string())
+    };
+    match operation(connect().await?).await {
+        Ok(value) => Ok(value),
+        Err(error) if error.is_daemon_gone() => {
+            tracing::info!(%error, "rmux transport was gone; reconnecting and retrying once");
+            operation(connect().await?)
+                .await
+                .map_err(|error| error.to_string())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Run a lookup or teardown against a daemon already running, never starting one: `None` when
+/// none runs, which hosts nothing. Each call connects afresh: a cached client may be dead.
+/// Closing the last pane stops the daemon mid-reply, so a lost connection after which no daemon
+/// listens means everything is gone, not that the operation failed.
+pub async fn with_existing<T, Operation, Fut>(operation: Operation) -> Result<Option<T>, String>
+where
+    Operation: Fn(Arc<RmuxClient>) -> Fut,
+    Fut: std::future::Future<Output = planeai_rmux::Result<T>>,
+{
+    let connect = || async {
+        RmuxClient::connect_existing(config())
+            .await
+            .map_err(|error| error.to_string())
+    };
+    let Some(client) = connect().await? else {
+        return Ok(None);
+    };
+    let error = match operation(Arc::new(client)).await {
+        Ok(value) => return Ok(Some(value)),
+        Err(error) if error.is_daemon_gone() => error,
+        Err(error) => return Err(error.to_string()),
+    };
+    tracing::info!(%error, "rmux transport was gone; reconnecting and retrying once");
+    let Some(client) = connect().await? else {
+        return Ok(None);
+    };
+    match operation(Arc::new(client)).await {
+        Ok(value) => Ok(Some(value)),
+        // Lost twice on fresh connections: a daemon shutting down still accepts them. A timeout
+        // is not: the daemon may be slow, but it runs.
+        Err(error) if error.is_connection_lost() => {
+            tracing::info!(%error, "rmux daemon is going away; nothing is left to act on");
+            Ok(None)
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}

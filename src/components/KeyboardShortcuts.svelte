@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Dialog } from "./ui";
-  import { IS_MAC, MOD_LABEL, MOD_ENTER_HINT } from "../lib/keyboard";
+  import { ALT_LABEL, IS_MAC, MOD_LABEL, MOD_ENTER_HINT } from "../lib/keyboard";
   import { getActiveZone } from "../lib/focus.svelte";
   import { filterShortcuts } from "../lib/shortcut-filter";
 
@@ -40,7 +40,8 @@
       { keys: `${MOD_LABEL}⇧T`, description: "Focus tasks panel" },
       { keys: `${MOD_LABEL}R`, description: "Refresh tasks" },
       { keys: `${MOD_LABEL}⇧R`, description: "Open Review" },
-      { keys: `${MOD_LABEL}E`, description: "Toggle file explorer" },
+      { keys: `${MOD_LABEL}E`, description: "Toggle Explorer / prior pane focus" },
+      { keys: `${MOD_LABEL}⇧E`, description: "Toggle file explorer" },
       { keys: `${MOD_LABEL}\\`, description: "Toggle diff" },
     ]},
     { section: "Splits", items: [
@@ -48,7 +49,7 @@
       { keys: `${MOD_LABEL}⇧D`, description: "Split horizontal" },
       { keys: `${MOD_LABEL}⇧W`, description: "Close split" },
       { keys: `${MOD_LABEL}⇧←→↑↓`, description: "Focus split in direction" },
-      { keys: `${MOD_LABEL}⌥←→↑↓`, description: "Move pane to split in direction" },
+      { keys: `${MOD_LABEL}${ALT_LABEL}←→↑↓`, description: "Move pane to split in direction" },
     ]},
     { section: "Terminal", items: [
       { keys: IS_MAC ? `${MOD_LABEL}C` : `Ctrl+Shift+C`, description: "Copy selection" },
@@ -64,18 +65,6 @@
     ]},
   ];
 
-  const prPanelShortcuts = { section: "PR Panel", items: [
-    { keys: `${MOD_LABEL}⇧P`, description: "Open PR panel / Create PR" },
-    { keys: `o`, description: "Open PR in browser" },
-    { keys: `m`, description: "Merge" },
-    { keys: `s`, description: "Cycle merge strategy" },
-    { keys: `r`, description: "Refresh CI checks" },
-    { keys: `R`, description: "Mark as ready (draft)" },
-    { keys: `f`, description: "Send failures to agent" },
-    { keys: `1–9`, description: "Open CI check in browser" },
-    { keys: `Esc`, description: "Close panel" },
-  ]};
-
   const sidebarShortcuts = { section: "Sidebar Navigation", items: [
     { keys: `j / ↓`, description: "Next item" },
     { keys: `k / ↑`, description: "Previous item" },
@@ -86,12 +75,16 @@
     { keys: `E`, description: "Rename" },
     { keys: `e`, description: "Edit task" },
     { keys: `R`, description: "Restart" },
-    { keys: `o`, description: "Open PR" },
     { keys: `st`, description: "Status → Todo" },
     { keys: `sp`, description: "Status → In Progress" },
     { keys: `sr`, description: "Status → In Review" },
     { keys: `sd`, description: "Status → Done" },
     { keys: `ss`, description: "Start session" },
+  ]};
+
+  const editorShortcuts = { section: "Editor", items: [
+    { keys: `${MOD_LABEL}⇧C`, description: "Comment on selected code" },
+    { keys: MOD_ENTER_HINT, description: "Send queued editor feedback" },
   ]};
 
   const reviewShortcuts = { section: "Review (Diff)", items: [
@@ -116,7 +109,9 @@
   const visibleShortcuts = $derived(
     getActiveZone() === "sidebar"
       ? [sidebarShortcuts, ...shortcuts]
-      : [reviewShortcuts, prPanelShortcuts, ...shortcuts]
+      : getActiveZone() === "editor"
+        ? [editorShortcuts, ...shortcuts]
+        : [reviewShortcuts, ...shortcuts]
   );
 
   const filteredShortcuts = $derived(

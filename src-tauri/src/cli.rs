@@ -21,6 +21,8 @@ pub struct SessionCreateOpts {
     pub yolo: bool,
     pub provider: Option<String>,
     pub task_key: Option<String>,
+    /// Name or id of the project owning `task_key`; defaults to `project`.
+    pub task_project: Option<String>,
     pub prompt: Option<String>,
     pub parent_session_id: Option<String>,
 }
@@ -64,7 +66,18 @@ pub struct SessionPlan {
     pub task_key: Option<String>,
     pub base_branch: Option<String>,
     pub project_id: String,
+    /// Project owning `task_key` when it differs from `project_id`.
+    pub task_project_id: Option<String>,
     pub parent_session_id: Option<String>,
+    /// The task prompt, part of `command`. A `local` session runs no command here: its
+    /// first attach in the app spawns the agent with this prompt.
+    pub prompt: Option<String>,
+}
+
+impl SessionPlan {
+    fn workspace_project_id(&self) -> &str {
+        self.task_project_id.as_deref().unwrap_or(&self.project_id)
+    }
 }
 
 pub fn build_session_plan(
@@ -83,11 +96,10 @@ pub fn build_session_plan(
         .get(provider_key)
         .ok_or_else(|| format!("unknown provider: {provider_key}"))?;
 
-    let mut cmd = config::launch_command(provider_def, opts.yolo);
-
-    if let (Some(prompt), Some(prompt_tpl)) = (&opts.prompt, &provider_def.prompt_command) {
-        planeai_core::template::append_prompt(&mut cmd, prompt_tpl, prompt);
+    if let Some(prompt) = &opts.prompt {
+        planeai_core::session_launch::check_task_prompt(prompt)?;
     }
+    let cmd = provider_def.first_launch_command(opts.yolo, opts.prompt.as_deref());
 
     let short_id = &session_id.replace('-', "")[..8];
 
@@ -142,7 +154,9 @@ pub fn build_session_plan(
         task_key: opts.task_key.clone(),
         base_branch: opts.base_branch.clone(),
         project_id: project.id.clone(),
+        task_project_id: None,
         parent_session_id: opts.parent_session_id.clone(),
+        prompt: opts.prompt.clone(),
     })
 }
 
@@ -230,6 +244,30 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             &effective_working_dir,
             Some(&session_env),
         )?;
+    } else if plan.backend == planeai_rmux::BACKEND {
+        // Without this branch the session row would be written with no process
+        // behind it, leaving a session that looks active and is empty.
+        let extra_path_dirs = env.config.resolved_extra_path_dirs();
+        let mut path_buf = String::new();
+        let session_env = planeai_core::command::build_daemon_env(
+            &extra_path_dirs,
+            &plan.session_id,
+            &mut path_buf,
+        );
+        let workspace = planeai_rmux::WorkspaceKey::for_session(
+            plan.workspace_project_id(),
+            plan.task_key.as_deref(),
+            &plan.session_id,
+        )
+        .name();
+        crate::rmux_ops::spawn_resource_blocking(
+            &plan.session_id,
+            &plan.session_id,
+            &workspace,
+            &plan.command,
+            &effective_working_dir,
+            &session_env,
+        )?;
     } else if let Some(tmux_name) = &plan.tmux_name {
         #[cfg(not(windows))]
         {
@@ -246,36 +284,47 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
         let _ = tmux_name;
     }
 
-    let session = db::create_session_with_id(
+    // Store worktree_path so gates and agents know where to run.
+    // For redirected sessions (branch already in another worktree), store that path.
+    // For worktree-created sessions, store the new worktree path.
+    // Cleanup guards against deleting non-loop-managed worktrees via branch name check.
+    let worktree_path = if was_redirected {
+        Some(effective_working_dir)
+    } else {
+        match &plan.branch_strategy {
+            BranchStrategy::Worktree { path, .. } => Some(path.clone()),
+            BranchStrategy::Checkout { .. } => None,
+        }
+    };
+    let session = db::create_session_with_params(
         conn,
-        &plan.session_id,
-        &plan.project_id,
-        &plan.session_name,
-        plan.tmux_name.as_deref(),
-        &plan.branch,
-        // Store worktree_path so gates and agents know where to run.
-        // For redirected sessions (branch already in another worktree), store that path.
-        // For worktree-created sessions, store the new worktree path.
-        // Cleanup guards against deleting non-loop-managed worktrees via branch name check.
-        if was_redirected {
-            Some(effective_working_dir.as_str())
-        } else {
-            match &plan.branch_strategy {
-                BranchStrategy::Worktree { path, .. } => Some(path.as_str()),
-                BranchStrategy::Checkout { .. } => None,
-            }
+        &planeai_core::services::CreateSessionParams {
+            id: plan.session_id.clone(),
+            project_id: plan.project_id.clone(),
+            name: plan.session_name.clone(),
+            tmux_name: plan.tmux_name.clone(),
+            branch: plan.branch.clone(),
+            worktree_path,
+            worktree_owned: Some(true),
+            provider: Some(plan.provider.clone()),
+            backend: plan.backend.clone(),
+            auto_approve: plan.yolo,
+            task_key: plan.task_key.clone(),
+            task_project_id: plan.task_project_id.clone(),
+            base_branch: plan.base_branch.clone(),
+            parent_session_id: plan.parent_session_id.clone(),
+            pending_prompt: crate::session_ops::pending_prompt(&plan.backend, plan.prompt.clone()),
+            ..Default::default()
         },
-        Some(&plan.provider),
-        &plan.backend,
-        plan.yolo,
-        plan.task_key.as_deref(),
-        plan.base_branch.as_deref(),
-        plan.parent_session_id.as_deref(),
     )
     .map_err(|e| e.to_string())?;
 
     if env.socket_path.exists() {
-        let _ = notify_gui(&env.socket_path, &plan.session_id);
+        tracing::debug!(session_id = %plan.session_id, "[DEBUG-lsr1] execute_plan: sending notify_gui");
+        let notify_result = notify_gui(&env.socket_path, &plan.session_id);
+        tracing::debug!(session_id = %plan.session_id, success = notify_result.is_ok(), "[DEBUG-lsr1] execute_plan: notify_gui done");
+    } else {
+        tracing::warn!(session_id = %plan.session_id, "[DEBUG-lsr1] execute_plan: socket_path does not exist, skipping notify_gui");
     }
 
     serde_json::to_string(&session).map_err(|e| e.to_string())
@@ -302,14 +351,88 @@ pub fn create_session(conn: &Connection, opts: SessionCreateOpts) -> Result<db::
         .find(|p| p.name == project_name)
         .ok_or_else(|| format!("unknown project: {project_name}"))?;
 
+    let task_project_id = resolve_task_project_id(&projects, proj, &opts)?;
+
     let session_id = uuid::Uuid::new_v4().to_string();
-    let plan = build_session_plan(&session_id, &opts, &env, proj)?;
+    let mut plan = build_session_plan(&session_id, &opts, &env, proj)?;
+    plan.task_project_id = task_project_id;
 
     execute_plan(&plan, conn, &env)?;
 
     db::get_session(conn, &session_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "session created but not found in database".to_string())
+}
+
+/// Resolve `--task-project` to a project id; None when it names the session's own project.
+fn resolve_task_project_id(
+    projects: &[db::Project],
+    session_project: &db::Project,
+    opts: &SessionCreateOpts,
+) -> Result<Option<String>, String> {
+    let Some(task_project) = &opts.task_project else {
+        return Ok(None);
+    };
+    if opts.task_key.is_none() {
+        return Err("--task-project requires --task-key".to_string());
+    }
+    let owner = projects
+        .iter()
+        .find(|p| p.id == *task_project || p.name == *task_project)
+        .ok_or_else(|| format!("unknown task project: {task_project}"))?;
+    Ok((owner.id != session_project.id).then(|| owner.id.clone()))
+}
+
+/// Options for a sibling session in the invoking agent's TaskWorkspace.
+pub struct WorkspaceSiblingOpts {
+    pub name: Option<String>,
+    pub branch: Option<String>,
+    pub base_branch: Option<String>,
+    pub yolo: bool,
+    pub provider: Option<String>,
+    pub prompt: Option<String>,
+}
+
+/// Create an isolated, task-linked sibling session for an existing agent session.
+pub fn create_workspace_sibling(
+    conn: &Connection,
+    parent_session_id: &str,
+    opts: WorkspaceSiblingOpts,
+) -> Result<db::Session, String> {
+    let parent = db::get_session(conn, parent_session_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("current session not found: {parent_session_id}"))?;
+    let task_key = parent
+        .task_key
+        .clone()
+        .ok_or_else(|| "current session is not linked to a task workspace".to_string())?;
+    let project = db::list_projects(conn)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|candidate| candidate.id == parent.project_id)
+        .ok_or_else(|| "project for current session not found".to_string())?;
+    let suffix = &uuid::Uuid::new_v4().to_string().replace('-', "")[..8];
+    let branch = opts
+        .branch
+        .unwrap_or_else(|| format!("{}--{suffix}", parent.branch));
+
+    create_session(
+        conn,
+        SessionCreateOpts {
+            project: project.name,
+            branch,
+            name: opts.name.or_else(|| Some(parent.name.clone())),
+            new_branch: true,
+            worktree: true,
+            base_branch: opts.base_branch.or(parent.base_branch.clone()),
+            yolo: opts.yolo,
+            provider: opts.provider.or(parent.provider.clone()),
+            task_key: Some(task_key),
+            task_project: parent.task_project_id.clone(),
+            prompt: opts.prompt,
+            parent_session_id: Some(parent.id),
+        },
+    )
 }
 
 /// Resolve the daemon binary path. Checks /usr/local/bin first, then falls back
@@ -365,7 +488,119 @@ mod tests {
             path: "/home/user/myapp".to_string(),
             status: "active".to_string(),
             prefix: "MYA".to_string(),
+            hidden: false,
         }
+    }
+
+    fn task_opts(task_key: Option<&str>, task_project: Option<&str>) -> SessionCreateOpts {
+        SessionCreateOpts {
+            project: "myapp".to_string(),
+            branch: "feat-x".to_string(),
+            name: None,
+            new_branch: true,
+            worktree: false,
+            base_branch: None,
+            yolo: false,
+            provider: None,
+            task_key: task_key.map(str::to_string),
+            task_project: task_project.map(str::to_string),
+            prompt: None,
+            parent_session_id: None,
+        }
+    }
+
+    #[test]
+    fn task_project_resolves_by_name_or_id_and_ignores_the_own_project() {
+        let own = test_project();
+        let owner = db::Project {
+            id: "proj-2".to_string(),
+            name: "owner".to_string(),
+            ..test_project()
+        };
+        let projects = [own.clone(), owner];
+        let resolve = |task_project| {
+            resolve_task_project_id(&projects, &own, &task_opts(Some("OWN-1"), task_project))
+        };
+
+        assert_eq!(resolve(Some("owner")).unwrap().as_deref(), Some("proj-2"));
+        assert_eq!(resolve(Some("proj-2")).unwrap().as_deref(), Some("proj-2"));
+        assert_eq!(resolve(Some("myapp")).unwrap(), None);
+        assert_eq!(resolve(None).unwrap(), None);
+        assert_eq!(
+            resolve(Some("nope")).unwrap_err(),
+            "unknown task project: nope"
+        );
+        assert_eq!(
+            resolve_task_project_id(&projects, &own, &task_opts(None, Some("owner"))).unwrap_err(),
+            "--task-project requires --task-key"
+        );
+    }
+
+    #[test]
+    fn a_local_session_keeps_its_prompt_for_the_apps_first_attach() {
+        let repo = tempfile::tempdir().unwrap();
+        let repo_path = repo.path().canonicalize().unwrap().display().to_string();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        ] {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo_path)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        }
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", &repo_path).unwrap();
+        let opts = SessionCreateOpts {
+            prompt: Some("Fix the login redirect".to_string()),
+            ..task_opts(Some("MYA-1"), None)
+        };
+        let env = Env {
+            socket_path: repo.path().join("no-gui.sock"),
+            ..test_env("local")
+        };
+        let plan = build_session_plan("session-1", &opts, &env, &project).unwrap();
+
+        execute_plan(&plan, &conn, &env).unwrap();
+
+        // The app's first attach spawns the agent with it (`resolve_attach_plan`).
+        assert_eq!(
+            db::pending_prompt(&conn, "session-1").unwrap().as_deref(),
+            Some("Fix the login redirect")
+        );
+    }
+
+    #[test]
+    fn the_cli_starts_an_agent_with_the_command_the_app_uses() {
+        let env = test_env("daemon");
+        let command = |yolo: bool, prompt: Option<&str>| {
+            let opts = SessionCreateOpts {
+                yolo,
+                prompt: prompt.map(str::to_string),
+                ..task_opts(Some("MYA-1"), None)
+            };
+            let plan = build_session_plan("session-1", &opts, &env, &test_project()).unwrap();
+            let app = env.config.providers["kiro"].first_launch_command(yolo, prompt);
+            (plan.command, app)
+        };
+        for (yolo, prompt) in [(false, None), (true, Some("- Fix it")), (false, Some(""))] {
+            let (cli, app) = command(yolo, prompt);
+            assert_eq!(cli, app, "yolo {yolo}, prompt {prompt:?}");
+        }
+        assert_eq!(command(false, Some("")).0, "kiro-cli chat");
     }
 
     #[test]
@@ -380,6 +615,7 @@ mod tests {
             yolo: false,
             provider: None,
             task_key: None,
+            task_project: None,
             prompt: None,
             parent_session_id: None,
         };
@@ -418,6 +654,7 @@ mod tests {
             yolo: false,
             provider: None,
             task_key: None,
+            task_project: None,
             prompt: None,
             parent_session_id: None,
         };
@@ -468,6 +705,7 @@ mod tests {
             yolo: false,
             provider: None,
             task_key: None,
+            task_project: None,
             prompt: None,
             parent_session_id: None,
         };
@@ -496,6 +734,7 @@ mod tests {
             yolo: true,
             provider: None,
             task_key: None,
+            task_project: None,
             prompt: None,
             parent_session_id: None,
         };
@@ -527,6 +766,7 @@ mod tests {
             yolo: false,
             provider: Some("nonexistent".to_string()),
             task_key: None,
+            task_project: None,
             prompt: None,
             parent_session_id: None,
         };

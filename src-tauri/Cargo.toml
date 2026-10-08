@@ -5,11 +5,14 @@ members = [
   "planeai-daemon",
   "planeai-ipc",
   "planeai-pty",
+  "planeai-rmux",
   "planeai-paths",
+  "planeai-plugin-contract",
   "planeai-toon",
-  "planeai-jira",
   "crates/planeai-cli-bin",
   "crates/planeai-daemon-bin",
+  "crates/planeai-plugin-jira",
+  "crates/planeai-plugin-fixture",
 ]
 resolver = "2"
 
@@ -23,6 +26,7 @@ tokio = { version = "1", features = [
   "rt-multi-thread",
   "time",
   "io-util",
+  "io-std",
   "net",
 ] }
 tokio-util = "0.7"
@@ -52,13 +56,16 @@ planeai-toon = { path = "planeai-toon" }
 planeai-ipc = { path = "planeai-ipc", features = ["async"] }
 planeai-daemon = { path = "planeai-daemon" }
 planeai-pty = { path = "planeai-pty" }
+planeai-rmux = { path = "planeai-rmux" }
+rmux-sdk = "=0.10.0"
 planeai-paths = { path = "planeai-paths" }
-planeai-jira = { path = "planeai-jira" }
+planeai-plugin-contract = { path = "planeai-plugin-contract" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 tauri = { version = "2.5", features = ["macos-private-api", "devtools"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "=0.11.0"
 json_comments = "0.2"
 regex = { workspace = true }
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -70,9 +77,10 @@ tauri-plugin-notification = "2"
 tauri-plugin-opener = "2.5.4"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-window-state = "2.4.1"
 font-kit = "0.14"
 trash = "5"
-notify = "7"
+notify = "8"
 tokio-util = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

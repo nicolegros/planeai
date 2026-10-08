@@ -4,7 +4,6 @@
   import { focusTerminal, getActiveZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
-  import { openUrl } from "@tauri-apps/plugin-opener";
   import { Button, ContextMenu } from "./ui";
   import TaskForm from "./TaskForm.svelte";
   import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle } from "@lucide/svelte";
@@ -15,15 +14,16 @@
   interface Props {
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectSession: (id: string) => void;
-    onArchiveSession?: (session: Pick<Session, "id" | "task_key" | "pr_url">) => void | Promise<void>;
+    onArchiveSession?: (session: Pick<Session, "id" | "task_key">) => void | Promise<void>;
     onSessionsChanged?: () => void;
+    onSessionCreated?: (session: Session) => void;
     disableKeyboard?: boolean;
   }
 
-  let { disableKeyboard = false, onPickTask, onSelectSession, onArchiveSession, onSessionsChanged }: Props = $props();
+  let { disableKeyboard = false, onPickTask, onSelectSession, onArchiveSession, onSessionsChanged, onSessionCreated }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
-  const projects = $derived(projectStore.getProjects().map(p => ({ name: p.name, path: p.path })));
+  const projects = $derived(projectStore.getProjects().map(p => ({ id: p.id, name: p.name, path: p.path, hidden: p.hidden })));
   const sessions = $derived(orchestrator.getSessions());
   const activeSessionId = $derived(orchestrator.getActiveSessionId());
   const agentStates = $derived(orchestrator.getAgentStates());
@@ -75,7 +75,7 @@
     collapsedSections = { ...collapsedSections, [key]: !collapsedSections[key] };
   }
 
-  function sessionForTask(key: string): Pick<Session, "id" | "task_key" | "pr_url"> | undefined {
+  function sessionForTask(key: string): Pick<Session, "id" | "task_key"> | undefined {
     return sessions.find((s) => s.task_key === key);
   }
 
@@ -215,9 +215,6 @@
       moveTask(task.key, action.status);
     } else if (action.type === "edit") {
       openEdit(task);
-    } else if (action.type === "open_pr") {
-      const linked = sessionForTask(task.key);
-      if (linked?.pr_url) openUrl(linked.pr_url);
     }
   }
 </script>
@@ -316,14 +313,15 @@
 
 <!-- Modal for create/edit -->
 {#if modalMode !== null}
-<div class="fixed inset-0 z-50 flex items-center justify-center" onkeydown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={modalMode === "create" ? "Create Task" : "Edit Task"}>
+<div class="fixed inset-0 z-50 flex items-center justify-center" onkeydown={(e) => e.stopPropagation()} role="dialog" tabindex="-1" aria-modal="true" aria-label={modalMode === "create" ? "Create Task" : "Edit Task"}>
   <div class="w-[36rem] max-h-[85vh] flex flex-col p-6 rounded-lg border border-border bg-panel shadow-lg overflow-hidden">
     <h2 class="flex-shrink-0 text-lg font-semibold text-t1 px-5 pb-2">{modalMode === "create" ? "Create Task" : "Edit Task"}</h2>
     <div class="flex-1 min-h-0 overflow-y-auto">
       <TaskForm
         mode={modalMode}
-        projects={projects.map(p => ({ id: "", name: p.name, path: p.path }))}
+        projects={projects}
         tasks={Object.values(tasksByProject).flat()}
+        sessions={sessions}
         initial={modalMode === "edit" && editingTask ? {
           key: editingTask.key,
           title: editingTask.title,
@@ -337,6 +335,7 @@
         } : { projectPath: projects[0]?.path ?? "" }}
         onSubmitted={() => { modalMode = null; focusTerminal(); }}
         onCancel={() => { modalMode = null; focusTerminal(); }}
+        onSessionCreated={(session) => { onSessionCreated?.(session); }}
       />
     </div>
   </div>

@@ -9,17 +9,29 @@ export interface Session {
   worktree_path: string | null;
   provider: string | null;
   backend: string;
-  tab_count: number;
   base_branch: string | null;
   task_key: string | null;
-  pr_url: string | null;
-  pr_state: string | null;
+  /** Project owning the linked task; null means the session's own project. */
+  task_project_id: string | null;
+}
+
+/** The project whose TaskWorkspace a session belongs to. */
+export function sessionTaskProjectId(
+  session: Pick<Session, "project_id" | "task_project_id">,
+): string {
+  return session.task_project_id ?? session.project_id;
+}
+
+export interface LaunchResult {
+  session: Session;
+  warning: string | null;
 }
 
 export interface Project {
   id: string;
   name: string;
   path: string;
+  hidden: boolean;
 }
 
 export interface TaskItem {
@@ -35,10 +47,18 @@ export interface TaskItem {
   base_branch: string;
 }
 
+import type { ReviewFileDiff } from "./review-diff";
+
 export interface DirEntry {
   name: string;
   path: string;
   is_dir: boolean;
+}
+
+export interface FsChangeEvent {
+  session_id: string;
+  path: string;
+  kind: "create" | "remove" | "modify" | "rename";
 }
 
 export interface ChangedFile {
@@ -49,28 +69,164 @@ export interface ChangedFile {
   old_path: string | null;
 }
 
-export interface FileDiff {
-  original: string;
-  modified: string;
-  language: string;
+export type FileDiff = ReviewFileDiff;
+
+// ─── Plugin runtime types ───────────────────────────────────────────────────
+
+export type PluginSourceKind = "builtin" | "local";
+export type PluginRuntimeState = "disabled" | "starting" | "running" | "stopping" | "error";
+
+export type PluginUiPlacement =
+  | "sidebar.header"
+  | "sidebar.navigation"
+  | "sidebar.section"
+  | "sidebar.footer"
+  | "preferences"
+  | "main-pane"
+  | "dialog"
+  | "session.panel"
+  | "session.indicator"
+  | "titlebar"
+  | "interaction"
+  /** Host-synthesized placement for a provider's session UI; never declared in manifests. */
+  | "session.main";
+
+export interface PluginUiContribution {
+  id: string;
+  label: string;
+  placement: PluginUiPlacement;
+  entrypoint: string;
+  order: number | null;
+  shortcut: string | null;
 }
 
-export interface CiCheck {
+export type ProviderFeature = "auto_approve" | "handoff";
+
+/** What a terminal tab runs when it starts; a program runs without a shell to parse it. */
+export type TabSpec =
+  | { kind: "shell" }
+  | { kind: "command"; command: string }
+  | { kind: "program"; argv: readonly string[] };
+
+/** Why a terminal tab ended, as its one `tab-ended` event reports it (ADR-0015). */
+export type TabEndReason = "closed" | "exited" | "failed_to_start" | "session_ended";
+
+export interface TabEnded {
+  pty_key: string;
+  reason: TabEndReason;
+  /** Why it failed to start. */
+  error?: string;
+}
+
+/** A session runtime declared by a plugin; its UI replaces the agent terminal (ADR-0014). */
+export interface PluginProvider {
+  id: string;
+  label: string;
+  entrypoint: string;
+  supports: ProviderFeature[];
+}
+
+/** An opaque provider event forwarded from the sidecar to the session's UI. */
+export interface ProviderSessionEvent {
+  plugin_id: string;
+  session_id: string;
+  seq: number;
+  payload: unknown;
+}
+
+/** A sidecar-registered action rendered in a host session context menu. */
+export interface PluginSessionAction {
+  plugin_id: string;
+  id: string;
+  label: string;
+  /** Empty means all providers; otherwise the action is shown only for these provider IDs. */
+  providers: string[];
+}
+
+export type PluginSessionAdvisorySeverity = "info" | "warning" | "error";
+
+export interface PluginSessionAdvisory {
+  session_id: string;
+  message: string;
+  severity: PluginSessionAdvisorySeverity;
+}
+
+export interface PluginSessionCompletion {
+  session_id: string;
+  message: string | null;
+}
+
+export interface PluginDiscoveryCandidate {
+  full_name: string;
+  description: string | null;
+  url: string;
+  updated_at: string;
+  stargazers_count: number;
+  language: string | null;
+}
+
+export interface PluginInventory {
+  id: string;
   name: string;
-  status: string;
-  conclusion: string | null;
-  url: string | null;
+  version: string;
+  host_api_version: string;
+  source_kind: PluginSourceKind;
+  backend_entrypoint: string;
+  capabilities: string[];
+  background_service?: {
+    method: string;
+    interval_setting: string;
+    default_interval_ms: number;
+  } | null;
+  ui_contributions: PluginUiContribution[];
+  providers: PluginProvider[];
+  installed_hash: string | null;
+  installed_path: string | null;
+  original_display_path: string | null;
+  enabled: boolean;
+  state: PluginRuntimeState;
+  last_error: string | null;
+  log_path: string | null;
+}
+
+export type JiraMigrationState = "not_needed" | "available" | "importing" | "failed" | "completed";
+export type GithubMigrationState = JiraMigrationState;
+
+export interface GithubMigrationStatus {
+  state: GithubMigrationState;
+  legacy_detected: boolean;
+  can_migrate: boolean;
+  message: string;
+  error: string | null;
+  imported_pull_requests: number;
+  skipped_state_only: number;
+  snapshot_path: string | null;
+}
+
+export interface JiraMigrationStatus {
+  state: JiraMigrationState;
+  legacy_detected: boolean;
+  can_migrate: boolean;
+  message: string;
+  error: string | null;
+  imported_issues: number;
+  imported_links: number;
+  snapshot_path: string | null;
+}
+
+export interface JiraPluginStatus {
+  plugin_id: string;
+  plugin_name: string;
+  plugin_version: string;
+  host_api_version: string;
+  runtime_state: PluginRuntimeState;
+  last_error: string | null;
 }
 
 export interface CommitEntry {
   sha: string;
   short_sha: string;
   subject: string;
-}
-
-export interface PrStatus {
-  checks: CiCheck[];
-  conflicting: boolean;
 }
 
 export interface JiraStatus {

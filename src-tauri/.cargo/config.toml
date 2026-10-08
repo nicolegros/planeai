@@ -1,0 +1,3 @@
+# tauri-build leaks a stub msvcrt.lib into the link path of crates depending on `planeai`, so every binary must link the CRT statically.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

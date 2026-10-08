@@ -1,0 +1,25 @@
+minimumReleaseAge: 10080
+
+# Security patch for GHSA-68fv-2mgg-jv7q, published 2026-09-30.
+# Remove once 1.2.2 is older than minimumReleaseAge (after 2026-10-07).
+minimumReleaseAgeExclude:
+  - source-map-js@1.2.2
+
+onlyBuiltDependencies:
+  - esbuild
+  - "@tailwindcss/oxide"
+
+overrides:
+  brace-expansion: ">=5.0.11"
+  devalue: ">=5.9.2 <6"
+  nanoid: 3.3.18
+  postcss: ">=8.5.18"
+  source-map-js: ">=1.2.2 <2"
+  undici: ">=8.10.2"
+
+auditConfig:
+  ignoreGhsas:
+    # braces has no patched release. It is only reached through auto's fast-glob
+    # in the release workflow, which expands trusted globs from this repo.
+    # Remove once braces ships a fix or auto drops fast-glob.
+    - GHSA-vfj7-8cjw-p6xm

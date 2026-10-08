@@ -1,9 +1,11 @@
 use tauri::State;
 
+use crate::commands::sessions::lifecycle::session_transition;
 use crate::db;
+use crate::plugins::PluginRuntimeHandle;
 use crate::state::{ConfigState, DbState, NotifyHandle};
 
-use super::helpers::provider_has_hook;
+use super::helpers::register_notify_session;
 
 #[tauri::command]
 pub fn create_session(
@@ -26,22 +28,23 @@ pub fn create_session(
         .flatten()
         .map(|p| p.name)
         .unwrap_or_else(|| "unknown".to_string());
-    let display_name = if name.is_empty() { &branch } else { &name };
-    let hook_enabled = session
-        .provider
-        .as_deref()
-        .map(|pk| provider_has_hook(pk, &cfg))
-        .unwrap_or(false);
     let mut ns = notify.0.lock().unwrap();
-    ns.register_session(&session.id, display_name, &project_name, hook_enabled);
+    register_notify_session(&mut ns, &session, &project_name, &cfg);
 
     Ok(session)
 }
 
 #[tauri::command]
 pub fn list_sessions(state: State<DbState>) -> Result<Vec<db::Session>, String> {
+    tracing::debug!("[DEBUG-lsr1] list_sessions: waiting for lock");
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::list_sessions(&conn).map_err(|e| e.to_string())
+    tracing::debug!("[DEBUG-lsr1] list_sessions: lock acquired, querying");
+    let result = db::list_sessions(&conn).map_err(|e| e.to_string());
+    tracing::debug!(
+        count = result.as_ref().map(|v| v.len()).unwrap_or(0),
+        "[DEBUG-lsr1] list_sessions: done"
+    );
+    result
 }
 
 #[tauri::command]
@@ -61,18 +64,8 @@ pub fn rename_session(
             .flatten()
             .map(|p| p.name)
             .unwrap_or_else(|| "unknown".to_string());
-        let display_name = if name.is_empty() {
-            &session.branch
-        } else {
-            &name
-        };
-        let hook_enabled = session
-            .provider
-            .as_deref()
-            .map(|pk| provider_has_hook(pk, &cfg))
-            .unwrap_or(false);
         let mut ns = notify.0.lock().unwrap();
-        ns.register_session(&id, display_name, &project_name, hook_enabled);
+        register_notify_session(&mut ns, &session, &project_name, &cfg);
     }
     Ok(())
 }
@@ -88,14 +81,21 @@ pub fn restore_session(
     state: State<DbState>,
     notify: State<NotifyHandle>,
     config_state: State<ConfigState>,
+    runtime: State<PluginRuntimeHandle>,
     id: String,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let previous = db::get_session(&conn, &id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
 
     // Restart relaunches the agent process and sets status to active
     let ops = crate::session_restart::real_restart_ops();
     let session = crate::session_restart::restart(&conn, &id, &cfg, &ops)?;
+    runtime
+        .0
+        .dispatch_session_lifecycle(session_transition(&session, &previous.status, "active"));
 
     // Register in NotifyState when restoring
     let project_name = db::get_project(&conn, &session.project_id)
@@ -103,18 +103,8 @@ pub fn restore_session(
         .flatten()
         .map(|p| p.name)
         .unwrap_or_else(|| "unknown".to_string());
-    let display_name = if session.name.is_empty() {
-        &session.branch
-    } else {
-        &session.name
-    };
-    let hook_enabled = session
-        .provider
-        .as_deref()
-        .map(|pk| provider_has_hook(pk, &cfg))
-        .unwrap_or(false);
     let mut ns = notify.0.lock().unwrap();
-    ns.register_session(&id, display_name, &project_name, hook_enabled);
+    register_notify_session(&mut ns, &session, &project_name, &cfg);
 
     Ok(())
 }
@@ -132,9 +122,24 @@ pub fn acknowledge_session(session_id: String, notify: State<NotifyHandle>) {
 }
 
 #[tauri::command]
-pub fn mark_exited(session_id: String, db_state: State<DbState>) -> Result<(), String> {
+pub fn mark_exited(
+    session_id: String,
+    db_state: State<DbState>,
+    runtime: State<PluginRuntimeHandle>,
+) -> Result<(), String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    db::mark_session_exited(&conn, &session_id).map_err(|e| e.to_string())
+    let previous = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+    db::mark_session_exited(&conn, &session_id).map_err(|e| e.to_string())?;
+    if previous.status == "active" {
+        runtime.0.dispatch_session_lifecycle(session_transition(
+            &previous,
+            &previous.status,
+            "exited",
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]

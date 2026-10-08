@@ -1,3 +1,5 @@
+pub mod agent_hooks;
+pub mod capture_cursor;
 pub mod cleanup;
 pub mod command;
 pub mod dispatch;
@@ -14,6 +16,7 @@ pub mod services;
 pub mod session;
 pub mod session_launch;
 pub mod task;
+pub mod task_lifecycle;
 pub mod template;
 pub mod text;
 pub mod verifier;

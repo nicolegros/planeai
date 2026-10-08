@@ -52,6 +52,7 @@ mod socket_tests {
 
         // List
         let resp = send_recv(&mut reader, r#"{"cmd":"list"}"#).await;
+        assert_eq!(resp["protocol_version"], 3);
         let sessions = resp["sessions"].as_array().unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0]["session_id"], "s1");
@@ -167,6 +168,65 @@ mod socket_tests {
             got_event,
             "should receive exited event for short-lived session"
         );
+    }
+
+    #[tokio::test]
+    async fn cancel_spawn_before_spawn_is_correlated_and_suppressed() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+        let _shutdown = start_server(&sock).await;
+        let mut reader = connect_control(&sock).await;
+
+        let cancelled = send_recv(
+            &mut reader,
+            r#"{"cmd":"cancel_spawn","request_id":"spawn-request-1"}"#,
+        )
+        .await;
+        assert_eq!(cancelled["ok"], true);
+        assert_eq!(cancelled["request_id"], "spawn-request-1");
+
+        let spawn = send_recv(
+            &mut reader,
+            r#"{"cmd":"spawn","request_id":"spawn-request-1","session_id":"suppressed","command":"cat","args":[]}"#,
+        )
+        .await;
+        assert_eq!(spawn["request_id"], "spawn-request-1");
+        assert_eq!(spawn["error"], "spawn request cancelled");
+
+        let sessions = send_recv(&mut reader, r#"{"cmd":"list"}"#).await;
+        assert!(sessions["sessions"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn duplicate_spawn_request_replays_the_original_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+        let _shutdown = start_server(&sock).await;
+        let mut reader = connect_control(&sock).await;
+
+        let first = send_recv(
+            &mut reader,
+            r#"{"cmd":"spawn","request_id":"spawn-request-1","session_id":"original","command":"sleep","args":["999"]}"#,
+        )
+        .await;
+        assert_eq!(first["ok"], true);
+        assert_eq!(first["session_id"], "original");
+
+        let duplicate = send_recv(
+            &mut reader,
+            r#"{"cmd":"spawn","request_id":"spawn-request-1","session_id":"different","command":"echo","args":["should-not-run"]}"#,
+        )
+        .await;
+        assert_eq!(duplicate["ok"], true);
+        assert_eq!(duplicate["request_id"], "spawn-request-1");
+        assert_eq!(duplicate["session_id"], "original");
+
+        let sessions = send_recv(&mut reader, r#"{"cmd":"list"}"#).await;
+        let sessions = sessions["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["session_id"], "original");
+
+        send_recv(&mut reader, r#"{"cmd":"kill","session_id":"original"}"#).await;
     }
 
     #[tokio::test]

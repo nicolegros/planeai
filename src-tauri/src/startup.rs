@@ -1,11 +1,11 @@
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 
-use crate::commands::pr::poll_pr_for_session;
-use crate::commands::sessions::helpers::provider_has_hook;
+use crate::commands::sessions::helpers::register_notify_session;
 use crate::config;
 use crate::db;
 use crate::notify::SharedNotifyState;
+use crate::plugins::PluginRuntimeHandle;
 use crate::state::{ConfigState, DbState};
 
 /// Revive sessions on startup: recreate dead tmux sessions.
@@ -128,6 +128,148 @@ pub fn reconcile_daemon_sessions(conn: &rusqlite::Connection, _cfg: &config::Con
     }
 }
 
+/// Run rmux reconciliation on a background thread with its own connection.
+///
+/// Reconciliation connects to the rmux daemon, enumerates panes, and may close
+/// some. That is network and process work, and AGENTS.md forbids it on the main
+/// thread: on macOS WKWebView dispatches Tauri IPC there, so blocking it stalls
+/// PTY delivery and keystrokes for every session. It is fire-and-forget because
+/// nothing in startup depends on its result — the session rows it corrects are
+/// re-read by the UI when it refreshes.
+pub fn spawn_rmux_reconciliation() {
+    let db_path = planeai_paths::db_path();
+    std::thread::spawn(move || {
+        let conn = match rusqlite::Connection::open(&db_path) {
+            Ok(conn) => conn,
+            Err(error) => {
+                tracing::warn!(%error, "rmux reconciliation: failed to open db");
+                return;
+            }
+        };
+        reconcile_rmux_sessions(&conn);
+    });
+}
+
+/// How long to wait before confirming that a pane really is orphaned.
+///
+/// Long enough for an in-flight launch to commit the row that claims its pane,
+/// short enough that startup reconciliation still finishes promptly.
+const ORPHAN_CONFIRMATION_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Reconcile rmux sessions: mark sessions exited when their pane is gone, and
+/// close panes no session owns.
+///
+/// Pane ids are only valid for a daemon lifetime, so a restarted daemon
+/// invalidates every recorded resource. Pruning the mapping and marking the
+/// affected sessions is the equivalent of the tmux `has-session` sweep.
+///
+/// Talks to the rmux daemon, so callers must not run it on the main thread; see
+/// [`spawn_rmux_reconciliation`].
+pub fn reconcile_rmux_sessions(conn: &rusqlite::Connection) {
+    let sessions = match db::list_sessions(conn) {
+        Ok(sessions) => sessions,
+        Err(_) => return,
+    };
+    let active: Vec<&db::Session> = sessions
+        .iter()
+        .filter(|session| session.backend == planeai_rmux::BACKEND && session.status == "active")
+        .collect();
+
+    if !active.is_empty() {
+        tracing::info!(count = active.len(), "reconciling rmux sessions on startup");
+
+        // A dead daemon prunes everything, which is the correct outcome: no rmux
+        // session survived it.
+        match crate::rmux_ops::prune_dead_resources(conn) {
+            Ok(affected) => {
+                for session in active {
+                    // A session with no remaining agent resource is no longer running.
+                    let has_agent = crate::rmux_resources::get(conn, &session.id)
+                        .map(|record| record.is_some())
+                        .unwrap_or(false);
+                    if !has_agent || affected.contains(&session.id) {
+                        let _ = db::mark_session_exited(conn, &session.id);
+                    }
+                }
+            }
+            // The daemon could not be read, so the sweep could not either: skipped until the
+            // next start.
+            Err(error) => {
+                tracing::warn!(%error, "could not reconcile rmux resources");
+                return;
+            }
+        }
+    }
+
+    sweep_orphan_rmux_panes(conn, &sessions);
+}
+
+/// Close rmux panes that outlived the sessions that owned them.
+///
+/// Runs even when no rmux session is active, because that is precisely the state
+/// an orphan leaves behind: the pane is alive and its session row is not.
+///
+/// Skipped entirely when the database holds no sessions at all. Such a database
+/// cannot distinguish a fresh install from one that was moved or lost, and every
+/// live pane would look orphaned — killing a user's running agents on the
+/// strength of an empty database is far worse than leaking panes, which the next
+/// sweep can still collect.
+///
+/// Requires two passes to agree before closing anything. See
+/// [`rmux_resources::OrphanSweep::confirmed_by`].
+fn sweep_orphan_rmux_panes(conn: &rusqlite::Connection, sessions: &[db::Session]) {
+    if sessions.is_empty() {
+        return;
+    }
+    let known_session_ids = |rows: &[db::Session]| -> std::collections::HashSet<String> {
+        rows.iter().map(|session| session.id.clone()).collect()
+    };
+
+    let proposed = match crate::rmux_ops::orphan_candidates(conn, &known_session_ids(sessions)) {
+        Ok(sweep) if sweep.is_empty() => return,
+        Ok(sweep) => sweep,
+        Err(error) => {
+            tracing::warn!(%error, "could not look for orphaned rmux panes");
+            return;
+        }
+    };
+
+    // Re-read the sessions too: a launch that completed during the delay records
+    // both a session row and a pane, and only a fresh read sees it.
+    std::thread::sleep(ORPHAN_CONFIRMATION_DELAY);
+    let sessions = match db::list_sessions(conn) {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            tracing::warn!(%error, "could not confirm orphaned rmux panes");
+            return;
+        }
+    };
+    if sessions.is_empty() {
+        return;
+    }
+    let later = match crate::rmux_ops::orphan_candidates(conn, &known_session_ids(&sessions)) {
+        Ok(sweep) => sweep,
+        Err(error) => {
+            tracing::warn!(%error, "could not confirm orphaned rmux panes");
+            return;
+        }
+    };
+
+    let confirmed = proposed.confirmed_by(&later);
+    if confirmed.is_empty() {
+        tracing::info!(
+            proposed = proposed.panes.len(),
+            "rmux panes looked orphaned but were accounted for on a second pass"
+        );
+        return;
+    }
+    match crate::rmux_ops::sweep_orphan_panes(conn, &confirmed) {
+        Ok(0) => {}
+        Ok(closed) => tracing::info!(closed, "closed orphaned rmux panes on startup"),
+        Err(error) => tracing::warn!(%error, "could not sweep orphaned rmux panes"),
+    }
+}
+
 /// Start a background task that listens for daemon exit events and marks sessions as exited.
 pub fn start_daemon_event_listener(app_handle: &tauri::AppHandle) {
     let app = app_handle.clone();
@@ -148,14 +290,28 @@ pub fn start_daemon_event_listener(app_handle: &tauri::AppHandle) {
             match event {
                 Ok(Some(evt)) if evt.event == "exited" => {
                     tracing::info!(session_id = %evt.session_id, "daemon session exited");
-                    let db = app.state::<DbState>();
-                    if let Ok(conn) = db.0.lock() {
-                        let _ = db::mark_session_exited(&conn, &evt.session_id);
+                    let lifecycle_event = {
+                        let db = app.state::<DbState>();
+                        let Ok(conn) = db.0.lock() else {
+                            continue;
+                        };
+                        crate::commands::sessions::lifecycle::exit_active_session(
+                            &conn,
+                            &evt.session_id,
+                        )
+                        .unwrap_or_else(|error| {
+                            tracing::warn!(session_id = %evt.session_id, %error, "failed to mark daemon session exited");
+                            None
+                        })
+                    };
+                    if let Some(event) = lifecycle_event {
+                        app.state::<PluginRuntimeHandle>()
+                            .0
+                            .dispatch_session_lifecycle(event);
                     }
-                    let _ = app.emit(
-                        "pty-exited",
-                        serde_json::json!({ "pty_key": evt.session_id }),
-                    );
+                    app.state::<crate::state::PtyState>()
+                        .0
+                        .report_exit(&evt.session_id);
                     let _ = app.emit("sessions-changed", ());
                 }
                 Ok(Some(_)) => {}   // Ignore unknown events
@@ -188,58 +344,8 @@ pub fn register_active_sessions(
             .find(|p| p.id == session.project_id)
             .map(|p| p.name.as_str())
             .unwrap_or("unknown");
-        let display_name = if session.name.is_empty() {
-            &session.branch
-        } else {
-            &session.name
-        };
-        let hook_enabled = session
-            .provider
-            .as_deref()
-            .map(|pk| provider_has_hook(pk, cfg))
-            .unwrap_or(false);
-        ns.register_session(&session.id, display_name, project_name, hook_enabled);
+        register_notify_session(&mut ns, session, project_name, cfg);
     }
-}
-
-/// Start background PR status poller (every 2 minutes).
-pub fn start_pr_poller(app_handle: &tauri::AppHandle) {
-    let app_handle = app_handle.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(120));
-        let db = app_handle.state::<DbState>();
-        let cfg_state = app_handle.state::<ConfigState>();
-        let Ok(conn) = db.0.lock() else { continue };
-        let Ok(cfg) = cfg_state.0.lock() else {
-            continue;
-        };
-        if cfg.pr_status.is_none() {
-            continue;
-        }
-        let Ok(sessions) = db::list_sessions(&conn) else {
-            continue;
-        };
-        let mut changed = false;
-        for session in &sessions {
-            let was_open = session.pr_state.as_deref() == Some("open");
-            match poll_pr_for_session(&conn, &cfg, session) {
-                Ok(true) => {
-                    changed = true;
-                    if was_open {
-                        let _ = app_handle
-                            .emit("pr-merged", serde_json::json!({ "session_id": session.id }));
-                    }
-                }
-                Err(e) => {
-                    let _ = app_handle.emit("cleanup-error", e);
-                }
-                _ => {}
-            }
-        }
-        if changed {
-            let _ = app_handle.emit("sessions-changed", ());
-        }
-    });
 }
 
 /// Warm font cache in background so preferences page opens instantly.

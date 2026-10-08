@@ -7,7 +7,7 @@ planeai includes a built-in task tracker designed for AI agent workflows. Tasks 
 
 ## The task board
 
-Tasks appear in the sidebar, grouped by project and status. Each status group shows tasks sorted by priority (highest first):
+Tasks appear in the sidebar, grouped by project and status. Each status group shows tasks sorted by priority (highest first), then by task key. Done groups start collapsed:
 
 | Status          | Meaning                                |
 | --------------- | -------------------------------------- |
@@ -23,6 +23,39 @@ Click any task to interact with it:
 
 Right-click a task to open the context menu with quick actions: start session, edit, or move to a different status.
 
+### Grouping by status
+
+To see the work of every project in one list, group the sidebar by status.
+Choose **Status** under **Preferences → Appearance → Sidebar** (⌘, / Ctrl+,), or right-click empty space or a group header in the sidebar to open the view options.
+
+The sidebar then shows a **Sessions** section first, holding loops and sessions that are not linked to a task, followed by one section per status: Running, Needs review, To do, and Done.
+Each section mixes the tasks of every visible project, sorted by priority, then by project order, then by task key.
+Each row shows its project name before the task key.
+Project actions, such as editing a project or toggling auto-dispatch, are only available when the sidebar is grouped by project.
+
+The same places turn off task keys ("Show task keys") and, when grouping by status, project names ("Show project labels").
+These choices are saved in `config.json` as `sidebar_group_by`, `hide_task_keys`, and `hide_project_labels`.
+Done sections start collapsed, and the sidebar remembers which sections you collapse.
+
+### Finding a task from the keyboard
+
+Open the command menu (**⌘K** / **Ctrl+K**) and start typing a task key or title. Tasks from every project are searchable, so you do not need an active session in the right project first. Selecting a task does the same thing as clicking it in the sidebar.
+
+Tasks appear once you type — the menu's default view stays a short list of actions. Tasks in the project you are currently working in are listed first. Completed tasks are included unless "Hide done tasks" is enabled.
+
+### Starting and renaming sessions
+
+While a task is focused, every "new session" entry point (**⌘N** then **S**, "New session" in the command menu, the sidebar button) opens the form with that task and its project already selected.
+The session name defaults to the task title; additional sessions on the same task are numbered, for example "Fix login (2)", and the name stays editable.
+
+A task's work can span repositories.
+Pick another project in the form and the task stays linked: the picker keeps it pinned with its project name, and a hint shows which project owns it.
+The new agent runs in the other project's repository but opens in the task's workspace, next to its sibling agents, with the repository's project name shown on its tab.
+If that repository lacks the task's base branch, the form uses the repository's default branch instead.
+
+To rename a session, pick "Rename session" in the command menu or double-click its agent tab, type the new name, and press **Enter**.
+The workspace tabs follow the new name.
+
 ## Creating tasks
 
 There are three ways to create tasks, each suited to a different workflow.
@@ -31,7 +64,7 @@ There are three ways to create tasks, each suited to a different workflow.
 
 Press **⌘N** (macOS) or **Ctrl+N** (Linux/Windows) to open the new item modal, then press **T** to create a task. Alternatively, open the command menu (**⌘K** / **Ctrl+K**) and search for "create task". The create dialog has fields for:
 
-- **Title** — short, actionable description (required)
+- **Title** — short, actionable description (required). Prefilled with a random name such as `jubilant-waffle`; focusing the untouched name selects it, so typing replaces it.
 - **Description** — detailed context for the agent. Be thorough — the agent relies entirely on this.
 - **Priority** — numeric value. Higher priority tasks get dispatched first.
 - **Base branch** — which git branch to create the worktree from (defaults to `main`)
@@ -99,34 +132,37 @@ The session and task stay linked. When the agent signals completion, the task mo
 
 ## Lifecycle hooks
 
-Hooks run shell commands at task state transitions. Configure them in **Preferences → Task Management** (⌘, / Ctrl+,) or directly in your `config.json`:
+Hooks move the linked task to a status when its agent session changes state.
+New installs start with task management on and the hooks below set.
+Configure them in **Preferences → Tasks** (⌘, / Ctrl+,) or directly in your `config.json`:
 
 ```jsonc
 {
-  "task_manager": {
-    "lifecycle_hooks": {
-      "on_start": "echo 'Starting {{task.key}}'",
-      "on_complete": "git add -A && git commit -m 'feat({{task.key | slugify}}): {{task.title}}'",
-      "on_notify": "say '{{task.key}} needs attention'",
-      "on_restart": "git stash && git pull --rebase",
-    },
+  "task_management": {
+    "on_start": { "move_to": "in_progress" },
+    "on_notify": { "move_to": "in_review" },
+    "on_resume": { "move_to": "in_progress" },
+    "on_restart": { "move_to": "in_progress" },
+    "on_complete": { "move_to": "done" },
   },
 }
 ```
 
-| Hook          | Fires when                                                |
-| ------------- | --------------------------------------------------------- |
-| `on_start`    | A task is dispatched to an agent session                  |
-| `on_complete` | The agent signals it's done (session archived or deleted) |
-| `on_notify`   | The agent signals idle (needs attention)                  |
-| `on_restart`  | A failed task's session is restarted                      |
-| `on_pr_open`  | A pull request is opened for the session's branch         |
-| `on_pr_merge` | The pull request is merged                                |
+| Hook          | Fires when                                          |
+| ------------- | --------------------------------------------------- |
+| `on_start`    | A session is created from the task                  |
+| `on_notify`   | The agent goes idle and waits for you               |
+| `on_resume`   | The agent's hook reports new work after going idle  |
+| `on_restart`  | An exited session linked to the task is restarted   |
+| `on_complete` | A session linked to the task is archived or deleted |
 
-Hooks run in the working directory of the task's git worktree. They support the same `{{template}}` syntax as other planeai templates (see [Configuration](/planeai/guides/configuration/)).
+A hook left unset never fires.
+`on_resume` needs an agent with PlaneAI hooks installed, since terminal output alone cannot tell a redraw from new work.
+It only moves a task whose status is still the `on_notify` target, and does nothing without `on_notify`.
+Valid statuses are `todo`, `in_progress`, `in_review`, and `done`.
 
 :::tip
-All task management settings — templates, lifecycle hooks, and auto-dispatch — are available in **Preferences → Task Management**. You don't need to edit JSON if you prefer a GUI.
+All task management settings — templates, lifecycle hooks, and auto-dispatch — are available in **Preferences → Tasks**. You don't need to edit JSON if you prefer a GUI.
 :::
 
 ## Auto-dispatch: the full lifecycle
@@ -142,9 +178,9 @@ When [auto-dispatch](/planeai/guides/auto-dispatch/) is enabled, tasks flow thro
 
 ### Enabling auto-dispatch
 
-Auto-dispatch is enabled **per project**. Right-click a project in the sidebar and select **Auto-dispatch** to toggle it on. When active, a ⚡ icon appears next to the project name.
+Auto-dispatch is enabled **per project**. With the sidebar grouped by project, right-click a project and select **Auto-dispatch** to toggle it on. When active, a ⚡ icon appears next to the project name.
 
-You also need the global auto-dispatch configuration — either toggle it in **Preferences → Task Management** (⌘, / Ctrl+,) or set it in your `config.json`:
+You also need the global auto-dispatch configuration — either toggle it in **Preferences → Tasks** (⌘, / Ctrl+,) or set it in your `config.json`:
 
 ```jsonc
 {
@@ -166,7 +202,7 @@ You don't have to enable auto-dispatch to use tasks. The manual workflow is:
 1. Create tasks on the board
 2. Click a task to start a session for it
 3. The agent receives the task description and works on it
-4. You review the diff (**⌘D** / **Ctrl+D**) and move the task to done
+4. You review the diff (**⌘\\** / **Ctrl+\\**) and move the task to done
 
 This gives you full control over when and how agents pick up work.
 
@@ -186,24 +222,4 @@ Tasks are stored locally in planeai's SQLite database, scoped to each project. F
 
 ## Jira Integration
 
-planeai can pull issues from a Jira Cloud site and display them alongside local tasks in the sidebar. This lets you work on Jira issues with the same agent-driven workflow as local tasks.
-
-### How it works
-
-1. **Configure sources** — define JQL filters in `integrations.jira.sources` (see [Configuration](/planeai/guides/configuration/#jira))
-2. **Connect** — authenticate via **Preferences → Jira → Connect to Jira** (OAuth 2.0)
-3. **Sync** — planeai polls Jira on an interval and imports matching issues into a dedicated Jira section in the sidebar
-4. **Assign** — click a Jira issue to assign it to a project, which creates a child task in that project's task board
-5. **Writeback** — when a task starts or completes locally, planeai can transition the Jira issue and/or add a comment
-
-### Sidebar
-
-Synced Jira issues appear in a dedicated "Jira" section at the bottom of the sidebar. Each issue shows its key, title, and status. Click an issue to assign it to a project (creating a local child task that can be dispatched to an agent).
-
-### Departed issues
-
-When a synced issue no longer matches its source JQL (e.g., reassigned or moved), planeai marks it as "departed" and shows a prompt. You can mark the local task as done or dismiss the notification.
-
-### Configuration
-
-See [Configuration → Integrations → Jira](/planeai/guides/configuration/#jira) for the full config schema including sources, status maps, and writeback options.
+The bundled Jira plugin manages OAuth connection and manual configured JQL-source synchronization. Syncing imports matching Jira issues as PlaneAI tasks and displays them in the Jira sidebar. Select an issue, choose a PlaneAI project, and PlaneAI creates a child task under the synced Jira task. Jira task writeback and periodic synchronization are deferred to a later parity slice.

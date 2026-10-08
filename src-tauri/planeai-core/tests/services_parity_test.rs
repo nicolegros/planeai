@@ -36,6 +36,32 @@ fn shared_migration_is_idempotent() {
 }
 
 #[test]
+fn task_workspace_layouts_are_migrated_with_project_scope() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    migrate_project_session_schema(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO projects (id, name, path, status, prefix) VALUES ('p1', 'project', '/tmp/project', 'active', 'PROJ')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO task_workspaces (project_id, task_key, layout_json) VALUES ('p1', 'PROJ-1', '{\"tree\":{}}')",
+        [],
+    )
+    .unwrap();
+
+    let saved: String = conn
+        .query_row(
+            "SELECT layout_json FROM task_workspaces WHERE project_id = 'p1' AND task_key = 'PROJ-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(saved, "{\"tree\":{}}");
+}
+
+#[test]
 fn production_and_core_path_produce_compatible_schema() {
     // Simulate production db.rs migration path
     let prod_conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -136,6 +162,8 @@ fn direct_backend_migrates_to_local() {
 
     migrate_project_session_schema(&conn).unwrap();
 
+    let project = ProjectService::get_by_id(&conn, "p1").unwrap().unwrap();
+    assert!(!project.hidden);
     let s = SessionService::get(&conn, "s1").unwrap().unwrap();
     assert_eq!(s.backend, "local");
 }
@@ -195,6 +223,62 @@ fn mru_ordering_matches_production_semantics() {
     let all = SessionService::list_active(&conn).unwrap();
     let ids: Vec<&str> = all.iter().map(|s| s.id.as_str()).collect();
     assert_eq!(ids, vec!["b", "a", "c"]);
+}
+
+#[test]
+fn list_active_excludes_exited_sessions_for_done_tasks() {
+    let conn = test_db();
+    planeai_tasks::sqlite::migrate(&conn).unwrap();
+    let project = ProjectService::ensure_project(&conn, "/tmp/proj").unwrap();
+
+    for (id, task_key) in [
+        ("no-task", None),
+        ("active-done", Some("PLA-1")),
+        ("exited-done", Some("PLA-1")),
+        ("active-in-progress", Some("PLA-2")),
+        ("exited-no-task", None),
+        ("exited-in-progress", Some("PLA-2")),
+    ] {
+        SessionService::create(
+            &conn,
+            &CreateSessionParams {
+                id: id.to_string(),
+                project_id: project.id.clone(),
+                backend: "daemon".to_string(),
+                task_key: task_key.map(str::to_string),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    for id in ["exited-done", "exited-no-task", "exited-in-progress"] {
+        SessionService::mark_exited(&conn, id).unwrap();
+    }
+
+    conn.execute(
+        "INSERT INTO task_projects (prefix, next_seq) VALUES ('PLA', 3)",
+        [],
+    )
+    .unwrap();
+    for (key, status) in [("PLA-1", "done"), ("PLA-2", "in_progress")] {
+        conn.execute(
+            "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at)              VALUES (?1, 'PLA', ?1, ?2, '2024-01-01', '2024-01-01')",
+            rusqlite::params![key, status],
+        )
+        .unwrap();
+    }
+
+    let ids: Vec<_> = SessionService::list_active(&conn)
+        .unwrap()
+        .into_iter()
+        .map(|session| session.id)
+        .collect();
+    assert!(ids.contains(&"no-task".to_string()));
+    assert!(ids.contains(&"active-done".to_string()));
+    assert!(!ids.contains(&"exited-done".to_string()));
+    assert!(ids.contains(&"active-in-progress".to_string()));
+    assert!(ids.contains(&"exited-no-task".to_string()));
+    assert!(ids.contains(&"exited-in-progress".to_string()));
 }
 
 #[test]
@@ -326,31 +410,6 @@ fn archived_destroyed_filtering_consistent() {
 }
 
 #[test]
-fn pr_state_persists_via_shared_service() {
-    let conn = test_db();
-    let p = ProjectService::ensure_project(&conn, "/tmp/proj").unwrap();
-    SessionService::create(
-        &conn,
-        &CreateSessionParams {
-            id: "s1".to_string(),
-            project_id: p.id.clone(),
-            backend: "daemon".to_string(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-
-    SessionService::update_pr_state(&conn, "s1", "https://github.com/org/repo/pull/1", "open")
-        .unwrap();
-    let s = SessionService::get(&conn, "s1").unwrap().unwrap();
-    assert_eq!(
-        s.pr_url.as_deref(),
-        Some("https://github.com/org/repo/pull/1")
-    );
-    assert_eq!(s.pr_state.as_deref(), Some("open"));
-}
-
-#[test]
 fn project_archive_cascades_to_sessions() {
     let conn = test_db();
     let p = ProjectService::create(&conn, "myapp", "/tmp/myapp").unwrap();
@@ -433,6 +492,23 @@ fn get_project_by_path() {
     assert!(ProjectService::get_by_path(&conn, "/tmp/nonexistent")
         .unwrap()
         .is_none());
+}
+
+#[test]
+fn update_project_persists_name_and_path_without_changing_prefix() {
+    let conn = test_db();
+    let project = ProjectService::create(&conn, "before", "/tmp/before").unwrap();
+
+    let updated = ProjectService::update(&conn, &project.id, "after", "/tmp/after").unwrap();
+
+    assert_eq!(updated.name, "after");
+    assert_eq!(updated.path, "/tmp/after");
+    assert_eq!(updated.prefix, project.prefix);
+    let reloaded = ProjectService::get_by_id(&conn, &project.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reloaded.name, "after");
+    assert_eq!(reloaded.path, "/tmp/after");
 }
 
 // ─── SessionService ──────────────────────────────────────────────────────────
@@ -788,10 +864,18 @@ fn production_db_compat_read_list_create_update() {
     // Verify we can READ a session with all production columns
     let s = SessionService::get(&conn, "s-existing").unwrap().unwrap();
     assert_eq!(s.tmux_name, Some("planeai-myapp-abc".to_string()));
-    assert_eq!(s.tab_count, 2);
     assert!(s.auto_approve);
     assert_eq!(s.task_key, Some("PLA-3".to_string()));
     assert_eq!(s.backend, "tmux");
+    let has_tab_count: bool = conn
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'tab_count'")
+        .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, i64>(0)))
+        .map(|count| count > 0)
+        .unwrap();
+    assert!(
+        !has_tab_count,
+        "the layout owns shell tabs, so tab_count is dropped"
+    );
     assert_eq!(s.provider, Some("kiro".to_string()));
 
     // Verify we can CREATE a new session alongside existing ones

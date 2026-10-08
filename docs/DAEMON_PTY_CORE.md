@@ -148,9 +148,11 @@ Binary framed protocol on data connections (type byte `0x01`).
 1. Client sends `FRAME_HELLO` with protocol version byte
 2. Client sends `FRAME_ATTACH` with session_id as payload
 3. Daemon replays buffer snapshot as `FRAME_OUTPUT` chunks
-4. Daemon streams live output as `FRAME_OUTPUT`
-5. On session exit: daemon sends `FRAME_EOF`
+4. Daemon streams live output as `FRAME_OUTPUT`, starting exactly where the snapshot ends
+5. On session exit or kill: daemon sends `FRAME_EOF` and closes the connection
 6. On error: daemon sends `FRAME_ERROR`
+
+The snapshot and the live subscription are taken under the lock the PTY sink holds while it appends to the buffer and broadcasts, so a client attaching mid-output neither misses nor repeats bytes.
 
 ### Legacy Attach (backward compatible)
 
@@ -162,7 +164,7 @@ Binary framed protocol on data connections (type byte `0x01`).
 When a slow client causes broadcast lag:
 
 - Daemon sends `FRAME_GAP` with JSON payload: `{"lagged": N}`
-- Client should display a gap indicator or request reconnect
+- The desktop client logs it and prints a dim `[planeai] output gap` line in the terminal, as it does for an rmux gap
 
 ## Command Spawning (argv preservation)
 
@@ -237,12 +239,12 @@ If resume fails, automatically falls back to fresh command.
 
 When a session transitions from exited to active (via restart):
 
-1. Session orchestrator calls `restart()` and defers terminal pool activation until the restart resolves
-2. On success, orchestrator updates session status to "active" and activates the terminal pool
-3. Terminal.svelte mounts and calls `pty.attach()` with flow control channel
+1. Session orchestrator calls `restart()`; the session stays `exited` until the restart resolves
+2. On success, orchestrator updates session status to "active"
+3. The session's Terminal view resets its buffer and calls `pty.attach()` with a flow control channel
 4. Replays buffer + resumes live output
 
-This sequencing prevents the terminal from attaching to a still-exited daemon session (which would immediately EOF and re-emit pty-exited). Restart failures surface via `showSnackbar()`; the terminal pool is still activated so the user sees the session state.
+A Terminal view never connects while its session is exited, which prevents attaching to a still-exited daemon session (which would immediately EOF and re-emit pty-exited). Restart failures surface via `showSnackbar()`.
 
 ## Architecture
 
@@ -253,10 +255,11 @@ desktop client
     → daemon process
       → SessionRegistry (HashMap<String, RegistryEntry>)
         → DaemonSession
-          → DaemonPtySink (PtyEventSink)
-            → planeai_pty::LocalPtySession (portable-pty)
-          → RingBuffer (scrollback)
-          → broadcast::Sender (live output fan-out)
+          → planeai_pty::LocalPtySession (portable-pty)
+            → DaemonPtySink (PtyEventSink): appends output, drops the sender on exit
+          → SessionOutput (one lock, shared with the sink)
+            → RingBuffer (scrollback)
+            → Option<broadcast::Sender> (live output fan-out; None once the session exits)
       → poll_exits() loop (500ms, transitions Running→Exited)
       → gc() loop (60s, removes expired sessions)
       → shutdown_timer (30s grace, exits when no clients + no live sessions)

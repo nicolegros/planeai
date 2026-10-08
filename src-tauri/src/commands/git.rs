@@ -118,7 +118,7 @@ pub async fn clone_repository(url: String, path: String) -> Result<String, Strin
 
     tracing::info!(url = %url, path = %path, "cloning repository");
 
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = tokio::process::Command::new(crate::command::resolve("git"));
     no_window_tokio(&mut cmd);
     cmd.env("PATH", augmented_path(&[]));
     // Prevent git from waiting for interactive input (SSH passphrase, HTTP credentials)

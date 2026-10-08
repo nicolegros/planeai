@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { installKeyboardRouter } from "../keyboard";
-import { setActiveZone } from "../focus.svelte";
+import { installKeyboardRouter, type KeyboardAction } from "../keyboard";
+import { focusEditor, focusExplorer, getActiveZone, setActiveZone } from "../focus.svelte";
 
 describe("installKeyboardRouter Escape yielding with data-form-keyboard", () => {
-  let onAction: ReturnType<typeof vi.fn>;
+  let onAction: (action: KeyboardAction) => void;
   let cleanup: () => void;
 
   beforeEach(() => {
-    onAction = vi.fn();
+    onAction = vi.fn((_action: KeyboardAction) => {});
     setActiveZone("sidebar"); // not terminal, so shouldPassEscape path isn't triggered
     cleanup = installKeyboardRouter(
       onAction,
@@ -46,5 +46,32 @@ describe("installKeyboardRouter Escape yielding with data-form-keyboard", () => 
     window.dispatchEvent(event);
 
     expect(onAction).toHaveBeenCalledWith({ type: "focus_terminal" });
+  });
+
+  it("restores the editor origin when Escape leaves Explorer", () => {
+    focusEditor();
+    focusExplorer();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    expect(onAction).toHaveBeenCalledWith({ type: "focus_terminal" });
+    expect(getActiveZone()).toBe("editor");
+  });
+
+  it("does not let an active editor tab suppress Escape from Explorer", () => {
+    cleanup();
+    cleanup = installKeyboardRouter(
+      onAction,
+      () => true,
+      () => true,
+      () => false,
+    );
+    focusEditor();
+    focusExplorer();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    expect(onAction).toHaveBeenCalledWith({ type: "focus_terminal" });
+    expect(getActiveZone()).toBe("editor");
   });
 });

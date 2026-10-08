@@ -1,14 +1,24 @@
 use serde::Serialize;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::Path;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 const DEBOUNCE_MS: u64 = 200;
+
+/// Maps a notify EventKind to a simple string for the frontend.
+fn event_kind_to_string(kind: &EventKind) -> String {
+    match kind {
+        EventKind::Create(_) => "create".to_string(),
+        EventKind::Remove(_) => "remove".to_string(),
+        EventKind::Modify(notify::event::ModifyKind::Name(_)) => "rename".to_string(),
+        EventKind::Modify(_) => "modify".to_string(),
+        _ => "modify".to_string(),
+    }
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct DirEntry {
@@ -21,6 +31,73 @@ pub struct DirEntry {
 pub struct FsEvent {
     pub session_id: String,
     pub path: String,
+    pub kind: String,
+}
+
+/// Recursively lists all file and directory paths under `root`.
+/// Returns canonical path strings sorted directories-first, case-insensitive.
+pub fn list_all_paths(root: &str) -> Result<Vec<String>, String> {
+    let root_path = Path::new(root);
+    if !root_path.is_dir() {
+        return Err(format!("Not a directory: {root}"));
+    }
+
+    let mut paths = Vec::new();
+    collect_paths(root_path, root_path, &mut paths).map_err(|e| e.to_string())?;
+    Ok(paths)
+}
+
+fn collect_paths(root: &Path, dir: &Path, paths: &mut Vec<String>) -> Result<(), std::io::Error> {
+    let mut entries: Vec<std::fs::DirEntry> =
+        std::fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
+
+    // Sort: directories first, then case-insensitive alphabetical
+    entries.sort_by(|a, b| {
+        let a_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let b_dir = b.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        match (a_dir, b_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a
+                .file_name()
+                .to_string_lossy()
+                .to_lowercase()
+                .cmp(&b.file_name().to_string_lossy().to_lowercase()),
+        }
+    });
+
+    for entry in entries {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+
+        // Skip hidden files and common ignored directories
+        if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist" {
+            continue;
+        }
+
+        // Use path relative to root for the canonical path
+        let mut rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        // @pierre/trees uses a trailing slash as the canonical directory identity.
+        // Without it, the path is interpreted as a file and a second inferred
+        // directory row is created for descendants.
+        if is_dir {
+            rel.push('/');
+        }
+
+        paths.push(rel.clone());
+
+        if is_dir {
+            collect_paths(root, &path, paths)?;
+        }
+    }
+
+    Ok(())
 }
 
 pub struct WatcherManager {
@@ -41,7 +118,8 @@ impl WatcherManager {
         sender: mpsc::Sender<FsEvent>,
     ) -> Result<(), String> {
         let sid = session_id.to_string();
-        let pending: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        // Track path → kind; last event kind wins when debounced
+        let pending: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
         let pending_clone = pending.clone();
         let sender_clone = sender.clone();
         let sid_clone = sid.clone();
@@ -49,18 +127,18 @@ impl WatcherManager {
         // Debounce thread: flushes accumulated paths every DEBOUNCE_MS
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_millis(DEBOUNCE_MS));
-            let paths: Vec<String> = {
-                let mut set = pending_clone.lock().unwrap();
-                if set.is_empty() {
+            let entries: Vec<(String, String)> = {
+                let mut map = pending_clone.lock().unwrap();
+                if map.is_empty() {
                     continue;
                 }
-                let drained: Vec<String> = set.drain().collect();
-                drained
+                map.drain().collect()
             };
-            for p in paths {
+            for (p, kind) in entries {
                 let _ = sender_clone.send(FsEvent {
                     session_id: sid_clone.clone(),
                     path: p,
+                    kind,
                 });
             }
         });
@@ -68,9 +146,10 @@ impl WatcherManager {
         let mut watcher =
             notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
                 if let Ok(event) = res {
-                    let mut set = pending.lock().unwrap();
+                    let kind = event_kind_to_string(&event.kind);
+                    let mut map = pending.lock().unwrap();
                     for p in event.paths {
-                        set.insert(p.to_string_lossy().into_owned());
+                        map.insert(p.to_string_lossy().into_owned(), kind.clone());
                     }
                 }
             })
@@ -303,5 +382,105 @@ mod tests {
         );
 
         manager.unwatch("session-2");
+    }
+
+    #[test]
+    fn list_all_paths_returns_recursive_relative_paths() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        fs::create_dir(root.join("src")).unwrap();
+        fs::create_dir(root.join("src").join("lib")).unwrap();
+        fs::write(root.join("README.md"), "").unwrap();
+        fs::write(root.join("src").join("main.rs"), "").unwrap();
+        fs::write(root.join("src").join("lib").join("utils.rs"), "").unwrap();
+
+        let paths = list_all_paths(root.to_str().unwrap()).unwrap();
+
+        // Directories carry a trailing slash because @pierre/trees uses it to
+        // distinguish them from files with the same path.
+        assert!(paths.contains(&"src/".to_string()));
+        assert!(paths.contains(&"src/lib/".to_string()));
+        assert!(paths.contains(&"src/main.rs".to_string()));
+        assert!(paths.contains(&"src/lib/utils.rs".to_string()));
+        assert!(paths.contains(&"README.md".to_string()));
+        assert!(
+            paths.iter().all(|path| !path.contains('\\')),
+            "tree paths must use forward slashes on every platform: {paths:?}"
+        );
+
+        // Directories sort before files at each level.
+        let src_idx = paths.iter().position(|p| p == "src/").unwrap();
+        let readme_idx = paths.iter().position(|p| p == "README.md").unwrap();
+        assert!(src_idx < readme_idx);
+    }
+
+    #[test]
+    fn list_all_paths_skips_hidden_and_ignored_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(root.join(".git").join("config"), "").unwrap();
+        fs::create_dir(root.join("node_modules")).unwrap();
+        fs::write(root.join("node_modules").join("pkg.json"), "").unwrap();
+        fs::create_dir(root.join("target")).unwrap();
+        fs::write(root.join("target").join("out"), "").unwrap();
+        fs::write(root.join("visible.txt"), "").unwrap();
+
+        let paths = list_all_paths(root.to_str().unwrap()).unwrap();
+
+        assert_eq!(paths, vec!["visible.txt"]);
+    }
+
+    #[test]
+    fn list_all_paths_errors_for_nonexistent_path() {
+        let result = list_all_paths("/tmp/does-not-exist-xyz");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn watch_emits_event_with_kind() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let (tx, rx) = mpsc::channel();
+
+        let mut manager = WatcherManager::new();
+        manager
+            .watch("session-kind", root.to_str().unwrap(), tx)
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Create a file — should emit with a non-empty kind field
+        fs::write(root.join("new_file.txt"), "hello").unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut found = false;
+        while std::time::Instant::now() < deadline {
+            match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                Ok(event) => {
+                    assert_eq!(event.session_id, "session-kind");
+                    // Verify kind field is populated (macOS FSEvents may report
+                    // "create" or "modify" depending on event coalescing)
+                    if event.path.contains("new_file.txt") {
+                        assert!(
+                            ["create", "modify"].contains(&event.kind.as_str()),
+                            "expected 'create' or 'modify', got '{}'",
+                            event.kind
+                        );
+                        found = true;
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        assert!(
+            found,
+            "expected an event for new_file.txt with a kind field"
+        );
+
+        manager.unwatch("session-kind");
     }
 }

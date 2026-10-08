@@ -1,3 +1,5 @@
+mod plugin_test;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -25,10 +27,31 @@ enum Commands {
         #[command(subcommand)]
         action: SymphonyAction,
     },
+    /// Validate a local plugin package without launching the desktop application
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
     /// Agent eXperience Interface — TOON output for autonomous agents
     Axi {
         #[command(subcommand)]
         action: Option<AxiAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PluginAction {
+    /// Run the headless JSONL protocol checks for a local plugin package
+    Test {
+        /// Path to the directory containing planeai-plugin.json
+        #[arg(long)]
+        package: std::path::PathBuf,
+        /// JSONL scenario of plugin RPC requests to run after handshake
+        #[arg(long)]
+        scenario: Option<std::path::PathBuf>,
+        /// Send this prompt to the first declared provider and require it to reach idle
+        #[arg(long)]
+        provider_turn: Option<String>,
     },
 }
 
@@ -53,11 +76,31 @@ enum SessionAction {
         provider: Option<String>,
         #[arg(long)]
         task_key: Option<String>,
+        /// Project (name or id) owning --task-key, when the session runs in another project
+        #[arg(long, requires = "task_key")]
+        task_project: Option<String>,
         #[arg(long)]
         prompt: Option<String>,
         /// Parent session ID (for orchestration tracking)
         #[arg(long)]
         parent: Option<String>,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Create a sibling session in the current task workspace ($PLANEAI_SESSION_ID required)
+    Spawn {
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long)]
+        base_branch: Option<String>,
+        #[arg(long)]
+        yolo: bool,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        prompt: Option<String>,
         #[arg(long)]
         pretty: bool,
     },
@@ -357,6 +400,24 @@ enum AxiSessionAction {
         provider: Option<String>,
         #[arg(long)]
         task_key: Option<String>,
+        /// Project (name or id) owning --task-key, when the session runs in another project
+        #[arg(long, requires = "task_key")]
+        task_project: Option<String>,
+        #[arg(long)]
+        prompt: Option<String>,
+    },
+    /// Create a sibling session in the current task workspace ($PLANEAI_SESSION_ID required)
+    Spawn {
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long)]
+        base_branch: Option<String>,
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        yolo: bool,
+        #[arg(long)]
+        provider: Option<String>,
         #[arg(long)]
         prompt: Option<String>,
     },
@@ -470,6 +531,26 @@ enum TaskAction {
 fn main() {
     let cli = Cli::parse();
 
+    // Plugin tests are intentionally handled before application logging and the
+    // database are initialized, so this command stays completely headless.
+    let command = match cli.command {
+        Commands::Plugin { action } => {
+            let result = match action {
+                PluginAction::Test {
+                    package,
+                    scenario,
+                    provider_turn,
+                } => plugin_test::run(&package, scenario.as_deref(), provider_turn.as_deref()),
+            };
+            if let Err(error) = result {
+                eprintln!("plugin test failed: {error:#}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        command => command,
+    };
+
     let log_dir = planeai_paths::app_data_dir().join("logs");
     let _guard = planeai::logging::init(&log_dir);
 
@@ -479,7 +560,10 @@ fn main() {
         std::process::exit(1);
     });
 
-    match cli.command {
+    match command {
+        Commands::Plugin { .. } => {
+            unreachable!("plugin commands return before application initialization")
+        }
         Commands::Project { action } => match action {
             ProjectAction::List { pretty } => {
                 let output = planeai::cli::run_project_list(&conn);
@@ -502,6 +586,7 @@ fn main() {
                 yolo,
                 provider,
                 task_key,
+                task_project,
                 prompt,
                 parent,
                 pretty,
@@ -518,6 +603,7 @@ fn main() {
                     yolo,
                     provider,
                     task_key,
+                    task_project,
                     prompt,
                     parent_session_id,
                 };
@@ -534,6 +620,45 @@ fn main() {
                     }
                     Err(e) => {
                         eprintln!("{{\"error\": \"{e}\"}}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            SessionAction::Spawn {
+                name,
+                branch,
+                base_branch,
+                yolo,
+                provider,
+                prompt,
+                pretty,
+            } => {
+                let parent_session_id = std::env::var("PLANEAI_SESSION_ID")
+                    .map_err(|_| "session spawn must run inside a PlaneAI agent session ($PLANEAI_SESSION_ID is not set)")
+                    .unwrap_or_else(|error| {
+                        eprintln!("{{\"error\": \"{error}\"}}");
+                        std::process::exit(1);
+                    });
+                let opts = planeai::cli::WorkspaceSiblingOpts {
+                    name,
+                    branch,
+                    base_branch,
+                    yolo,
+                    provider,
+                    prompt,
+                };
+                match planeai::cli::create_workspace_sibling(&conn, &parent_session_id, opts) {
+                    Ok(session) => {
+                        let output = serde_json::to_string(&session).unwrap();
+                        if pretty {
+                            let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+                            println!("{}", serde_json::to_string_pretty(&value).unwrap());
+                        } else {
+                            println!("{output}");
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("{{\"error\": \"{error}\"}}");
                         std::process::exit(1);
                     }
                 }
@@ -765,6 +890,19 @@ fn main() {
                 }
             };
 
+            let lifecycle_context = planeai::task_cli::TaskLifecycleContext {
+                origin: planeai_core::task_lifecycle::TaskLifecycleOrigin::Cli,
+                project_id: conn
+                    .query_row(
+                        "SELECT id FROM projects WHERE prefix = ?1",
+                        [&prefix],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| error.to_string())
+                    .unwrap_or_default(),
+                project_prefix: prefix.clone(),
+            };
+
             let (result, pretty, key_for_notify) = match action {
                 TaskAction::Add {
                     title,
@@ -777,7 +915,7 @@ fn main() {
                     pretty,
                     ..
                 } => {
-                    let r = planeai::task_cli::run_task_add(
+                    let r = planeai::task_cli::run_task_add_with_lifecycle(
                         &repo,
                         planeai::task_cli::AddParams {
                             title: &title,
@@ -788,6 +926,7 @@ fn main() {
                             parent: parent.as_deref(),
                             base_branch: base_branch.as_deref(),
                         },
+                        &lifecycle_context,
                     );
                     let key = r.as_ref().ok().and_then(|json| {
                         serde_json::from_str::<serde_json::Value>(json)
@@ -817,7 +956,12 @@ fn main() {
                     pretty,
                     ..
                 } => {
-                    let r = planeai::task_cli::run_task_move(&repo, &key, &status);
+                    let r = planeai::task_cli::run_task_move_with_lifecycle(
+                        &repo,
+                        &key,
+                        &status,
+                        &lifecycle_context,
+                    );
                     (r, pretty, Some(key))
                 }
                 TaskAction::Edit {
@@ -834,7 +978,7 @@ fn main() {
                 } => {
                     let parent_opt = parent.map(|s| if s.is_empty() { None } else { Some(s) });
                     let parent_ref = parent_opt.as_ref().map(|o| o.as_deref());
-                    let r = planeai::task_cli::run_task_edit(
+                    let r = planeai::task_cli::run_task_edit_with_lifecycle(
                         &repo,
                         planeai::task_cli::EditParams {
                             key: &key,
@@ -846,11 +990,22 @@ fn main() {
                             parent: parent_ref,
                             base_branch: base_branch.as_deref(),
                         },
+                        &lifecycle_context,
                     );
                     (r, pretty, Some(key))
                 }
                 TaskAction::Delete { key, pretty, .. } => {
-                    let r = planeai::task_cli::run_task_delete(&repo, &key);
+                    let project_id = planeai::db::list_projects(&conn).ok().and_then(|projects| {
+                        projects
+                            .into_iter()
+                            .find(|candidate| candidate.prefix == prefix)
+                            .map(|candidate| candidate.id)
+                    });
+                    let r = planeai::task_cli::run_task_delete_in_project(
+                        &repo,
+                        &key,
+                        project_id.as_deref(),
+                    );
                     (r, pretty, Some(key))
                 }
             };
@@ -947,6 +1102,19 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
             }
         };
 
+    let lifecycle_context = planeai::task_cli::TaskLifecycleContext {
+        origin: planeai_core::task_lifecycle::TaskLifecycleOrigin::Axi,
+        project_id: conn
+            .query_row(
+                "SELECT id FROM projects WHERE prefix = ?1",
+                [&prefix],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+            .unwrap_or_default(),
+        project_prefix: prefix.clone(),
+    };
+
     let (output, code) = match action {
         AxiTaskAction::List { status, tags, .. } => {
             planeai::axi::task_ls(&repo, status.as_deref(), &tags)
@@ -962,7 +1130,7 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
             base_branch,
             ..
         } => {
-            let result = planeai::axi::task_add(
+            let result = planeai::axi::task_add_with_lifecycle(
                 &repo,
                 planeai::task_cli::AddParams {
                     title: &title,
@@ -973,6 +1141,7 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
                     parent: parent.as_deref(),
                     base_branch: base_branch.as_deref(),
                 },
+                &lifecycle_context,
             );
             if code_of(&result) == 0 {
                 if let Some(key) = extract_key(&result.0) {
@@ -982,7 +1151,8 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
             result
         }
         AxiTaskAction::Move { key, status, .. } => {
-            let result = planeai::axi::task_move(&repo, &key, &status);
+            let result =
+                planeai::axi::task_move_with_lifecycle(&repo, &key, &status, &lifecycle_context);
             if code_of(&result) == 0 {
                 planeai::task_cli::notify_task_changed(&key);
             }
@@ -1008,6 +1178,7 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
             yolo,
             provider,
             task_key,
+            task_project,
             prompt,
         } => {
             let parent_session_id = std::env::var("PLANEAI_SESSION_ID").ok();
@@ -1022,6 +1193,7 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                 yolo,
                 provider,
                 task_key,
+                task_project,
                 prompt,
                 parent_session_id,
             };
@@ -1029,6 +1201,31 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
             match planeai::cli::create_session(conn, opts) {
                 Ok(session) => planeai::axi::session_create_output(&session),
                 Err(e) => return emit_axi_error(&e),
+            }
+        }
+        AxiSessionAction::Spawn {
+            name,
+            branch,
+            base_branch,
+            yolo,
+            provider,
+            prompt,
+        } => {
+            let parent_session_id = match std::env::var("PLANEAI_SESSION_ID") {
+                Ok(session_id) => session_id,
+                Err(_) => return emit_axi_error("session spawn must run inside a PlaneAI agent session ($PLANEAI_SESSION_ID is not set)"),
+            };
+            let opts = planeai::cli::WorkspaceSiblingOpts {
+                name,
+                branch,
+                base_branch,
+                yolo,
+                provider,
+                prompt,
+            };
+            match planeai::cli::create_workspace_sibling(conn, &parent_session_id, opts) {
+                Ok(session) => planeai::axi::session_create_output(&session),
+                Err(error) => return emit_axi_error(&error),
             }
         }
         AxiSessionAction::Prompt { id, text } => {
@@ -1092,7 +1289,7 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                             None => return emit_axi_error("tmux session has no tmux_name"),
                         };
                         // Validate cursor prefix
-                        if !cursor_str.starts_with("tmux:") {
+                        if !cursor_str.trim().trim_matches('"').starts_with("tmux:") {
                             return emit_axi_error(&format!(
                                 "invalid cursor for tmux backend: {cursor_str}"
                             ));
@@ -1106,6 +1303,26 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                                 let (output, code) = planeai::axi::session_read_cursor_output(
                                     &session.id[..8],
                                     "tmux",
+                                    &result.cursor,
+                                    result.truncated,
+                                    &result.text,
+                                );
+                                print!("{output}");
+                                code
+                            }
+                            Err(e) => emit_axi_error(&e),
+                        }
+                    }
+                    planeai_rmux::BACKEND => {
+                        match planeai::rmux_ops::read_pane_after(
+                            &session.id,
+                            &cursor_str,
+                            max_bytes,
+                        ) {
+                            Ok(result) => {
+                                let (output, code) = planeai::axi::session_read_cursor_output(
+                                    &session.id[..8],
+                                    planeai_rmux::BACKEND,
                                     &result.cursor,
                                     result.truncated,
                                     &result.text,
@@ -1137,6 +1354,10 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                         Err(e) => return emit_axi_error(&e),
                     }
                 }
+                planeai_rmux::BACKEND => match planeai::rmux_ops::read_pane(&session.id, lines) {
+                    Ok(text) => planeai::axi::session_read_output(&session.id[..8], &text),
+                    Err(e) => return emit_axi_error(&e),
+                },
                 "local" => return emit_axi_error("local backend does not support remote read"),
                 other => return emit_axi_error(&format!("unsupported backend: {other}")),
             }
@@ -1154,6 +1375,9 @@ fn emit_axi_error(msg: &str) -> i32 {
 
 /// Parse a daemon cursor string "daemon:<offset>" into the byte offset.
 fn parse_daemon_cursor(cursor: &str) -> Result<u64, String> {
+    // TOON quotes any value containing a colon, so a cursor copied verbatim from
+    // `axi session read` output arrives quoted.
+    let cursor = cursor.trim().trim_matches('"');
     let parts: Vec<&str> = cursor.splitn(2, ':').collect();
     if parts.len() != 2 || parts[0] != "daemon" {
         return Err(format!("invalid cursor for daemon backend: {cursor}"));
@@ -1443,4 +1667,21 @@ fn symphony_command(cmd: &str) -> Result<String, String> {
         }
     }
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::*;
+
+    #[test]
+    fn plugin_test_scenario_help_describes_supported_jsonl_requests() {
+        let mut command = Cli::command();
+        let plugin = command.find_subcommand_mut("plugin").unwrap();
+        let test = plugin.find_subcommand_mut("test").unwrap();
+        let help = test.render_long_help().to_string();
+        assert!(help.contains("JSONL scenario of plugin RPC requests to run after handshake"));
+        assert!(!help.contains("Reserved for future scenario JSONL support"));
+    }
 }

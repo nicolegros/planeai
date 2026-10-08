@@ -8,7 +8,10 @@ $event = ($input_text | ConvertFrom-Json).hook_event_name
 $e = switch ($event) {
     "Stop" { "stop" }
     "UserPromptSubmit" { "busy" }
-    default { "notification" }
+    "PostToolUse" { "busy" }
+    "Notification" { "notification" }
+    "StopFailure" { "notification" }
+    default { exit 0 }  # unknown events must never alert
 }
 $msg = '{"session_id":"' + $sid + '","event":"' + $e + '"}'
 $pipeName = $sock -replace '^\\\\.\\pipe\\',''

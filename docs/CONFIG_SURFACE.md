@@ -9,22 +9,27 @@
 
 These are normal options users should configure.
 
-| Field                     | Type     | Default      | Description                                                         |
-| ------------------------- | -------- | ------------ | ------------------------------------------------------------------- |
-| `providers`               | map      | kiro, claude | Provider name → {command, yolo_flag, ...}                           |
-| `default_provider`        | string   | `"kiro"`     | Which provider to use when launching sessions                       |
-| `session_backend`         | string   | `"local"`    | Where sessions run: `local`, `tmux`, `daemon`                       |
-| `session_log_dir`         | string   | unset        | Directory for durable `.ansi` session logs                          |
-| `extra_path_dirs`         | string[] | `[]`         | Extra dirs prepended to PATH for sessions                           |
-| `appearance`              | object   | —            | Theme, dark/light mode, terminal themes                             |
-| `terminal`                | object   | —            | font_family, font_size, option_as_meta                              |
-| `projects_base_path`      | string   | unset        | Base directory for project worktrees                                |
-| `task_management`         | object   | unset        | Task lifecycle hooks and dispatch config                            |
-| `daemon_scrollback_bytes` | number   | 1MB          | Daemon ring buffer size                                             |
-| `integrations`            | object   | unset        | External service integrations (currently: `jira`)                   |
-| `scrollback_lines`        | number   | —            | Terminal scrollback line limit                                      |
-| `sound_enabled`           | bool     | `true`       | Play a chime when an agent finishes a task                          |
-| `post_merge_action`       | string   | `"archive"`  | Default action after PR merge timeout: `archive`, `destroy`, `keep` |
+| Field                     | Type     | Default                           | Description                                                                                                                                                      |
+| ------------------------- | -------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `providers`               | map      | kiro, claude, copilot, codex      | Provider name → {command, yolo_flag, ...}                                                                                                                        |
+| `default_provider`        | string   | `"kiro"`                          | Which provider to use when launching sessions                                                                                                                    |
+| `session_backend`         | string   | `"local"`                         | Where sessions run: `local`, `tmux`, `daemon`                                                                                                                    |
+| `session_log_dir`         | string   | unset                             | Directory for durable `.ansi` session logs                                                                                                                       |
+| `extra_path_dirs`         | string[] | `[]`                              | Extra dirs prepended to PATH for sessions and agent detection                                                                                                    |
+| `appearance`              | object   | —                                 | Theme, dark/light mode, terminal themes                                                                                                                          |
+| `terminal`                | object   | —                                 | font_family, font_size, option_as_meta                                                                                                                           |
+| `projects_base_path`      | string   | unset                             | Base directory for project worktrees                                                                                                                             |
+| `task_management`         | object   | recommended hooks on new installs | Task lifecycle hooks and dispatch config. `null` turns task management off; configs written before it defaulted on and lacking the key stay off                  |
+| `daemon_scrollback_bytes` | number   | 1MB                               | Daemon ring buffer size                                                                                                                                          |
+| `integrations`            | object   | unset                             | Reserved legacy integration config; Jira is configured in plugin settings                                                                                        |
+| `scrollback_lines`        | number   | —                                 | Terminal scrollback line limit                                                                                                                                   |
+| `sound_enabled`           | bool     | `true`                            | Play a chime when an agent finishes a task                                                                                                                       |
+| `auto_open_review`        | bool     | `false` on new installs           | Open the Review tab when the active session's agent stops with changes. Configs written before this default changed that lack the key (or set `null`) keep it on |
+| `post_merge_action`       | string   | `"archive"`                       | Default action after PR merge timeout: `archive`, `destroy`, `keep`                                                                                              |
+| `sidebar_group_by`        | string   | `"project"`                       | Sidebar top-level grouping: `project` or `status`                                                                                                                |
+| `hide_task_keys`          | bool     | `false`                           | Hide task keys on sidebar task rows                                                                                                                              |
+| `hide_project_labels`     | bool     | `false`                           | Hide project names on sidebar rows when grouped by status                                                                                                        |
+| `onboarding_completed`    | bool     | see description                   | `false` on first launch until setup is finished or skipped; configs written before this field existed load as `true`                                             |
 
 ### 2. Advanced compatibility config
 
@@ -64,7 +69,6 @@ These exist in the config file for compatibility but are migration-period option
 
 | Field             | Reason                                |
 | ----------------- | ------------------------------------- |
-| `pr_status`       | May move into `task_management`       |
 | `hide_done_tasks` | UI preference, may become per-project |
 
 ---
@@ -132,13 +136,13 @@ Use env vars to control PTY implementation:
 
 ```bash
 # Roll back daemon PTY to legacy
-PLANEAI_DAEMON_PTY_CORE=legacy pnpm tauri dev
+PLANEAI_DAEMON_PTY_CORE=legacy make dev
 
 # Use modern planeai-pty for daemon sessions
-PLANEAI_DAEMON_PTY_CORE=planeai-pty pnpm tauri dev
+PLANEAI_DAEMON_PTY_CORE=planeai-pty make dev
 
 # Roll back local PTY to legacy
-PLANEAI_LOCAL_PTY_CORE=legacy pnpm tauri dev
+PLANEAI_LOCAL_PTY_CORE=legacy make dev
 ```
 
 ### Resolution order
@@ -214,37 +218,23 @@ Specific examples:
 
 ---
 
-## integrations.jira
+## Jira plugin settings
 
-### Definition
+Jira connection settings are owned by the bundled `planeai-plugin-jira`, not by `integrations.jira`. Configure the Jira Cloud site and connect from **Preferences → Jira**. OAuth credentials are stored only in the plugin secrets namespace.
 
-Optional Jira Cloud integration that syncs issues into planeai's task board and writes back status transitions.
+The Jira plugin supports configured JQL sources, task synchronization, periodic refresh, lifecycle writeback, a sidebar section, departed prompts, and assigning a Jira issue to a PlaneAI project as a child task.
 
-### Schema
+For a profile with legacy `integrations.jira` data, migration is explicit: **Preferences → Plugins → Migrate and enable Jira plugin**. The host takes a private backup, fences legacy Jira, transfers public settings, refresh token/cloud identity, issue/source/sync state, and task links to the plugin namespace, validates the import, then enables the bundled plugin. A failed or interrupted migration stays fenced and exposes **Retry migration**, which resumes idempotently from the same backup. No profile runs legacy and plugin Jira workers concurrently.
 
-| Field                                | Type   | Default | Description                                   |
-| ------------------------------------ | ------ | ------- | --------------------------------------------- |
-| `integrations.jira.site`             | string | —       | Jira Cloud site URL (required to enable)      |
-| `integrations.jira.sync_interval_ms` | number | 60000   | Polling interval in milliseconds              |
-| `integrations.jira.sources`          | map    | `{}`    | Named JQL sync sources (key = source alias)   |
-| `sources.<name>.jql`                 | string | —       | JQL filter selecting issues to sync           |
-| `sources.<name>.status_map`          | map    | `{}`    | Jira status name → planeai status             |
-| `sources.<name>.writeback`           | object | null    | Optional writeback config                     |
-| `writeback.on_start`                 | string | null    | Jira status to transition to on work start    |
-| `writeback.on_complete`              | string | null    | Jira status to transition to on work complete |
-| `writeback.comment`                  | bool   | false   | Add a timestamped comment on each transition  |
+### Build-time environment variables
 
-### Build-time env vars
+| Variable             | Required | Description             |
+| -------------------- | -------- | ----------------------- |
+| `JIRA_CLIENT_ID`     | Yes*     | OAuth 2.0 client ID     |
+| `JIRA_CLIENT_SECRET` | Yes*     | OAuth 2.0 client secret |
 
-| Variable             | Required | Description                                      |
-| -------------------- | -------- | ------------------------------------------------ |
-| `JIRA_CLIENT_ID`     | Yes\*    | OAuth 2.0 client ID (from Atlassian dev console) |
-| `JIRA_CLIENT_SECRET` | Yes\*    | OAuth 2.0 client secret                          |
+*Without these values the development build uses placeholders and OAuth is unavailable.
 
-\* Build succeeds without them (placeholder values used) but OAuth will not work at runtime.
+## GitHub plugin legacy PR migration
 
-### Policy
-
-- Jira is entirely optional. Absent `integrations.jira` config means the feature is inactive.
-- Auth tokens are stored in the app data directory (file-based, `0600` permissions on Unix).
-- All Jira network calls are async and never block the main thread.
+Profiles with legacy session `pr_url`/`pr_state` values are migrated explicitly from **Preferences → Plugins** into the standalone GitHub plugin's host-owned settings document. PlaneAI freezes a private snapshot of URL-backed mappings, fences only the `github` plugin until import completes, merges compatible mappings into `plugins/state/github/data/settings.json`, and validates the strict versioned `github` namespace before recording completion. State-only legacy values are reported as safely skipped because they cannot form a valid PR mapping. The migration never installs or enables the local GitHub plugin; after a successful import, install or enable it normally. Failed or interrupted imports remain retryable from the same frozen snapshot.

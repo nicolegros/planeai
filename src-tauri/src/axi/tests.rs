@@ -228,7 +228,6 @@ fn session_create_outputs_toon_with_session_id() {
         provider: Some("kiro".to_string()),
         backend: "daemon".to_string(),
         provider_session_id: None,
-        tab_count: 1,
         auto_approve: true,
         task_key: None,
         base_branch: Some("main".to_string()),
@@ -236,6 +235,7 @@ fn session_create_outputs_toon_with_session_id() {
         pr_state: None,
         attached_once: false,
         parent_session_id: Some("pppppppp-1111-2222-3333-444444444444".to_string()),
+        task_project_id: None,
     };
 
     let (output, code) = session_create_output(&session);

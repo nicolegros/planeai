@@ -53,11 +53,9 @@ pub fn archive(
 
     // Fire task hook before mutation
     if let (Some(cfg), Some(ref key)) = (config, &session.task_key) {
-        if let Some(cwd) = session_cwd(conn, &session) {
-            eprintln!("[session] firing on_complete hook for task {key}");
-            tracing::info!(task_key = %key, "firing on_complete hook");
-            fire_task_hook(cfg, &session, "on_complete", &cwd, conn);
-        }
+        eprintln!("[session] firing on_complete hook for task {key}");
+        tracing::info!(task_key = %key, "firing on_complete hook");
+        fire_task_hook(cfg, &session, "on_complete", conn);
     }
 
     // Kill the agent backend process.
@@ -67,7 +65,6 @@ pub fn archive(
         &session.backend,
         session.tmux_name.as_deref(),
         Some(session.id.as_str()),
-        session.tab_count,
         kill_ops,
     );
     if !kill_errors.is_empty() {
@@ -83,26 +80,26 @@ pub fn archive(
 }
 
 /// Archive all active/exited sessions linked to a task key.
-/// Returns the number of sessions archived.
+/// Returns the sessions that were successfully archived.
 pub fn archive_sessions_for_task(
     conn: &Connection,
     task_key: &str,
     config: &Option<Config>,
-) -> usize {
+) -> Vec<Session> {
     let sessions = match planeai_core::services::SessionService::list_by_task_key(conn, task_key) {
         Ok(s) => s,
         Err(e) => {
             tracing::error!(task_key = %task_key, error = %e, "failed to list sessions for task");
-            return 0;
+            return vec![];
         }
     };
 
     if sessions.is_empty() {
-        return 0;
+        return vec![];
     }
 
     let kill_ops = crate::cleanup::real_kill_ops();
-    let mut count = 0;
+    let mut archived = Vec::new();
 
     for session in &sessions {
         tracing::info!(
@@ -111,18 +108,17 @@ pub fn archive_sessions_for_task(
             task_key = %task_key,
             "archiving session — task moved to done"
         );
-        if let Err(e) = archive(conn, &session.id, config, &kill_ops) {
-            tracing::warn!(
+        match archive(conn, &session.id, config, &kill_ops) {
+            Ok(session) => archived.push(session),
+            Err(error) => tracing::warn!(
                 session_id = %&session.id[..8],
-                error = %e,
+                %error,
                 "failed to archive session for done task"
-            );
-        } else {
-            count += 1;
+            ),
         }
     }
 
-    count
+    archived
 }
 
 pub fn list(conn: &Connection, archived: bool) -> Result<Vec<Session>, String> {
@@ -199,9 +195,7 @@ pub fn destroy(
 
     // Fire task hook before mutation
     if let (Some(cfg), Some(_)) = (config, &session.task_key) {
-        if let Some(cwd) = session_cwd(conn, &session) {
-            fire_task_hook(cfg, &session, "on_complete", &cwd, conn);
-        }
+        fire_task_hook(cfg, &session, "on_complete", conn);
     }
 
     // Soft-delete
@@ -213,10 +207,12 @@ pub fn destroy(
         .flatten()
         .map(|p| p.path);
 
+    let worktree_owned = db::session_owns_worktree(conn, &session.id).unwrap_or(false);
     let ctx = CleanupContext {
         backend: session.backend.clone(),
         tmux_name: session.tmux_name.clone(),
         worktree_path: session.worktree_path.clone(),
+        worktree_owned,
         project_path: project_path.clone(),
         branch: if session.worktree_path.is_some() {
             Some(session.branch.clone())
@@ -224,7 +220,6 @@ pub fn destroy(
             None
         },
         session_id: Some(session.id.clone()),
-        tab_count: session.tab_count,
     };
     let cleanup_errors = crate::cleanup::run_cleanup(&ctx, cleanup_ops);
 
@@ -234,25 +229,28 @@ pub fn destroy(
     })
 }
 
-pub fn session_cwd(conn: &Connection, session: &Session) -> Option<String> {
-    if let Some(ref wt) = session.worktree_path {
-        return Some(wt.clone());
-    }
-    db::get_project(conn, &session.project_id)
+/// The project whose task store holds the session's task, which may differ from the repo it runs in.
+fn task_owner_project(conn: &Connection, session: &Session) -> Option<db::Project> {
+    db::get_project(conn, session.task_project_id())
         .ok()
         .flatten()
-        .map(|p| p.path)
 }
 
-/// Fire a task manager lifecycle hook (on_start, on_notify, on_restart, on_complete).
-/// Uses the caller's connection — no new DB connections opened.
-pub fn fire_task_hook(
-    cfg: &Config,
-    session: &Session,
-    hook_name: &str,
-    cwd: &str,
-    conn: &Connection,
-) {
+/// `on_resume` only moves a task whose status is still the `on_notify` target.
+fn resume_applies(
+    tm: &crate::config::TaskManager,
+    current: Option<planeai_tasks::model::Status>,
+) -> bool {
+    let notified = tm
+        .on_notify
+        .as_ref()
+        .and_then(|hook| planeai_tasks::model::Status::parse(&hook.move_to));
+    notified.is_some() && notified == current
+}
+
+/// Fire a task manager lifecycle hook (on_start, on_notify, on_restart, on_resume, on_complete).
+/// Reads the session through the caller's connection and opens the task store to move the task.
+pub fn fire_task_hook(cfg: &Config, session: &Session, hook_name: &str, conn: &Connection) {
     let task_key = match &session.task_key {
         Some(k) => k,
         None => return,
@@ -265,33 +263,38 @@ pub fn fire_task_hook(
         "on_start" => tm.on_start.as_ref(),
         "on_notify" => tm.on_notify.as_ref(),
         "on_restart" => tm.on_restart.as_ref(),
+        "on_resume" => tm.on_resume.as_ref(),
         "on_complete" => tm.on_complete.as_ref(),
         _ => None,
     };
     if let Some(h) = hook {
         let db_path = planeai_paths::db_path();
-        let projects = db::list_projects(conn).unwrap_or_default();
-        let prefix = projects
-            .iter()
-            .find(|p| cwd.starts_with(&p.path))
-            .map(|p| p.prefix.clone())
-            .unwrap_or_default();
-        if !prefix.is_empty() {
-            if let Ok(repo) = planeai_tasks::sqlite::SqliteRepository::open(
+        let Some(project) = task_owner_project(conn, session) else {
+            return;
+        };
+        if let (Some(status), Ok(repo)) = (
+            planeai_tasks::model::Status::parse(&h.move_to),
+            planeai_tasks::sqlite::SqliteRepository::open(
                 db_path.to_str().unwrap_or_default(),
-                &prefix,
-            ) {
-                use planeai_tasks::model::{Status, UpdateParams};
+                &project.prefix,
+            ),
+        ) {
+            if hook_name == "on_resume" {
                 use planeai_tasks::provider::TaskProvider;
-                if let Some(s) = Status::parse(&h.move_to) {
-                    let _ = repo.update(
-                        task_key,
-                        UpdateParams {
-                            status: Some(s),
-                            ..Default::default()
-                        },
-                    );
+                if !resume_applies(tm, repo.get(task_key).ok().map(|task| task.status)) {
+                    return;
                 }
+            }
+            match planeai_core::task_lifecycle::move_task_with_lifecycle(&repo, task_key, status) {
+                Ok((_task, events)) => {
+                    forward_task_lifecycle(planeai_core::task_lifecycle::TaskLifecycleBatch::new(
+                        planeai_core::task_lifecycle::TaskLifecycleOrigin::SessionHook,
+                        project.id.clone(),
+                        project.prefix.clone(),
+                        events,
+                    ))
+                }
+                Err(error) => tracing::warn!(task_key, %error, "task lifecycle hook move failed"),
             }
         }
     }
@@ -308,93 +311,109 @@ pub trait PromptOps {
     fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String>;
     fn tmux_has_session(&self, tmux_name: &str) -> bool;
     fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String>;
+    fn rmux_send(&self, session_id: &str, text: &str) -> Result<(), String>;
 }
 
-#[cfg(not(windows))]
 pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
     struct RealPromptOps;
     impl PromptOps for RealPromptOps {
         fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String> {
-            crate::tmux::send_keys(tmux_name, text)
+            tmux_send_prompt(tmux_name, text)
         }
         fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String> {
-            use std::io::Write;
-            use std::os::unix::net::UnixStream;
-            let sock = planeai_paths::app_data_dir().join("notify.sock");
-            if !sock.exists() {
-                return Err("GUI is not running (socket not found)".to_string());
-            }
-            let mut stream = UnixStream::connect(&sock).map_err(|e| e.to_string())?;
-            let msg = serde_json::json!({
-                "event": "send_prompt",
-                "session_id": session_id,
-                "text": text,
-            });
-            stream
-                .write_all(format!("{}\n", msg).as_bytes())
-                .map_err(|e| e.to_string())
+            notify_gui_send_prompt(session_id, text)
         }
         fn tmux_has_session(&self, tmux_name: &str) -> bool {
-            crate::tmux::has_session(tmux_name)
+            tmux_session_exists(tmux_name)
         }
         fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String> {
             daemon_send_prompt(session_id, text)
+        }
+        fn rmux_send(&self, session_id: &str, text: &str) -> Result<(), String> {
+            crate::rmux_ops::send_prompt(session_id, text)
         }
     }
     RealPromptOps
 }
 
+// The `tmux` module is `cfg(not(windows))`, so the Windows arms below build their
+// invocations from `command::tmux_command` directly rather than reaching for it.
+
+#[cfg(not(windows))]
+fn tmux_send_prompt(tmux_name: &str, text: &str) -> Result<(), String> {
+    crate::tmux::send_keys(tmux_name, text)
+}
+
 #[cfg(windows)]
-pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
-    struct WindowsPromptOps;
-    impl PromptOps for WindowsPromptOps {
-        fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String> {
-            use std::process::Command;
-            let output = Command::new("tmux")
-                .args(["send-keys", "-t", tmux_name, "-l", text])
-                .output()
-                .map_err(|e| format!("failed to run tmux: {e}"))?;
-            if !output.status.success() {
-                return Err(String::from_utf8_lossy(&output.stderr).to_string());
-            }
-            let output = Command::new("tmux")
-                .args(["send-keys", "-t", tmux_name, "Enter"])
-                .output()
-                .map_err(|e| format!("failed to run tmux: {e}"))?;
-            if !output.status.success() {
-                return Err(String::from_utf8_lossy(&output.stderr).to_string());
-            }
-            Ok(())
-        }
-        fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String> {
-            use std::io::Write;
-            let pipe_name = format!("\\\\.\\pipe\\planeai-notify");
-            let mut stream = std::fs::OpenOptions::new()
-                .write(true)
-                .open(&pipe_name)
-                .map_err(|e| format!("GUI is not running (pipe not found): {e}"))?;
-            let msg = serde_json::json!({
-                "event": "send_prompt",
-                "session_id": session_id,
-                "text": text,
-            });
-            stream
-                .write_all(format!("{}\n", msg).as_bytes())
-                .map_err(|e| e.to_string())
-        }
-        fn tmux_has_session(&self, tmux_name: &str) -> bool {
-            use std::process::Command;
-            Command::new("tmux")
-                .args(["has-session", "-t", tmux_name])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        }
-        fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String> {
-            daemon_send_prompt(session_id, text)
-        }
+fn tmux_send_prompt(tmux_name: &str, text: &str) -> Result<(), String> {
+    // Literal text first (no key-name interpretation), then Enter separately.
+    run_tmux(&["send-keys", "-t", tmux_name, "-l", text])?;
+    run_tmux(&["send-keys", "-t", tmux_name, "Enter"])
+}
+
+#[cfg(windows)]
+fn run_tmux(args: &[&str]) -> Result<(), String> {
+    let output = crate::command::tmux_command(args)
+        .output()
+        .map_err(|e| format!("failed to run tmux: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
     }
-    WindowsPromptOps
+}
+
+#[cfg(not(windows))]
+fn tmux_session_exists(tmux_name: &str) -> bool {
+    crate::tmux::has_session(tmux_name)
+}
+
+#[cfg(windows)]
+fn tmux_session_exists(tmux_name: &str) -> bool {
+    // '=' forces an exact match so a name is not matched by prefix.
+    crate::command::tmux_command(&["has-session", "-t", &format!("={tmux_name}")])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// The newline-delimited frame the GUI's notify listener expects.
+fn send_prompt_frame(session_id: &str, text: &str) -> String {
+    let msg = serde_json::json!({
+        "event": "send_prompt",
+        "session_id": session_id,
+        "text": text,
+    });
+    format!("{msg}\n")
+}
+
+/// Hand a prompt to the running GUI over its local IPC transport:
+/// a unix domain socket, or a named pipe on Windows.
+#[cfg(not(windows))]
+fn notify_gui_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+    let sock = planeai_paths::app_data_dir().join("notify.sock");
+    if !sock.exists() {
+        return Err("GUI is not running (socket not found)".to_string());
+    }
+    let mut stream = UnixStream::connect(&sock).map_err(|e| e.to_string())?;
+    stream
+        .write_all(send_prompt_frame(session_id, text).as_bytes())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+fn notify_gui_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    const PIPE_NAME: &str = r"\\.\pipe\planeai-notify";
+    let mut stream = std::fs::OpenOptions::new()
+        .write(true)
+        .open(PIPE_NAME)
+        .map_err(|e| format!("GUI is not running (pipe not found): {e}"))?;
+    stream
+        .write_all(send_prompt_frame(session_id, text).as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(unix)]
@@ -512,6 +531,19 @@ fn daemon_send_frames(
     Ok(())
 }
 
+/// `sessions.backend` for sessions whose runtime is a plugin provider (ADR-0014).
+pub const PLUGIN_BACKEND: &str = "plugin";
+
+/// The task prompt a new session keeps for its first attach: only a backend that runs nothing
+/// at launch (`local`) keeps it; every other backend already started the agent with it.
+pub fn pending_prompt(backend: &str, task_prompt: Option<String>) -> Option<String> {
+    let spawns_on_attach = !matches!(
+        backend,
+        "tmux" | "daemon" | planeai_rmux::BACKEND | PLUGIN_BACKEND
+    );
+    task_prompt.filter(|_| spawns_on_attach)
+}
+
 pub fn send_prompt(
     conn: &Connection,
     id_prefix: &str,
@@ -552,9 +584,20 @@ pub fn send_prompt(
             ops.notify_socket_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to local PTY");
         }
+        // The GUI owns provider runtimes, so prompts take the same route as local PTYs.
+        PLUGIN_BACKEND => {
+            // The GUI delivers it later, so refuse what the provider would reject while the caller can still hear it.
+            planeai_plugin_contract::provider::check_prompt_size(text)?;
+            ops.notify_socket_send(&session.id, text)?;
+            tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to plugin provider");
+        }
         "daemon" => {
             ops.daemon_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via daemon data connection");
+        }
+        planeai_rmux::BACKEND => {
+            ops.rmux_send(&session.id, text)?;
+            tracing::info!(session_id = %session.id, "send_prompt: sent via rmux pane input");
         }
         other => return Err(format!("unsupported backend: {other}")),
     }
@@ -701,21 +744,21 @@ pub fn read_daemon_buffer_after(
     }
 }
 
+/// Scrollback depth captured when matching a tmux cursor against pane history.
+const TMUX_CURSOR_SCROLLBACK_LINES: usize = 10_000;
+
 /// Read output from a tmux-backend session via tmux capture-pane.
 pub fn read_tmux_pane(tmux_name: &str, lines: usize) -> Result<String, String> {
-    let mut cmd = std::process::Command::new("tmux");
-    cmd.args([
+    let output = crate::command::tmux_command(&[
         "capture-pane",
         "-p",
         "-t",
         tmux_name,
         "-S",
         &format!("-{lines}"),
-    ]);
-    planeai_core::command::no_window(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run tmux: {e}"))?;
+    ])
+    .output()
+    .map_err(|e| format!("failed to run tmux: {e}"))?;
 
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
@@ -744,143 +787,21 @@ pub fn read_tmux_pane_after(
     cursor: &str,
     max_bytes: usize,
 ) -> Result<TmuxCursorReadResult, String> {
-    // Capture full scrollback (up to 10000 lines for cursor matching)
-    let mut cmd = std::process::Command::new("tmux");
-    cmd.args(["capture-pane", "-p", "-t", tmux_name, "-S", "-10000"]);
-    planeai_core::command::no_window(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run tmux: {e}"))?;
-
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-
-    let full_text = String::from_utf8_lossy(&output.stdout).to_string();
-    let all_lines: Vec<&str> = full_text.lines().collect();
-
-    // Parse cursor: "tmux:<line_index>:<hash>"
-    let (prev_line_count, prev_hash) = parse_tmux_cursor(cursor)?;
-
-    // Try to validate cursor: check if lines up to prev_line_count still hash the same
-    let truncated = if prev_line_count == 0 {
-        false
-    } else if prev_line_count <= all_lines.len() {
-        let check_lines = &all_lines[..prev_line_count];
-        let current_hash = hash_lines(check_lines);
-        current_hash != prev_hash
-    } else {
-        true // History is shorter than our cursor position
-    };
-
-    let new_content = if truncated {
-        // Can't trust cursor — return all content
-        full_text.clone()
-    } else {
-        // Return only lines after the cursor position
-        if prev_line_count >= all_lines.len() {
-            String::new()
-        } else {
-            all_lines[prev_line_count..].join("\n")
-        }
-    };
-
-    // Apply max_bytes cap: truncate to complete lines within the byte budget so
-    // the line-based cursor can advance precisely. Any partial trailing line is
-    // omitted and will be returned on the next poll.
-    let (text, was_capped) = if max_bytes > 0 && new_content.len() > max_bytes {
-        let safe_end = new_content
-            .char_indices()
-            .take_while(|(i, _)| *i < max_bytes)
-            .last()
-            .map_or(0, |(i, c)| i + c.len_utf8());
-        let capped = &new_content[..safe_end];
-        if let Some(last_nl) = capped.rfind('\n') {
-            (new_content[..last_nl].to_string(), true)
-        } else {
-            (capped.to_string(), true)
-        }
-    } else {
-        (new_content, false)
-    };
-
-    // Build cursor: if max_bytes capped the output, only advance to cover the
-    // lines actually delivered so remaining content is returned on the next poll.
-    let new_cursor = if was_capped && !truncated {
-        let newline_count = text.matches('\n').count();
-        if newline_count == 0 {
-            build_tmux_cursor(&all_lines[..prev_line_count])
-        } else {
-            let delivered_line_count = newline_count + 1;
-            let cursor_line_count = prev_line_count + delivered_line_count;
-            let cursor_lines = &all_lines[..cursor_line_count];
-            build_tmux_cursor(cursor_lines)
-        }
-    } else {
-        build_tmux_cursor(&all_lines)
-    };
-
+    let captured = read_tmux_pane(tmux_name, TMUX_CURSOR_SCROLLBACK_LINES)?;
+    let read = planeai_core::capture_cursor::read_after("tmux", &captured, cursor, max_bytes)?;
     Ok(TmuxCursorReadResult {
-        text,
-        cursor: new_cursor,
-        truncated,
+        text: read.text,
+        cursor: read.cursor,
+        truncated: read.truncated,
     })
 }
 
 /// Build an initial tmux cursor (for first read without --after).
 #[allow(dead_code)]
 pub fn build_tmux_cursor_from_pane(tmux_name: &str) -> Result<String, String> {
-    let mut cmd = std::process::Command::new("tmux");
-    cmd.args(["capture-pane", "-p", "-t", tmux_name, "-S", "-10000"]);
-    planeai_core::command::no_window(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run tmux: {e}"))?;
-
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-
-    let full_text = String::from_utf8_lossy(&output.stdout).to_string();
-    let all_lines: Vec<&str> = full_text.lines().collect();
-    Ok(build_tmux_cursor(&all_lines))
-}
-
-fn parse_tmux_cursor(cursor: &str) -> Result<(usize, u64), String> {
-    let parts: Vec<&str> = cursor.splitn(3, ':').collect();
-    if parts.len() != 3 || parts[0] != "tmux" {
-        return Err(format!("invalid tmux cursor: {cursor}"));
-    }
-    let line_count: usize = parts[1]
-        .parse()
-        .map_err(|_| format!("invalid cursor line count: {}", parts[1]))?;
-    let hash: u64 = parts[2]
-        .parse()
-        .map_err(|_| format!("invalid cursor hash: {}", parts[2]))?;
-    Ok((line_count, hash))
-}
-
-fn build_tmux_cursor(lines: &[&str]) -> String {
-    let line_count = lines.len();
-    let hash = hash_lines(lines);
-    format!("tmux:{line_count}:{hash}")
-}
-
-fn hash_lines(lines: &[&str]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    lines.len().hash(&mut hasher);
-    // Hash first 5 lines for anchoring (detects history trimming)
-    let first_end = lines.len().min(5);
-    for line in &lines[..first_end] {
-        line.hash(&mut hasher);
-    }
-    // Hash last 10 lines for tail stability
-    let start = lines.len().saturating_sub(10);
-    for line in &lines[start..] {
-        line.hash(&mut hasher);
-    }
-    hasher.finish()
+    let captured = read_tmux_pane(tmux_name, TMUX_CURSOR_SCROLLBACK_LINES)?;
+    let lines: Vec<&str> = captured.lines().collect();
+    Ok(planeai_core::capture_cursor::build_cursor("tmux", &lines))
 }
 
 pub fn resolve_session_by_prefix(conn: &Connection, prefix: &str) -> Result<Session, ResolveError> {
@@ -912,8 +833,54 @@ pub fn resolve_session_by_prefix(conn: &Connection, prefix: &str) -> Result<Sess
     }
 }
 
+/// Forward a post-commit lifecycle batch to the desktop host when it is running.
+/// Session operations are shared by the library and Tauri binary, so this uses the
+/// workspace IPC crate directly rather than a binary-local plugin dependency.
+fn forward_task_lifecycle(batch: planeai_core::task_lifecycle::TaskLifecycleBatch) {
+    use std::io::Write;
+
+    if batch.events.is_empty() {
+        return;
+    }
+
+    let app_dir = planeai_paths::app_data_dir();
+    if !planeai_ipc::channel_exists(planeai_ipc::Channel::Notify, &app_dir) {
+        tracing::debug!(batch_id = %batch.batch_id, "desktop host unavailable; dropping task lifecycle batch");
+        return;
+    }
+    match planeai_ipc::connect(planeai_ipc::Channel::Notify, &app_dir) {
+        Ok(mut stream) => {
+            let message = serde_json::json!({"event": "task_lifecycle", "batch": batch});
+            if let Err(error) = writeln!(stream, "{message}") {
+                tracing::warn!(%error, "failed to forward task lifecycle batch");
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "failed to connect to desktop host for task lifecycle batch")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_a_local_session_keeps_its_task_prompt_for_the_first_attach() {
+        let kept = |backend: &str| pending_prompt(backend, Some("Fix it".into()));
+        assert_eq!(
+            [
+                "local",
+                "tmux",
+                "daemon",
+                planeai_rmux::BACKEND,
+                PLUGIN_BACKEND
+            ]
+            .map(kept),
+            [Some("Fix it".into()), None, None, None, None]
+        );
+        assert_eq!(pending_prompt("local", None), None);
+    }
+
     use super::*;
     use crate::cleanup::CleanupOps;
     use crate::config::Config;
@@ -937,6 +904,12 @@ mod tests {
     }
 
     impl PromptOps for MockPromptOps {
+        fn rmux_send(&self, session_id: &str, text: &str) -> Result<(), String> {
+            self.sent_socket
+                .borrow_mut()
+                .push((session_id.to_string(), text.to_string()));
+            Ok(())
+        }
         fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String> {
             self.sent_keys
                 .borrow_mut()
@@ -995,7 +968,9 @@ mod tests {
     fn test_kill_ops() -> KillOps {
         KillOps {
             kill_tmux: Box::new(|_| Ok(())),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| Ok(())),
+            kill_rmux_session: Box::new(|_| Ok(())),
         }
     }
 
@@ -1003,7 +978,9 @@ mod tests {
         CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
+                list_daemon_sessions: Box::new(|| Ok(Vec::new())),
                 kill_daemon_session: Box::new(|_| Err("daemon error".to_string())),
+                kill_rmux_session: Box::new(|_| Ok(())),
             },
             remove_worktree: Box::new(|_, _| Err("locked".to_string())),
             remove_dir: Box::new(|_| Err("permission denied".to_string())),
@@ -1221,7 +1198,9 @@ mod tests {
                 KILLED.with(|k| k.borrow_mut().push(name.to_string()));
                 Ok(())
             }),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| Ok(())),
+            kill_rmux_session: Box::new(|_| Ok(())),
         };
 
         archive(&conn, id, &None, &ops).unwrap();
@@ -1258,7 +1237,9 @@ mod tests {
 
         let ops = KillOps {
             kill_tmux: Box::new(|_| panic!("should not be called for local backend")),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|_| panic!("should not be called for local backend")),
+            kill_rmux_session: Box::new(|_| Ok(())),
         };
 
         archive(&conn, id, &None, &ops).unwrap();
@@ -1297,10 +1278,12 @@ mod tests {
 
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
             kill_daemon_session: Box::new(|sid| {
                 KILLED.with(|k| k.borrow_mut().push(sid.to_string()));
                 Ok(())
             }),
+            kill_rmux_session: Box::new(|_| Ok(())),
         };
 
         archive(&conn, id, &None, &ops).unwrap();
@@ -1422,6 +1405,83 @@ mod tests {
     }
 
     #[test]
+    fn resume_only_reverts_the_on_notify_move() {
+        use planeai_tasks::model::Status;
+        let hook = |status: &str| {
+            Some(crate::config::LifecycleHook {
+                move_to: status.to_string(),
+            })
+        };
+        let tm = crate::config::TaskManager {
+            templates: None,
+            on_start: None,
+            on_notify: hook("in_review"),
+            on_restart: None,
+            on_resume: hook("in_progress"),
+            on_complete: None,
+            auto_dispatch: None,
+        };
+
+        assert!(resume_applies(&tm, Some(Status::InReview)));
+        assert!(!resume_applies(&tm, Some(Status::Done)));
+        assert!(!resume_applies(&tm, Some(Status::Todo)));
+        assert!(!resume_applies(&tm, None));
+        let without_notify = crate::config::TaskManager {
+            on_notify: None,
+            ..tm
+        };
+        assert!(!resume_applies(&without_notify, Some(Status::InReview)));
+    }
+
+    #[test]
+    fn task_hooks_resolve_the_task_owner_not_the_session_repo() {
+        let conn = setup_db();
+        let owner = db::create_project(&conn, "owner", "/tmp/owner").unwrap();
+        let repo = db::create_project(&conn, "repo", "/tmp/repo").unwrap();
+        let session = db::create_session_with_params(
+            &conn,
+            &planeai_core::services::CreateSessionParams {
+                id: "sess-cross".to_string(),
+                project_id: repo.id.to_string(),
+                name: "agent".to_string(),
+                branch: "own-1/fix".to_string(),
+                worktree_path: Some("/tmp/worktrees/repo/abc".to_string()),
+                backend: "daemon".to_string(),
+                auto_approve: true,
+                task_key: Some("OWN-1".to_string()),
+                task_project_id: Some(owner.id.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(task_owner_project(&conn, &session).unwrap().id, owner.id);
+    }
+
+    #[test]
+    fn task_hooks_resolve_worktree_sessions_to_their_project() {
+        let conn = setup_db();
+        let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let session = db::create_session_with_params(
+            &conn,
+            &planeai_core::services::CreateSessionParams {
+                id: "sess-wt".to_string(),
+                project_id: project.id.to_string(),
+                name: "agent".to_string(),
+                branch: "mya-1/fix".to_string(),
+                worktree_path: Some("/tmp/.planeai/worktrees/myapp/abc".to_string()),
+                backend: "daemon".to_string(),
+                auto_approve: true,
+                task_key: Some("MYA-1".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(task_owner_project(&conn, &session).unwrap().id, project.id);
+    }
+
+    #[test]
     fn format_table_renders_correct_columns() {
         let projects = vec![db::Project {
             id: "proj-1".to_string(),
@@ -1429,6 +1489,7 @@ mod tests {
             path: "/tmp/myapp".to_string(),
             status: "active".to_string(),
             prefix: "MYA".to_string(),
+            hidden: false,
         }];
         let sessions = vec![db::Session {
             id: "aaaabbbb-1111-2222-3333-444455556666".to_string(),
@@ -1442,7 +1503,6 @@ mod tests {
             provider: None,
             backend: "tmux".to_string(),
             provider_session_id: None,
-            tab_count: 1,
             auto_approve: false,
             task_key: None,
             base_branch: None,
@@ -1450,6 +1510,7 @@ mod tests {
             pr_state: None,
             attached_once: false,
             parent_session_id: None,
+            task_project_id: None,
         }];
 
         let table = format_table(&sessions, &projects);
@@ -1539,6 +1600,48 @@ mod tests {
         // Local backend sends via notify socket
         assert_eq!(ops.sent_keys.borrow().len(), 0);
         assert_eq!(ops.sent_socket.borrow().len(), 1);
+    }
+
+    #[test]
+    fn send_prompt_plugin_backend_uses_notify_socket() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "ccccdddd-1111-2222-3333-444455556666";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "provider-session",
+            None,
+            "main",
+            None,
+            Some("claude-chat:claude"),
+            "plugin",
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let ops = MockPromptOps::new(true);
+        // Too large for the provider: refused here, since the GUI delivers it later.
+        let oversized = "x".repeat(64 * 1024);
+        assert!(send_prompt(&conn, "cccc", &oversized, &ops)
+            .unwrap_err()
+            .contains("too long"));
+        assert!(ops.sent_socket.borrow().is_empty());
+
+        let result = send_prompt(&conn, "cccc", "hello provider", &ops).unwrap();
+        assert_eq!(result.backend, "plugin");
+        assert_eq!(ops.sent_keys.borrow().len(), 0);
+        assert_eq!(
+            ops.sent_socket.borrow().as_slice(),
+            &[(id.to_string(), "hello provider".to_string())]
+        );
     }
 
     #[test]
@@ -1709,45 +1812,41 @@ mod tests {
 
     #[test]
     fn parse_tmux_cursor_valid() {
-        let (line_count, hash) = super::parse_tmux_cursor("tmux:42:12345678901234").unwrap();
+        let (line_count, hash) =
+            planeai_core::capture_cursor::parse_cursor("tmux", "tmux:42:12345678901234").unwrap();
         assert_eq!(line_count, 42);
         assert_eq!(hash, 12345678901234);
     }
 
     #[test]
     fn parse_tmux_cursor_invalid_prefix() {
-        let result = super::parse_tmux_cursor("daemon:42:12345");
+        let result = planeai_core::capture_cursor::parse_cursor("tmux", "daemon:42:12345");
         assert!(result.is_err());
     }
 
     #[test]
     fn parse_tmux_cursor_invalid_format() {
-        let result = super::parse_tmux_cursor("tmux:abc:def");
+        let result = planeai_core::capture_cursor::parse_cursor("tmux", "tmux:abc:def");
         assert!(result.is_err());
     }
 
     #[test]
     fn build_tmux_cursor_roundtrips() {
         let lines: Vec<&str> = vec!["line 1", "line 2", "line 3"];
-        let cursor = super::build_tmux_cursor(&lines);
+        let cursor = planeai_core::capture_cursor::build_cursor("tmux", &lines);
         assert!(cursor.starts_with("tmux:3:"));
-        let (count, hash) = super::parse_tmux_cursor(&cursor).unwrap();
+        let (count, hash) = planeai_core::capture_cursor::parse_cursor("tmux", &cursor).unwrap();
         assert_eq!(count, 3);
         assert!(hash > 0);
     }
 
     #[test]
-    fn hash_lines_deterministic() {
-        let lines: Vec<&str> = vec!["hello", "world"];
-        let h1 = super::hash_lines(&lines);
-        let h2 = super::hash_lines(&lines);
-        assert_eq!(h1, h2);
-    }
+    fn tmux_and_rmux_cursors_are_not_interchangeable() {
+        // Both backends use the same algorithm, so the label is the only thing
+        // stopping one backend's cursor from being read as the other's.
+        let lines: Vec<&str> = vec!["line 1"];
+        let tmux_cursor = planeai_core::capture_cursor::build_cursor("tmux", &lines);
 
-    #[test]
-    fn hash_lines_different_for_different_content() {
-        let lines1: Vec<&str> = vec!["hello", "world"];
-        let lines2: Vec<&str> = vec!["hello", "mars"];
-        assert_ne!(super::hash_lines(&lines1), super::hash_lines(&lines2));
+        assert!(planeai_core::capture_cursor::parse_cursor("rmux", &tmux_cursor).is_err());
     }
 }

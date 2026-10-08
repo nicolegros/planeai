@@ -281,21 +281,21 @@
   display: none;
 }
 
-/* ── @pierre/diffs theming ── */
-/* NOTE: --diffs-font-size / --diffs-font-family are NOT set here on purpose.
-   They are driven by the terminal font settings in ReviewTab.svelte and set on
-   an ancestor element so they inherit in. Declaring them directly on
-   diffs-container here would shadow that inherited value and win. */
-diffs-container {
-  --diffs-line-height: 1.72;
-  --diffs-dark-bg: #0a0a0a;
-  --diffs-light-bg: #ffffff;
-  --diffs-dark: #f2f2f2;
-  --diffs-light: #171717;
-  --diffs-dark-addition-color: #3fb950;
-  --diffs-dark-deletion-color: #ff7b72;
-  --diffs-light-addition-color: #1a7f37;
-  --diffs-light-deletion-color: #cf222e;
+/* ── @pierre/trees theming ── */
+.file-tree-host {
+  --trees-theme-bg: var(--color-canvas);
+  --trees-theme-fg: var(--color-t1);
+  --trees-theme-fg-muted: var(--color-t2);
+  --trees-theme-selection-bg: var(--color-accent-bg);
+  --trees-theme-selection-fg: var(--color-accent);
+  --trees-theme-hover-bg: var(--color-panel-hi);
+  --trees-theme-focus-outline: var(--color-accent);
+  --trees-theme-input-bg: var(--color-panel);
+  --trees-theme-input-border: var(--color-border);
+  --trees-theme-git-added: var(--color-status-running);
+  --trees-theme-git-modified: var(--color-status-review);
+  --trees-theme-git-deleted: var(--color-status-exited);
+  --trees-theme-git-ignored: var(--color-t3);
 }
 
 /* ── Animations ── */
@@ -360,6 +360,38 @@ diffs-container {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+/* Where a dragged tab or file would land in a pane, above its terminal. */
+.pane-drop-preview {
+  position: absolute;
+  inset: 0;
+  background: var(--color-accent-bg);
+  border: 2px solid var(--color-accent);
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: 20;
+  transition: inset 80ms ease-out;
+}
+
+/* While a tab is dragged, nothing under the pointer reacts or gets selected. */
+body.tab-dragging,
+body.tab-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.pane-drop-preview[data-zone="left"] {
+  right: 50%;
+}
+.pane-drop-preview[data-zone="right"] {
+  left: 50%;
+}
+.pane-drop-preview[data-zone="up"] {
+  bottom: 50%;
+}
+.pane-drop-preview[data-zone="down"] {
+  top: 50%;
 }
 
 /* Terminal internal padding — gives text breathing room from edges.

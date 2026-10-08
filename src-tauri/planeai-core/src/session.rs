@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::task::{Task, TaskSource};
@@ -22,6 +22,17 @@ pub trait Backend: Send + Sync {
         session_id: &str,
     ) -> Result<(), String>;
     fn create_daemon_session(&self, session_id: &str, cmd: &str, cwd: &str) -> Result<(), String>;
+    /// Spawn the agent in PlaneAI's private rmux daemon.
+    ///
+    /// `workspace` is the rmux session name shared by every resource of this
+    /// task, so two agents on one task land in the same workspace.
+    fn create_rmux_session(
+        &self,
+        session_id: &str,
+        workspace: &str,
+        cmd: &str,
+        cwd: &str,
+    ) -> Result<(), String>;
     fn insert_session(&self, session: &NewSession) -> Result<(), String>;
     fn notify_gui(&self, session_id: &str) -> Result<(), String>;
     fn kill_session(&self, session: &NewSession) -> Result<(), String>;
@@ -115,16 +126,12 @@ impl SessionDispatcher {
         backend.create_worktree(&self.project_path, &wt_path, &branch, &resolved_base)?;
 
         // Build agent launch command via shared helper (autonomous=true for auto-dispatch)
-        let rendered_prompt = if let Some(tpl) = &self.dispatch_config.prompt_template {
-            let mut vars = HashMap::new();
-            vars.insert("key", task.key.as_str());
-            vars.insert("title", task.title.as_str());
-            vars.insert("description", task.description.as_str());
-            vars.insert("parent_key", effective_parent_key);
-            Some(template::render(tpl, &vars))
-        } else {
-            None
-        };
+        let vars = template::TaskVars::from(task);
+        let rendered_prompt = self
+            .dispatch_config
+            .prompt_template
+            .as_deref()
+            .map(|tpl| vars.render(tpl));
 
         let provider_config = crate::session_launch::ProviderConfig {
             command: self.dispatch_config.provider_command.clone(),
@@ -139,32 +146,33 @@ impl SessionDispatcher {
             self.dispatch_config.prompt_wrapper.as_deref(),
         );
         let cmd = launch_result.command;
+        // The prompt is task content: log its size, never its text.
         tracing::info!(
-            command = %cmd,
+            provider_command = %self.dispatch_config.provider_command,
             prompt_injected = launch_result.prompt_was_injected,
             approve_applied = launch_result.auto_approve_was_applied,
-            prompt_template = ?self.dispatch_config.prompt_template,
             prompt_command = ?self.dispatch_config.prompt_command,
-            rendered_prompt = ?rendered_prompt,
+            prompt_chars = ?rendered_prompt.as_deref().map(|prompt| prompt.chars().count()),
             "dispatch command built"
         );
 
         // Create tmux session
         let tmux_name = format!("planeai-{}-{}", self.project_name, short_id);
-        if self.dispatch_config.session_backend == "tmux" {
-            backend.create_tmux_session(&tmux_name, &wt_path, &cmd, &session_id)?;
-        } else if self.dispatch_config.session_backend == "daemon" {
-            backend.create_daemon_session(&session_id, &cmd, &wt_path)?;
+        // A backend that spawns nothing here would insert a session row with no
+        // agent behind it, so every persistent backend must be handled.
+        match self.dispatch_config.session_backend.as_str() {
+            "tmux" => backend.create_tmux_session(&tmux_name, &wt_path, &cmd, &session_id)?,
+            "daemon" => backend.create_daemon_session(&session_id, &cmd, &wt_path)?,
+            "rmux" => {
+                let workspace = rmux_workspace_name(&self.project_id, &task.key);
+                backend.create_rmux_session(&session_id, &workspace, &cmd, &wt_path)?
+            }
+            // `local` sessions spawn their PTY on attach.
+            _ => {}
         }
 
         let session_name = if let Some(tpl) = &self.dispatch_config.name_template {
-            let mut vars = HashMap::new();
-            vars.insert("key", task.key.as_str());
-            vars.insert("title", task.title.as_str());
-            vars.insert("description", task.description.as_str());
-            vars.insert("status", task.status.as_str());
-            vars.insert("parent_key", effective_parent_key);
-            template::render(tpl, &vars)
+            vars.render(tpl)
         } else {
             format!("{}: {}", task.key, task.title)
         };
@@ -199,4 +207,22 @@ impl SessionDispatcher {
 
         Ok(new_session)
     }
+}
+
+/// The rmux session name for a task workspace.
+///
+/// Mirrors `planeai_rmux::WorkspaceKey::name` without depending on that crate, so
+/// the orchestrator stays free of backend types. The two must agree, which the
+/// parity test in `session_test.rs` asserts.
+fn rmux_workspace_name(project_id: &str, task_key: &str) -> String {
+    fn sanitize(value: &str) -> String {
+        value
+            .chars()
+            .map(|character| match character {
+                ':' | '.' => '_',
+                other => other,
+            })
+            .collect()
+    }
+    format!("planeai-ws-{}-{}", sanitize(project_id), sanitize(task_key))
 }

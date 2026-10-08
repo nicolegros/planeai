@@ -1,23 +1,32 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-  import { listen } from "@tauri-apps/api/event";
-  import { sessions as sessionsApi, pr as prApi, pty, notify, sessionLogs } from "./lib/api";
-  import type { Session, Project } from "./lib/types";
-  import { focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone } from "./lib/focus.svelte";
+  import { emitTo, listen } from "@tauri-apps/api/event";
+  import { sessions as sessionsApi, pty, notify, sessionLogs, editor as editorApi, updater } from "./lib/api";
+  import { TabEndedError } from "./lib/terminal-pty";
+  import { sessionTaskProjectId, type Session, type Project, type TaskItem } from "./lib/types";
+  import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
+  import { isTerminalPaneFocused, releaseTerminalDomFocus } from "./lib/terminal-focus";
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
-  import { installKeyboardRouter, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT } from "./lib/keyboard";
+  import { installKeyboardRouter, matchChord, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT, IS_WINDOWS } from "./lib/keyboard";
+  import { findPluginShortcut } from "./lib/plugin-shortcuts";
+  import { resolvePluginOpen, type PluginOpenOrigin } from "./lib/plugin-navigation";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
-  import { computeSidebarSessionOrder, isLoopId, parseLoopId } from "./lib/sidebar-session-order";
+  import { sidebarNavigationOrder } from "./lib/sidebar-model";
+  import { getSidebarModel } from "./lib/sidebar-model-store.svelte";
+  import { isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { isTerminal, isActive as isLoopActive } from "./lib/loop-status";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
-  import { createFormKeyboardController } from "./lib/form-keyboard.svelte";
+  import { taskSessionDefaults } from "./lib/task-session-defaults";
+  import { pluginPreferencesLocation, settingsLocationQuery, type SettingsLocation } from "./lib/settings-registry";
+  import { shouldShowOnboarding } from "./lib/onboarding";
+  import Onboarding from "./components/Onboarding.svelte";
+  import { openFileWithConfiguredEditor } from "./lib/file-editor";
   import { loadTheme } from "./lib/theme-loader";
-  import { startPolling as startCiPolling, getCiChecks, classifyCheck } from "./lib/ci-checks.svelte";
-  import { startPolling as startPrCommentPolling } from "./lib/pr-comments.svelte";
+  import { errorMessage } from "./lib/errors";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
@@ -35,26 +44,33 @@
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
   import SharedDialog from "./components/ui/Dialog.svelte";
   import FormDialog from "./components/ui/FormDialog.svelte";
-  import { Input, Label, Button, Checkbox } from "./components/ui";
+  import PluginDialog from "./components/PluginDialog.svelte";
   import LogViewer from "./components/LogViewer.svelte";
-  import PrPanel from "./components/PrPanel.svelte";
   import PostMergePrompt from "./components/PostMergePrompt.svelte";
-  import JiraDepartedPrompt from "./components/JiraDepartedPrompt.svelte";
   import LoopForm from "./components/LoopForm.svelte";
   import LoopDashboard from "./components/LoopDashboard.svelte";
+  import EmptyTaskWorkspace from "./components/EmptyTaskWorkspace.svelte";
+  import PluginContributionHost from "./components/PluginContributionHost.svelte";
+  import ProviderSessionView from "./components/ProviderSessionView.svelte";
+  import { isPluginSession, runtimeProviders } from "./lib/plugin-providers";
+  import { sendToAgent } from "./lib/agent-input";
+  import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution, TabEnded } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
-  import { loops as loopsApi } from "./lib/api";
-  import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
-  import { startListening as startJiraDepartedListening, stopListening as stopJiraDepartedListening, focusDepartedPrompt, getCurrent as getDepartedPrompt } from "./lib/jira-departed-prompt.svelte";
-  import { getTabs, getActiveTabIndex, addTab } from "./lib/session-tabs.svelte";
-  import { isMounted as poolIsMounted, touchMru } from "./lib/mru.svelte";
+  import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
+  import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
+  import { providerHandoff, taskWorkspaceLayout as workspaceLayout, toPaneTabs, workspaceOf, type PaneTab, type WorkspaceAgent, type WorkspaceIdentity } from "./lib/task-workspace-layout.svelte";
+  import { activeTabOf, findLeaf, tabsOf, type LeafNode, type NavDirection, type SplitDirection, type TabEntry } from "./lib/layout-tree";
+  import { pressTab as pressTabForDrag, tabDrag, type TabDropTarget } from "./lib/tab-drag.svelte";
+  import { dropPositionToViewport, droppedPathsText } from "./lib/dropped-paths";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { ptyKeySessionId } from "./lib/pty-key";
+  import { saveActiveEditorResource } from "./lib/editor-resources";
+  import { getMruList } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
-  import { initUpdateListener, focusUpdateToast, getUpdateState } from "./lib/updater.svelte";
+  import { initUpdateListener, focusUpdateToast, getUpdateState, setLaunchUpdateAvailable } from "./lib/updater.svelte";
   import SplitContainer from "./components/SplitContainer.svelte";
   import TabStrip from "./components/TabStrip.svelte";
-  import * as splitTree from "./lib/split-tree.svelte";
-  import type { LeafNode } from "./lib/split-tree.svelte";
 
   // ─── UI-only state ──────────────────────────────────────────────────────────
   let showProjectForm = $state(false);
@@ -63,6 +79,7 @@
   let sidebarVisible = $state(true);
   let commandMenuOpen = $state(false);
   let commandMenuFileMode = $state(false);
+  let commandMenuRenameId = $state<string | null>(null);
   let showNewItemModal = $state(false);
   let showShortcuts = $state(false);
   let showHookPrompt = $state(false);
@@ -71,602 +88,529 @@
   let quitDirectCount = $state(0);
   let fileExplorerVisible = $state(false);
   let showLogViewer = $state(false);
+  let activePluginId = $state<string | null>(null);
+  let activeContributionId = $state<string | null>(null);
+  let pluginInventory = $state<import("./lib/types").PluginInventory[]>([]);
+  let pluginSessionActions = $state<PluginSessionAction[]>([]);
+  let pluginSessionActionsRevision = 0;
+  let terminalFocusRequest = $state<{ id: number; sessionId: string } | null>(null);
 
-  // PR form state
-  let showPrForm = $state(false);
-  let showPrPanel = $state(false);
-  let prTitle = $state("");
-  let prBody = $state("");
-  let prBaseBranch = $state("");
-  let prDraft = $state(false);
-  let prSubmitting = $state(false);
-  let prError = $state("");
-  let prFormWrapper = $state<HTMLDivElement | null>(null);
+  /** The contribution open in the host's plugin dialog, and the element to refocus when it closes. */
+  let pluginDialog = $state<{ pluginId: string; contributionId: string; returnFocus: HTMLElement | null } | null>(null);
 
-  const prFk = createFormKeyboardController(
-    () => [
-      { key: "t", ref: () => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-title'] input") ?? null },
-      { key: "b", ref: () => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-body'] textarea") ?? null },
-      { key: "a", ref: () => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-base'] input") ?? null },
-      { key: "d", toggle: () => { prDraft = !prDraft; } },
-    ],
-    { wrapper: () => prFormWrapper, onDismiss: () => { showPrForm = false; tick().then(() => refocusTerminal()); } },
-  );
-
-  $effect(() => { if (showPrForm && prFormWrapper) prFormWrapper.focus(); });
-
-  function togglePrPanel() {
-    const s = sessions.find(x => x.id === activeSessionId);
-    if (s?.pr_url) { showPrPanel = !showPrPanel; if (!showPrPanel) tick().then(() => refocusTerminal()); }
-    else if (activeSessionId) { openPrForm(); }
-  }
-
-  async function openPrForm() {
-    if (!activeSessionId) return;
-    prError = "";
-    prSubmitting = false;
-    try {
-      const defaults = await prApi.generateDefaults(activeSessionId);
-      prTitle = defaults.title;
-      prBody = defaults.body;
-      prBaseBranch = defaults.base_branch;
-      prDraft = false;
-      showPrForm = true;
-    } catch (e: any) {
-      showSnackbar(e.toString());
-    }
-  }
-
-  async function submitPr() {
-    if (prSubmitting || !activeSessionId) return;
-    prSubmitting = true;
-    prError = "";
-    try {
-      const url = await prApi.create(activeSessionId, prTitle, prBody, prBaseBranch, prDraft);
-      showPrForm = false;
-      showSnackbar(`PR created: ${url}`, "success");
-      await orchestrator.loadSessions();
-    } catch (e: any) {
-      prError = e.toString();
-    } finally {
-      prSubmitting = false;
-    }
-  }
   let logViewerEnabled = $state(false);
   let sessionToDelete = $state<Session | null>(null);
   let projectToDelete = $state<Project | null>(null);
+  let projectToEdit = $state<Project | null>(null);
   let loopToDelete = $state<import("./lib/types").LoopRunSummary | null>(null);
   let renamingSessionId = $state<string | null>(null);
   let taskPrefill = $state<{ key: string; title: string; description: string; branch: string; name: string; prompt: string; baseBranch?: string; projectId?: string | null } | null>(null);
-
-  let editorBindRefs = $state<Record<string, EditorTab>>({});
-  $effect(() => { for (const [id, ref] of Object.entries(editorBindRefs)) { if (ref) orchestrator.registerEditorRef(id, ref); } });
+  let selectedTaskWorkspace = $state<{ task: TaskItem; project: Project } | null>(null);
+  let taskWorkspaceToEdit = $state<{ task: TaskItem; project: Project } | null>(null);
+  let archivedTaskSessions = $state<Session[]>([]);
+  // Task and loop identities are UI-only; persisted MRU accepts real session IDs only.
+  let workspaceMru = $state<string[]>([]);
 
   // ─── Derived from orchestrator ──────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
   const sessions = $derived(orchestrator.getSessions());
   const activeSessionId = $derived(orchestrator.getActiveSessionId());
   const agentStates = $derived(orchestrator.getAgentStates());
-  const diffTabOpen = $derived(orchestrator.getDiffTabOpen());
-  const editorTabOpen = $derived(orchestrator.getEditorTabOpen());
-  const diffFileName = $derived(orchestrator.getDiffFileName());
-  const editorFileName = $derived(orchestrator.getEditorFileName());
-  const editorModified = $derived(orchestrator.getEditorModified());
   const symphonyStatus = $derived(orchestrator.getSymphonyStatus());
   const zone = $derived(getActiveZone());
   const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
+  const activeTaskWorkspace = $derived.by(() => {
+    if (selectedTaskWorkspace) return selectedTaskWorkspace;
+    if (!activeSession?.task_key) return null;
+    const project = projects.find((candidate) => candidate.id === sessionTaskProjectId(activeSession));
+    const task = project ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === activeSession.task_key) : undefined;
+    return task && project ? { task, project } : null;
+  });
+  const activeTaskSessions = $derived(
+    activeTaskWorkspace
+      ? sessions.filter((session) => workspaceOf(session).key === toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key))
+      : [],
+  );
+  const isEmptyTaskWorkspace = $derived(!!activeTaskWorkspace && activeTaskSessions.length === 0);
+  const activePluginSessionContext = $derived(activeSession ? {
+    id: activeSession.id,
+    projectId: activeSession.project_id,
+    branch: activeSession.branch,
+    baseBranch: activeSession.base_branch,
+    status: activeSession.status,
+    provider: activeSession.provider,
+    taskKey: activeSession.task_key,
+  } : undefined);
   const activeLoopId = $derived(loopStore.getActiveLoopId());
+  const activePlugin = $derived(pluginInventory.find((plugin) => plugin.id === activePluginId) ?? null);
+  const activeContribution = $derived(activePlugin?.ui_contributions.find((contribution) => contribution.id === activeContributionId) ?? null);
+  const modalPlugin = $derived(pluginInventory.find((plugin) => plugin.id === pluginDialog?.pluginId) ?? null);
+  const modalContribution = $derived(modalPlugin?.ui_contributions.find((contribution) => contribution.id === pluginDialog?.contributionId) ?? null);
+  const comparePluginContribution = (left: { plugin: PluginInventory; contribution: PluginUiContribution }, right: { plugin: PluginInventory; contribution: PluginUiContribution }) =>
+    (left.contribution.order ?? 0) - (right.contribution.order ?? 0) || left.plugin.name.localeCompare(right.plugin.name) || left.plugin.id.localeCompare(right.plugin.id) || left.contribution.id.localeCompare(right.contribution.id);
+  const sidebarPluginContributions = $derived(
+    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+      plugin.ui_contributions.filter((contribution) => ["sidebar.header", "sidebar.navigation", "sidebar.section", "sidebar.footer"].includes(contribution.placement)).map((contribution) => ({ plugin, contribution })),
+    ).sort(comparePluginContribution),
+  );
+  const sessionIndicatorContributions = $derived(
+    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+      plugin.ui_contributions.filter((contribution) => contribution.placement === "session.indicator").map((contribution) => ({ plugin, contribution })),
+    ).sort(comparePluginContribution),
+  );
+  const globalPluginCommands = $derived(
+    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+      plugin.ui_contributions.filter((contribution) => contribution.placement === "main-pane" || contribution.placement === "dialog").map((contribution) => ({ plugin, contribution })),
+    ).sort(comparePluginContribution),
+  );
+  const sessionPanelCommands = $derived(
+    activeSession
+      ? pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+          plugin.ui_contributions.filter((contribution) => contribution.placement === "session.panel").map((contribution) => ({ plugin, contribution })),
+        ).sort(comparePluginContribution)
+      : [],
+  );
+  const titlebarContributions = $derived(
+    activeSession
+      ? pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+          plugin.ui_contributions.filter((contribution) => contribution.placement === "titlebar").map((contribution) => ({ plugin, contribution })),
+        ).sort(comparePluginContribution)
+      : [],
+  );
+  const pluginCommands = $derived([...globalPluginCommands, ...sessionPanelCommands]);
+  const interactionPluginContributions = $derived(
+    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+      plugin.ui_contributions.filter((contribution) => contribution.placement === "interaction").map((contribution) => ({ plugin, contribution })),
+    ).sort(comparePluginContribution),
+  );
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
-  const ciStatus = $derived.by(() => {
-    if (!activeSessionId) return null;
-    const checks = getCiChecks(activeSessionId);
-    if (checks.length === 0) return null;
-    if (checks.some((c) => classifyCheck(c) === "fail")) return "failing" as const;
-    if (checks.every((c) => classifyCheck(c) !== "pending")) return "passing" as const;
-    return "pending" as const;
-  });
 
   // Session IDs in sidebar display order (includes loop:<id> entries)
-  const sidebarSessionOrder = $derived(computeSidebarSessionOrder(
-    projects,
-    sessions,
-    taskStore.getTasksByProject(),
-    !!getSettings().hide_done_tasks,
-    Object.fromEntries(projects.map((p) => [p.id, loopStore.getLoopsForProject(p.id)])),
-    Object.fromEntries(projects.flatMap((p) => loopStore.getLoopsForProject(p.id)).map((l) => [l.id, loopStore.getSessionsForLoop(l.id)])),
-    new Set(projects.flatMap((p) => loopStore.getLoopsForProject(p.id)).flatMap((l) => loopStore.getSessionsForLoop(l.id).map((s) => s.session_id))),
+  const sidebarSessionOrder = $derived(sidebarNavigationOrder(getSidebarModel()));
+
+  // ─── TaskWorkspace layout ───────────────────────────────────────────────────
+  const layoutTree = $derived(workspaceLayout.layout?.tree ?? null);
+  const focusedLeafId = $derived(workspaceLayout.layout?.focusedLeafId ?? null);
+  const hasMultiplePanes = $derived(workspaceLayout.isSplit);
+  // Split shortcuts act on the visible layout only: never behind a loop
+  // dashboard, a plugin page or an empty TaskWorkspace.
+  const canSplit = $derived(
+    !!activeSessionId && !!layoutTree && !isEmptyTaskWorkspace && !activeLoopId && !activePluginId,
+  );
+  // A single pane shows its tabs in the titlebar; split panes each get their own tab bar.
+  const singlePane = $derived(layoutTree?.type === "leaf" ? layoutTree : null);
+  const titlebarTabs = $derived(singlePane ? paneTabs(singlePane) : []);
+
+  // Editor tabs with unsaved changes, by pty key.
+  let modifiedEditorTabs = $state<ReadonlySet<string>>(new Set());
+  const explorerActiveFile = $derived.by(() => {
+    const tab = workspaceLayout.focusedTab();
+    return tab?.type === "editor" ? (tab.filePath ?? null) : null;
+  });
+  const explorerModifiedPaths = $derived(new Set(
+    tabsOf(workspaceLayout.layout)
+      .filter((tab) => tab.type === "editor" && tab.filePath && modifiedEditorTabs.has(tab.ptyKey) && ptyKeySessionId(tab.ptyKey) === activeSessionId)
+      .map((tab) => tab.filePath!),
   ));
 
-  // Pre-compute titlebar tabs to avoid IIFE re-evaluation on every render
-  const titlebarTabs = $derived.by(() => {
-    if (!activeSessionId) return [];
-    // When split tree is active with a single leaf, derive tabs from the leaf
-    const tree = splitTree.getTree();
-    if (tree && tree.type === "leaf" && tree.tabs.length > 0) {
-      return getLeafTabInfo(tree);
-    }
-    // Fallback to session-tabs store (before tree is initialized)
-    const shellTabs = getTabs(activeSessionId).map(t => t.index === 0 ? { ...t, label: activeSession?.provider || getSettings().default_provider || "Agent" } : t);
-    const extra: { index: number; label: string; icon?: string; modified?: boolean }[] = [];
-    if (diffTabOpen[activeSessionId]) extra.push({ index: -1, label: diffFileName[activeSessionId] || "Diff", icon: "git-compare" });
-    if (editorTabOpen[activeSessionId]) extra.push({ index: -2, label: editorFileName[activeSessionId] || "Editor", icon: "file", modified: editorModified[activeSessionId] || false });
-    return [...shellTabs, ...extra];
+  function setEditorTabModified(ptyKey: string, modified: boolean): void {
+    if (modifiedEditorTabs.has(ptyKey) === modified) return;
+    const next = new Set(modifiedEditorTabs);
+    if (modified) next.add(ptyKey);
+    else next.delete(ptyKey);
+    modifiedEditorTabs = next;
+  }
+
+  const showOnboarding = $derived(shouldShowOnboarding(getSettings()));
+
+  // ─── Terminal DOM focus ─────────────────────────────────────────────────────
+
+  // Every dialog that owns the keyboard, not only those that gated `focused`
+  // before: a trailing focus request would otherwise hand xterm DOM focus behind
+  // one, and xterm swallows the keys the dialog needs. Dialogs App does not model
+  // are caught by the DOM probe inside releaseTerminalDomFocus.
+  const keyboardModalOpen = $derived(
+    showNewItemModal || !!sessionToDelete || showTaskForm || showProjectForm || !!pluginDialog
+      || showSessionForm || showLoopForm || commandMenuOpen || showShortcuts
+      || !!projectToDelete || !!loopToDelete || showQuitConfirm || showOnboarding,
+  );
+  const terminalKeyboardOwnership = $derived({
+    zone,
+    modalOpen: keyboardModalOpen,
+    pluginOverlayActive: !!activePluginId,
   });
 
-  // ─── Split tree ─────────────────────────────────────────────────────────────
-  const splitTreeNode = $derived(splitTree.getTree());
-  const hasMultiplePanes = $derived(splitTreeNode !== null && splitTreeNode.type === "split");
-  const titlebarActiveTabIdx = $derived.by(() => {
-    const tree = splitTree.getTree();
-    if (tree?.type === "leaf") {
-      const idx = tree.tabs.findIndex((t) => t.ptyKey === tree.activeTab);
-      return idx >= 0 ? idx : 0;
-    }
-    return orchestrator.getUnifiedActiveIndex();
+  // See releaseTerminalDomFocus: a stranded terminal silently swallows sidebar
+  // navigation, so release when ownership is lost...
+  $effect(() => {
+    releaseTerminalDomFocus(terminalKeyboardOwnership);
   });
 
-  // Initialize tree when sessions first load (single leaf with all session IDs)
-  let splitTreeInitialized = $state(false);
+  // ...and on focus arrival. Bubble phase, so a genuine click has already run
+  // Terminal's onFocused -> focusTerminal() and ownership reads true by now.
+  $effect(() => {
+    const onFocusIn = (): void => releaseTerminalDomFocus(terminalKeyboardOwnership);
+    window.addEventListener("focusin", onFocusIn);
+    return () => window.removeEventListener("focusin", onFocusIn);
+  });
+
+  // Layouts load once sessions are known, so a restored layout can be reconciled against them.
+  let sessionsLoaded = $state(false);
 
   $effect(() => {
-    if (!splitTreeInitialized && sessions.length > 0) {
-      splitTreeInitialized = true;
+    if (!sessionsLoaded && sessions.length > 0) {
+      sessionsLoaded = true;
     }
   });
 
-  // ─── Per-session split layout (DB-backed) ───────────────────────────────────
-  let lastTreeSessionId = $state<string | null>(null);
-  let loadGeneration = 0; // not reactive - just a counter for staleness
-  let loadingLayout = $state(false); // suppress auto-save and stale-tab cleanup during load
+  function workspaceForSession(sessionId: string): WorkspaceIdentity | null {
+    const session = sessions.find((candidate) => candidate.id === sessionId);
+    return session ? workspaceOf(session) : null;
+  }
 
-  // When active session changes, save current tree and load/create for new session
+  function workspaceSessions(workspace: WorkspaceIdentity): Session[] {
+    return sessions.filter((session) => workspaceOf(session).key === workspace.key);
+  }
+
+  function workspaceAgents(workspace: WorkspaceIdentity): WorkspaceAgent[] {
+    return workspaceSessions(workspace).map((session) => ({
+      sessionId: session.id,
+      label: session.name || session.branch || "Agent",
+      icon: session.provider ? "bot" : "terminal",
+    }));
+  }
+
+  // The selected session decides which workspace is shown. Selecting another
+  // agent of the same task keeps the shared layout and only brings its tab forward.
+  // Keyed by identity rather than the session list: an empty TaskWorkspace clears
+  // the layout while the selection stays put, and an unrelated session update must
+  // not load the hidden workspace back in behind it.
+  const activeWorkspaceKey = $derived(
+    activeSessionId && sessionsLoaded ? (workspaceForSession(activeSessionId)?.key ?? null) : null,
+  );
   $effect(() => {
-    if (!activeSessionId || !splitTreeInitialized) return;
-    if (activeSessionId === lastTreeSessionId) return;
-
-    const tree = splitTree.getTree();
-    if (!tree) {
-      loadLayoutForSession(activeSessionId);
-      return;
-    }
-
-    // Check if the active session is already in the tree
-    const allLeaves = splitTree.getAllLeaves();
-    const hasActive = allLeaves.some((leaf) =>
-      leaf.tabs.some((t) => ptyKeyToSessionId(t.ptyKey) === activeSessionId)
-    );
-    if (hasActive) {
-      lastTreeSessionId = activeSessionId;
-      return;
-    }
-
-    // Session changed — save current tree, then load new
-    if (lastTreeSessionId) {
-      saveSplitTreeToDb();
-    }
-
-    loadLayoutForSession(activeSessionId);
+    if (!activeWorkspaceKey || !activeSessionId) return;
+    const sessionId = activeSessionId;
+    untrack(() => {
+      const workspace = workspaceForSession(sessionId);
+      if (workspace) void showWorkspace(workspace, sessionId, orchestrator.isSelectionExplicit(sessionId));
+    });
   });
 
-  async function loadLayoutForSession(sessionId: string): Promise<void> {
-    loadingLayout = true;
-    const gen = ++loadGeneration;
+  // Keep the loaded workspace's tabs in step with its sessions (added, renamed, archived).
+  $effect(() => {
+    const workspace = workspaceLayout.workspace;
+    if (!workspace || workspaceLayout.loading) return;
+    const agents = workspaceAgents(workspace);
+    untrack(() => workspaceLayout.reconcile(agents));
+  });
+
+  /** Show a workspace, then apply the session selection its restored layout implies. */
+  async function showWorkspace(workspace: WorkspaceIdentity, sessionId: string, selectionIsExplicit: boolean): Promise<void> {
+    const shown = await workspaceLayout.show(workspace, {
+      agents: workspaceAgents(workspace),
+      selectedSessionId: sessionId,
+      selectionIsExplicit,
+    });
+    if (!shown) return;
+    if (shown.adoptedSessionId) orchestrator.selectSession(shown.adoptedSessionId);
+    if (shown.restored) requestFocusedTerminalFocus();
+  }
+
+  /** Press on a tab: dragging it drops into a tab bar, into a pane, or splits a pane. */
+  function pressTab(e: PointerEvent, ptyKey: string): void {
+    pressTabForDrag(ptyKey, e, dropTab);
+  }
+
+  function dropTab(ptyKey: string, target: TabDropTarget): void {
+    if (target.kind === "strip") workspaceLayout.moveTab(ptyKey, target.paneId, target.index);
+    else if (target.zone !== "center") workspaceLayout.splitWithTab(ptyKey, target.paneId, target.zone);
+    else if (workspaceLayout.findTab(ptyKey)?.leaf.id !== target.paneId) workspaceLayout.moveTab(ptyKey, target.paneId);
+    else return;
+    syncFocusedTabToSelection();
+  }
+
+  /** Pane a file dragged from the OS is over, highlighted as the drop target. */
+  let fileDropPane = $state<string | null>(null);
+
+  /** The pane under a native drag-drop position. */
+  function paneAt(position: { x: number; y: number }): string | null {
+    const point = dropPositionToViewport(position, { windows: IS_WINDOWS, pixelRatio: devicePixelRatio });
+    const element = document.elementFromPoint(point.x, point.y);
+    return element?.closest<HTMLElement>("[data-pane-drop]")?.dataset.paneDrop ?? null;
+  }
+
+  /** Type dropped file paths into the terminal in front of a pane, like a terminal app. */
+  async function typeDroppedPaths(paneId: string, paths: string[]): Promise<void> {
+    const leaf = workspaceLayout.layout ? findLeaf(workspaceLayout.layout, paneId) : null;
+    const tab = activeTabOf(leaf);
+    if (!tab || !isTerminalTab(tab)) return;
+    const session = sessions.find((candidate) => candidate.id === ptyKeySessionId(tab.ptyKey));
+    if (tab.type === "agent" && session && isPluginSession(session)) {
+      showSnackbar("Chats do not take dropped files yet. Drop them on a terminal tab instead.", "error");
+      return;
+    }
+    const { text, skipped } = droppedPathsText(paths, { windows: IS_WINDOWS });
+    if (skipped.length > 0) {
+      showSnackbar(
+        skipped.length === 1
+          ? "Skipped a dropped file whose name cannot be typed safely"
+          : `Skipped ${skipped.length} dropped files whose names cannot be typed safely`,
+        "error",
+      );
+    }
+    if (!text) return;
+    workspaceLayout.focusTab(tab.ptyKey);
+    selectTerminalTab(tab.ptyKey);
     try {
-      const layoutJson = await sessionsApi.getLayout(sessionId);
-      // Staleness check - if session changed while we were loading, discard
-      if (gen !== loadGeneration) { loadingLayout = false; return; }
-      if (layoutJson) {
-        const data = JSON.parse(layoutJson);
-        if (isValidSerializedTree(data)) {
-          splitTree.deserialize(data);
-          lastTreeSessionId = sessionId;
-          loadingLayout = false;
-          return;
-        }
+      if (!(await pty.write(tab.ptyKey, Array.from(new TextEncoder().encode(text))))) {
+        throw new Error("the terminal is not attached");
       }
-    } catch (e) {
-      console.warn("Failed to load layout for session", sessionId, e);
-    }
-    // Staleness check again
-    if (gen !== loadGeneration) { loadingLayout = false; return; }
-    // No saved layout or invalid - initialize fresh
-    const entries = buildTabEntriesForSession(sessionId);
-    if (!splitTree.replaceRootLeafTabs(entries)) {
-      // Tree is a split (multi-pane) or null — must create fresh
-      splitTree.initTree(entries);
-    }
-    lastTreeSessionId = sessionId;
-    loadingLayout = false;
-  }
-
-  /** Validate deserialized tree structure to prevent corrupt data from crashing. */
-  function isValidSerializedTree(data: unknown): data is import("./lib/split-tree.svelte").SerializedTree {
-    if (!data || typeof data !== "object") return false;
-    const d = data as Record<string, unknown>;
-    if (typeof d.focusedLeafId !== "string") return false;
-    if (!d.tree || typeof d.tree !== "object") return false;
-    if (!isValidTreeNode(d.tree)) return false;
-    // Migrate: ensure all tabs have a type field (for trees saved before type was added)
-    migrateTreeTypes(d.tree as import("./lib/split-tree.svelte").TreeNode);
-    // Validate focusedLeafId references an existing leaf
-    if (!leafExistsInNode(d.tree as import("./lib/split-tree.svelte").TreeNode, d.focusedLeafId as string)) {
-      // Fallback to first leaf in the tree
-      const firstLeaf = findFirstLeafId(d.tree as import("./lib/split-tree.svelte").TreeNode);
-      if (!firstLeaf) return false;
-      d.focusedLeafId = firstLeaf;
-    }
-    return true;
-  }
-
-  function leafExistsInNode(node: import("./lib/split-tree.svelte").TreeNode, id: string): boolean {
-    if (node.type === "leaf") return node.id === id;
-    return leafExistsInNode(node.children[0], id) || leafExistsInNode(node.children[1], id);
-  }
-
-  function findFirstLeafId(node: import("./lib/split-tree.svelte").TreeNode): string | null {
-    if (node.type === "leaf") return node.id;
-    return findFirstLeafId(node.children[0]);
-  }
-
-  function isValidTreeNode(node: unknown, depth = 0): boolean {
-    if (depth > 50) return false;
-    if (!node || typeof node !== "object") return false;
-    const n = node as Record<string, unknown>;
-    if (typeof n.id !== "string") return false;
-    if (n.type === "leaf") {
-      return Array.isArray(n.tabs) && typeof n.activeTab === "string";
-    }
-    if (n.type === "split") {
-      return typeof n.direction === "string"
-        && typeof n.ratio === "number" && n.ratio >= 0 && n.ratio <= 1
-        && Array.isArray(n.children) && n.children.length === 2
-        && isValidTreeNode(n.children[0], depth + 1) && isValidTreeNode(n.children[1], depth + 1);
-    }
-    return false;
-  }
-
-  /** Backfill type field on TabEntry for trees saved before type was introduced. */
-  function migrateTreeTypes(node: import("./lib/split-tree.svelte").TreeNode): void {
-    if (node.type === "leaf") {
-      for (const tab of node.tabs) {
-        if (!tab.type) {
-          if (tab.ptyKey.includes(":diff")) tab.type = "diff";
-          else if (tab.ptyKey.includes(":editor:")) {
-            tab.type = "editor";
-            // Restore filePath from ptyKey format: sessionId:editor:filePath
-            if (!tab.filePath) {
-              const editorIdx = tab.ptyKey.indexOf(":editor:");
-              if (editorIdx !== -1) tab.filePath = tab.ptyKey.slice(editorIdx + 8);
-            }
-          }
-          else if (tab.ptyKey.includes(":")) tab.type = "shell";
-          else tab.type = "agent";
-        }
-      }
-    } else {
-      migrateTreeTypes(node.children[0]);
-      migrateTreeTypes(node.children[1]);
+      orchestrator.recordUserInput(ptyKeySessionId(tab.ptyKey));
+    } catch (error) {
+      showSnackbar(`Failed to type dropped path: ${errorMessage(error)}`, "error");
     }
   }
 
-  /** Build TabEntry[] for a session from its current tabs in session-tabs store */
-  function buildTabEntriesForSession(sessionId: string): import("./lib/split-tree.svelte").TabEntry[] {
-    const session = sessions.find((s) => s.id === sessionId);
-    const sessionTabs = getTabs(sessionId);
-    if (sessionTabs.length === 0) {
-      return [{ ptyKey: sessionId, label: session?.name || session?.branch || "Agent", icon: session?.provider ? "bot" : "terminal", type: "agent" }];
-    }
-    return sessionTabs.map((t) => ({
-      ptyKey: t.index === 0 ? sessionId : `${sessionId}:${t.index}`,
-      label: t.index === 0 ? (session?.name || session?.branch || "Agent") : (t.customTitle ? t.label : "Shell"),
-      icon: t.index === 0 ? (session?.provider ? "bot" : "terminal") : "terminal",
-      type: (t.index === 0 ? "agent" : "shell") as "agent" | "shell",
-      customTitle: t.customTitle,
-    }));
+  function paneTabs(leaf: LeafNode): PaneTab[] {
+    return toPaneTabs(leaf, (tab) => tab.type === "agent" ? crossProjectName(ptyKeySessionId(tab.ptyKey)) : undefined);
   }
 
-  // Stale tabs are cleaned up reactively by the $effect below
-
-  // Remove stale tabs when sessions are deleted/archived
-  $effect(() => {
-    if (loadingLayout) return;
-    const sessionIds = new Set(sessions.map((s) => s.id));
-    // Collect stale keys: tabs whose session was deleted, OR tabs that don't
-    // belong to the current layout's session (cross-contamination guard)
-    const allLeaves = splitTree.getAllLeaves();
-    const stalePtyKeys: string[] = [];
-    for (const leaf of allLeaves) {
-      for (const tab of leaf.tabs) {
-        const sid = ptyKeyToSessionId(tab.ptyKey);
-        if (!sid) continue;
-        // Session deleted
-        if (!sessionIds.has(sid)) {
-          stalePtyKeys.push(tab.ptyKey);
-        }
-        // Session exists but belongs to a different session (cross-project contamination)
-        else if (lastTreeSessionId && sid !== lastTreeSessionId && tab.type === "agent") {
-          stalePtyKeys.push(tab.ptyKey);
-        }
-      }
-    }
-    for (const key of stalePtyKeys) {
-      splitTree.removeSessionFromLeaf(key);
-    }
-  });
-
-  // Drag-and-drop state
-  let dragSessionId = $state<string | null>(null);
-
-  function handleTabDragStart(e: DragEvent, ptyKey: string, leafId: string) {
-    if (!ptyKey) { e.preventDefault(); return; }
-    dragSessionId = ptyKey;
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", ptyKey);
-    }
+  /** Names the repo an agent runs in when it differs from its task's project. */
+  function crossProjectName(sessionId: string): string | undefined {
+    const session = sessions.find((candidate) => candidate.id === sessionId);
+    if (!session || sessionTaskProjectId(session) === session.project_id) return undefined;
+    return projects.find((project) => project.id === session.project_id)?.name;
   }
 
-  function handleTabDrop(e: DragEvent, targetLeafId: string, insertIndex: number) {
-    if (!dragSessionId) return;
-    splitTree.moveSessionToLeaf(dragSessionId, targetLeafId, insertIndex);
-    dragSessionId = null;
+  /** Bring a tab forward from a tab strip; a terminal tab also selects its session. */
+  function selectPaneTab(ptyKey: string): void {
+    const tab = workspaceLayout.focusTab(ptyKey);
+    if (tab && isTerminalTab(tab)) selectTerminalTab(ptyKey);
   }
 
-  function handleTabDragOver(e: DragEvent) {
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  function isTerminalTab(tab: TabEntry): boolean {
+    return tab.type === "agent" || tab.type === "shell";
   }
 
-  // Get tab info for a leaf — returns Tab[] compatible with TabStrip
-  function getLeafTabInfo(leaf: LeafNode): import("./lib/session-tabs.svelte").Tab[] {
-    return leaf.tabs.map((tabEntry, i) => ({
-      index: i,
-      label: tabEntry.label,
-      icon: tabEntry.icon,
-      customTitle: tabEntry.customTitle,
-    }));
-  }
+  const SPLIT_DIRECTIONS: Record<string, NavDirection> = {
+    focus_split_left: "left", focus_split_right: "right", focus_split_up: "up", focus_split_down: "down",
+    move_tab_left: "left", move_tab_right: "right", move_tab_up: "up", move_tab_down: "down",
+  };
 
-  /** Extract the session ID from a pty key (strips ":tabIndex" suffix if present) */
-  function ptyKeyToSessionId(ptyKey: string): string {
-    const colonIdx = ptyKey.indexOf(":");
-    return colonIdx === -1 ? ptyKey : ptyKey.slice(0, colonIdx);
-  }
-
-  // Handle split keyboard actions
   function handleSplitAction(actionType: string): void {
-    switch (actionType) {
-      case "split_vertical": {
-        doSplit("vertical");
-        break;
-      }
-      case "split_horizontal": {
-        doSplit("horizontal");
-        break;
-      }
-      case "close_split": {
-        const focusedLeafId = splitTree.getFocusedLeafId();
-        if (focusedLeafId) splitTree.closeSplit(focusedLeafId);
-        syncFocusedLeafToOrchestrator();
-        break;
-      }
-      case "focus_split_left": splitTree.focusDirection("left"); syncFocusedLeafToOrchestrator(); break;
-      case "focus_split_right": splitTree.focusDirection("right"); syncFocusedLeafToOrchestrator(); break;
-      case "focus_split_up": splitTree.focusDirection("up"); syncFocusedLeafToOrchestrator(); break;
-      case "focus_split_down": splitTree.focusDirection("down"); syncFocusedLeafToOrchestrator(); break;
-      case "move_tab_left": splitTree.moveTabToDirection("left"); syncFocusedLeafToOrchestrator(); break;
-      case "move_tab_right": splitTree.moveTabToDirection("right"); syncFocusedLeafToOrchestrator(); break;
-      case "move_tab_up": splitTree.moveTabToDirection("up"); syncFocusedLeafToOrchestrator(); break;
-      case "move_tab_down": splitTree.moveTabToDirection("down"); syncFocusedLeafToOrchestrator(); break;
-    }
+    if (!canSplit) return;
+    if (actionType === "split_vertical") return void splitPane("vertical");
+    if (actionType === "split_horizontal") return void splitPane("horizontal");
+    if (actionType === "close_split") workspaceLayout.closePane();
+    else if (actionType.startsWith("focus_split_")) workspaceLayout.focusDirection(SPLIT_DIRECTIONS[actionType]);
+    else if (actionType.startsWith("move_tab_")) workspaceLayout.moveFocusedTab(SPLIT_DIRECTIONS[actionType]);
+    syncFocusedTabToSelection();
   }
 
-  /**
-   * Split the focused pane and open a shell tab in the new pane.
-   * Uses the existing session's shell tab mechanism ($SHELL -l).
-   */
-  function doSplit(direction: "vertical" | "horizontal"): void {
+  /** Split the focused pane and open a login shell for the focused agent in the new pane. */
+  async function splitPane(direction: SplitDirection): Promise<void> {
     if (!activeSessionId) return;
-
-    const newLeafId = splitTree.splitFocusedLeaf(direction);
-    if (!newLeafId) return;
-
-    // Create a new shell tab within the current session
-    const tabIndex = addTab(activeSessionId);
-    if (tabIndex === -1) {
-      // Undo the split — destroy the empty leaf
-      splitTree.destroyLeaf(newLeafId);
-      return;
-    }
-    pty.incrementTabCount(activeSessionId);
-
-    // The pty key for shell tabs is "sessionId:tabIndex"
-    const ptyKey = `${activeSessionId}:${tabIndex}`;
-
-    // Verify this ptyKey isn't already in the tree (defensive)
-    const existing = splitTree.getLeafForSession(ptyKey);
-    if (existing) {
-      splitTree.destroyLeaf(newLeafId);
-      return;
-    }
-
-    splitTree.addSessionToLeaf(newLeafId, { ptyKey, label: "Shell", icon: "terminal", type: "shell" });
+    if (!(await openShell(activeSessionId, { split: direction }))) return;
     // Wait for Terminal to mount + open before refocusing
     tick().then(() => requestAnimationFrame(() => refocusTerminal()));
   }
 
-  /** Open a new shell tab in the focused split leaf. */
-  function splitNewTab(): void {
+  /** Open a shell tab for the focused agent in a pane (the focused one by default). */
+  async function openShellTab(paneId?: string): Promise<void> {
     if (!activeSessionId) return;
-    const focusedLeafId = splitTree.getFocusedLeafId();
-    if (!focusedLeafId) return;
-
-    const tabIndex = addTab(activeSessionId);
-    if (tabIndex === -1) return;
-    pty.incrementTabCount(activeSessionId);
-
-    const ptyKey = `${activeSessionId}:${tabIndex}`;
-    splitTree.addSessionToLeaf(focusedLeafId, { ptyKey, label: "Shell", icon: "terminal", type: "shell" });
+    if (!(await openShell(activeSessionId, { paneId }))) return;
+    await tick();
     refocusTerminal();
   }
 
-  /** Close the active tab in the focused split leaf. */
-  function splitCloseTab(): void {
-    const leaf = splitTree.getFocusedLeaf();
-    if (!leaf || leaf.tabs.length === 0) return;
+  async function openShell(sessionId: string, where: Parameters<typeof workspaceLayout.openShell>[1]): Promise<string | null> {
+    try {
+      return await workspaceLayout.openShell(sessionId, where);
+    } catch (error) {
+      showSnackbar(`Failed to open shell: ${errorMessage(error)}`, "error");
+      return null;
+    }
+  }
 
-    const activeEntry = splitTree.getActiveTabEntry(leaf);
-    if (!activeEntry) return;
-
-    // Agent tabs can't be closed directly
-    if (activeEntry.type === "agent") {
-      if (splitTree.getAllLeaves().length > 1) {
-        splitTree.closeSplit(leaf.id);
-        syncFocusedLeafToOrchestrator();
-        tick().then(() => refocusTerminal());
+  /**
+   * Close a tab. Agent tabs represent durable sessions, so closing one parks the
+   * agent rather than destroying its worktree; a task workspace may end up empty.
+   */
+  async function closeTab(ptyKey: string): Promise<void> {
+    let outcome;
+    try {
+      outcome = await workspaceLayout.closeTab(ptyKey);
+    } catch (error) {
+      showSnackbar(`Failed to close shell tab: ${errorMessage(error)}`, "error");
+      return;
+    }
+    if (outcome === "agent") {
+      const session = sessions.find((candidate) => candidate.id === ptyKeySessionId(ptyKey));
+      if (!session) return;
+      try {
+        await orchestrator.parkSession(session);
+      } catch (error) {
+        showSnackbar(`Failed to close session: ${errorMessage(error)}`, "error");
       }
-      return;
+    } else if (outcome === "closed") {
+      await tick();
+      refocusTerminal();
     }
-
-    // Diff and editor tabs — just remove from tree
-    if (activeEntry.type === "diff" || activeEntry.type === "editor") {
-      splitTree.removeSessionFromLeaf(activeEntry.ptyKey);
-      tick().then(() => refocusTerminal());
-      return;
-    }
-
-    // Shell tabs — remove from tree + close backend PTY
-    splitTree.removeSessionFromLeaf(activeEntry.ptyKey);
-    const colonIdx = activeEntry.ptyKey.indexOf(":");
-    if (colonIdx !== -1) {
-      const sessionId = activeEntry.ptyKey.slice(0, colonIdx);
-      const tabIndex = parseInt(activeEntry.ptyKey.slice(colonIdx + 1), 10);
-      if (!isNaN(tabIndex)) orchestrator.closeShellTab(sessionId, tabIndex);
-    }
-    tick().then(() => refocusTerminal());
   }
 
-  /** Navigate to the next tab in the focused split leaf. */
-  function splitNextTab(): void {
-    const leaf = splitTree.getFocusedLeaf();
-    if (!leaf || leaf.tabs.length <= 1) return;
-    const currentIdx = leaf.tabs.findIndex((t) => t.ptyKey === leaf.activeTab);
-    const nextIdx = (currentIdx + 1) % leaf.tabs.length;
-    splitTree.setLeafActiveTab(leaf.id, leaf.tabs[nextIdx].ptyKey);
+  function closeFocusedTab(): void {
+    const tab = workspaceLayout.focusedTab();
+    if (tab) void closeTab(tab.ptyKey);
   }
 
-  /** Navigate to the previous tab in the focused split leaf. */
-  function splitPrevTab(): void {
-    const leaf = splitTree.getFocusedLeaf();
-    if (!leaf || leaf.tabs.length <= 1) return;
-    const currentIdx = leaf.tabs.findIndex((t) => t.ptyKey === leaf.activeTab);
-    const prevIdx = (currentIdx - 1 + leaf.tabs.length) % leaf.tabs.length;
-    splitTree.setLeafActiveTab(leaf.id, leaf.tabs[prevIdx].ptyKey);
+  function preserveKeyboardSelectedTerminal(entry: TabEntry): void {
+    if (!isTerminalTab(entry)) return;
+    if (ptyKeySessionId(entry.ptyKey) !== activeSessionId) selectTerminalTab(entry.ptyKey);
+    // Session synchronization can focus the agent tab. Restore the specific
+    // keyboard-selected PTY after that reactive update settles.
+    tick().then(() => requestAnimationFrame(() => {
+      workspaceLayout.focusTab(entry.ptyKey);
+      requestTerminalFocus(entry.ptyKey);
+    }));
   }
 
-  /** Toggle diff tab: if it exists in the tree, focus it; otherwise add it to focused leaf. */
-  function toggleDiffInTree(): void {
+  /** Move to the next (1) or previous (-1) tab of the focused pane. */
+  function cycleTab(delta: number): void {
+    const tab = workspaceLayout.cycleTab(delta);
+    if (tab) preserveKeyboardSelectedTerminal(tab);
+  }
+
+  function toggleDiff(): void {
     if (!activeSessionId) return;
-    const diffPtyKey = `${activeSessionId}:diff`;
-
-    // If already open, toggle: if active focus away, if not active focus it
-    const existing = splitTree.findTab(diffPtyKey);
-    if (existing) {
-      if (existing.leaf.activeTab === diffPtyKey) {
-        // Diff is active — close it
-        splitTree.removeSessionFromLeaf(diffPtyKey);
-        tick().then(() => refocusTerminal());
-      } else {
-        // Diff exists but not active — focus it
-        splitTree.focusTab(diffPtyKey);
-      }
-      return;
+    if (workspaceLayout.toggleDiff(activeSessionId) === "closed") {
+      tick().then(() => refocusTerminal());
     }
-
-    // Add diff tab to focused leaf
-    const focusedLeafId = splitTree.getFocusedLeafId();
-    if (!focusedLeafId) return;
-    const tabEntry: import("./lib/split-tree.svelte").TabEntry = {
-      ptyKey: diffPtyKey,
-      label: "Diff",
-      icon: "git-compare",
-      type: "diff",
-    };
-    splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
   }
 
-  /** Open a file in an editor tab. If already open, focus it. */
-  function openFileInTree(sessionId: string, filePath: string): void {
-    // Reject traversal paths (.. as path segment)
+  async function openTerminalEditor(sessionId: string, filePath: string): Promise<void> {
+    try {
+      if (await workspaceLayout.openTerminalEditor(sessionId, filePath)) {
+        tick().then(() => requestAnimationFrame(() => refocusTerminal()));
+      }
+    } catch (error) {
+      showSnackbar(`Failed to open terminal editor: ${error}`, "error");
+    }
+  }
+
+  /** Open a file with the globally configured editor. */
+  async function openFile(sessionId: string, filePath: string): Promise<void> {
     if (filePath.split(/[/\\]/).includes("..")) return;
-    const editorPtyKey = `${sessionId}:editor:${filePath}`;
-
-    // If already open, focus it
-    if (splitTree.focusTab(editorPtyKey)) return;
-
-    // Add editor tab to focused leaf
-    const focusedLeafId = splitTree.getFocusedLeafId();
-    if (!focusedLeafId) return;
-    const fileName = filePath.split("/").pop() ?? filePath;
-    const tabEntry: import("./lib/split-tree.svelte").TabEntry = {
-      ptyKey: editorPtyKey,
-      label: fileName,
-      icon: "file",
-      type: "editor",
-      filePath,
-    };
-    splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
-  }
-
-  // Sync the focused leaf's active session to the orchestrator
-  function syncFocusedLeafToOrchestrator(): void {
-    const leaf = splitTree.getFocusedLeaf();
-    if (leaf && leaf.tabs.length > 0) {
-      const activeEntry = splitTree.getActiveTabEntry(leaf);
-      if (activeEntry) {
-        const sessionId = ptyKeyToSessionId(activeEntry.ptyKey);
-        if (sessionId !== activeSessionId) {
-          orchestrator.selectSession(sessionId);
+    const result = await openFileWithConfiguredEditor(getSettings().editor, {
+      openEmbedded: () => { workspaceLayout.openEditor(sessionId, filePath); },
+      openTerminal: () => openTerminalEditor(sessionId, filePath),
+      openExternal: async () => {
+        try {
+          await editorApi.openExternal(sessionId, filePath);
+        } catch (error) {
+          showSnackbar(`Failed to open external editor: ${error}`, "error");
         }
-      }
-    }
-  }
-
-  // ─── Split tree persistence (DB) ────────────────────────────────────────────
-  let splitSaveTimeout: ReturnType<typeof setTimeout> | null = null;
-
-  function saveSplitTreeToDb(): void {
-    const data = splitTree.serialize();
-    if (!data || !lastTreeSessionId) return;
-    const sessionId = lastTreeSessionId;
-    sessionsApi.saveLayout(sessionId, JSON.stringify(data)).catch((e) => {
-      console.warn("Failed to save split layout for session", sessionId, e);
+      },
     });
+    if (result === "invalid") showSnackbar("Editor configuration has an unknown mode", "error");
   }
 
-  // Auto-save split tree on changes (debounced 500ms)
+  // Sync terminal selections—not editor/diff tabs—to the focused agent session.
+  function syncFocusedTabToSelection(): void {
+    const tab = workspaceLayout.focusedTab();
+    if (!tab || !isTerminalTab(tab)) return;
+    if (ptyKeySessionId(tab.ptyKey) !== activeSessionId) selectTerminalTab(tab.ptyKey);
+  }
+
+  function closeOverlays(): void {
+    showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; closePluginContributionModal(); showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false; commandMenuRenameId = null;
+  }
+
+  // Setup can restart mid-session; anything left open would sit under the wizard and keep the keyboard.
   $effect(() => {
-    const _tree = splitTree.getTree();
-    if (splitTreeInitialized && _tree && lastTreeSessionId && !loadingLayout) {
-      if (splitSaveTimeout) clearTimeout(splitSaveTimeout);
-      splitSaveTimeout = setTimeout(saveSplitTreeToDb, 500);
-    }
-    return () => { if (splitSaveTimeout) clearTimeout(splitSaveTimeout); };
+    if (!showOnboarding) return;
+    untrack(() => {
+      closeOverlays();
+      projectToDelete = null;
+      loopToDelete = null;
+    });
   });
 
+  /** The user focused a terminal or chat pane: its pane, tab and the keyboard zone follow. */
+  function claimAgentPane(leafId: string, ptyKey: string): void {
+    workspaceLayout.focusPane(leafId);
+    selectTerminalTab(ptyKey);
+    focusTerminal();
+  }
+
+  // ─── Provider session terminal handoff ─────────────────────────────────────
+
+  async function handoffProviderSession(sessionId: string): Promise<void> {
+    await providerHandoff.start(sessionId, (command, label) =>
+      workspaceLayout.openCommand(sessionId, command, label, { handoff: true }),
+    );
+  }
+
+  function handbackProviderSession(sessionId: string): Promise<void> {
+    return providerHandoff.end(sessionId, (ptyKey) => workspaceLayout.closeTab(ptyKey));
+  }
+
   // ─── Project management ─────────────────────────────────────────────────────
-  async function openPreferences() {
+  async function openPreferences(location?: SettingsLocation) {
     const existing = await WebviewWindow.getByLabel("preferences");
-    if (existing) { existing.setFocus(); return; }
-    new WebviewWindow("preferences", { url: "index.html?page=preferences", title: "Preferences", width: 720, height: 680, parent: getCurrentWindow(), resizable: true, minimizable: false, maximizable: false });
+    if (existing) {
+      if (location) await emitTo("preferences", "preferences-navigate", location).catch((error) => console.warn("Failed to navigate Preferences:", error));
+      existing.setFocus();
+      return;
+    }
+    const [search, hash] = location ? settingsLocationQuery(location) : ["?page=preferences", ""];
+    new WebviewWindow("preferences", { url: `index.html${search}${hash}`, title: "Preferences", width: 920, height: 680, minWidth: 760, minHeight: 520, parent: getCurrentWindow(), resizable: true, minimizable: false, maximizable: false });
   }
 
   async function doRename(id: string, name: string) {
-    await sessionsApi.rename(id, name);
-    orchestrator.updateSessionName(id, name);
     renamingSessionId = null;
+    try {
+      await sessionsApi.rename(id, name);
+      orchestrator.updateSessionName(id, name);
+    } catch (error) {
+      showSnackbar(`Failed to rename session: ${error}`);
+    }
     focusTerminal();
+  }
+
+  function openSessionRename(sessionId: string): void {
+    commandMenuFileMode = false;
+    commandMenuRenameId = sessionId;
+    commandMenuOpen = true;
+  }
+
+  /** Double-clicking an agent tab renames its session. */
+  function renameFromTab(ptyKey: string): void {
+    if (workspaceLayout.findTab(ptyKey)?.tab.type === "agent") openSessionRename(ptyKeySessionId(ptyKey));
+  }
+
+  function openAddProject() {
+    projectToEdit = null;
+    showProjectForm = true;
+  }
+
+  function openEditProject(project: Project) {
+    projectToEdit = project;
+    showProjectForm = true;
+  }
+
+  async function finishProjectForm() {
+    showProjectForm = false;
+    projectToEdit = null;
+    await taskStore.refresh(projects.map((project) => project.path));
+    focusTerminal();
+  }
+
+  function cancelProjectForm() {
+    showProjectForm = false;
+    projectToEdit = null;
+    tick().then(() => refocusTerminal());
   }
 
   async function deleteProject(p: Project) {
@@ -692,16 +636,252 @@
     loopStore.refreshAllLoops(projects.map(p => p.id));
   }
 
+  // ─── Plugin workspace ─────────────────────────────────────────────────────
+
+  async function refreshPlugins(): Promise<boolean> {
+    try {
+      pluginInventory = await pluginsApi.list();
+      const actionRevision = pluginSessionActionsRevision;
+      const actions = await pluginsApi.listSessionActions();
+      if (actionRevision === pluginSessionActionsRevision) {
+        pluginSessionActions = actions;
+      }
+      return true;
+    } catch (error) {
+      console.warn("Failed to load plugin inventory", error);
+      return false;
+    }
+  }
+
+  function leavePluginWorkspace(): void {
+    activePluginId = null;
+    activeContributionId = null;
+  }
+
+  function closePluginContributionModal(): void {
+    const returnFocus = pluginDialog?.returnFocus;
+    pluginDialog = null;
+    tick().then(() => {
+      if (returnFocus?.isConnected) returnFocus.focus();
+      else refocusTerminal();
+    });
+  }
+
+  /** Opens a contribution on the surface its placement and the request's origin call for. */
+  function openPlugin(pluginId: string, contributionId: string, origin: PluginOpenOrigin): void {
+    const target = resolvePluginOpen(pluginInventory, pluginId, contributionId, origin, !!activeSession);
+    if (target.surface === "unavailable") {
+      showSnackbar("Plugin contribution is unavailable");
+      return;
+    }
+    if (target.surface === "dialog") {
+      // A session panel returns to its terminal; a dialog returns where the user was.
+      const sessionPanel = target.contribution.placement === "session.panel";
+      if (sessionPanel) leavePluginWorkspace();
+      const focused = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+      pluginDialog = { pluginId, contributionId, returnFocus: pluginDialog ? pluginDialog.returnFocus : sessionPanel ? null : focused };
+      return;
+    }
+    pluginDialog = null;
+    if (activePluginId === pluginId && activeContributionId === contributionId) return;
+    loopStore.setActiveLoopId(null);
+    activePluginId = pluginId;
+    activeContributionId = contributionId;
+  }
+
+  const navigatePlugin = (pluginId: string, contributionId: string) => openPlugin(pluginId, contributionId, "navigation");
+
+  function focusPluginInteraction(): boolean {
+    const interaction = document.querySelector<HTMLElement>("[data-plugin-interaction-host] [data-plugin-ui-contribution]");
+    if (!interaction) return false;
+    interaction.focus();
+    return true;
+  }
+
+  function invalidatePluginPage(pluginId: string): void {
+    if (activePluginId === pluginId) leavePluginWorkspace();
+  }
+
+  async function runPluginSessionAction(session: Session, action: PluginSessionAction): Promise<void> {
+    try {
+      await pluginsApi.call(action.plugin_id, "plugin.sessionAction", {
+        action_id: action.id,
+        session_id: session.id,
+      });
+    } catch (error) {
+      showSnackbar(`Integration action failed: ${String(error)}`);
+    }
+  }
+
+  function showIntegrationCompletionPrompt(session: Session, message: string): void {
+    showMergePrompt({
+      sessionId: session.id,
+      sessionName: session.name || session.branch,
+      taskKey: session.task_key,
+      message,
+      onArchive: (id) => {
+        const found = sessions.find((candidate) => candidate.id === id);
+        return found ? orchestrator.archiveSession(found) : Promise.resolve();
+      },
+      onDestroy: (id) => {
+        const found = sessions.find((candidate) => candidate.id === id);
+        return found ? orchestrator.deleteSession(found) : Promise.resolve();
+      },
+      onTaskDone: session.task_key
+        ? async (id) => {
+            const found = sessions.find((candidate) => candidate.id === id);
+            if (!found?.task_key) return;
+            const project = projects.find((candidate) => candidate.id === sessionTaskProjectId(found));
+            if (project) await taskStore.moveTask(found.task_key, "done", project.path);
+          }
+        : undefined,
+    });
+  }
+
+  /**
+   * `focusPtyKey` is the terminal that takes keyboard focus, when it is not the
+   * agent's own tab (a shell of that session, clicked or selected).
+   */
+  function selectWorkspaceSession(sessionId: string, opts: { explicit?: boolean; focusPtyKey?: string } = {}): void {
+    const session = sessions.find((candidate) => candidate.id === sessionId);
+    if (session?.task_key) {
+      const project = projects.find((candidate) => candidate.id === sessionTaskProjectId(session));
+      const task = project ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === session.task_key) : undefined;
+      if (project && task) {
+        selectedTaskWorkspace = { project, task };
+        touchWorkspaceMru(toTaskWorkspaceId(project.id, task.key));
+      } else {
+        // The task could not be resolved: done tasks are filtered out of the
+        // listing, and another project's tasks may not be loaded yet. Keeping the
+        // previous selection would pin the main pane to the wrong task, so fall
+        // back to deriving the workspace from the newly selected session.
+        selectedTaskWorkspace = null;
+      }
+    } else {
+      selectedTaskWorkspace = null;
+    }
+    leavePluginWorkspace();
+    loopStore.setActiveLoopId(null);
+    // `selectWorkspaceTask` passes explicit: false — its first-linked session is an
+    // arbitrary entry point and must not override a remembered tab.
+    orchestrator.selectSession(sessionId, { explicit: opts.explicit ?? true });
+    requestTerminalFocus(opts.focusPtyKey ?? sessionId);
+  }
+
+  /** Select the session of a terminal tab, keeping keyboard focus on that tab. */
+  function selectTerminalTab(ptyKey: string): void {
+    selectWorkspaceSession(ptyKeySessionId(ptyKey), { focusPtyKey: ptyKey });
+  }
+
+  function openSessionForTask(task: TaskItem, project: Project): void {
+    taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: taskSessionDefaults(task, getSettings().task_management?.templates).name, prompt: "", baseBranch: task.base_branch, projectId: project.id };
+    showSessionForm = true;
+  }
+
+  /** Generic "new session" entry points start from the focused task, if any. */
+  function openNewSessionForm(): void {
+    if (activeTaskWorkspace && !activeLoopId && !activePluginId) { openSessionForTask(activeTaskWorkspace.task, activeTaskWorkspace.project); return; }
+    taskPrefill = null;
+    showSessionForm = true;
+  }
+
+  function selectWorkspaceTask(task: TaskItem, repoPath: string): void {
+    const project = projects.find((candidate) => candidate.path === repoPath);
+    if (!project) return;
+    selectedTaskWorkspace = { task, project };
+    touchWorkspaceMru(toTaskWorkspaceId(project.id, task.key));
+    loopStore.setActiveLoopId(null);
+    const linked = sessions.find((session) => sessionTaskProjectId(session) === project.id && session.task_key === task.key);
+    if (linked) {
+      const alreadyActive = linked.id === activeSessionId;
+      selectWorkspaceSession(linked.id, { explicit: false });
+      // The active session ID does not change when returning from an empty
+      // TaskWorkspace. Reload its layout because the empty workspace reset the tree.
+      if (alreadyActive) {
+        const workspace = workspaceForSession(linked.id);
+        if (workspace) void showWorkspace(workspace, linked.id, false);
+      }
+      // Keep the routed task authoritative even if session/task-store reconciliation lags.
+      selectedTaskWorkspace = { task, project };
+    } else workspaceLayout.clear();
+  }
+
+  async function restoreTaskSession(session: Session): Promise<void> {
+    await sessionsApi.restore(session.id);
+    await orchestrator.loadSessions();
+    selectWorkspaceSession(session.id);
+  }
+
+  $effect(() => {
+    const workspace = activeTaskWorkspace;
+    if (!workspace) { archivedTaskSessions = []; return; }
+    sessionsApi.listArchived().then((items) => {
+      if (activeTaskWorkspace?.task.key === workspace.task.key && activeTaskWorkspace.project.id === workspace.project.id) {
+        archivedTaskSessions = items.filter((session) => sessionTaskProjectId(session) === workspace.project.id && session.task_key === workspace.task.key);
+      }
+    }).catch(() => { archivedTaskSessions = []; });
+  });
+
+  function jumpToWorkspaceSession(index: number): void {
+    leavePluginWorkspace();
+    loopStore.setActiveLoopId(null);
+    orchestrator.jumpToSession(index);
+  }
+
+  function selectWorkspaceLoop(loopId: string): void {
+    leavePluginWorkspace();
+    loopStore.setActiveLoopId(loopId);
+    touchWorkspaceMru(`loop:${loopId}`);
+  }
+
+  /** Promote a UI-only workspace identity without sending it to session MRU persistence. */
+  function touchWorkspaceMru(id: string): void {
+    workspaceMru = [id, ...workspaceMru.filter((candidate) => candidate !== id)];
+  }
+
+  /** Runtime switcher candidates: collapse task sessions to their task workspace. */
+  function getWorkspaceMruCandidates(): string[] {
+    const valid = getSwitchableIds();
+    const persisted = getMruList().map((id) => {
+      const session = sessions.find((candidate) => candidate.id === id);
+      return session?.task_key ? toTaskWorkspaceId(sessionTaskProjectId(session), session.task_key) : id;
+    });
+    return [...workspaceMru, ...persisted, ...sidebarSessionOrder]
+      .filter((id, index, all) => valid.has(id) && all.indexOf(id) === index);
+  }
+
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
 
-  /** Valid IDs for MRU cycling — includes session IDs + loop:<id> entries. */
+  function requestTerminalFocus(sessionId: string): void {
+    tick().then(() => {
+      requestAnimationFrame(() => {
+        terminalFocusRequest = { id: (terminalFocusRequest?.id ?? 0) + 1, sessionId };
+      });
+    });
+  }
+
+  function requestFocusedTerminalFocus(): void {
+    const tab = workspaceLayout.focusedTab();
+    if (tab && isTerminalTab(tab)) requestTerminalFocus(tab.ptyKey);
+  }
+
+  /** Valid IDs for MRU cycling — task workspaces, legacy sessions, and loops. */
   function getSwitchableIds(): Set<string> {
-    const ids = orchestrator.getSwitchableSessionIds();
+    const ids = new Set<string>(sidebarSessionOrder.filter((id) => {
+      const taskWorkspace = parseTaskWorkspaceId(id);
+      if (!taskWorkspace) return true;
+      const project = projects.find((candidate) => candidate.id === taskWorkspace.projectId);
+      const task = project
+        ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === taskWorkspace.taskKey)
+        : undefined;
+      return task?.status !== "todo";
+    }));
+    for (const session of sessions) {
+      if (!session.task_key) ids.add(session.id);
+    }
     for (const p of projects) {
       for (const loop of loopStore.getLoopsForProject(p.id)) {
-        if (loop.status !== "draft" && !isTerminal(loop.status)) {
-          ids.add(`loop:${loop.id}`);
-        }
+        if (loop.status !== "draft" && !isTerminal(loop.status)) ids.add(`loop:${loop.id}`);
       }
     }
     return ids;
@@ -717,14 +897,91 @@
 
     const cleanupEvents = orchestrator.startEventListeners();
     const cleanupSymphony = orchestrator.startSymphonyPolling();
-    const cleanupCi = startCiPolling(orchestrator.getSessions());
-    const cleanupPrComments = startPrCommentPolling(orchestrator.getSessions());
     const cleanupLoopListener = loopStore.startLoopEventListener(() => projectStore.getProjects().map((p) => p.id));
+    const cleanupTaskListener = taskStore.startTaskEventListener(() => projectStore.getProjects().map((p) => p.path));
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
-    const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
+    // Backend failures the user should see, from work no window is awaiting.
+    const unlistenAppError = listen<string>("app-error", (event) => { showSnackbar(event.payload); });
+    const unlistenTabEnded = listen<TabEnded>("tab-ended", (event) => {
+      const { pty_key, reason, error } = event.payload;
+      void workspaceLayout.tabEnded(pty_key, reason, error);
+    });
+    const unlistenPluginRuntime = listen<import("./lib/types").PluginInventory>("plugin-runtime-changed", (event) => {
+      pluginSessionActionsRevision += 1;
+      pluginInventory = pluginInventory.filter((plugin) => plugin.id !== event.payload.id).concat(event.payload);
+      if (event.payload.state !== "running") {
+        pluginSessionActions = pluginSessionActions.filter((action) => action.plugin_id !== event.payload.id);
+        invalidatePluginPage(event.payload.id);
+      }
+    });
+    const unlistenPluginActions = listen<{ plugin_id: string; actions: PluginSessionAction[] }>("plugin-session-actions", (event) => {
+      pluginSessionActionsRevision += 1;
+      const { plugin_id: pluginId, actions } = event.payload;
+      if (!pluginInventory.some((plugin) => plugin.id === pluginId)) return;
+      pluginSessionActions = pluginSessionActions
+        .filter((action) => action.plugin_id !== pluginId)
+        .concat(actions.map((action) => ({ ...action, plugin_id: pluginId })));
+    });
+    const unlistenPluginAdvisory = listen<{ plugin_id: string; advisory: PluginSessionAdvisory }>("plugin-session-advisory", (event) => {
+      const { plugin_id: pluginId, advisory } = event.payload;
+      if (!sessions.some((session) => session.id === advisory.session_id)) return;
+      const pluginName = pluginInventory.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
+      showSnackbar(`${pluginName}: ${advisory.message}`, advisory.severity);
+    });
+    const unlistenPluginCompletion = listen<{ plugin_id: string; completion: PluginSessionCompletion }>("plugin-session-completed", (event) => {
+      const session = sessions.find((candidate) => candidate.id === event.payload.completion.session_id);
+      if (!session) return;
+      const pluginName = pluginInventory.find((plugin) => plugin.id === event.payload.plugin_id)?.name ?? event.payload.plugin_id;
+      showIntegrationCompletionPrompt(session, event.payload.completion.message ?? `${pluginName} completed`);
+    });
 
-    startJiraDepartedListening();
-    initUpdateListener();
+    void initUpdateListener().then(async () => {
+      try {
+        const update = await updater.getPending();
+        if (update) setLaunchUpdateAvailable(update);
+      } catch (error) {
+        console.warn("Failed to load pending update:", error);
+      }
+    });
+    const onPluginShortcut = (event: KeyboardEvent) => {
+      // This capture listener runs before the host router. Defer plugin routing
+      // until propagation completes so a built-in shortcut always wins.
+      queueMicrotask(() => {
+      if (event.defaultPrevented || showOnboarding) return;
+      const target = findPluginShortcut(event, sessionPanelCommands, globalPluginCommands);
+      if (!target) return;
+      event.preventDefault();
+      if (pluginDialog?.pluginId === target.plugin.id && pluginDialog.contributionId === target.contribution.id) {
+        closePluginContributionModal();
+        return;
+      }
+      openPlugin(target.plugin.id, target.contribution.id, "shortcut");
+      });
+    };
+    window.addEventListener("keydown", onPluginShortcut, true);
+    const unlistenFileDrop = getCurrentWebview().onDragDropEvent(({ payload }) => {
+      if (payload.type === "leave") fileDropPane = null;
+      else if (payload.type === "drop") {
+        const paneId = paneAt(payload.position);
+        fileDropPane = null;
+        if (paneId) void typeDroppedPaths(paneId, payload.paths);
+      } else fileDropPane = paneAt(payload.position);
+    });
+    let pluginListenersDisposed = false;
+    const pluginListenerReady = Promise.all([
+      unlistenPluginRuntime,
+      unlistenPluginActions,
+      unlistenPluginAdvisory,
+      unlistenPluginCompletion,
+    ]);
+    void pluginListenerReady
+      .then(() => {
+        if (!pluginListenersDisposed) void refreshPlugins();
+      })
+      .catch((error) => {
+        console.warn("Failed to register plugin event listeners", error);
+        if (!pluginListenersDisposed) void refreshPlugins();
+      });
 
     notify.isInstalled().then((installed) => { if (!installed) showHookPrompt = true; });
     sessionLogs.isEnabled().then((enabled) => { logViewerEnabled = enabled; });
@@ -734,53 +991,69 @@
       (action) => {
         if (action.type === "new_session") {
           showNewItemModal = true;
-        } else if (action.type === "new_project") { showProjectForm = true; }
+        } else if (action.type === "new_project") { openAddProject(); }
         else if (action.type === "toggle_sidebar") { sidebarVisible = !sidebarVisible; if (sidebarVisible) focusSidebar(); else focusTerminal(); }
-        else if (action.type === "jump_to_session") { loopStore.setActiveLoopId(null); orchestrator.jumpToSession(action.index); }
+        else if (action.type === "jump_to_session") { jumpToWorkspaceSession(action.index); }
         else if (action.type === "tab_switch") {
           const sw = getCycleState();
-          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
-          if (!sw.isCycling) startCycle(currentId, getSwitchableIds());
+          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
+          if (!sw.isCycling) startCycle(currentId, getSwitchableIds(), getWorkspaceMruCandidates());
           else advance(1);
         } else if (action.type === "tab_switch_reverse") {
           const sw = getCycleState();
-          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
-          if (!sw.isCycling) { startCycle(currentId, getSwitchableIds()); advance(-1); }
+          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
+          if (!sw.isCycling) { startCycle(currentId, getSwitchableIds(), getWorkspaceMruCandidates()); advance(-1); }
           else advance(-1);
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
           if (navCycle.isCycling()) navCycle.cancel();
-          showSessionForm = false; showProjectForm = false; showShortcuts = false; showNewItemModal = false; showTaskForm = false; showPrForm = false; showPrPanel = false; showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
-        } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
+          closeOverlays();
+        } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; commandMenuRenameId = null; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
-        else if (action.type === "new_tab") { splitNewTab(); }
-        else if (action.type === "close_tab") { splitCloseTab(); }
-        else if (action.type === "next_tab") { splitNextTab(); }
-        else if (action.type === "prev_tab") { splitPrevTab(); }
+        else if (action.type === "new_tab") { void openShellTab(); }
+        else if (action.type === "close_tab") { closeFocusedTab(); }
+        else if (action.type === "next_tab") { cycleTab(1); }
+        else if (action.type === "prev_tab") { cycleTab(-1); }
         else if (action.type === "next_session") {
-          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
+          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
           if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, 1);
           else navCycle.advance(1);
         } else if (action.type === "prev_session") {
-          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
+          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
           if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, -1);
           else navCycle.advance(-1);
         }
-        else if (action.type === "toggle_diff") { toggleDiffInTree(); }
-        else if (action.type === "toggle_file_explorer") { fileExplorerVisible = !fileExplorerVisible; if (fileExplorerVisible) focusExplorer(); else focusTerminal(); }
+        else if (action.type === "toggle_diff") { toggleDiff(); }
+        else if (action.type === "focus_file_explorer") {
+          const wasExplorerFocused = getActiveZone() === "explorer";
+          toggleExplorerFocus();
+          if (!wasExplorerFocused) fileExplorerVisible = true;
+        }
+        else if (action.type === "toggle_file_explorer") {
+          fileExplorerVisible = !fileExplorerVisible;
+          if (fileExplorerVisible) focusExplorer();
+          else if (getActiveZone() === "explorer") toggleExplorerFocus();
+        }
         else if (action.type === "toggle_task_panel") { if (!sidebarVisible) sidebarVisible = true; }
         else if (action.type === "toggle_sessions_panel") { if (!sidebarVisible) sidebarVisible = true; }
         else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskStore.refresh(projects.map((p) => p.path)); }
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
-        else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
-        else if (action.type === "toggle_pr_panel") { togglePrPanel(); }
-        else if (action.type === "focus_merge_prompt") { if (getPrompt()) focusMergePrompt(); else if (getDepartedPrompt()) focusDepartedPrompt(); else { const u = getUpdateState(); if (u.updateAvailable && !u.dismissed) focusUpdateToast(); } }
+        else if (action.type === "save_file") { saveActiveEditorResource(); }
+        else if (action.type === "focus_merge_prompt") {
+          if (getPrompt()) focusMergePrompt();
+          else {
+            const u = getUpdateState();
+            if (u.updateAvailable && !u.dismissed) focusUpdateToast();
+            else focusPluginInteraction();
+          }
+        }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
-      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
-      () => { const leaf = splitTree.getFocusedLeaf(); return !!leaf && splitTree.getActiveTabEntry(leaf)?.type === "editor"; },
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !pluginDialog && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
+      () => getActiveZone() === "editor" && workspaceLayout.focusedTab()?.type === "editor",
       () => !!document.activeElement?.closest('[data-form-keyboard]'),
+      () => showOnboarding,
     );
 
     function onModalKeydown(e: KeyboardEvent) {
@@ -789,7 +1062,7 @@
         e.preventDefault();
         e.stopImmediatePropagation();
         if (e.key === 'Escape') { showNewItemModal = false; }
-        else if (e.key === 's') { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }
+        else if (e.key === 's') { showNewItemModal = false; openNewSessionForm(); }
         else if (e.key === 't') { showNewItemModal = false; showTaskForm = true; }
         else if (e.key === 'l') { showNewItemModal = false; showLoopForm = true; }
       } else if (sessionToDelete) {
@@ -817,56 +1090,68 @@
     }
     window.addEventListener("keydown", onModalKeydown, true);
 
-    /** Route a navigation target (may be a session ID or a loop:<id> prefixed string). */
+    /** Route a navigation target (task workspace, session, or loop). */
     function routeNavTarget(target: string): void {
       if (isLoopId(target)) {
-        loopStore.setActiveLoopId(parseLoopId(target));
-        touchMru(target);
+        selectWorkspaceLoop(parseLoopId(target));
+      } else if (isTaskWorkspaceId(target)) {
+        const parsed = parseTaskWorkspaceId(target);
+        const project = parsed ? projects.find((candidate) => candidate.id === parsed.projectId) : undefined;
+        const task = project && parsed ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === parsed.taskKey) : undefined;
+        if (project && task) selectWorkspaceTask(task, project.path);
       } else {
-        loopStore.setActiveLoopId(null);
-        orchestrator.selectSession(target);
+        selectWorkspaceSession(target);
       }
     }
 
     function onKeyUp(e: KeyboardEvent) {
       const isModRelease = (e.key === "Control" && !e.ctrlKey) || (e.key === "Meta" && !e.metaKey);
       if (!isModRelease) return;
-      if (getCycleState().isCycling) { const target = commit(); if (target) { routeNavTarget(target); if (!isLoopId(target)) focusTerminal(); } }
-      if (navCycle.isCycling()) { const target = navCycle.commit(); if (target) { routeNavTarget(target); if (!isLoopId(target)) focusTerminal(); } }
+      if (getCycleState().isCycling) {
+        const target = commit();
+        if (target && !isLoopId(target)) {
+          routeNavTarget(target);
+          focusTerminal();
+        } else if (target) routeNavTarget(target);
+      }
+      if (navCycle.isCycling()) {
+        const target = navCycle.commit();
+        if (target && !isLoopId(target)) {
+          routeNavTarget(target);
+          focusTerminal();
+        } else if (target) routeNavTarget(target);
+      }
     }
     function onBlur() { setTimeout(() => { if (!document.hasFocus()) { if (getCycleState().isCycling) cancel(); if (navCycle.isCycling()) navCycle.cancel(); } }, 0); }
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); stopJiraDepartedListening(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); unlistenFileDrop.then((fn) => fn()); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); cleanupTaskListener(); unlistenSettings.then((fn) => fn()); unlistenAppError.then((fn) => fn()); unlistenTabEnded.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
-<main class="flex flex-col h-screen">
+<main class="flex flex-col h-screen" inert={showOnboarding}>
   <Titlebar
     projectName={activeProjectName}
     sessionName={activeSessionName}
     {sidebarVisible}
-    prUrl={sessions.find(s => s.id === activeSessionId)?.pr_url ?? null}
-    prState={sessions.find(s => s.id === activeSessionId)?.pr_state ?? null}
-    {ciStatus}
-    hasChanges={!!activeSessionId}
-    sessionId={activeSessionId}
-    tabs={hasMultiplePanes ? [] : titlebarTabs}
-    activeTabIndex={titlebarActiveTabIdx}
+    tabs={isEmptyTaskWorkspace || hasMultiplePanes ? [] : titlebarTabs}
+    activeTabId={activeTabOf(singlePane)?.ptyKey ?? ""}
     runningCount={sessions.filter(s => s.status === 'active').length}
     activeProvider={activeSession?.provider ?? null}
-    onSelectTab={(i) => { const tree = splitTree.getTree(); if (tree?.type === "leaf" && tree.tabs[i]) splitTree.setLeafActiveTab(tree.id, tree.tabs[i].ptyKey); else orchestrator.selectUnifiedTab(i); }}
-    onCloseTab={(i) => {
-      if (!activeSessionId) return;
-      if (i === -1) orchestrator.closeDiffTab(activeSessionId);
-      else if (i === -2) orchestrator.closeEditorTab(activeSessionId);
-      else { orchestrator.closeShellTab(activeSessionId, i); }
+    onSelectTab={(ptyKey) => {
+      leavePluginWorkspace();
+      loopStore.setActiveLoopId(null);
+      selectPaneTab(ptyKey);
     }}
-    onAddTab={() => orchestrator.handleNewTab()}
-    onCreatePr={openPrForm}
+    onAddTab={() => openShellTab(singlePane?.id)}
+    onTabDoubleClick={renameFromTab}
+    paneId={singlePane?.id}
+    onTabPress={pressTab}
+    {titlebarContributions}
+    titlebarSession={activePluginSessionContext}
+    onOpenTitlebarContribution={(pluginId, contributionId) => openPlugin(pluginId, contributionId, "titlebar")}
     onOpenCommand={() => { commandMenuFileMode = false; commandMenuOpen = true; }}
-    onTogglePrPanel={togglePrPanel}
     {symphonyStatus}
   />
 
@@ -874,34 +1159,43 @@
   {#if sidebarVisible}
       <UnifiedSidebar
         {renamingSessionId}
-        onSelectSession={(id) => { loopStore.setActiveLoopId(null); orchestrator.selectSession(id); }}
+        onSelectSession={selectWorkspaceSession}
         onArchiveSession={(s) => orchestrator.archiveSession(s)}
         onDeleteSession={(s) => (sessionToDelete = s)}
         onRestartSession={(s) => orchestrator.restartSession(s)}
         onRenameSession={doRename}
         onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
         onDeleteProject={(p) => (projectToDelete = p)}
-        onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "", baseBranch: task.base_branch, projectId: proj?.id ?? null }; showSessionForm = true; }}
-        onAddProject={() => (showProjectForm = true)}
+        onEditProject={openEditProject}
+        onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); if (proj) openSessionForTask(task, proj); }}
+        onSelectTask={selectWorkspaceTask}
+        onAddProject={openAddProject}
         onOpenPreferences={openPreferences}
-        onCreateSession={() => { showNewItemModal = true; }}
+        onCreateSession={openNewSessionForm}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
-        onSelectLoop={(id) => { loopStore.setActiveLoopId(id); touchMru(`loop:${id}`); }}
+        onSelectLoop={selectWorkspaceLoop}
         onStartLoop={(id) => { loopsApi.start(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onTickLoop={(id) => { loopsApi.tick(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onStopLoop={(id) => { loopsApi.stop(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onDeleteLoop={(id) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === id); if (!loop) return; const hasSessions = (loopStore.getSessionsForLoop(id) ?? []).length > 0; if (hasSessions) { loopToDelete = loop; } else { deleteLoopOnly(id); } }}
         onDeleteLoopSession={(session, loopId) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === loopId); if (loop && isLoopActive(loop.status)) { showSnackbar("Stop the loop before deleting its sessions"); } else { orchestrator.deleteSession(session); } }}
+        selectedTaskWorkspace={activeTaskWorkspace ? { projectId: activeTaskWorkspace.project.id, taskKey: activeTaskWorkspace.task.key } : null}
         selectedLoopId={activeLoopId}
-        onToggleDiff={toggleDiffInTree}
+        onToggleDiff={toggleDiff}
+        pluginContributions={sidebarPluginContributions}
+        {sessionIndicatorContributions}
+        pluginSessionActions={pluginSessionActions}
+        onPluginSessionAction={runPluginSessionAction}
+        onPluginNavigate={navigatePlugin}
+        onPluginClose={leavePluginWorkspace}
       />
   {/if}
 
   <section class="flex-1 flex flex-col relative bg-main overflow-hidden">
     <div class="flex-1 relative overflow-hidden">
     {#if showProjectForm}
-    <FormDialog title="Add Project" onClose={() => { showProjectForm = false; tick().then(() => refocusTerminal()); }}>
-      <ProjectForm onCreated={() => { showProjectForm = false; projectStore.loadProjects(); focusTerminal(); }} onCancel={() => { showProjectForm = false; tick().then(() => refocusTerminal()); }} />
+    <FormDialog title={projectToEdit ? "Edit Project" : "Add Project"} onClose={cancelProjectForm}>
+      <ProjectForm project={projectToEdit} onCreated={finishProjectForm} onCancel={cancelProjectForm} />
     </FormDialog>
     {/if}
 
@@ -911,8 +1205,14 @@
         {projects}
         {sessions}
         {taskPrefill}
+        runtimeProviders={runtimeProviders(pluginInventory)}
         currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
-        onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
+        onCreateTask={() => {
+          showSessionForm = false;
+          taskPrefill = null;
+          showTaskForm = true;
+        }}
+        onCreated={(session) => { leavePluginWorkspace(); showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
         onCancel={() => { showSessionForm = false; taskPrefill = null; tick().then(() => refocusTerminal()); }}
       />
     </FormDialog>
@@ -921,11 +1221,25 @@
     {#if showTaskForm}
     <FormDialog title="New Task" onClose={() => { showTaskForm = false; tick().then(() => refocusTerminal()); }}>
       <TaskForm
-        mode="create"
+        mode={taskWorkspaceToEdit ? "edit" : "create"}
         {projects}
+        {sessions}
+        runtimeProviders={runtimeProviders(pluginInventory)}
         tasks={taskStore.getAllTasks()}
-        onSubmitted={() => { showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
-        onCancel={() => { showTaskForm = false; tick().then(() => refocusTerminal()); }}
+        initial={taskWorkspaceToEdit ? {
+          key: taskWorkspaceToEdit.task.key,
+          title: taskWorkspaceToEdit.task.title,
+          description: taskWorkspaceToEdit.task.description,
+          priority: taskWorkspaceToEdit.task.priority,
+          parentKey: taskWorkspaceToEdit.task.parent_key,
+          blockedBy: taskWorkspaceToEdit.task.blocked_by,
+          tags: taskWorkspaceToEdit.task.tags,
+          baseBranch: taskWorkspaceToEdit.task.base_branch,
+          projectPath: taskWorkspaceToEdit.project.path,
+        } : { projectPath: projects[0]?.path ?? "" }}
+        onSubmitted={() => { taskWorkspaceToEdit = null; showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
+        onCancel={() => { taskWorkspaceToEdit = null; showTaskForm = false; tick().then(() => refocusTerminal()); }}
+        onSessionCreated={(session) => { leavePluginWorkspace(); taskWorkspaceToEdit = null; showTaskForm = false; orchestrator.createSession(session); focusTerminal(); }}
       />
     </FormDialog>
     {/if}
@@ -934,7 +1248,7 @@
     <FormDialog title="Start Loop" onClose={() => { showLoopForm = false; tick().then(() => refocusTerminal()); }}>
       <LoopForm
         projects={projects.map(p => ({ id: p.id, name: p.name, path: p.path }))}
-        onCreated={(loop) => { showLoopForm = false; loopStore.setActiveLoopId(loop.id); loopStore.refreshAllLoops(projects.map(p => p.id)); focusTerminal(); }}
+        onCreated={(loop) => { showLoopForm = false; selectWorkspaceLoop(loop.id); loopStore.refreshAllLoops(projects.map(p => p.id)); focusTerminal(); }}
         onCancel={() => { showLoopForm = false; tick().then(() => refocusTerminal()); }}
       />
     </FormDialog>
@@ -947,80 +1261,134 @@
     <CommandMenu
       open={commandMenuOpen}
       openFileMode={commandMenuFileMode}
-      onOpenChange={(v) => { commandMenuOpen = v; if (!v) commandMenuFileMode = false; }}
-      onSelectSession={(id) => { orchestrator.selectSession(id); focusTerminal(); }}
+      renameSessionId={commandMenuRenameId}
+      onOpenChange={(v) => { commandMenuOpen = v; if (!v) { commandMenuFileMode = false; commandMenuRenameId = null; } }}
+      onSelectSession={(id) => { selectWorkspaceSession(id); focusTerminal(); }}
       onArchiveSession={() => { if (activeSessionId) { const s = sessions.find(x => x.id === activeSessionId); if (s) orchestrator.archiveSession(s); } }}
       onDeleteSession={() => { if (activeSessionId) { const s = sessions.find(x => x.id === activeSessionId); if (s) sessionToDelete = s; } }}
-      onRenameSession={() => { if (activeSessionId) { sidebarVisible = true; renamingSessionId = activeSessionId; } }}
+      onRenameSession={doRename}
       onRestoreSession={async (id) => { await sessionsApi.restore(id); await orchestrator.loadSessions(); }}
       onDestroyArchivedSession={async (id) => { await sessionsApi.destroy(id); }}
-      onNewSession={() => { if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }}
-      onResetTerminal={() => { if (activeSessionId) pty.write(activeSessionId, [0x0c]); }}
+      onNewSession={() => { if (projects.length === 0) openAddProject(); else openNewSessionForm(); }}
+      onResetTerminal={() => {
+        if (activeSessionId) {
+          orchestrator.recordUserInput(activeSessionId);
+          pty.write(activeSessionId, [0x0c]);
+        }
+      }}
       onArchiveProject={async (id) => { await projectStore.archiveProject(id); }}
+      onHideProject={async (id) => { await projectStore.hideProject(id); }}
+      onUnhideProject={async (id) => { await projectStore.unhideProject(id); }}
       onDeleteProject={(id) => { const p = projects.find(x => x.id === id); if (p) projectToDelete = p; }}
       onRestoreProject={async (id) => { await projectStore.restoreProject(id); }}
-      onPickTask={(task) => { taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" }; showSessionForm = true; }}
+      onSelectTask={(task, repoPath) => { selectWorkspaceTask(task, repoPath); focusTerminal(); }}
       onCreateTask={() => { showTaskForm = true; }}
-      onToggleDiff={() => toggleDiffInTree()}
-      onOpenFile={(path) => { if (activeSessionId) openFileInTree(activeSessionId, path); }}
+      onToggleDiff={toggleDiff}
+      onOpenFile={(path) => { if (activeSessionId) openFile(activeSessionId, path); }}
       onOpenLogViewer={logViewerEnabled ? () => { showLogViewer = true; } : undefined}
-      onCreatePr={openPrForm}
-      onSplitVertical={() => handleSplitAction("split_vertical")}
+        onSplitVertical={() => handleSplitAction("split_vertical")}
       onSplitHorizontal={() => handleSplitAction("split_horizontal")}
       onCloseSplit={() => handleSplitAction("close_split")}
+      pluginCommands={pluginCommands}
+      onOpenPluginContribution={(pluginId, contributionId) => openPlugin(pluginId, contributionId, "command")}
     />
 
     <KeyboardShortcuts open={showShortcuts} onOpenChange={(v) => (showShortcuts = v)} />
 
     <!-- Split leaf snippet: renders a leaf pane with its own tab bar and terminal -->
     {#snippet splitLeafSnippet(leaf: LeafNode)}
-      {@const leafTabs = getLeafTabInfo(leaf)}
-      {@const activeEntry = splitTree.getActiveTabEntry(leaf)}
-      {@const activeTabIdx = leaf.tabs.findIndex((t) => t.ptyKey === leaf.activeTab)}
-      {@const showLeafTabBar = hasMultiplePanes}
+      {@const activeEntry = activeTabOf(leaf)}
+      {@const isFocusedLeaf = leaf.id === focusedLeafId}
+      <!-- Click-to-focus on the pane container. Focus is also reachable from the keyboard
+           via the pane navigation shortcuts, so no key handler is duplicated here. -->
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <div
         class="split-leaf {hasMultiplePanes ? '' : 'split-leaf-single'}"
-        class:split-leaf-focused={leaf.id === splitTree.getFocusedLeafId() && hasMultiplePanes}
+        class:split-leaf-focused={isFocusedLeaf && hasMultiplePanes}
         role="group"
         aria-label="Split pane"
-        onclick={() => { splitTree.setFocusedLeaf(leaf.id); if (activeEntry) { const sid = ptyKeyToSessionId(activeEntry.ptyKey); orchestrator.selectSession(sid); } focusTerminal(); }}
+        onclick={(event) => {
+          workspaceLayout.focusPane(leaf.id);
+          if (activeEntry && isTerminalTab(activeEntry)) selectTerminalTab(activeEntry.ptyKey);
+          if (!(event.target instanceof Element && event.target.closest("[data-editor-tab]"))) {
+            focusTerminal();
+          }
+        }}
       >
-        {#if showLeafTabBar}
+        {#if hasMultiplePanes}
         <div class="flex items-stretch h-[38px] bg-chrome border-b border-border shrink-0">
           <TabStrip
-            tabs={leafTabs}
-            activeTabIndex={activeTabIdx >= 0 ? activeTabIdx : 0}
-            focused={leaf.id === splitTree.getFocusedLeafId()}
+            tabs={paneTabs(leaf)}
+            activeTabId={activeEntry?.ptyKey ?? ""}
+            focused={isFocusedLeaf}
             showAddButton={true}
-            showCloseButton={hasMultiplePanes}
-            draggable={hasMultiplePanes}
-            onSelectTab={(i) => { splitTree.setFocusedLeaf(leaf.id); if (leaf.tabs[i]) splitTree.setLeafActiveTab(leaf.id, leaf.tabs[i].ptyKey); }}
-            onAddTab={() => { splitTree.setFocusedLeaf(leaf.id); splitNewTab(); }}
-            onClose={() => splitTree.closeSplit(leaf.id)}
-            onTabDragStart={(e, tabIndex) => handleTabDragStart(e, leaf.tabs[tabIndex]?.ptyKey ?? "", leaf.id)}
-            onTabDrop={(e, insertIndex) => handleTabDrop(e, leaf.id, insertIndex)}
-            onTabDragOver={handleTabDragOver}
+            showCloseButton={true}
+            paneId={leaf.id}
+            onSelectTab={selectPaneTab}
+            onAddTab={() => openShellTab(leaf.id)}
+            onClose={() => { workspaceLayout.closePane(leaf.id); syncFocusedTabToSelection(); }}
+            onTabDoubleClick={renameFromTab}
+            onTabPress={pressTab}
           />
         </div>
         {/if}
-        <div class="split-leaf-content">
+        <div class="split-leaf-content" data-pane-drop={leaf.id}>
+          {#if tabDrag.target?.kind === "pane" && tabDrag.target.paneId === leaf.id}
+            <div class="pane-drop-preview" data-zone={tabDrag.target.zone}></div>
+          {:else if fileDropPane === leaf.id && activeEntry && isTerminalTab(activeEntry)}
+            <div class="pane-drop-preview" data-zone="center"></div>
+          {/if}
           {#each leaf.tabs as tabEntry (tabEntry.ptyKey)}
-            {@const sessionId = ptyKeyToSessionId(tabEntry.ptyKey)}
+            {@const sessionId = ptyKeySessionId(tabEntry.ptyKey)}
             {@const session = sessions.find((s) => s.id === sessionId)}
-            {@const isActiveInLeaf = tabEntry.ptyKey === leaf.activeTab}
+            {@const isActiveInLeaf = tabEntry.ptyKey === activeEntry?.ptyKey}
             {@const project = session ? projects.find((p) => p.id === session.project_id) : null}
-            {#if (tabEntry.type === "agent" || tabEntry.type === "shell")}
-              {#if session && poolIsMounted(session.id)}
+            {#if isTerminalTab(tabEntry)}
+              {@const paneFocused = isTerminalPaneFocused({
+                ...terminalKeyboardOwnership,
+                isActiveTabInLeaf: isActiveInLeaf,
+                isFocusedLeaf,
+                belongsToActiveSession: sessionId === activeSessionId,
+              })}
+              {#if session && tabEntry.type === "agent" && isPluginSession(session)}
+              <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
+                <ProviderSessionView
+                  {session}
+                  inventory={pluginInventory}
+                  focused={paneFocused}
+                  onFocused={() => {
+                    if (isActiveInLeaf) claimAgentPane(leaf.id, tabEntry.ptyKey);
+                  }}
+                  onNavigate={navigatePlugin}
+                  onOpenPreferences={openPreferences}
+                  onHandoff={handoffProviderSession}
+                  onHandback={handbackProviderSession}
+                />
+              </div>
+              {:else if session}
               <!-- Wrapper hides inactive tabs; Terminal's visible prop also pauses during loop overlay -->
               <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
                 <Terminal
+                  focusRequest={terminalFocusRequest}
                   sessionId={tabEntry.ptyKey}
-                  visible={isActiveInLeaf && !activeLoopId}
-                  focused={isActiveInLeaf && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
+                  visible={isActiveInLeaf && !activeLoopId && !activePluginId}
+                  focused={paneFocused}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
-                  onAttached={() => { if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
-                  onUserInput={() => { if (agentStates[sessionId]) orchestrator.clearAgentState(sessionId); orchestrator.clearReviewReady(sessionId); }}
+                  onAttached={() => {
+                    if (tabEntry.type === "shell" && leaf.id === workspaceLayout.layout?.focusedLeafId) refocusTerminal();
+                  }}
+                  onAttachError={(error) => {
+                    // A tab that ended reports it through its end; one that stays failed to start or reconnect.
+                    if (error instanceof TabEndedError) workspaceLayout.dropEnded(error.ptyKey);
+                    else if (tabEntry.type === "shell") showSnackbar(`Failed to open terminal: ${error}`, "error");
+                    else showSnackbar(String(error));
+                  }}
+                  onFocused={(event) => {
+                    if (event.type !== "focusin" || isActiveInLeaf) claimAgentPane(leaf.id, tabEntry.ptyKey);
+                  }}
+                  onUserInput={() => orchestrator.recordUserInput(sessionId)}
                 />
               </div>
               {/if}
@@ -1034,10 +1402,12 @@
                   <ReviewTab
                     {repoPath}
                     {baseBranch}
-                    visible={true}
+                    visible={!activePluginId}
+                    focused={isFocusedLeaf}
                     sessionId={sessionId}
-                    onEditFile={(filePath) => openFileInTree(sessionId, filePath)}
-                    onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
+                    onEditFile={(filePath) => openFile(sessionId, filePath)}
+                    onFileChange={(name) => workspaceLayout.setTabTitle(tabEntry.ptyKey, name)}
+                    onSend={(text) => sendToAgent(session, text)}
                   />
                 {:else}
                   <div class="flex items-center justify-center h-full text-t3 text-sm" role="status">No project associated with this session</div>
@@ -1049,12 +1419,18 @@
                 {@const editorRepoPath = session.worktree_path ?? project.path}
                 <EditorTab
                   repoPath={editorRepoPath}
-                  visible={isActiveInLeaf}
+                  sessionId={sessionId}
+                  ptyKey={tabEntry.ptyKey}
+                  sessionExited={session.status === "exited"}
+                  visible={isActiveInLeaf && !activePluginId}
                   theme={isDark() ? "vs-dark" : "vs"}
                   initialFile={tabEntry.filePath}
-                  onClose={() => splitTree.removeSessionFromLeaf(tabEntry.ptyKey)}
-                  onFocusEditor={() => splitTree.focusTab(tabEntry.ptyKey)}
-                  onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
+                  focused={isActiveInLeaf && !activePluginId && isFocusedLeaf && zone === "editor"}
+                  onClose={() => { setEditorTabModified(tabEntry.ptyKey, false); void closeTab(tabEntry.ptyKey); }}
+                  onFocusEditor={() => { workspaceLayout.focusTab(tabEntry.ptyKey); focusEditor(); }}
+                  onFileChange={(name) => workspaceLayout.setTabTitle(tabEntry.ptyKey, name)}
+                  onModifiedChange={(modified) => setEditorTabModified(tabEntry.ptyKey, modified)}
+                  onSend={(text) => sendToAgent(session, text)}
                 />
               {:else if isActiveInLeaf}
                 <div class="flex items-center justify-center h-full text-t3 text-sm" role="status">No project associated with this session</div>
@@ -1073,36 +1449,61 @@
       </div>
     {/snippet}
 
-    <!-- Always render through split tree (single leaf = normal view) -->
-    {#if splitTreeNode}
-      <div class:hidden={!!activeLoopId} class="w-full h-full">
-        <SplitContainer node={splitTreeNode} renderLeaf={splitLeafSnippet} />
+    {#if isEmptyTaskWorkspace && activeTaskWorkspace}
+      <EmptyTaskWorkspace
+        task={activeTaskWorkspace.task}
+        archivedSessions={archivedTaskSessions}
+        active={!activeLoopId && !activePluginId}
+        onNewSession={() => openSessionForTask(activeTaskWorkspace.task, activeTaskWorkspace.project)}
+        onRestore={restoreTaskSession}
+        onEdit={() => { taskWorkspaceToEdit = activeTaskWorkspace; showTaskForm = true; }}
+      />
+    {/if}
+
+    <!-- Always render through the layout tree (a single pane is the normal view) -->
+    {#if layoutTree && !isEmptyTaskWorkspace}
+      <div class:hidden={!!activeLoopId || !!activePluginId} class="w-full h-full">
+        <SplitContainer node={layoutTree} renderLeaf={splitLeafSnippet} />
       </div>
     {/if}
 
-    {#if activeLoopId}
+    {#if activePluginId}
+      <div class="flex h-full flex-col bg-main">
+        <div class="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2">
+          <button class="text-xs text-t2 hover:text-t1" onclick={leavePluginWorkspace}>← Back to workspace</button>
+          <span class="text-sm font-medium text-t1">{activePlugin ? `${activePlugin.name} · ${activeContribution?.label ?? "Contribution"}` : "Plugin"}</span>
+        </div>
+        {#if activePlugin && activeContribution}
+          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} session={activeContribution.placement === "session.panel" ? activePluginSessionContext : undefined} getFocusedAgentSession={() => activePluginSessionContext} onNavigate={navigatePlugin} onClose={leavePluginWorkspace} onOpenPreferences={() => openPreferences(pluginPreferencesLocation(activePlugin))} autofocus /></div>
+        {:else}
+          <div class="flex min-h-0 flex-1 items-center justify-center text-sm text-t3">Plugin contribution is no longer available.</div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if activeLoopId && !activePluginId}
       {@const loopProjectPath = (() => { const loops = projects.flatMap(p => loopStore.getLoopsForProject(p.id)); const loop = loops.find(l => l.id === activeLoopId); return loop ? (projects.find(p => p.id === loop.project_id)?.path ?? "") : ""; })()}
       <div class="w-full h-full bg-main">
         <LoopDashboard
           loopId={activeLoopId}
           projectPath={loopProjectPath}
-          onSelectSession={(sessionId) => { loopStore.setActiveLoopId(null); orchestrator.selectSession(sessionId); }}
+          onSelectSession={selectWorkspaceSession}
           onOpenArtifact={(path) => {
             // If no active session, select the first session from this loop
             if (!activeSession) {
               const loopSessions = loopStore.getSessionsForLoop(activeLoopId);
               if (loopSessions.length > 0) {
-                orchestrator.selectSession(loopSessions[0].session_id);
+                selectWorkspaceSession(loopSessions[0].session_id);
               } else return;
             }
             loopStore.setActiveLoopId(null);
-            if (activeSessionId) openFileInTree(activeSessionId, path);
+            if (activeSessionId) openFile(activeSessionId, path);
           }}
         />
       </div>
     {/if}
 
-    {#if sessions.length === 0 && !showProjectForm && !showSessionForm && !activeLoopId}
+    {#if sessions.length === 0 && !activeTaskWorkspace && !showProjectForm && !showSessionForm && !activeLoopId && !activePluginId}
       <div class="flex items-center justify-center h-full">
         <p class="text-t2">No active session. Press <kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">{MOD_LABEL}N</kbd> to create one.</p>
       </div>
@@ -1199,7 +1600,7 @@
               <span class="text-[13px] font-semibold text-t1">{quitDirectCount} active session{quitDirectCount > 1 ? 's' : ''} will be terminated.</span>
               <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
             </div>
-            <p class="text-[11px] text-t3">Direct sessions don't survive app quit.</p>
+            <p class="text-[11px] text-t3">Local sessions and running chat turns don't survive app quit.</p>
           </div>
           <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
             <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showQuitConfirm = false; }}>
@@ -1216,14 +1617,14 @@
     {/if}
 
     {#if showNewItemModal}
-      <SharedDialog open={true} onOpenChange={(v) => { if (!v) showNewItemModal = false; }} title="New…" class="w-[268px] rounded-[13px] border-border-s shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] overflow-hidden">
+      <SharedDialog open={true} onOpenChange={(v) => { if (!v) showNewItemModal = false; }} title="New…" preventOpenAutoFocus={true} class="w-[268px] rounded-[13px] border-border-s shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] overflow-hidden">
         <div>
           <div class="flex items-center px-[15px] pt-[13px] pb-[11px]">
             <span class="text-[13px] font-semibold text-t1">New…</span>
             <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
           </div>
           <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
-            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] bg-accent-bg" onclick={() => { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }}>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] bg-accent-bg" onclick={() => { showNewItemModal = false; openNewSessionForm(); }}>
               <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">›_</span>
               <span class="flex-1 text-[13.5px] text-t1">Session</span>
               <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">s</span>
@@ -1262,10 +1663,10 @@
         rootPath={explorerRoot}
         sessionId={activeSessionId}
         visible={true}
-        activeFilePath={editorFileName[activeSessionId] ?? null}
-        modifiedPaths={editorModified[activeSessionId] ? new Set([editorFileName[activeSessionId] ?? ""].filter(Boolean)) : new Set()}
-        onOpenFile={(path) => { if (activeSessionId) openFileInTree(activeSessionId, path); }}
-        onPinFile={(path) => { if (activeSessionId) openFileInTree(activeSessionId, path); }}
+        activeFilePath={explorerActiveFile}
+        modifiedPaths={explorerModifiedPaths}
+        onOpenFile={(path) => { if (activeSessionId) openFile(activeSessionId, path); }}
+        onPinFile={(path) => { if (activeSessionId) openFile(activeSessionId, path); }}
         onFocus={() => focusExplorer()}
       />
     {/if}
@@ -1273,74 +1674,37 @@
   </div>
 </main>
 
-{#if showPrForm}
-  <FormDialog title="Create Pull Request" onClose={() => { showPrForm = false; tick().then(() => refocusTerminal()); }}>
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <div bind:this={prFormWrapper} tabindex="-1" onkeydown={prFk.handleKeydown} onfocusin={prFk.handleFocusin} class="outline-none px-5 pb-5" data-form-keyboard>
-      <form class="space-y-3" onsubmit={(e) => { e.preventDefault(); submitPr(); }} onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submitPr(); } }}>
-        <div class="space-y-1" data-field="pr-title">
-          <Label>Title <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">T</span></Label>
-          <Input bind:value={prTitle} />
-        </div>
-        <div class="space-y-1" data-field="pr-body">
-          <Label>Body <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">B</span></Label>
-          <textarea bind:value={prBody} rows="10" class="w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 resize-y focus:outline-none focus:ring-1 focus:ring-accent font-mono text-xs"></textarea>
-        </div>
-        <div class="space-y-1" data-field="pr-base">
-          <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">A</span></Label>
-          <Input bind:value={prBaseBranch} />
-        </div>
-        <div class="flex items-center gap-4">
-          <Checkbox id="pr-draft" label="Draft PR" bind:checked={prDraft} tabindex={-1} />
-          <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">D</span>
-        </div>
-        {#if prError}
-          <p class="text-xs text-status-exited">{prError}</p>
-        {/if}
-        <div class="flex items-center justify-between pt-2 border-t border-border">
-          <div class="flex items-center gap-2">
-            {#if prFk.mode === "insert"}
-              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent font-medium">INSERT</span>
-              <span class="text-[10px] text-t3">esc → normal mode</span>
-            {:else}
-              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-panel-hi text-t2 font-medium">NORMAL</span>
-              <span class="text-[10px] text-t3">press a key to focus field</span>
-            {/if}
-          </div>
-          <div class="flex gap-2">
-            <Button type="button" onclick={() => { showPrForm = false; tick().then(() => refocusTerminal()); }}>Cancel</Button>
-            <Button type="submit" variant="primary" disabled={prSubmitting || !prTitle.trim()}>
-              {prSubmitting ? "Creating…" : "Create"} <span class="ml-1 font-mono text-[10px] opacity-60">{MOD_ENTER_HINT}</span>
-            </Button>
-          </div>
-        </div>
-      </form>
-    </div>
-  </FormDialog>
-{/if}
-
-{#if showPrPanel && activeSession?.pr_url}
-  <FormDialog title="Pull Request" onClose={() => { showPrPanel = false; tick().then(() => refocusTerminal()); }}>
-    <PrPanel
-      sessionId={activeSession.id}
-      prUrl={activeSession.pr_url!}
-      prState={activeSession.pr_state ?? null}
-      sessionName={activeSession.name}
-      onClose={() => { showPrPanel = false; tick().then(() => refocusTerminal()); }}
-    />
-  </FormDialog>
+{#if modalPlugin && modalContribution && (modalContribution.placement === "dialog" || activePluginSessionContext)}
+  <PluginDialog
+    plugin={modalPlugin}
+    contribution={modalContribution}
+    session={activePluginSessionContext}
+    getFocusedAgentSession={() => activePluginSessionContext}
+    onNavigate={navigatePlugin}
+    onClose={closePluginContributionModal}
+    onOpenPreferences={() => openPreferences(pluginPreferencesLocation(modalPlugin))}
+  />
 {/if}
 
 {#if getSnackbarMessage()}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="fixed bottom-4 left-4 z-[100] max-w-lg cursor-pointer rounded-lg {getSnackbarType() === 'error' ? 'bg-red-600' : 'bg-green-600'} px-4 py-3 shadow-lg" onclick={() => { navigator.clipboard.writeText(getSnackbarMessage()!); dismissSnackbar(); }} title="Click to copy and dismiss">
+  <div class="fixed bottom-4 left-4 z-[100] max-w-lg cursor-pointer rounded-lg {getSnackbarType() === 'error' ? 'bg-red-600' : getSnackbarType() === 'warning' ? 'bg-amber-600' : getSnackbarType() === 'info' ? 'bg-blue-600' : 'bg-green-600'} px-4 py-3 shadow-lg" onclick={() => { navigator.clipboard.writeText(getSnackbarMessage()!); dismissSnackbar(); }} title="Click to copy and dismiss">
     <p class="text-sm text-white font-mono break-all">{getSnackbarMessage()}</p>
-    <p class="text-xs {getSnackbarType() === 'error' ? 'text-red-200' : 'text-green-200'} mt-1">Click to dismiss</p>
+    <p class="text-xs {getSnackbarType() === 'error' ? 'text-red-200' : getSnackbarType() === 'warning' ? 'text-amber-100' : getSnackbarType() === 'info' ? 'text-blue-100' : 'text-green-200'} mt-1">Click to dismiss</p>
   </div>
 {/if}
 
+<!-- Workspace prompts would sit on top of setup and act on the hidden workspace; they return after it. -->
+{#if showOnboarding}
+  <Onboarding />
+{:else}
+  {#each interactionPluginContributions as { plugin, contribution } (`${plugin.id}:${contribution.id}`)}
+    <div class="pointer-events-none fixed inset-0 z-[90]" data-plugin-interaction-host={`${plugin.id}:${contribution.id}`}>
+      <PluginContributionHost {plugin} {contribution} onNavigate={navigatePlugin} onClose={leavePluginWorkspace} onOpenPreferences={() => openPreferences(pluginPreferencesLocation(plugin))} />
+    </div>
+  {/each}
+  <UpdateToast />
+{/if}
+<!-- Stays visible during setup: its countdown keeps running and acts when it ends. -->
 <PostMergePrompt />
-<JiraDepartedPrompt />
-<UpdateToast />

@@ -30,6 +30,7 @@ export default defineConfig({
             { label: "Auto-Dispatch", slug: "guides/auto-dispatch" },
             { label: "Loops", slug: "guides/loops" },
             { label: "Theming", slug: "guides/theming" },
+            { label: "Plugin author guide", slug: "guides/plugin-ui-contributions" },
           ],
         },
         {

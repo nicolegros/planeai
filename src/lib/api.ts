@@ -2,22 +2,24 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
 import type {
   Session,
+  LaunchResult,
   Project,
   TaskItem,
   DirEntry,
   ChangedFile,
   FileDiff,
-  CiCheck,
-  PrStatus,
   CommitEntry,
-  JiraStatus,
-  SyncResult,
-  JiraTasksResponse,
+  PluginInventory,
+  PluginDiscoveryCandidate,
+  GithubMigrationStatus,
+  JiraMigrationStatus,
   LoopRunSummary,
   LoopRunDetail,
   RecipeSummary,
+  TabSpec,
 } from "./types";
 import type { AppConfig } from "./settings.svelte";
+import { toProviderSessionError } from "./provider-session-error";
 
 export interface LaunchSessionParams {
   projectId: string;
@@ -31,16 +33,33 @@ export interface LaunchSessionParams {
   autoApprove: boolean;
   provider: string;
   taskKey: string | null;
+  /** Project owning `taskKey`, when it differs from `projectId`. */
+  taskProjectId: string | null;
   taskPrompt: string | null;
+}
+
+/** A task's session as "Start session immediately" starts it; the backend applies the templates. */
+export interface StartTaskSessionParams {
+  projectId: string;
+  taskKey: string;
+  /** `null` starts on the configured default provider. */
+  provider: string | null;
+  useWorktree: boolean;
+  autoApprove: boolean;
+  /** Overrides the branch template. */
+  branch: string | null;
+  /** Overrides the prompt template. */
+  prompt: string | null;
 }
 
 export const sessions = {
   list: () => invoke<Session[]>("list_sessions"),
   listArchived: () => invoke<Session[]>("list_archived_sessions"),
   launch: (params: LaunchSessionParams) =>
-    invoke<Session>("launch_session", params as unknown as Record<string, unknown>),
+    invoke<LaunchResult>("launch_session", params as unknown as Record<string, unknown>),
   destroy: (id: string) => invoke("destroy_session", { id }),
   archive: (id: string) => invoke("archive_session", { id }),
+  park: (id: string) => invoke("park_session", { id }),
   restore: (id: string) => invoke("restore_session", { id }),
   rename: (id: string, name: string) => invoke("rename_session", { id, name }),
   restart: (sessionId: string) => invoke<Session>("restart_session", { sessionId }),
@@ -50,48 +69,83 @@ export const sessions = {
   saveLayout: (sessionId: string, layoutJson: string) =>
     invoke("save_session_layout", { sessionId, layoutJson }),
   getLayout: (sessionId: string) => invoke<string | null>("get_session_layout", { sessionId }),
+  saveTaskWorkspaceLayout: (projectId: string, taskKey: string, layoutJson: string) =>
+    invoke("save_task_workspace_layout", { projectId, taskKey, layoutJson }),
+  getTaskWorkspaceLayout: (projectId: string, taskKey: string) =>
+    invoke<string | null>("get_task_workspace_layout", { projectId, taskKey }),
 };
 
 export const projects = {
   list: () => invoke<Project[]>("list_projects"),
   listArchived: () => invoke<Project[]>("list_archived_projects"),
-  create: (name: string, path: string) => invoke("create_project", { name, path }),
+  create: (name: string, path: string) => invoke<Project>("create_project", { name, path }),
+  update: (id: string, name: string, path: string) =>
+    invoke<Project>("update_project", { id, name, path }),
   delete: (id: string) => invoke("delete_project", { id }),
   archive: (id: string) => invoke("archive_project", { id }),
   restore: (id: string) => invoke("restore_project", { id }),
+  hide: (id: string) => invoke("hide_project", { id }),
+  unhide: (id: string) => invoke("unhide_project", { id }),
   setAutoMode: (id: string, enabled: boolean) => invoke("set_project_auto_mode", { id, enabled }),
   getAutoMode: (id: string) => invoke<boolean>("get_project_auto_mode", { id }),
   validateGitRepo: (path: string) => invoke<boolean>("validate_git_repo", { path }),
   listBranches: (repoPath: string) => invoke<string[]>("list_branches", { repoPath }),
+  detectDefaultBranch: (repoPath: string) => invoke<string>("detect_default_branch", { repoPath }),
 };
 
 export const pty = {
-  write: (sessionId: string, data: number[]) => invoke("write_to_pty", { sessionId, data }),
+  write: (sessionId: string, data: number[]) =>
+    invoke<boolean>("write_to_pty", { sessionId, data }),
   attach: (sessionId: string, darkMode: boolean, onData: Channel<ArrayBuffer>) =>
     invoke("attach_session", { sessionId, darkMode, onData }),
-  spawnTab: (
+  /** Reserve a terminal tab running `spec`; resolves its index, never one the session had. */
+  openTab: (sessionId: string, spec: TabSpec) => invoke<number>("open_tab", { sessionId, spec }),
+  /** Start a terminal tab, or connect to the process already running it; false when it ended instead. */
+  attachTab: (
     sessionId: string,
     tabIndex: number,
     darkMode: boolean,
     onData: Channel<ArrayBuffer>,
-  ) => invoke("spawn_tab", { sessionId, tabIndex, darkMode, onData }),
+  ) => invoke<boolean>("attach_tab", { sessionId, tabIndex, darkMode, onData }),
   resize: (sessionId: string, rows: number, cols: number) =>
     invoke("resize_pty", { sessionId, rows, cols }),
   pause: (sessionId: string) => invoke("pause_pty", { sessionId }),
   resume: (sessionId: string) => invoke("resume_pty", { sessionId }),
+  /** Close a terminal tab; rejects, leaving it live, when its process could not be ended. */
   closeTab: (sessionId: string, tabIndex: number) => invoke("close_tab", { sessionId, tabIndex }),
-  incrementTabCount: (sessionId: string) => invoke("increment_tab_count", { sessionId }),
+  /** The terminal tabs among `ptyKeys` that ended. */
+  endedTabs: (ptyKeys: string[]) => invoke<string[]>("ended_tabs", { ptyKeys }),
+  /** Whether the tab still runs its program, such as a provider handoff's TUI. */
+  isProgramRunning: (ptyKey: string) => invoke<boolean>("is_program_running", { ptyKey }),
+};
+
+export interface LspConnection {
+  connection_id: string;
+  language_id: string;
+  profile_id: string;
+}
+
+export const lsp = {
+  connect: (repoPath: string, filePath: string, onMessage: Channel<string>) =>
+    invoke<LspConnection>("lsp_connect", { repoPath, filePath, onMessage }),
+  send: (connectionId: string, message: string) => invoke("lsp_send", { connectionId, message }),
+  disconnect: (connectionId: string) => invoke("lsp_disconnect", { connectionId }),
 };
 
 export const config = {
   get: () => invoke<AppConfig>("get_config"),
   update: (newConfig: AppConfig) => invoke("update_config", { newConfig }),
   refresh: () => invoke<AppConfig>("refresh_config"),
+  defaults: () => invoke<AppConfig>("get_config_defaults"),
+  /** Resolved binary path per agent key (configured providers plus presets), null when not found. */
+  detectProviders: () => invoke<Record<string, string | null>>("detect_providers"),
 };
 
-export const wsl = {
-  listDistros: () => invoke<string[]>("list_wsl_distros"),
-  isAvailable: () => invoke<boolean>("is_wsl_available"),
+export const editor = {
+  getTerminalCommand: (sessionId: string, filePath: string) =>
+    invoke<string>("get_terminal_editor_command", { sessionId, filePath }),
+  openExternal: (sessionId: string, filePath: string) =>
+    invoke("open_external_editor", { sessionId, filePath }),
 };
 
 export const tasks = {
@@ -106,7 +160,9 @@ export const tasks = {
     blockedBy: string[];
     parentKey?: string | null;
     baseBranch?: string;
-  }) => invoke("create_task_item", params),
+  }) => invoke<TaskItem>("create_task_item", params),
+  startSession: (params: StartTaskSessionParams) =>
+    invoke<LaunchResult>("start_task_session", params as unknown as Record<string, unknown>),
   edit: (params: {
     repoPath: string;
     key: string;
@@ -128,10 +184,12 @@ export const tasks = {
   move: (key: string, status: string, repoPath: string) =>
     invoke("move_task_item", { key, status, repoPath }),
   fireNotifyHook: (sessionId: string) => invoke("fire_task_notify_hook", { sessionId }),
+  fireResumeHook: (sessionId: string) => invoke("fire_task_resume_hook", { sessionId }),
 };
 
 export const fileExplorer = {
   listDir: (path: string) => invoke<DirEntry[]>("fe_list_directory", { path }),
+  listAllPaths: (rootPath: string) => invoke<string[]>("fe_list_all_paths", { rootPath }),
   rename: (oldPath: string, newPath: string) => invoke("fe_rename_entry", { oldPath, newPath }),
   deleteToTrash: (path: string) => invoke("fe_delete_to_trash", { path }),
   createDir: (path: string) => invoke("fe_create_directory", { path }),
@@ -197,30 +255,6 @@ export const git = {
     invoke<string>("read_file", { filePath, repoPath }),
   writeFile: (filePath: string, content: string, repoPath: string) =>
     invoke("write_file", { filePath, content, repoPath }),
-  fetchPrUrl: (sessionId: string) => invoke<string | null>("fetch_pr_url", { sessionId }),
-};
-
-export const pr = {
-  create: (sessionId: string, title: string, body: string, baseBranch: string, draft: boolean) =>
-    invoke<string>("create_pr", { sessionId, title, body, baseBranch, draft }),
-  generateDefaults: (sessionId: string) =>
-    invoke<{ title: string; body: string; base_branch: string }>("generate_pr_defaults", {
-      sessionId,
-    }),
-  getCiChecks: (sessionId: string) => invoke<CiCheck[]>("get_ci_checks", { sessionId }),
-  getPrComments: (sessionId: string) => invoke<number>("get_pr_comments", { sessionId }),
-  getMergeConflictStatus: (sessionId: string) =>
-    invoke<boolean>("get_merge_conflict_status", { sessionId }),
-  getPrStatus: (sessionId: string) => invoke<PrStatus>("get_pr_status", { sessionId }),
-  getAllowedStrategies: (sessionId: string) =>
-    invoke<string[]>("get_allowed_merge_strategies", { sessionId }),
-  merge: (sessionId: string, strategy: string) => invoke("merge_pr", { sessionId, strategy }),
-  markReady: (sessionId: string) => invoke("mark_pr_ready", { sessionId }),
-  getMergeState: (sessionId: string) =>
-    invoke<{ blocked: boolean; reasons: string[]; settingsUrl: string | null }>("get_merge_state", {
-      sessionId,
-    }),
-  getCiFailureLogs: (sessionId: string) => invoke<string>("get_ci_failure_logs", { sessionId }),
 };
 
 export const notify = {
@@ -232,20 +266,60 @@ export const symphony = {
   getStatus: () => invoke<string>("get_symphony_status"),
 };
 
-export const jira = {
-  connect: () => invoke("jira_connect"),
-  disconnect: () => invoke("jira_disconnect"),
-  syncNow: () => invoke<SyncResult>("jira_sync_now"),
-  status: () => invoke<JiraStatus>("jira_status"),
-  listTasks: () => invoke<JiraTasksResponse>("list_jira_tasks"),
-  assign: (jiraTaskKey: string, projectId: string) =>
-    invoke<TaskItem>("assign_jira_task", { jiraTaskKey, projectId }),
+export const plugins = {
+  list: () => invoke<PluginInventory[]>("list_plugins"),
+  discover: () => invoke<PluginDiscoveryCandidate[]>("discover_plugins"),
+  listSessionActions: () =>
+    invoke<import("./types").PluginSessionAction[]>("list_plugin_session_actions"),
+  installLocal: (sourcePath: string) =>
+    invoke<PluginInventory>("install_local_plugin", { sourcePath }),
+  removeLocal: (pluginId: string) => invoke("remove_local_plugin", { pluginId }),
+  enable: (pluginId: string) => invoke<PluginInventory>("enable_plugin", { pluginId }),
+  disable: (pluginId: string) => invoke<PluginInventory>("disable_plugin", { pluginId }),
+  reload: (pluginId: string) => invoke<PluginInventory>("reload_plugin", { pluginId }),
+  jiraMigrationStatus: () => invoke<JiraMigrationStatus>("jira_migration_status"),
+  migrateLegacyJira: () => invoke<JiraMigrationStatus>("migrate_legacy_jira"),
+  githubMigrationStatus: () => invoke<GithubMigrationStatus>("github_migration_status"),
+  migrateLegacyGithub: () => invoke<GithubMigrationStatus>("migrate_legacy_github"),
+  call: <T>(pluginId: string, method: string, params: unknown = null) =>
+    invoke<T>("plugin_call", { pluginId, method, params }),
+  hostCall: <T>(pluginId: string, method: string, params: unknown = null) =>
+    invoke<T>("plugin_host_call", { pluginId, method, params }),
+  settings: <T>(pluginId: string) => invoke<T>("plugin_settings", { pluginId }),
+  updateSettings: <T>(pluginId: string, settings: unknown) =>
+    invoke<T>("update_plugin_settings", { pluginId, settings }),
+  localUiSource: (pluginId: string, contributionId: string) =>
+    invoke<string>("local_plugin_ui_source", { pluginId, contributionId }),
+  localProviderUiSource: (pluginId: string, providerId: string) =>
+    invoke<string>("local_plugin_provider_ui_source", { pluginId, providerId }),
+  dataChanged: (pluginId: string) => invoke<void>("plugin_data_changed", { pluginId }),
+};
+
+function invokeProviderSession<T>(command: string, args: Record<string, unknown>): Promise<T> {
+  return invoke<T>(command, args).catch((error: unknown) => {
+    throw toProviderSessionError(error);
+  });
+}
+
+/** Host-routed control of plugin provider sessions (ADR-0014). */
+export const providerSessions = {
+  ensure: (sessionId: string) =>
+    invokeProviderSession<void>("provider_session_ensure", { sessionId }),
+  send: (sessionId: string, text: string) =>
+    invokeProviderSession<void>("provider_session_send", { sessionId, text }),
+  interrupt: (sessionId: string) =>
+    invokeProviderSession<void>("provider_session_interrupt", { sessionId }),
+  handoff: (sessionId: string) =>
+    invokeProviderSession<string[]>("provider_session_handoff", { sessionId }),
+  handback: (sessionId: string) =>
+    invokeProviderSession<void>("provider_session_handback", { sessionId }),
 };
 
 export const preferences = {
   listMonospaceFonts: () => invoke<string[]>("list_monospace_fonts"),
   listThemes: () => invoke<string[]>("list_themes"),
   checkTmuxAvailable: () => invoke<boolean>("check_tmux_available"),
+  checkRmuxAvailable: () => invoke<boolean>("check_rmux_available"),
   checkCliInstalled: () => invoke<boolean>("check_cli_installed"),
   installCli: () => invoke("install_cli"),
   getLogDir: () => invoke<string>("get_log_dir"),
@@ -300,6 +374,14 @@ export const loops = {
   delete: (loopId: string) => invoke<string[]>("delete_loop", { loopId }),
 };
 
+export interface AppUpdateInfo {
+  version: string;
+  body: string | null;
+}
+
 export const updater = {
+  getVersion: () => invoke<string>("get_app_version"),
+  getPending: () => invoke<AppUpdateInfo | null>("get_pending_update"),
+  check: () => invoke<AppUpdateInfo | null>("check_for_update"),
   install: () => invoke<void>("install_update"),
 };

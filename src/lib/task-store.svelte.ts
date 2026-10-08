@@ -2,11 +2,13 @@
  * Global task store — single source of truth for task state across all components.
  * Replaces independent fetching in TaskPanel, UnifiedSidebar, and App.svelte.
  */
+import { listen } from "@tauri-apps/api/event";
 import { tasks as tasksApi } from "./api";
 import type { TaskItem } from "./types";
 
 let tasksByProject = $state<Record<string, TaskItem[]>>({});
 let loading = $state(false);
+let taskRequestGeneration = 0;
 
 export function getTasksByProject(): Record<string, TaskItem[]> {
   return tasksByProject;
@@ -32,28 +34,73 @@ export function isLoading(): boolean {
   return loading;
 }
 
+/** Replaces the full store snapshot, retaining prior data for failed project requests. */
 export async function loadTasks(projectPaths: string[]): Promise<void> {
-  if (projectPaths.length === 0) return;
+  const requestGeneration = ++taskRequestGeneration;
   loading = true;
   try {
+    if (projectPaths.length === 0) {
+      tasksByProject = {};
+      return;
+    }
+    const previous = tasksByProject;
     const results: Record<string, TaskItem[]> = {};
     await Promise.all(
       projectPaths.map(async (path) => {
         try {
           results[path] = await tasksApi.listAll(path);
         } catch {
-          results[path] = [];
+          results[path] = previous[path] ?? [];
         }
       }),
     );
-    tasksByProject = results;
+    if (requestGeneration === taskRequestGeneration) tasksByProject = results;
   } finally {
-    loading = false;
+    if (requestGeneration === taskRequestGeneration) loading = false;
   }
 }
 
+/** Refreshes on `tasks-changed`, emitted for status moves made outside the UI (lifecycle hooks, CLI); bursts are coalesced. */
+export function startTaskEventListener(getProjectPaths: () => string[]): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const unlisten = listen("tasks-changed", () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      void refresh(getProjectPaths());
+    }, 150);
+  });
+  return () => {
+    if (timer) clearTimeout(timer);
+    void unlisten.then((fn) => fn());
+  };
+}
+
+/** Refreshes only the supplied projects, preserving unrelated store entries. */
 export async function refresh(projectPaths: string[]): Promise<void> {
-  await loadTasks(projectPaths);
+  const requestGeneration = ++taskRequestGeneration;
+  loading = true;
+  try {
+    if (projectPaths.length === 0) {
+      tasksByProject = {};
+      return;
+    }
+    const results: Record<string, TaskItem[]> = {};
+    await Promise.all(
+      projectPaths.map(async (path) => {
+        try {
+          results[path] = await tasksApi.listAll(path);
+        } catch {
+          // Keep the last successful snapshot for this project on refresh failure.
+        }
+      }),
+    );
+    if (requestGeneration === taskRequestGeneration) {
+      tasksByProject = { ...tasksByProject, ...results };
+    }
+  } finally {
+    if (requestGeneration === taskRequestGeneration) loading = false;
+  }
 }
 
 export async function moveTask(key: string, status: string, repoPath: string): Promise<void> {
@@ -70,9 +117,11 @@ export async function createTask(params: {
   blockedBy: string[];
   parentKey?: string | null;
   baseBranch?: string;
-}): Promise<void> {
-  await tasksApi.create(params);
-  await loadTasks(Object.keys(tasksByProject));
+}): Promise<TaskItem> {
+  const created = await tasksApi.create(params);
+  // Refresh store in background — don't block return on refresh failure
+  loadTasks(Object.keys(tasksByProject)).catch(() => {});
+  return created;
 }
 
 export async function editTask(params: {

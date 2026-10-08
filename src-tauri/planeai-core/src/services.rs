@@ -62,16 +62,17 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
     // Idempotent column additions
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN worktree_path TEXT");
+    let _ = conn
+        .execute_batch("ALTER TABLE sessions ADD COLUMN worktree_owned INTEGER NOT NULL DEFAULT 1");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider TEXT");
     let _ =
         conn.execute_batch("ALTER TABLE sessions ADD COLUMN backend TEXT NOT NULL DEFAULT 'tmux'");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider_session_id TEXT");
-    let _ =
-        conn.execute_batch("ALTER TABLE sessions ADD COLUMN tab_count INTEGER NOT NULL DEFAULT 1");
     let _ = conn
         .execute_batch("ALTER TABLE sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 1");
     let _ =
         conn.execute_batch("ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+    let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN task_key TEXT");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN base_branch TEXT");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN mru_position INTEGER");
@@ -147,10 +148,10 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
                  status TEXT NOT NULL DEFAULT 'active',
                  created_at TEXT NOT NULL,
                  worktree_path TEXT,
+                 worktree_owned INTEGER NOT NULL DEFAULT 1,
                  provider TEXT,
                  backend TEXT NOT NULL DEFAULT 'tmux',
                  provider_session_id TEXT,
-                 tab_count INTEGER NOT NULL DEFAULT 1,
                  auto_approve INTEGER NOT NULL DEFAULT 1,
                  task_key TEXT,
                  base_branch TEXT,
@@ -160,8 +161,8 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
                  auto_dispatched INTEGER NOT NULL DEFAULT 0,
                  updated_at TEXT
              );
-             INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, updated_at)
-                 SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, created_at FROM sessions_old;
+             INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, provider_session_id, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, updated_at)
+                 SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, provider_session_id, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, created_at FROM sessions_old;
              DROP TABLE sessions_old;"
         )?;
     }
@@ -189,7 +190,10 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
     // Track which session spawned this one (orchestration / parent-child relationships)
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT");
 
-    // Split layout persistence — stores the split tree JSON per session
+    // Project owning `task_key` when the session runs in another project's repo; NULL means `project_id`.
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN task_project_id TEXT");
+
+    // Legacy split layout persistence — stores the split tree JSON per session.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS session_layouts (
              session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
@@ -197,6 +201,25 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
          )",
     )?;
+
+    // Task workspaces own the shared layout for every agent session linked to a task.
+    // `tasks` live in task-manager storage, so this is intentionally keyed by its
+    // stable project/task identity instead of a foreign key to a local tasks table.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_workspaces (
+             project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+             task_key TEXT NOT NULL,
+             layout_json TEXT NOT NULL,
+             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             PRIMARY KEY (project_id, task_key)
+         )",
+    )?;
+
+    // The task prompt a `local` session's agent gets when it first spawns, on attach.
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN pending_prompt TEXT");
+
+    // Shell tabs are tracked by the persisted TaskWorkspace layout, not a per-session count.
+    let _ = conn.execute_batch("ALTER TABLE sessions DROP COLUMN tab_count");
 
     Ok(())
 }
@@ -210,6 +233,7 @@ pub struct Project {
     pub path: String,
     pub status: String,
     pub prefix: String,
+    pub hidden: bool,
 }
 
 // ─── Session types (matches production db::Session) ──────────────────────────
@@ -227,7 +251,6 @@ pub struct SessionRecord {
     pub provider: Option<String>,
     pub backend: String,
     pub provider_session_id: Option<String>,
-    pub tab_count: i64,
     pub auto_approve: bool,
     pub task_key: Option<String>,
     pub base_branch: Option<String>,
@@ -237,10 +260,18 @@ pub struct SessionRecord {
     pub auto_dispatched: bool,
     pub attached_once: bool,
     pub parent_session_id: Option<String>,
+    pub task_project_id: Option<String>,
+}
+
+impl SessionRecord {
+    /// The project whose TaskWorkspace this session belongs to.
+    pub fn task_project_id(&self) -> &str {
+        self.task_project_id.as_deref().unwrap_or(&self.project_id)
+    }
 }
 
 /// Column list matching production SESSION_COLUMNS + mru_position + auto_dispatched.
-const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, mru_position, auto_dispatched, attached_once, parent_session_id";
+const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, auto_approve, task_key, base_branch, pr_url, pr_state, mru_position, auto_dispatched, attached_once, parent_session_id, task_project_id";
 
 fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SessionRecord> {
     Ok(SessionRecord {
@@ -255,16 +286,16 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SessionRecord> {
         provider: row.get(8)?,
         backend: row.get(9)?,
         provider_session_id: row.get(10)?,
-        tab_count: row.get(11)?,
-        auto_approve: row.get(12)?,
-        task_key: row.get(13)?,
-        base_branch: row.get(14)?,
-        pr_url: row.get(15)?,
-        pr_state: row.get(16)?,
-        mru_position: row.get(17)?,
-        auto_dispatched: row.get::<_, bool>(18).unwrap_or(false),
-        attached_once: row.get::<_, bool>(19).unwrap_or(false),
-        parent_session_id: row.get(20)?,
+        auto_approve: row.get(11)?,
+        task_key: row.get(12)?,
+        base_branch: row.get(13)?,
+        pr_url: row.get(14)?,
+        pr_state: row.get(15)?,
+        mru_position: row.get(16)?,
+        auto_dispatched: row.get::<_, bool>(17).unwrap_or(false),
+        attached_once: row.get::<_, bool>(18).unwrap_or(false),
+        parent_session_id: row.get(19)?,
+        task_project_id: row.get(20)?,
     })
 }
 
@@ -276,6 +307,7 @@ pub struct CreateSessionParams {
     pub tmux_name: Option<String>,
     pub branch: String,
     pub worktree_path: Option<String>,
+    pub worktree_owned: Option<bool>,
     pub provider: Option<String>,
     pub backend: String,
     pub auto_approve: bool,
@@ -283,6 +315,9 @@ pub struct CreateSessionParams {
     pub base_branch: Option<String>,
     pub auto_dispatched: bool,
     pub parent_session_id: Option<String>,
+    pub task_project_id: Option<String>,
+    /// For a backend that spawns the agent on first attach rather than at launch.
+    pub pending_prompt: Option<String>,
 }
 
 // ─── ProjectService ──────────────────────────────────────────────────────────
@@ -294,7 +329,7 @@ impl ProjectService {
     pub fn ensure_project(conn: &Connection, path: &str) -> SqlResult<Project> {
         let existing: Option<Project> = conn
             .prepare(
-                "SELECT id, name, path, status, prefix FROM projects WHERE path = ?1 AND status = 'active'",
+                "SELECT id, name, path, status, prefix, hidden FROM projects WHERE path = ?1 AND status = 'active'",
             )?
             .query_row(params![path], |row| {
                 Ok(Project {
@@ -303,6 +338,7 @@ impl ProjectService {
                     path: row.get(2)?,
                     status: row.get(3)?,
                     prefix: row.get(4)?,
+                    hidden: row.get(5)?,
                 })
             })
             .ok();
@@ -328,12 +364,13 @@ impl ProjectService {
             path: path.to_string(),
             status: "active".to_string(),
             prefix,
+            hidden: false,
         })
     }
 
     pub fn list_active(conn: &Connection) -> SqlResult<Vec<Project>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, path, status, prefix FROM projects WHERE status = 'active'",
+            "SELECT id, name, path, status, prefix, hidden FROM projects WHERE status = 'active'",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(Project {
@@ -342,6 +379,7 @@ impl ProjectService {
                 path: row.get(2)?,
                 status: row.get(3)?,
                 prefix: row.get(4)?,
+                hidden: row.get(5)?,
             })
         })?;
         rows.collect()
@@ -349,7 +387,7 @@ impl ProjectService {
 
     pub fn get_by_path(conn: &Connection, path: &str) -> SqlResult<Option<Project>> {
         conn.prepare(
-            "SELECT id, name, path, status, prefix FROM projects WHERE path = ?1 AND status = 'active'",
+            "SELECT id, name, path, status, prefix, hidden FROM projects WHERE path = ?1 AND status = 'active'",
         )?
         .query_row(params![path], |row| {
             Ok(Project {
@@ -358,6 +396,7 @@ impl ProjectService {
                 path: row.get(2)?,
                 status: row.get(3)?,
                 prefix: row.get(4)?,
+                hidden: row.get(5)?,
             })
         })
         .ok()
@@ -365,7 +404,7 @@ impl ProjectService {
     }
 
     pub fn get_by_id(conn: &Connection, id: &str) -> SqlResult<Option<Project>> {
-        conn.prepare("SELECT id, name, path, status, prefix FROM projects WHERE id = ?1")?
+        conn.prepare("SELECT id, name, path, status, prefix, hidden FROM projects WHERE id = ?1")?
             .query_row(params![id], |row| {
                 Ok(Project {
                     id: row.get(0)?,
@@ -373,6 +412,7 @@ impl ProjectService {
                     path: row.get(2)?,
                     status: row.get(3)?,
                     prefix: row.get(4)?,
+                    hidden: row.get(5)?,
                 })
             })
             .ok()
@@ -392,7 +432,20 @@ impl ProjectService {
             path: path.to_string(),
             status: "active".to_string(),
             prefix,
+            hidden: false,
         })
+    }
+
+    /// Update display metadata for a project without changing its stable task prefix.
+    pub fn update(conn: &Connection, id: &str, name: &str, path: &str) -> SqlResult<Project> {
+        let updated = conn.execute(
+            "UPDATE projects SET name = ?1, path = ?2 WHERE id = ?3",
+            params![name, path, id],
+        )?;
+        if updated == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        Self::get_by_id(conn, id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
     }
 
     pub fn archive(conn: &Connection, id: &str) -> SqlResult<()> {
@@ -409,7 +462,7 @@ impl ProjectService {
 
     pub fn list_archived(conn: &Connection) -> SqlResult<Vec<Project>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, path, status, prefix FROM projects WHERE status = 'archived'",
+            "SELECT id, name, path, status, prefix, hidden FROM projects WHERE status = 'archived'",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(Project {
@@ -418,6 +471,7 @@ impl ProjectService {
                 path: row.get(2)?,
                 status: row.get(3)?,
                 prefix: row.get(4)?,
+                hidden: row.get(5)?,
             })
         })?;
         rows.collect()
@@ -431,8 +485,23 @@ impl ProjectService {
         Ok(())
     }
 
+    pub fn hide(conn: &Connection, id: &str) -> SqlResult<()> {
+        conn.execute("UPDATE projects SET hidden = 1 WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn unhide(conn: &Connection, id: &str) -> SqlResult<()> {
+        conn.execute("UPDATE projects SET hidden = 0 WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
     pub fn delete(conn: &Connection, id: &str) -> SqlResult<()> {
         conn.execute("DELETE FROM sessions WHERE project_id = ?1", params![id])?;
+        // Sessions of other projects linked to this project's tasks fall back to their own project.
+        conn.execute(
+            "UPDATE sessions SET task_project_id = NULL WHERE task_project_id = ?1",
+            params![id],
+        )?;
         conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
         Ok(())
     }
@@ -477,10 +546,14 @@ pub struct SessionService;
 impl SessionService {
     /// Create a session record. Used by both Tauri and Iced launch paths.
     pub fn create(conn: &Connection, params: &CreateSessionParams) -> SqlResult<SessionRecord> {
+        let task_project_id = params
+            .task_project_id
+            .clone()
+            .filter(|id| params.task_key.is_some() && *id != params.project_id);
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, auto_approve, task_key, base_branch, auto_dispatched, parent_session_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, auto_approve, task_key, base_branch, auto_dispatched, parent_session_id, task_project_id, pending_prompt)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 params.id,
                 params.project_id,
@@ -489,6 +562,7 @@ impl SessionService {
                 params.branch,
                 created_at,
                 params.worktree_path,
+                params.worktree_owned.unwrap_or(true),
                 params.provider,
                 params.backend,
                 params.auto_approve,
@@ -496,6 +570,8 @@ impl SessionService {
                 params.base_branch,
                 params.auto_dispatched,
                 params.parent_session_id,
+                task_project_id,
+                params.pending_prompt,
             ],
         )?;
         Ok(SessionRecord {
@@ -510,7 +586,6 @@ impl SessionService {
             provider: params.provider.clone(),
             backend: params.backend.clone(),
             provider_session_id: None,
-            tab_count: 1,
             auto_approve: params.auto_approve,
             task_key: params.task_key.clone(),
             base_branch: params.base_branch.clone(),
@@ -520,6 +595,7 @@ impl SessionService {
             auto_dispatched: params.auto_dispatched,
             attached_once: false,
             parent_session_id: params.parent_session_id.clone(),
+            task_project_id,
         })
     }
 
@@ -707,15 +783,6 @@ impl SessionService {
         Ok(())
     }
 
-    /// Update tab count.
-    pub fn update_tab_count(conn: &Connection, session_id: &str, tab_count: i64) -> SqlResult<()> {
-        conn.execute(
-            "UPDATE sessions SET tab_count = ?2 WHERE id = ?1",
-            params![session_id, tab_count],
-        )?;
-        Ok(())
-    }
-
     /// Save MRU ordering. Clears all positions then sets for the given IDs.
     pub fn save_mru_order(conn: &Connection, session_ids: &[&str]) -> SqlResult<()> {
         let tx = conn.unchecked_transaction()?;
@@ -730,20 +797,6 @@ impl SessionService {
         Ok(())
     }
 
-    /// Update PR state.
-    pub fn update_pr_state(
-        conn: &Connection,
-        session_id: &str,
-        pr_url: &str,
-        pr_state: &str,
-    ) -> SqlResult<()> {
-        conn.execute(
-            "UPDATE sessions SET pr_url = ?1, pr_state = ?2 WHERE id = ?3",
-            params![pr_url, pr_state, session_id],
-        )?;
-        Ok(())
-    }
-
     /// Check if there's an active checkout (non-worktree) session for a project.
     pub fn has_active_checkout(conn: &Connection, project_id: &str) -> SqlResult<bool> {
         let count: i64 = conn.query_row(
@@ -754,11 +807,42 @@ impl SessionService {
         Ok(count > 0)
     }
 
-    /// Mark a session as having been attached at least once.
+    /// Mark a session as having been attached at least once; its pending prompt is delivered.
     pub fn mark_attached(conn: &Connection, session_id: &str) -> SqlResult<()> {
         conn.execute(
-            "UPDATE sessions SET attached_once = 1 WHERE id = ?1 AND attached_once = 0",
+            "UPDATE sessions SET attached_once = 1, pending_prompt = NULL WHERE id = ?1 AND attached_once = 0",
             params![session_id],
+        )?;
+        Ok(())
+    }
+
+    /// The prompt the session's first spawn still has to deliver.
+    pub fn pending_prompt(conn: &Connection, session_id: &str) -> SqlResult<Option<String>> {
+        conn.query_row(
+            "SELECT pending_prompt FROM sessions WHERE id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// Remove the prompt a spawn is about to deliver, so no later spawn delivers it again.
+    pub fn take_pending_prompt(conn: &Connection, session_id: &str) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET pending_prompt = NULL WHERE id = ?1",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Give a taken prompt back after its spawn failed, unless an attach already happened.
+    pub fn return_pending_prompt(
+        conn: &Connection,
+        session_id: &str,
+        prompt: &str,
+    ) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET pending_prompt = ?2 WHERE id = ?1 AND attached_once = 0",
+            params![session_id, prompt],
         )?;
         Ok(())
     }
@@ -1017,18 +1101,12 @@ impl TaskService {
         repo.get(key).map_err(|e| e.to_string())
     }
 
-    /// Resolve the task prompt from task title + description using a template.
-    /// Template uses {key}, {title}, {description} placeholders.
+    /// Resolve the task prompt from a template over the task's template variables.
     pub fn resolve_task_prompt(
         task: &planeai_tasks::model::Task,
         template: Option<&str>,
     ) -> String {
-        let tmpl = template.unwrap_or("{title}\n\n{description}");
-        let mut vars = std::collections::HashMap::new();
-        vars.insert("key", task.key.as_str());
-        vars.insert("title", task.title.as_str());
-        vars.insert("description", task.description.as_str());
-        crate::template::render(tmpl, &vars)
+        crate::template::TaskVars::from(task).render(template.unwrap_or("{title}\n\n{description}"))
     }
 
     /// Link a session to a task and optionally move task to a new status (on_start hook).

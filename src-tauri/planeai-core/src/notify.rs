@@ -1,7 +1,8 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use crate::task_lifecycle::TaskLifecycleBatch;
 
 pub const SILENCE_THRESHOLD: Duration = Duration::from_secs(5);
 pub const DEBOUNCE_THRESHOLD: Duration = Duration::from_secs(2);
@@ -20,6 +21,7 @@ pub enum NotifyEvent {
     SessionCreated,
     SessionChanged,
     SendPrompt,
+    TaskLifecycle,
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +29,7 @@ pub struct NotifyMessage {
     pub session_id: String,
     pub event: NotifyEvent,
     pub text: Option<String>,
+    pub lifecycle_batch: Option<TaskLifecycleBatch>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +45,8 @@ pub struct NotifyState {
     meta: HashMap<String, SessionMeta>,
     notified: std::collections::HashSet<String>,
     idle_since: HashMap<String, Instant>,
+    /// Sessions whose status comes only from their plugin provider (ADR-0014).
+    provider_owned: std::collections::HashSet<String>,
     #[cfg(any(test, feature = "test-support"))]
     time_offset: HashMap<String, Duration>,
 }
@@ -60,6 +65,7 @@ impl NotifyState {
             meta: HashMap::new(),
             notified: std::collections::HashSet::new(),
             idle_since: HashMap::new(),
+            provider_owned: std::collections::HashSet::new(),
             #[cfg(any(test, feature = "test-support"))]
             time_offset: HashMap::new(),
         }
@@ -80,6 +86,50 @@ impl NotifyState {
                 hook_enabled,
             },
         );
+    }
+
+    /// Hand a session's status to its plugin provider: hook and PTY signals stop applying.
+    pub fn mark_provider_owned(&mut self, session_id: &str) {
+        self.provider_owned.insert(session_id.to_string());
+    }
+
+    /// A provider session failed to launch; its id will never report status.
+    pub fn release_provider_owned(&mut self, session_id: &str) {
+        self.provider_owned.remove(session_id);
+    }
+
+    pub fn is_provider_owned(&self, session_id: &str) -> bool {
+        self.provider_owned.contains(session_id)
+    }
+
+    /// A provider reported a running turn. Returns whether the session resumed.
+    pub fn provider_busy(&mut self, session_id: &str) -> bool {
+        self.mark_provider_owned(session_id);
+        self.notify_busy(session_id)
+    }
+
+    /// A provider reported its session idle or waiting on the user. Returns whether that
+    /// ends a turn worth notifying: providers also report idle when they start or resume a
+    /// session, which is not a finished turn.
+    pub fn provider_settled(&mut self, session_id: &str) -> bool {
+        self.mark_provider_owned(session_id);
+        if self.get_state(session_id) != Some(AgentState::Busy) {
+            self.states.insert(session_id.to_string(), AgentState::Idle);
+            self.idle_since.remove(session_id);
+            return false;
+        }
+        self.notify_stop_immediate(session_id)
+    }
+
+    /// The provider driving a session went away, so a running turn will never report its
+    /// end. Returns whether the session was busy; it is idle afterwards, without notifying.
+    pub fn provider_released(&mut self, session_id: &str) -> bool {
+        if self.get_state(session_id) != Some(AgentState::Busy) {
+            return false;
+        }
+        self.states.insert(session_id.to_string(), AgentState::Idle);
+        self.idle_since.remove(session_id);
+        true
     }
 
     pub fn get_meta(&self, session_id: &str) -> Option<&SessionMeta> {
@@ -132,7 +182,8 @@ impl NotifyState {
         // The hook is the authoritative signal for when the agent stops — PTY output
         // is just terminal rendering noise that may trail after the stop hook fires.
         let hook_enabled = self.meta.get(session_id).is_some_and(|m| m.hook_enabled);
-        if hook_enabled && self.get_state(session_id) == Some(AgentState::Idle) {
+        // Only hooks mark a hook-enabled session busy; a redraw after attach must not.
+        if hook_enabled && self.get_state(session_id) != Some(AgentState::Busy) {
             self.last_output
                 .insert(session_id.to_string(), Instant::now());
             return;
@@ -148,12 +199,17 @@ impl NotifyState {
     /// Transition to Busy from an authoritative hook signal (e.g., userPromptSubmit).
     /// Unlike `notify_output`, this always cancels any pending debounce and resets state,
     /// regardless of hook_enabled status.
-    pub fn notify_busy(&mut self, session_id: &str) {
+    ///
+    /// Returns true unless the agent was already busy, so repeated signals (one per tool
+    /// call) are not resumes; the first prompt after a restart is one.
+    pub fn notify_busy(&mut self, session_id: &str) -> bool {
+        let resumed = self.get_state(session_id) != Some(AgentState::Busy);
         self.states.insert(session_id.to_string(), AgentState::Busy);
         self.last_output
             .insert(session_id.to_string(), Instant::now());
         self.idle_since.remove(session_id);
         self.notified.remove(session_id);
+        resumed
     }
 
     pub fn acknowledge(&mut self, session_id: &str) {
@@ -162,6 +218,10 @@ impl NotifyState {
 
     pub fn check_silence(&mut self, session_id: &str) -> bool {
         if self.get_state(session_id) != Some(AgentState::Busy) {
+            return false;
+        }
+        // Providers report their own status, even before their session registers.
+        if self.is_provider_owned(session_id) {
             return false;
         }
         // Skip sessions without meta (not registered) or with hooks enabled
@@ -238,428 +298,31 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
             Some("session_created") => NotifyEvent::SessionCreated,
             Some("session_changed") => NotifyEvent::SessionChanged,
             Some("send_prompt") => NotifyEvent::SendPrompt,
+            Some("task_lifecycle") => NotifyEvent::TaskLifecycle,
             _ => NotifyEvent::Stop,
         };
         let text = v
             .get("text")
             .and_then(|t| t.as_str())
             .map(|s| s.to_string());
+        let lifecycle_batch = v
+            .get("batch")
+            .cloned()
+            .and_then(|batch| serde_json::from_value(batch).ok());
         NotifyMessage {
             session_id,
             event,
             text,
+            lifecycle_batch,
         }
     } else {
         NotifyMessage {
             session_id: line.trim().to_string(),
             event: NotifyEvent::Stop,
             text: None,
+            lifecycle_batch: None,
         }
     }
-}
-
-// ─── Hook detection ──────────────────────────────────────────────────────────
-
-/// Case-insensitive lookup in a JSON object for a key.
-fn get_ignore_case<'a>(
-    obj: &'a serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Option<&'a serde_json::Value> {
-    obj.iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(key))
-        .map(|(_, v)| v)
-}
-
-/// Check if a v3 hooks array contains a trigger with the given name (case-insensitive)
-/// whose action command contains the planeai notify marker.
-fn has_v3_notify_trigger(hooks: &[serde_json::Value], trigger_name: &str) -> bool {
-    hooks.iter().any(|h| {
-        let trigger = h.get("trigger").and_then(|t| t.as_str()).unwrap_or("");
-        let cmd = h
-            .get("action")
-            .and_then(|a| a.get("command"))
-            .and_then(|c| c.as_str())
-            .unwrap_or("");
-        trigger.eq_ignore_ascii_case(trigger_name) && cmd.contains("planeai-stop-notify")
-    })
-}
-
-pub fn is_kiro_hook_installed_at(config_path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(config_path) else {
-        return false;
-    };
-    if !content.contains("planeai-stop-notify") {
-        return false;
-    }
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return false;
-    };
-    let Some(hooks) = v.get("hooks").and_then(|h| h.as_object()) else {
-        return false;
-    };
-    let has_stop = get_ignore_case(hooks, "stop")
-        .and_then(|a| a.as_array())
-        .is_some_and(|arr| {
-            arr.iter().any(|h| {
-                h.get("command")
-                    .and_then(|c| c.as_str())
-                    .is_some_and(|c| c.contains("planeai-stop-notify"))
-            })
-        });
-    let has_prompt = get_ignore_case(hooks, "userPromptSubmit")
-        .and_then(|a| a.as_array())
-        .is_some_and(|arr| {
-            arr.iter().any(|h| {
-                h.get("command")
-                    .and_then(|c| c.as_str())
-                    .is_some_and(|c| c.contains("planeai-stop-notify"))
-            })
-        });
-    has_stop && has_prompt
-}
-
-/// Check if the planeai notification hook is installed in the Kiro CLI v3 hooks directory.
-///
-/// v3 hooks live in `.kiro/hooks/<name>.json` with schema:
-/// ```json
-/// { "version": "v1", "hooks": [{ "trigger": "Stop", "action": { "type": "command", "command": "..." } }] }
-/// ```
-pub fn is_kiro_v3_hook_installed_at(hooks_dir: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(hooks_dir) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        if !content.contains("planeai-stop-notify") {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
-            continue;
-        };
-        let Some(hooks) = v.get("hooks").and_then(|h| h.as_array()) else {
-            continue;
-        };
-        if has_v3_notify_trigger(hooks, "Stop") && has_v3_notify_trigger(hooks, "UserPromptSubmit")
-        {
-            return true;
-        }
-    }
-    false
-}
-
-pub fn is_claude_hook_installed_at(settings_path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(settings_path) else {
-        return false;
-    };
-    if !content.contains("planeai-stop-notify") {
-        return false;
-    }
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return false;
-    };
-    let Some(hooks) = v.get("hooks").and_then(|h| h.as_object()) else {
-        return false;
-    };
-    ["Stop", "StopFailure", "Notification", "UserPromptSubmit"]
-        .iter()
-        .all(|event| hooks.contains_key(*event))
-}
-
-pub fn is_copilot_hook_installed_at(copilot_dir: &Path) -> bool {
-    let notify_path = copilot_dir.join("hooks").join("planeai-notify.json");
-    let Ok(content) = std::fs::read_to_string(notify_path) else {
-        return false;
-    };
-    content.contains("planeai-stop-notify-copilot")
-}
-
-/// Check if the notification hook is installed for a given provider command.
-pub fn is_hook_installed_for_provider(command: &str) -> bool {
-    let home = std::env::var("HOME").unwrap_or_default();
-    if command.contains("kiro") {
-        // Check v2 agent config location
-        if is_kiro_hook_installed_at(&Path::new(&home).join(".kiro/agents/default.json")) {
-            return true;
-        }
-        // Check v3 hooks directory
-        is_kiro_v3_hook_installed_at(&Path::new(&home).join(".kiro/hooks"))
-    } else if command.contains("claude") {
-        is_claude_hook_installed_at(&Path::new(&home).join(".claude/settings.json"))
-    } else if command.contains("copilot") {
-        let copilot_dir = std::env::var("COPILOT_HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| Path::new(&home).join(".copilot"));
-        is_copilot_hook_installed_at(&copilot_dir)
-    } else {
-        false
-    }
-}
-
-// ─── Hook installation ───────────────────────────────────────────────────────
-
-/// Install all notification hooks for providers found on this system.
-pub fn install_all_hooks(home: &str) -> Result<(), String> {
-    let kiro_dir = std::path::Path::new(home).join(".kiro");
-    if kiro_dir.exists() {
-        install_kiro_hook(home)?;
-    }
-    let claude_dir = std::path::Path::new(home).join(".claude");
-    if claude_dir.exists() {
-        install_claude_hook(home)?;
-    }
-    install_copilot_hook(home)?;
-    Ok(())
-}
-
-/// Refresh hook script files to the latest bundled version.
-///
-/// Called on every app startup to ensure script content stays in sync with
-/// the app version. Only writes scripts for hooks that are already installed
-/// (detected via `is_*_hook_installed_at`). Does not modify agent/settings
-/// config files — those are managed by `install_*_hook`.
-pub fn refresh_hook_scripts(home: &str) {
-    let kiro_config = std::path::Path::new(home).join(".kiro/agents/default.json");
-    let kiro_v3_dir = std::path::Path::new(home).join(".kiro/hooks");
-    if is_kiro_hook_installed_at(&kiro_config) || is_kiro_v3_hook_installed_at(&kiro_v3_dir) {
-        let _ = install_kiro_hook(home);
-    }
-
-    let claude_settings = std::path::Path::new(home).join(".claude/settings.json");
-    if is_claude_hook_installed_at(&claude_settings) {
-        let _ = install_claude_hook(home);
-    }
-
-    let copilot_dir = std::env::var("COPILOT_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from(format!("{home}/.copilot")));
-    if is_copilot_hook_installed_at(&copilot_dir) {
-        let _ = install_copilot_hook(home);
-    }
-}
-
-pub fn install_kiro_hook(home: &str) -> Result<(), String> {
-    let hooks_dir = format!("{home}/.kiro/hooks");
-    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
-
-    #[cfg(not(windows))]
-    let (script_path, script_content) = (
-        format!("{hooks_dir}/planeai-stop-notify.sh"),
-        include_str!("../resources/planeai-stop-notify.sh"),
-    );
-    #[cfg(windows)]
-    let (script_path, script_content) = (
-        format!("{hooks_dir}/planeai-stop-notify.ps1"),
-        include_str!("../resources/planeai-stop-notify.ps1"),
-    );
-
-    std::fs::write(&script_path, script_content)
-        .map_err(|e| format!("failed to write hook script: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
-            .map_err(|e| format!("failed to chmod hook: {e}"))?;
-    }
-
-    let agents_dir = format!("{home}/.kiro/agents");
-    std::fs::create_dir_all(&agents_dir)
-        .map_err(|e| format!("failed to create agents dir: {e}"))?;
-    let config_path = format!("{agents_dir}/default.json");
-
-    let mut config: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&config_path) {
-        serde_json::from_str(&content).map_err(|e| format!("failed to parse default.json: {e}"))?
-    } else {
-        serde_json::json!({ "name": "default", "tools": ["*"] })
-    };
-
-    #[cfg(not(windows))]
-    let hook_command = format!("{hooks_dir}/planeai-stop-notify.sh");
-    #[cfg(windows)]
-    let hook_command =
-        format!("powershell -NoProfile -File \"{hooks_dir}/planeai-stop-notify.ps1\"");
-
-    let hooks = config
-        .as_object_mut()
-        .unwrap()
-        .entry("hooks")
-        .or_insert_with(|| serde_json::json!({}));
-    let hooks_obj = hooks.as_object_mut().unwrap();
-
-    let mut ensure_hook = |event: &str| {
-        let arr = hooks_obj
-            .entry(event)
-            .or_insert_with(|| serde_json::json!([]));
-        let arr = arr.as_array_mut().unwrap();
-        let already = arr.iter().any(|h| {
-            h.get("command")
-                .and_then(|c| c.as_str())
-                .is_some_and(|c| c.contains("planeai-stop-notify"))
-        });
-        if !already {
-            arr.push(serde_json::json!({ "command": hook_command }));
-        }
-    };
-
-    ensure_hook("stop");
-    ensure_hook("userPromptSubmit");
-
-    let output = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
-    std::fs::write(&config_path, output)
-        .map_err(|e| format!("failed to write default.json: {e}"))?;
-    Ok(())
-}
-
-pub fn install_claude_hook(home: &str) -> Result<(), String> {
-    let claude_dir = std::path::PathBuf::from(format!("{home}/.claude"));
-    let hooks_dir = claude_dir.join("hooks");
-    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
-
-    #[cfg(not(windows))]
-    let (script_path, script_content) = (
-        hooks_dir.join("planeai-stop-notify-claude.sh"),
-        include_str!("../resources/planeai-stop-notify-claude.sh"),
-    );
-    #[cfg(windows)]
-    let (script_path, script_content) = (
-        hooks_dir.join("planeai-stop-notify-claude.ps1"),
-        include_str!("../resources/planeai-stop-notify-claude.ps1"),
-    );
-
-    std::fs::write(&script_path, script_content)
-        .map_err(|e| format!("failed to write hook script: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
-            .map_err(|e| format!("failed to chmod hook: {e}"))?;
-    }
-
-    let script_command = script_path.to_string_lossy().to_string();
-    install_claude_hook_at(&claude_dir, &script_command)
-}
-
-pub fn install_copilot_hook(home: &str) -> Result<(), String> {
-    let copilot_dir = std::env::var("COPILOT_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from(format!("{home}/.copilot")));
-    let hooks_dir = copilot_dir.join("hooks");
-    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
-
-    #[cfg(not(windows))]
-    let (bash_path, bash_content) = (
-        hooks_dir.join("planeai-stop-notify-copilot.sh"),
-        include_str!("../resources/planeai-stop-notify-copilot.sh"),
-    );
-    #[cfg(not(windows))]
-    {
-        std::fs::write(&bash_path, bash_content)
-            .map_err(|e| format!("failed to write hook script: {e}"))?;
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&bash_path, std::fs::Permissions::from_mode(0o755))
-            .map_err(|e| format!("failed to chmod hook: {e}"))?;
-    }
-
-    #[cfg(windows)]
-    let bash_path = hooks_dir.join("planeai-stop-notify-copilot.sh");
-
-    let ps_path = hooks_dir.join("planeai-stop-notify-copilot.ps1");
-    let ps_content = include_str!("../resources/planeai-stop-notify-copilot.ps1");
-    std::fs::write(&ps_path, ps_content)
-        .map_err(|e| format!("failed to write hook script: {e}"))?;
-
-    install_copilot_hook_at(
-        &copilot_dir,
-        &bash_path.to_string_lossy(),
-        &ps_path.to_string_lossy(),
-    )
-}
-
-pub fn install_copilot_hook_at(
-    copilot_dir: &Path,
-    bash_script: &str,
-    ps_script: &str,
-) -> Result<(), String> {
-    let hooks_dir = copilot_dir.join("hooks");
-    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
-
-    let config = serde_json::json!({
-        "version": 1,
-        "hooks": {
-            "agentStop": [{ "type": "command", "bash": format!("{bash_script} stop"), "powershell": format!("{ps_script} stop"), "timeoutSec": 5 }],
-            "userPromptSubmitted": [{ "type": "command", "bash": format!("{bash_script} busy"), "powershell": format!("{ps_script} busy"), "timeoutSec": 5 }],
-            "errorOccurred": [{ "type": "command", "bash": format!("{bash_script} notification"), "powershell": format!("{ps_script} notification"), "timeoutSec": 5 }]
-        }
-    });
-
-    let output = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
-    std::fs::write(hooks_dir.join("planeai-notify.json"), output)
-        .map_err(|e| format!("failed to write planeai-notify.json: {e}"))?;
-    Ok(())
-}
-
-pub fn install_claude_hook_at(claude_dir: &Path, script_command: &str) -> Result<(), String> {
-    std::fs::create_dir_all(claude_dir)
-        .map_err(|e| format!("failed to create .claude dir: {e}"))?;
-
-    let settings_path = claude_dir.join("settings.json");
-    let mut settings: serde_json::Value = if let Ok(content) =
-        std::fs::read_to_string(&settings_path)
-    {
-        serde_json::from_str(&content).map_err(|e| format!("failed to parse settings.json: {e}"))?
-    } else {
-        serde_json::json!({})
-    };
-
-    let hooks = settings
-        .as_object_mut()
-        .unwrap()
-        .entry("hooks")
-        .or_insert_with(|| serde_json::json!({}));
-    let hooks_obj = hooks.as_object_mut().unwrap();
-
-    let hook_entry = serde_json::json!({
-        "type": "command",
-        "command": script_command,
-        "args": []
-    });
-
-    let mut ensure_hook = |event: &str, matcher: Option<&str>| {
-        let arr = hooks_obj
-            .entry(event)
-            .or_insert_with(|| serde_json::json!([]));
-        let arr = arr.as_array_mut().unwrap();
-        if arr.iter().any(|g| {
-            serde_json::to_string(g)
-                .unwrap_or_default()
-                .contains("planeai-stop-notify")
-        }) {
-            return;
-        }
-        let mut group = serde_json::json!({ "hooks": [hook_entry] });
-        if let Some(m) = matcher {
-            group
-                .as_object_mut()
-                .unwrap()
-                .insert("matcher".to_string(), serde_json::json!(m));
-        }
-        arr.push(group);
-    };
-
-    ensure_hook("Stop", None);
-    ensure_hook("StopFailure", None);
-    ensure_hook("Notification", Some("idle_prompt|permission_prompt"));
-    ensure_hook("UserPromptSubmit", None);
-
-    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(&settings_path, output)
-        .map_err(|e| format!("failed to write settings.json: {e}"))?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -704,9 +367,50 @@ mod tests {
     }
 
     #[test]
+    fn a_provider_settling_notifies_only_when_a_turn_ran() {
+        let mut state = NotifyState::new();
+        // Providers report idle when they start or resume a session: not a finished turn.
+        assert!(!state.provider_settled("s1"));
+        assert_eq!(state.get_state("s1"), Some(AgentState::Idle));
+        assert!(state.is_provider_owned("s1"));
+        assert!(!state.provider_settled("s1"));
+
+        assert!(state.provider_busy("s1"));
+        assert!(!state.provider_busy("s1"));
+        assert!(state.provider_settled("s1"));
+        assert!(!state.provider_settled("s1"));
+    }
+
+    #[test]
+    fn a_released_provider_session_stops_being_busy_without_a_notification() {
+        let mut state = NotifyState::new();
+        assert!(!state.provider_released("s1"));
+        state.provider_busy("s1");
+        assert!(state.provider_released("s1"));
+        assert_eq!(state.get_state("s1"), Some(AgentState::Idle));
+        // The turn did not finish, so its next real end still notifies.
+        state.provider_busy("s1");
+        assert!(state.provider_settled("s1"));
+    }
+
+    #[test]
+    fn silence_check_skipped_for_provider_owned_sessions() {
+        let mut state = NotifyState::new();
+        state.register_session("s1", "test", "project", false);
+        state.mark_provider_owned("s1");
+        state.notify_busy("s1");
+        state.advance_time("s1", SILENCE_THRESHOLD + Duration::from_secs(1));
+        assert!(!state.check_silence("s1"));
+        assert_eq!(state.get_state("s1"), Some(AgentState::Busy));
+        assert!(state.is_provider_owned("s1"));
+        assert!(!state.is_provider_owned("s2"));
+    }
+
+    #[test]
     fn silence_check_skipped_for_hook_enabled_sessions() {
         let mut state = NotifyState::new();
         state.register_session("s1", "test", "project", true);
+        let _ = state.notify_busy("s1");
         state.notify_output("s1");
         state.advance_time("s1", Duration::from_secs(10));
         assert!(!state.check_silence("s1"));
@@ -741,6 +445,31 @@ mod tests {
     }
 
     #[test]
+    fn busy_hook_is_a_resume_unless_already_busy() {
+        let mut state = NotifyState::new();
+        state.register_session("s1", "test", "project", true);
+        assert!(state.notify_busy("s1"));
+        // Repeated busy signals while working (one per tool call).
+        assert!(!state.notify_busy("s1"));
+
+        state.notify_stop_debounced("s1");
+        state.advance_time("s1", Duration::from_secs(3));
+        assert!(state.check_debounce("s1"));
+        assert_eq!(state.get_state("s1"), Some(AgentState::Idle));
+        assert!(state.notify_busy("s1"));
+    }
+
+    #[test]
+    fn first_prompt_after_restart_resumes_a_hook_session_despite_redraw_output() {
+        let mut state = NotifyState::new();
+        state.register_session("s1", "test", "project", true);
+        // The attach redraw must not mark it busy; only hooks do.
+        state.notify_output("s1");
+        assert_ne!(state.get_state("s1"), Some(AgentState::Busy));
+        assert!(state.notify_busy("s1"));
+    }
+
+    #[test]
     fn debounced_stop_cancelled_by_busy_hook() {
         // An explicit busy hook signal (notify_busy) SHOULD cancel the debounce.
         let mut state = NotifyState::new();
@@ -749,7 +478,7 @@ mod tests {
         state.notify_stop_debounced("s1");
         state.advance_time("s1", Duration::from_secs(1));
         // Busy hook fires (user submitted a new prompt)
-        state.notify_busy("s1");
+        let _ = state.notify_busy("s1");
         state.advance_time("s1", Duration::from_secs(2));
         assert!(!state.check_debounce("s1"));
     }
@@ -813,7 +542,7 @@ mod tests {
         state.register_session("s1", "agent-1", "project-a", true);
 
         // Simulate: agent worked, then stopped → Idle
-        state.notify_busy("s1");
+        let _ = state.notify_busy("s1");
         assert_eq!(state.get_state("s1"), Some(AgentState::Busy));
         let fired = state.notify_stop_immediate("s1");
         assert!(fired);
@@ -926,190 +655,28 @@ mod tests {
         assert_eq!(msg.event, NotifyEvent::Stop);
     }
 
-    // ─── Hook detection tests ────────────────────────────────────────────────
-
     #[test]
-    fn detect_kiro_hook_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("default.json");
-        let config = serde_json::json!({
-            "name": "default",
-            "hooks": {
-                "stop": [{ "command": "/path/to/planeai-stop-notify.sh" }],
-                "userPromptSubmit": [{ "command": "/path/to/planeai-stop-notify.sh" }]
-            }
-        });
-        std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
-        assert!(is_kiro_hook_installed_at(&config_path));
-    }
+    fn parse_task_lifecycle_message_preserves_batch_without_session_id() {
+        let batch = TaskLifecycleBatch::new(
+            crate::task_lifecycle::TaskLifecycleOrigin::Cli,
+            "project-1",
+            "PLA",
+            vec![crate::task_lifecycle::TaskLifecycleEvent::StatusChanged {
+                task_key: "PLA-1".into(),
+                parent_key: None,
+                previous_status: "todo".into(),
+                new_status: "done".into(),
+                cause: crate::task_lifecycle::StatusChangeCause::Direct,
+            }],
+        );
+        let message = serde_json::json!({"event":"task_lifecycle","batch":batch});
+        let parsed = parse_notify_message(&message.to_string());
 
-    #[test]
-    fn detect_kiro_hook_not_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("default.json");
-        std::fs::write(&config_path, r#"{"name":"default"}"#).unwrap();
-        assert!(!is_kiro_hook_installed_at(&config_path));
-    }
-
-    #[test]
-    fn detect_kiro_hook_missing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!is_kiro_hook_installed_at(&dir.path().join("nope.json")));
-    }
-
-    #[test]
-    fn detect_kiro_hook_pascal_case_keys() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("default.json");
-        let config = serde_json::json!({
-            "name": "default",
-            "hooks": {
-                "Stop": [{ "command": "/path/to/planeai-stop-notify.sh" }],
-                "UserPromptSubmit": [{ "command": "/path/to/planeai-stop-notify.sh" }]
-            }
-        });
-        std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
-        assert!(is_kiro_hook_installed_at(&config_path));
-    }
-
-    #[test]
-    fn detect_kiro_v3_hook_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let hooks_dir = dir.path().join("hooks");
-        std::fs::create_dir_all(&hooks_dir).unwrap();
-        let hook = serde_json::json!({
-            "version": "v1",
-            "hooks": [
-                { "name": "planeai-stop", "trigger": "Stop", "action": { "type": "command", "command": "/path/to/planeai-stop-notify.sh" } },
-                { "name": "planeai-busy", "trigger": "UserPromptSubmit", "action": { "type": "command", "command": "/path/to/planeai-stop-notify.sh" } }
-            ]
-        });
-        std::fs::write(
-            hooks_dir.join("planeai-notify.json"),
-            serde_json::to_string(&hook).unwrap(),
-        )
-        .unwrap();
-        assert!(is_kiro_v3_hook_installed_at(&hooks_dir));
-    }
-
-    #[test]
-    fn detect_kiro_v3_hook_missing_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!is_kiro_v3_hook_installed_at(&dir.path().join("hooks")));
-    }
-
-    #[test]
-    fn detect_kiro_v3_hook_missing_trigger() {
-        let dir = tempfile::tempdir().unwrap();
-        let hooks_dir = dir.path().join("hooks");
-        std::fs::create_dir_all(&hooks_dir).unwrap();
-        let hook = serde_json::json!({
-            "version": "v1",
-            "hooks": [
-                { "name": "planeai-stop", "trigger": "Stop", "action": { "type": "command", "command": "/path/to/planeai-stop-notify.sh" } }
-            ]
-        });
-        std::fs::write(
-            hooks_dir.join("planeai-notify.json"),
-            serde_json::to_string(&hook).unwrap(),
-        )
-        .unwrap();
-        assert!(!is_kiro_v3_hook_installed_at(&hooks_dir));
-    }
-
-    #[test]
-    fn detect_claude_hook_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        std::fs::write(&path, r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/path/to/planeai-stop-notify-claude.sh"}]}],"StopFailure":[{}],"Notification":[{}],"UserPromptSubmit":[{}]}}"#).unwrap();
-        assert!(is_claude_hook_installed_at(&path));
-    }
-
-    #[test]
-    fn detect_claude_hook_not_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        std::fs::write(&path, r#"{"hooks":{}}"#).unwrap();
-        assert!(!is_claude_hook_installed_at(&path));
-    }
-
-    #[test]
-    fn detect_copilot_hook_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let hooks_dir = dir.path().join("hooks");
-        std::fs::create_dir_all(&hooks_dir).unwrap();
-        std::fs::write(
-            hooks_dir.join("planeai-notify.json"),
-            r#"{"hooks":{"agentStop":[{"bash":"planeai-stop-notify-copilot.sh stop"}]}}"#,
-        )
-        .unwrap();
-        assert!(is_copilot_hook_installed_at(dir.path()));
-    }
-
-    #[test]
-    fn detect_copilot_hook_missing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!is_copilot_hook_installed_at(dir.path()));
-    }
-
-    // ─── Hook install tests ──────────────────────────────────────────────────
-
-    #[test]
-    fn install_copilot_hook_creates_correct_structure() {
-        let dir = tempfile::tempdir().unwrap();
-        install_copilot_hook_at(dir.path(), "/path/script.sh", "/path/script.ps1").unwrap();
-        let content =
-            std::fs::read_to_string(dir.path().join("hooks/planeai-notify.json")).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(v["version"], 1);
-        assert!(v["hooks"]["agentStop"][0]["bash"]
-            .as_str()
-            .unwrap()
-            .contains("stop"));
-    }
-
-    #[test]
-    fn install_copilot_hook_is_idempotent() {
-        let dir = tempfile::tempdir().unwrap();
-        install_copilot_hook_at(dir.path(), "/path/s.sh", "/path/s.ps1").unwrap();
-        install_copilot_hook_at(dir.path(), "/path/s.sh", "/path/s.ps1").unwrap();
-        let content =
-            std::fs::read_to_string(dir.path().join("hooks/planeai-notify.json")).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(v["hooks"]["agentStop"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn install_claude_hook_creates_correct_structure() {
-        let dir = tempfile::tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        install_claude_hook_at(&claude_dir, "/path/planeai-stop-notify-claude.sh").unwrap();
-        let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
-        )
-        .unwrap();
-        assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .contains("planeai-stop-notify"));
-    }
-
-    #[test]
-    fn install_claude_hook_merges_with_existing_settings() {
-        let dir = tempfile::tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
-        std::fs::write(
-            claude_dir.join("settings.json"),
-            r#"{"permissions":{"allow":["Read"]}}"#,
-        )
-        .unwrap();
-        install_claude_hook_at(&claude_dir, "/path/planeai-stop-notify-claude.sh").unwrap();
-        let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(settings["permissions"]["allow"][0], "Read");
-        assert!(settings["hooks"]["Stop"].is_array());
+        assert!(matches!(parsed.event, NotifyEvent::TaskLifecycle));
+        assert!(parsed.session_id.is_empty());
+        assert_eq!(
+            parsed.lifecycle_batch.unwrap().project.project_prefix,
+            "PLA"
+        );
     }
 }

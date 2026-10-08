@@ -15,12 +15,12 @@ Sessions can be linked to a task. When a session is linked, planeai tracks which
 
 ## Providers
 
-A provider is the configuration layer between planeai and an AI agent CLI. It tells planeai how to start a session, how to send a prompt to a running agent, and what flags to use in autonomous mode.
+A provider is the configuration layer between planeai and an AI agent CLI. It tells planeai how to start a session, how to start it on a task prompt, and what flags to use in autonomous mode.
 
-planeai ships with no hardcoded agent — it works with any CLI that accepts text input. You configure providers for the agents you use (Kiro, Claude, Copilot, or anything else). Each provider defines:
+planeai ships with no hardcoded agent — it works with any CLI that accepts text input. You configure providers for the agents you use (Kiro, Claude, Copilot, Codex, or anything else). Each provider defines:
 
 - **command** — how to start a new agent session
-- **prompt_command** — how to send a message to an existing session
+- **prompt_command** - the arguments that start the agent on a task prompt
 - **yolo_flag** — what flag enables autonomous mode (skipping confirmations)
 - **autonomous_prompt_template** — how task details are formatted when dispatched
 
@@ -42,7 +42,8 @@ Choose based on whether you need sessions to survive app closures. If you do, us
 
 A project is a registered directory on your filesystem — typically a git repository. Registering a project tells planeai where your code lives so it can create sessions, worktrees, and tasks scoped to that codebase.
 
-The sidebar organizes everything by project: tasks appear under the project they belong to, and sessions are grouped by their associated project. You can have multiple projects registered simultaneously.
+By default the sidebar organizes everything by project: tasks appear under the project they belong to, and sessions are grouped by their associated project. You can have multiple projects registered simultaneously.
+You can also group the sidebar by task status to see the work of every project in one list.
 
 ## Tasks
 
@@ -57,9 +58,9 @@ Tasks are planeai's built-in work tracker. Each task represents a unit of work �
 - **Parent** — optional parent task for subtask hierarchies
 - **Base branch** — which git branch to start from when creating a worktree
 
-Tasks appear in the sidebar grouped by status. Clicking a task either jumps to its linked session (if one exists) or starts a new session for it. You can create tasks from the GUI, the CLI, or directly from an agent session using the built-in agent skills.
+Tasks appear in the sidebar grouped by status, either inside each project or across all projects. Clicking a task either jumps to its linked session (if one exists) or starts a new session for it. You can create tasks from the GUI, the CLI, or directly from an agent session using the built-in agent skills.
 
-Tasks can also be synced from Jira Cloud. When configured, planeai pulls issues matching JQL filters and displays them in a dedicated sidebar section. You assign a Jira issue to a project to create a local child task, which can then be dispatched to an agent like any other task. See the [Task Management guide](/planeai/guides/task-management/#jira-integration) for details.
+The bundled Jira plugin manages Jira Cloud OAuth and manual configured-source synchronization. Synced issues are imported as PlaneAI tasks, appear in the sidebar, and can be assigned to a PlaneAI project as child tasks. Writeback and periodic synchronization remain deferred. See the [Task Management guide](/planeai/guides/task-management/#jira-integration) for the current scope.
 
 ## Auto-Dispatch (Symphony Mode)
 

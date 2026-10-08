@@ -151,4 +151,16 @@ describe("matchChord", () => {
       type: "toggle_task_panel",
     });
   });
+
+  it("returns focus_file_explorer on platform mod+E", () => {
+    expect(matchChord(key({ key: "e", [modKey]: true }))).toEqual({
+      type: "focus_file_explorer",
+    });
+  });
+
+  it("returns toggle_file_explorer on platform mod+Shift+E", () => {
+    expect(matchChord(key({ key: "e", [modKey]: true, shiftKey: true }))).toEqual({
+      type: "toggle_file_explorer",
+    });
+  });
 });

@@ -1,0 +1,1490 @@
+//! Headless local-plugin conformance harness for `planeai-cli plugin test`.
+//!
+//! Optional scenarios are stable JSONL request sequences executed after the
+//! handshake, before the standard lifecycle and shutdown checks.
+
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use anyhow::{anyhow, bail, Context, Result};
+use planeai_plugin_contract::provider::{
+    self as protocol, error_code, is_host_controlled_method, validate_handoff_argv,
+    HandoffResponse, ProviderSessionStatus, SessionEventParams, SessionStatusParams, StopReason,
+    EVENT_NOTIFICATION, STATUS_NOTIFICATION,
+};
+use planeai_plugin_contract::{known_provider_features, ProviderFeature};
+use serde_json::{json, Map, Value};
+
+#[cfg(test)]
+const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
+const MAX_FRAME_BYTES: usize = 64 * 1024;
+const RPC_TIMEOUT: Duration = Duration::from_secs(5);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+const CANCELLATION_ACK_TIMEOUT: Duration = Duration::from_secs(3);
+
+pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>) -> Result<()> {
+    let scenario = scenario.map(read_scenario).transpose()?;
+
+    let package = package
+        .canonicalize()
+        .with_context(|| format!("failed to resolve plugin package {}", package.display()))?;
+    if !package.is_dir() {
+        bail!("plugin package must be a directory: {}", package.display());
+    }
+
+    let manifest = read_manifest(&package)?;
+    let entrypoint = validate_local_manifest(&manifest, current_platform_key())?;
+    let capabilities = manifest_capabilities(&manifest);
+    let host_api_version = manifest
+        .get("host_api_version")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("plugin manifest host_api_version must be a string"))?;
+    validate_ui_entrypoints(&package, &manifest)?;
+    let executable = validate_entrypoint(&package, &entrypoint)?;
+
+    let mut process = PluginProcess::spawn(&executable, &package, &capabilities)?;
+    let handshake = process.call(
+        "plugin.handshake",
+        handshake_params(&capabilities, host_api_version),
+    )?;
+    let subscriptions = validate_handshake(&handshake, &manifest)?;
+    if capabilities
+        .iter()
+        .any(|capability| capability == "providers")
+    {
+        // A fresh plugin state holds no sessions, so the host lists none.
+        process.call(protocol::RECONCILE, json!({ "sessions": [] }))?;
+    }
+
+    for request in scenario.unwrap_or_default() {
+        match request.timeout {
+            Some(timeout) => {
+                process.call_until_cancelled(&request.method, request.params, timeout)?
+            }
+            None => {
+                process.call(&request.method, request.params)?;
+            }
+        }
+    }
+    let providers = declared_providers(&manifest);
+    if providers.is_empty() && provider_turn.is_some() {
+        bail!("--provider-turn requires a plugin that declares providers");
+    }
+    for (provider_id, handoff) in providers {
+        check_provider(&mut process, &provider_id, handoff, provider_turn)
+            .with_context(|| format!("provider {provider_id}"))?;
+    }
+    if lifecycle_delivery_is_granted(&capabilities, &subscriptions) {
+        process.call(
+            "plugin.taskLifecycle",
+            json!({
+                "batch": {
+                    "batch_id": "planeai-cli-plugin-test",
+                    "origin": "cli-plugin-test",
+                    "events": []
+                }
+            }),
+        )?;
+    }
+    if session_lifecycle_delivery_is_granted(&capabilities, &subscriptions) {
+        process.call("plugin.sessionLifecycle", json!({ "event": { "type": "status_changed", "session_id": uuid::Uuid::new_v4().to_string(), "project_id": "plugin-test", "branch": "plugin-test", "linked_task_key": Value::Null, "previous_status": "active", "status": "exited" } }))?;
+    }
+    let shutdown_deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+    process.call_before_deadline("plugin.shutdown", Value::Null, shutdown_deadline)?;
+    process.wait_for_exit_before(shutdown_deadline)?;
+
+    println!(
+        "plugin test passed: {}",
+        manifest["id"].as_str().unwrap_or("<unknown>")
+    );
+    Ok(())
+}
+
+fn declared_providers(manifest: &Value) -> Vec<(String, bool)> {
+    let providers = manifest.get("providers").and_then(Value::as_array);
+    providers
+        .into_iter()
+        .flatten()
+        .filter_map(|provider| {
+            let supports = provider
+                .get("supports")
+                .and_then(Value::as_array)
+                .map(|features| known_provider_features(features))
+                .unwrap_or_default();
+            Some((
+                provider.get("id")?.as_str()?.to_owned(),
+                supports.contains(&ProviderFeature::Handoff),
+            ))
+        })
+        .collect()
+}
+
+/// Start and resume parameters as the host sends them.
+fn session_params(
+    process: &PluginProcess,
+    session_id: &str,
+    provider_id: &str,
+) -> Map<String, Value> {
+    let socket = process.state.root.join("notify.sock");
+    let params = json!({
+        "session_id": session_id,
+        "provider_id": provider_id,
+        "cwd": process.state.data_dir.display().to_string(),
+        "env": {
+            "PLANEAI_SESSION_ID": session_id,
+            "PLANEAI_SOCKET": socket.display().to_string(),
+            "PATH": std::env::var("PATH").unwrap_or_default(),
+        },
+        "auto_approve": false,
+    });
+    let Value::Object(params) = params else {
+        unreachable!("session params are an object")
+    };
+    params
+}
+
+/// Exercise the provider session contract: start, an optional full turn that must reach
+/// `idle`, the handoff round trip, then the idempotence and unknown-session rules every
+/// provider must follow. Real agent plugins skip the turn so tests stay offline.
+fn check_provider(
+    process: &mut PluginProcess,
+    provider_id: &str,
+    handoff: bool,
+    provider_turn: Option<&str>,
+) -> Result<()> {
+    let session = uuid::Uuid::new_v4().to_string();
+    let only_session = json!({ "session_id": session });
+    process.provider_sessions.insert(session.clone(), 0);
+    let start = session_params(process, &session, provider_id);
+    process.call(protocol::START, Value::Object(start))?;
+    if let Some(text) = provider_turn {
+        let statuses_before = process.provider_statuses.len();
+        process.call(
+            protocol::SEND,
+            json!({ "session_id": session, "text": text }),
+        )?;
+        process.await_provider_turn(statuses_before, RPC_TIMEOUT)?;
+        if process.provider_events_received == 0 {
+            bail!("provider turn completed without emitting a {EVENT_NOTIFICATION}");
+        }
+    }
+    if handoff {
+        // Both are idempotent: a repeated handoff returns the command again.
+        for _ in 0..2 {
+            let result = process.call(protocol::HANDOFF, only_session.clone())?;
+            let response: HandoffResponse = serde_json::from_value(result)
+                .with_context(|| format!("{} must return {{ argv }}", protocol::HANDOFF))?;
+            validate_handoff_argv(response.argv).map_err(|error| anyhow!(error))?;
+        }
+        for _ in 0..2 {
+            process.call(protocol::HANDBACK, only_session.clone())?;
+        }
+    }
+    let stop = json!({ "session_id": session, "reason": StopReason::Destroy });
+    for _ in 0..2 {
+        process
+            .call(protocol::STOP, stop.clone())
+            .context("stop must be idempotent")?;
+    }
+    let error = process
+        .call(protocol::INTERRUPT, only_session.clone())
+        .err()
+        .ok_or_else(|| anyhow!("{} of a stopped session must fail", protocol::INTERRUPT))?;
+    if error
+        .root_cause()
+        .downcast_ref::<RpcError>()
+        .map(|error| error.code)
+        != Some(error_code::SESSION_NOT_FOUND)
+    {
+        bail!(
+            "{} of a session the plugin does not know must answer error {}, got: {error}",
+            protocol::INTERRUPT,
+            error_code::SESSION_NOT_FOUND
+        );
+    }
+
+    // A session from before a restart, whose state the plugin may have lost.
+    let resumed = uuid::Uuid::new_v4().to_string();
+    process.provider_sessions.insert(resumed.clone(), 0);
+    let mut resume = session_params(process, &resumed, provider_id);
+    resume.insert("handed_off".into(), false.into());
+    process
+        .call(protocol::RESUME, Value::Object(resume))
+        .context("resume must accept a session the plugin has not seen")?;
+    process.call(
+        protocol::STOP,
+        json!({ "session_id": resumed, "reason": StopReason::Archive }),
+    )?;
+    process.call(protocol::STOP,
+        json!({ "session_id": uuid::Uuid::new_v4().to_string(), "reason": StopReason::Destroy }),
+    )
+    .context("stop must accept a session the plugin does not know")?;
+    Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+struct ScenarioRequest {
+    method: String,
+    params: Value,
+    timeout: Option<Duration>,
+}
+
+fn read_scenario(path: &Path) -> Result<Vec<ScenarioRequest>> {
+    let file = fs::File::open(path)
+        .with_context(|| format!("failed to read scenario {}", path.display()))?;
+    BufReader::new(file)
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| match line {
+            Ok(line) if line.trim().is_empty() => None,
+            Ok(line) => Some(parse_scenario_line(&line).with_context(|| {
+                format!("invalid scenario {} line {}", path.display(), index + 1)
+            })),
+            Err(error) => Some(Err(anyhow!(
+                "failed to read scenario {} line {}: {error}",
+                path.display(),
+                index + 1
+            ))),
+        })
+        .collect()
+}
+
+fn parse_scenario_line(line: &str) -> Result<ScenarioRequest> {
+    let value: Value = serde_json::from_str(line)
+        .map_err(|error| anyhow!("scenario line is not valid JSON: {error}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("scenario line must be a JSON object"))?;
+    reject_unknown_fields(object, &["method", "params", "timeout_ms"], "scenario line")?;
+    let method = required_string(object, "method")?.to_owned();
+    if is_host_controlled_method(&method) {
+        bail!("scenario may not send host-controlled method: {method}");
+    }
+    let timeout = match object.get("timeout_ms") {
+        None => None,
+        Some(value) => {
+            let milliseconds = value
+                .as_u64()
+                .filter(|milliseconds| {
+                    *milliseconds > 0 && *milliseconds <= RPC_TIMEOUT.as_millis() as u64
+                })
+                .ok_or_else(|| {
+                    anyhow!(
+                        "scenario timeout_ms must be an integer between 1 and {}",
+                        RPC_TIMEOUT.as_millis()
+                    )
+                })?;
+            Some(Duration::from_millis(milliseconds))
+        }
+    };
+    Ok(ScenarioRequest {
+        method,
+        params: object.get("params").cloned().unwrap_or(Value::Null),
+        timeout,
+    })
+}
+
+fn manifest_capabilities(manifest: &Value) -> Vec<String> {
+    manifest
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|capability| {
+            capability
+                .as_str()
+                .expect("manifest capabilities were validated")
+                .to_owned()
+        })
+        .collect()
+}
+
+fn handshake_params(capabilities: &[String], host_api_version: &str) -> Value {
+    json!({
+        "host_api_version": host_api_version,
+        "host_capabilities": capabilities,
+        "host_features": protocol::HOST_FEATURES,
+    })
+}
+
+fn lifecycle_delivery_is_granted(capabilities: &[String], subscriptions: &[String]) -> bool {
+    capabilities
+        .iter()
+        .any(|capability| capability == "task-events")
+        && subscriptions
+            .iter()
+            .any(|subscription| subscription == "task.lifecycle")
+}
+
+fn session_lifecycle_delivery_is_granted(
+    capabilities: &[String],
+    subscriptions: &[String],
+) -> bool {
+    capabilities
+        .iter()
+        .any(|capability| capability == "session-events")
+        && subscriptions
+            .iter()
+            .any(|subscription| subscription == "session.lifecycle")
+}
+
+fn read_manifest(package: &Path) -> Result<Value> {
+    let path = package.join("planeai-plugin.json");
+    let text = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read plugin manifest {}", path.display()))?;
+    let manifest = serde_json::from_str(&text)
+        .with_context(|| format!("failed to parse plugin manifest {}", path.display()))?;
+    Ok(manifest)
+}
+
+fn validate_local_manifest(manifest: &Value, platform: &str) -> Result<String> {
+    planeai_plugin_contract::validate_local_manifest(manifest, platform)
+}
+
+fn reject_unknown_fields(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+    subject: &str,
+) -> Result<()> {
+    if let Some(field) = object
+        .keys()
+        .find(|field| !allowed.contains(&field.as_str()))
+    {
+        bail!("{subject} contains undocumented field: {field}");
+    }
+    Ok(())
+}
+
+fn required_string<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'a str> {
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("plugin manifest {field} must be a nonempty string"))
+}
+
+fn validate_ui_entrypoints(package: &Path, manifest: &Value) -> Result<()> {
+    let Some(contributions) = manifest.get("ui_contributions").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for contribution in contributions {
+        let entrypoint = contribution["entrypoint"]
+            .as_str()
+            .expect("UI contribution entrypoint was validated");
+        if !package.join(entrypoint).is_file() {
+            bail!("plugin UI contribution entrypoint is missing: {entrypoint}");
+        }
+    }
+    Ok(())
+}
+
+fn validate_entrypoint(package: &Path, entrypoint: &str) -> Result<PathBuf> {
+    let executable = package.join(entrypoint);
+    let executable = executable.canonicalize().with_context(|| {
+        format!(
+            "plugin backend entrypoint for {} is missing: {entrypoint}",
+            current_platform_key()
+        )
+    })?;
+    let metadata = fs::metadata(&executable)
+        .with_context(|| format!("failed to inspect plugin backend {}", executable.display()))?;
+    if !metadata.is_file() {
+        bail!("plugin backend entrypoint is not a file: {entrypoint}");
+    }
+    if !is_executable(&metadata) {
+        bail!("plugin backend entrypoint is not executable: {entrypoint}");
+    }
+    Ok(executable)
+}
+
+#[cfg(unix)]
+fn is_executable(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    metadata.mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_metadata: &fs::Metadata) -> bool {
+    true
+}
+
+fn current_platform_key() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "macos-arm64",
+        ("macos", "x86_64") => "macos-x64",
+        ("linux", "aarch64") => "linux-arm64",
+        ("linux", "x86_64") => "linux-x64",
+        ("windows", "aarch64") => "windows-arm64",
+        ("windows", "x86_64") => "windows-x64",
+        _ => "unsupported-platform",
+    }
+}
+
+struct TemporaryPluginState {
+    root: PathBuf,
+    data_dir: PathBuf,
+    secrets_dir: PathBuf,
+}
+
+impl TemporaryPluginState {
+    fn new() -> Result<Self> {
+        for attempt in 0..10 {
+            let entropy = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "planeai-plugin-test-{}-{entropy}-{attempt}",
+                std::process::id()
+            ));
+            match fs::create_dir(&root) {
+                Ok(()) => {
+                    let data_dir = root.join("data");
+                    let secrets_dir = root.join("secrets");
+                    if let Err(error) = fs::create_dir_all(&data_dir)
+                        .and_then(|()| fs::create_dir_all(&secrets_dir))
+                    {
+                        let _ = fs::remove_dir_all(&root);
+                        return Err(error)
+                            .context("failed to create plugin test state directories");
+                    }
+                    return Ok(Self {
+                        root,
+                        data_dir,
+                        secrets_dir,
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error).context("failed to create plugin test state root"),
+            }
+        }
+        bail!("failed to create a unique plugin test state root")
+    }
+}
+
+impl Drop for TemporaryPluginState {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+struct PluginProcess {
+    child: Child,
+    writer: Sender<WriteFrame>,
+    frames: Receiver<Result<String>>,
+    settings: Value,
+    capabilities: HashSet<String>,
+    /// Last event sequence number seen per started provider session.
+    provider_sessions: HashMap<String, u64>,
+    provider_statuses: Vec<ProviderSessionStatus>,
+    provider_events_received: usize,
+    /// The last request id sent.
+    request_id: u64,
+    state: TemporaryPluginState,
+}
+
+struct WriteFrame {
+    frame: String,
+    completed: Sender<Result<()>>,
+}
+
+impl PluginProcess {
+    fn spawn(executable: &Path, package: &Path, capabilities: &[String]) -> Result<Self> {
+        let state = TemporaryPluginState::new()?;
+        let mut command = Command::new(executable);
+        command
+            .current_dir(package)
+            .env("PLANEAI_PLUGIN_DATA_DIR", &state.data_dir)
+            .env("PLANEAI_PLUGIN_SECRETS_DIR", &state.secrets_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+        planeai_core::command::no_window(&mut command);
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("failed to start plugin sidecar {}", executable.display()))?;
+        let stdin = child.stdin.take().expect("piped child stdin exists");
+        let stdout = child.stdout.take().expect("piped child stdout exists");
+        let (writer, write_frames) = mpsc::channel();
+        std::thread::spawn(move || write_frames_to_plugin(stdin, write_frames));
+        let (sender, frames) = mpsc::channel();
+        std::thread::spawn(move || read_frames(stdout, sender));
+        Ok(Self {
+            child,
+            writer,
+            frames,
+            settings: json!({}),
+            capabilities: capabilities.iter().cloned().collect(),
+            provider_sessions: HashMap::new(),
+            provider_statuses: Vec::new(),
+            provider_events_received: 0,
+            request_id: 0,
+            state,
+        })
+    }
+
+    /// Sends the next request and returns its id.
+    fn send_request(&mut self, method: &str, params: Value, deadline: Instant) -> Result<u64> {
+        self.request_id += 1;
+        let id = self.request_id;
+        self.send_before(
+            json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
+            deadline,
+        )?;
+        Ok(id)
+    }
+
+    /// A request within the host's deadline for it. A plugin's JSON-RPC error is an
+    /// [`RpcError`] at the root of the returned error.
+    fn call(&mut self, method: &str, params: Value) -> Result<Value> {
+        let timeout = protocol::request_timeout(method).unwrap_or(RPC_TIMEOUT);
+        let deadline = Instant::now() + timeout;
+        let id = self.send_request(method, params, deadline)?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let result = match self.await_response(id, remaining)? {
+            Some(result) => result.map_err(anyhow::Error::from),
+            None => {
+                self.verify_cancellation(id)?;
+                Err(anyhow!("timed out waiting for plugin JSON-RPC output"))
+            }
+        };
+        result.with_context(|| format!("{method} failed"))
+    }
+
+    fn call_before_deadline(
+        &mut self,
+        method: &str,
+        params: Value,
+        deadline: Instant,
+    ) -> Result<Value> {
+        let id = self.send_request(method, params, deadline)?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        Ok(self
+            .await_response(id, remaining)?
+            .ok_or_else(|| anyhow!("timed out waiting for plugin JSON-RPC output"))??)
+    }
+
+    fn call_until_cancelled(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        let id = self.send_request(method, params, deadline)?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if let Some(response) = self.await_response(id, remaining)? {
+            match response {
+                Ok(_) => bail!("plugin responded before the cancellation deadline"),
+                Err(error) => bail!(
+                    "plugin returned error {} before the cancellation deadline: {}",
+                    error.code,
+                    error.message
+                ),
+            }
+        }
+        self.verify_cancellation(id)
+    }
+
+    fn verify_cancellation(&mut self, id: u64) -> Result<()> {
+        let deadline = Instant::now() + CANCELLATION_ACK_TIMEOUT;
+        self.send_before(
+            json!({
+                "jsonrpc": "2.0",
+                "method": "$/cancelRequest",
+                "params": { "id": id },
+            }),
+            deadline,
+        )?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match self
+            .await_response(id, remaining)?
+            .ok_or_else(|| anyhow!("plugin did not acknowledge cancellation"))?
+        {
+            Err(error) if error.code == -32800 => Ok(()),
+            Err(error) => bail!(
+                "plugin cancellation response used error code {}; expected -32800",
+                error.code
+            ),
+            Ok(_) => bail!("plugin cancellation response must use error code -32800"),
+        }
+    }
+
+    fn await_response(
+        &mut self,
+        expected_id: u64,
+        timeout: Duration,
+    ) -> Result<Option<std::result::Result<Value, RpcError>>> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+            let line = match self.frames.recv_timeout(remaining) {
+                Ok(frame) => frame?,
+                Err(mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    bail!("plugin closed stdout before responding")
+                }
+            };
+            if let Some((response_id, result)) = self.dispatch(&line)? {
+                if response_id != json!(expected_id) {
+                    bail!("mismatched JSON-RPC response id: expected {expected_id}, got {response_id}");
+                }
+                return Ok(Some(result));
+            }
+        }
+    }
+
+    /// Serve a plugin's request or notification; a response is returned to the caller.
+    fn dispatch(
+        &mut self,
+        line: &str,
+    ) -> Result<Option<(Value, std::result::Result<Value, RpcError>)>> {
+        match parse_frame(line)? {
+            Frame::Response { id, result } => return Ok(Some((id, result))),
+            Frame::Request { id, method, params } => {
+                self.handle_host_request(id, &method, params)?
+            }
+            Frame::Notification { method, params } => self.handle_notification(&method, params)?,
+        }
+        Ok(None)
+    }
+
+    /// Pump plugin output until a turn completes: `busy` then `idle`, both after `after`.
+    /// Statuses still queued from earlier requests (start's `idle`) cannot satisfy it.
+    fn await_provider_turn(&mut self, after: usize, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let statuses = &self.provider_statuses[after..];
+            if let Some(busy) = statuses
+                .iter()
+                .position(|status| *status == ProviderSessionStatus::Busy)
+            {
+                if statuses[busy..].contains(&ProviderSessionStatus::Idle) {
+                    return Ok(());
+                }
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let line = match self.frames.recv_timeout(remaining) {
+                Ok(frame) => frame?,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    bail!("provider turn did not report busy then idle in time")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    bail!("plugin closed stdout during a provider turn")
+                }
+            };
+            if let Some((id, _)) = self.dispatch(&line)? {
+                bail!("unexpected JSON-RPC response {id} during a provider turn");
+            }
+        }
+    }
+
+    fn handle_notification(&mut self, method: &str, params: Option<Value>) -> Result<()> {
+        if !self.capabilities.contains("providers") {
+            bail!("plugin sent notification {method} without the providers capability");
+        }
+        let params = params.unwrap_or(Value::Null);
+        // The host's own parameter types, so this check cannot accept what the host rejects.
+        let invalid = |error: serde_json::Error| anyhow!("invalid {method}: {error}");
+        match method {
+            EVENT_NOTIFICATION => {
+                let event: SessionEventParams = serde_json::from_value(params).map_err(invalid)?;
+                let last_seq = self.provider_session_seq(method, &event.session_id)?;
+                event
+                    .check_seq(*last_seq)
+                    .map_err(|error| anyhow!("{method}: {error}"))?;
+                *last_seq = event.seq;
+                self.provider_events_received += 1;
+            }
+            STATUS_NOTIFICATION => {
+                let status: SessionStatusParams =
+                    serde_json::from_value(params).map_err(invalid)?;
+                self.provider_session_seq(method, &status.session_id)?;
+                self.provider_statuses.push(status.status);
+            }
+            _ => bail!(
+                "plugin sent undocumented notification {method}; provider sessions report through {EVENT_NOTIFICATION} and {STATUS_NOTIFICATION}"
+            ),
+        }
+        Ok(())
+    }
+
+    fn provider_session_seq(&mut self, method: &str, session_id: &str) -> Result<&mut u64> {
+        self.provider_sessions
+            .get_mut(session_id)
+            .ok_or_else(|| anyhow!("{method} referenced unknown session {session_id}"))
+    }
+
+    fn send(&self, frame: Value) -> Result<()> {
+        self.send_before(frame, Instant::now() + RPC_TIMEOUT)
+    }
+
+    fn send_before(&self, frame: Value, deadline: Instant) -> Result<()> {
+        let frame = serde_json::to_string(&frame).expect("JSON value serializes");
+        validate_outbound_frame_size(&frame)?;
+        let (completed, result) = mpsc::channel();
+        self.writer
+            .send(WriteFrame { frame, completed })
+            .map_err(|_| anyhow!("plugin JSON-RPC writer stopped unexpectedly"))?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match result.recv_timeout(remaining) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                bail!("timed out writing plugin JSON-RPC request")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                bail!("plugin JSON-RPC writer stopped before completing a request")
+            }
+        }
+    }
+
+    fn handle_host_request(
+        &mut self,
+        id: Value,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<()> {
+        match self.handle_host_callback(method, params) {
+            Ok(Some(result)) => self.send(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": result,
+            })),
+            Ok(None) => self.send(host_method_not_found_response(id)),
+            Err(error) => self.send(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": { "code": -32601, "message": error.to_string() },
+            })),
+        }
+    }
+
+    fn handle_host_callback(
+        &mut self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Option<Value>> {
+        host_callback(&mut self.settings, &self.capabilities, method, params)
+    }
+
+    fn wait_for_exit_before(&mut self, deadline: Instant) -> Result<()> {
+        loop {
+            if let Some(status) = self
+                .child
+                .try_wait()
+                .context("failed to inspect plugin sidecar")?
+            {
+                if !status.success() {
+                    bail!("plugin sidecar exited with {status}");
+                }
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                bail!("timed out waiting for plugin sidecar to exit after shutdown");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+fn validate_outbound_frame_size(frame: &str) -> Result<()> {
+    if frame.len() + 1 > MAX_FRAME_BYTES {
+        bail!("plugin JSON-RPC request exceeded the frame limit");
+    }
+    Ok(())
+}
+
+fn host_method_not_found_response(id: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": -32601, "message": "host method not found" },
+    })
+}
+
+fn host_callback(
+    settings: &mut Value,
+    capabilities: &HashSet<String>,
+    method: &str,
+    params: Option<Value>,
+) -> Result<Option<Value>> {
+    match method {
+        "host.settings.get" | "host.settings.replace" | "host.settings.patch" => {
+            if !capabilities.contains("settings") {
+                bail!("plugin capability is not granted");
+            }
+            settings_callback(settings, method, params)
+        }
+        "host.tasks.read" | "host.task.get" => {
+            if !capabilities.contains("tasks.read") {
+                bail!("plugin capability is not granted");
+            }
+            let key = params
+                .as_ref()
+                .and_then(|params| params.get("key"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("task read requires key"))?;
+            let _ = key;
+            Ok(Some(json!({ "task": null })))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn settings_callback(
+    settings: &mut Value,
+    method: &str,
+    params: Option<Value>,
+) -> Result<Option<Value>> {
+    let params = params.unwrap_or(Value::Null);
+    match method {
+        "host.settings.get" => {
+            let settings = if let Some(path) = params.get("path") {
+                let path = path.as_array().ok_or_else(|| {
+                    anyhow!("malformed host.settings.get callback: path must be an array")
+                })?;
+                if path.is_empty() {
+                    bail!("malformed host.settings.get callback: path must not be empty");
+                }
+                path.iter().try_fold(settings.clone(), |current, segment| {
+                    let segment = segment.as_str().ok_or_else(|| {
+                        anyhow!("malformed host.settings.get callback: path keys must be strings")
+                    })?;
+                    Ok::<Value, anyhow::Error>(current.get(segment).cloned().unwrap_or(Value::Null))
+                })?
+            } else {
+                settings.clone()
+            };
+            Ok(Some(json!({ "settings": settings })))
+        }
+        "host.settings.replace" => {
+            let replacement = params.get("settings").cloned().unwrap_or(params);
+            if !replacement.is_object() {
+                bail!("malformed host.settings.replace callback: settings must be an object");
+            }
+            *settings = replacement;
+            Ok(Some(json!({ "settings": settings })))
+        }
+        "host.settings.patch" => {
+            let patch = params.get("patch").cloned().unwrap_or(params);
+            let patch = patch.as_object().ok_or_else(|| {
+                anyhow!("malformed host.settings.patch callback: patch must be an object")
+            })?;
+            merge_settings_patch(
+                settings
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow!("host settings must be an object"))?,
+                patch,
+            );
+            Ok(Some(json!({ "updated": true })))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn merge_settings_patch(
+    target: &mut serde_json::Map<String, Value>,
+    patch: &serde_json::Map<String, Value>,
+) {
+    for (key, value) in patch {
+        if value.is_null() {
+            target.remove(key);
+        } else if let Some(value) = value.as_object() {
+            let target_value = target
+                .entry(key.clone())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if !target_value.is_object() {
+                *target_value = Value::Object(serde_json::Map::new());
+            }
+            merge_settings_patch(
+                target_value
+                    .as_object_mut()
+                    .expect("object target was initialized above"),
+                value,
+            );
+        } else {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+impl Drop for PluginProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}
+
+fn write_frames_to_plugin(mut stdin: ChildStdin, frames: Receiver<WriteFrame>) {
+    for WriteFrame { frame, completed } in frames {
+        let result = (|| {
+            stdin
+                .write_all(frame.as_bytes())
+                .context("failed to write plugin JSON-RPC request")?;
+            stdin
+                .write_all(b"\n")
+                .context("failed to terminate plugin JSON-RPC request")?;
+            stdin.flush().context("failed to flush plugin request")
+        })();
+        let failed = result.is_err();
+        let _ = completed.send(result);
+        if failed {
+            break;
+        }
+    }
+}
+
+fn read_frames(stdout: impl std::io::Read, sender: mpsc::Sender<Result<String>>) {
+    let mut reader = BufReader::new(stdout);
+    loop {
+        let mut bytes = Vec::new();
+        let read = reader
+            .by_ref()
+            .take((MAX_FRAME_BYTES + 1) as u64)
+            .read_until(b'\n', &mut bytes);
+        match read {
+            Ok(0) => break,
+            Ok(_) if bytes.len() > MAX_FRAME_BYTES || !bytes.ends_with(b"\n") => {
+                let _ = sender.send(Err(anyhow!(
+                    "plugin JSON-RPC output exceeded the frame limit"
+                )));
+                break;
+            }
+            Ok(_) => {
+                bytes.pop();
+                let frame = String::from_utf8(bytes)
+                    .map_err(|error| anyhow!("plugin JSON-RPC output was not UTF-8: {error}"));
+                if sender.send(frame).is_err() {
+                    break;
+                }
+            }
+            Err(error) => {
+                let _ = sender.send(Err(anyhow!(
+                    "failed to read plugin JSON-RPC output: {error}"
+                )));
+                break;
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RpcError {
+    code: i64,
+    message: String,
+}
+
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "plugin RPC error {}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for RpcError {}
+
+enum Frame {
+    Request {
+        id: Value,
+        method: String,
+        params: Option<Value>,
+    },
+    Response {
+        id: Value,
+        result: std::result::Result<Value, RpcError>,
+    },
+    Notification {
+        method: String,
+        params: Option<Value>,
+    },
+}
+
+fn parse_frame(line: &str) -> Result<Frame> {
+    let value: Value = serde_json::from_str(line)
+        .map_err(|error| anyhow!("malformed JSON-RPC output: {error}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("malformed JSON-RPC output: frame must be an object"))?;
+    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        bail!("malformed JSON-RPC output: expected jsonrpc 2.0");
+    }
+    // Notifications carry no id; the checker tells documented ones from the rest.
+    if let (false, Some(method)) = (
+        object.contains_key("id"),
+        object.get("method").and_then(Value::as_str),
+    ) {
+        return Ok(Frame::Notification {
+            method: method.to_owned(),
+            params: object.get("params").cloned(),
+        });
+    }
+    let id = valid_id(object.get("id"))?;
+    if let Some(method) = object.get("method") {
+        if object.contains_key("result") || object.contains_key("error") {
+            bail!("malformed JSON-RPC output: request cannot contain result or error");
+        }
+        let params = object.get("params").cloned();
+        if params
+            .as_ref()
+            .is_some_and(|params| !params.is_null() && !params.is_array() && !params.is_object())
+        {
+            bail!("malformed JSON-RPC output: params must be null, an array, or an object");
+        }
+        return Ok(Frame::Request {
+            id,
+            method: method
+                .as_str()
+                .filter(|method| !method.is_empty())
+                .ok_or_else(|| {
+                    anyhow!("malformed JSON-RPC output: method must be a nonempty string")
+                })?
+                .to_owned(),
+            params,
+        });
+    }
+    let has_result = object.contains_key("result");
+    let has_error = object.contains_key("error");
+    if has_result == has_error {
+        bail!("malformed JSON-RPC output: response must contain exactly one of result or error");
+    }
+    if has_error {
+        let error = object["error"]
+            .as_object()
+            .filter(|error| {
+                error.get("code").and_then(Value::as_i64).is_some()
+                    && error.get("message").and_then(Value::as_str).is_some()
+            })
+            .ok_or_else(|| anyhow!("malformed JSON-RPC output: invalid error object"))?;
+        return Ok(Frame::Response {
+            id,
+            result: Err(RpcError {
+                code: error["code"].as_i64().expect("validated integer"),
+                message: error["message"]
+                    .as_str()
+                    .expect("validated string")
+                    .to_owned(),
+            }),
+        });
+    }
+    Ok(Frame::Response {
+        id,
+        result: Ok(object["result"].clone()),
+    })
+}
+
+fn valid_id(id: Option<&Value>) -> Result<Value> {
+    match id {
+        Some(Value::String(_)) | Some(Value::Number(_)) => Ok(id.expect("matched some").clone()),
+        _ => bail!("malformed JSON-RPC output: id must be a string or number"),
+    }
+}
+
+fn validate_handshake(result: &Value, manifest: &Value) -> Result<Vec<String>> {
+    let result = result
+        .as_object()
+        .ok_or_else(|| anyhow!("malformed plugin.handshake result: expected object"))?;
+    for (field, manifest_field) in [
+        ("plugin_id", "id"),
+        ("plugin_name", "name"),
+        ("plugin_version", "version"),
+        ("host_api_version", "host_api_version"),
+    ] {
+        if result.get(field) != manifest.get(manifest_field) {
+            bail!("mismatched plugin.handshake result: {field} does not match manifest");
+        }
+    }
+    result
+        .get("lifecycle_event_subscriptions")
+        .cloned()
+        .unwrap_or_else(|| json!([]))
+        .as_array()
+        .ok_or_else(|| {
+            anyhow!("malformed plugin.handshake result: subscriptions must be an array")
+        })?
+        .iter()
+        .map(|value| {
+            value.as_str().map(str::to_owned).ok_or_else(|| {
+                anyhow!("malformed plugin.handshake result: subscriptions must be strings")
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest() -> Value {
+        json!({
+            "schema": "planeai.plugin.v1",
+            "id": "fixture",
+            "name": "Fixture",
+            "version": "1.0.0",
+            "host_api_version": HOST_API_VERSION,
+            "source_kind": "local",
+            "backend_entrypoints": { "test-platform": "bin/plugin" },
+            "capabilities": ["settings", "tasks.read", "task-events"],
+            "ui_contributions": [{
+                "id": "fixture-pane",
+                "label": "Fixture",
+                "placement": "main-pane",
+                "entrypoint": "ui/entry.js",
+                "shortcut": "Mod+G"
+            }]
+        })
+    }
+
+    #[test]
+    fn manifest_validation_requires_local_schema_and_platform_entrypoint() {
+        assert_eq!(
+            validate_local_manifest(&manifest(), "test-platform").unwrap(),
+            "bin/plugin"
+        );
+        let mut unsupported_schema = manifest();
+        unsupported_schema["schema"] = json!("other");
+        assert!(validate_local_manifest(&unsupported_schema, "test-platform").is_err());
+        assert!(validate_local_manifest(&manifest(), "missing-platform").is_err());
+    }
+
+    #[test]
+    fn manifest_validation_accepts_titlebar_contributions() {
+        let mut titlebar = manifest();
+        titlebar["ui_contributions"][0]["placement"] = json!("titlebar");
+        titlebar["ui_contributions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("shortcut");
+        assert_eq!(
+            validate_local_manifest(&titlebar, "test-platform").unwrap(),
+            "bin/plugin"
+        );
+    }
+
+    #[test]
+    fn manifest_validation_rejects_non_local_and_unsafe_entrypoints() {
+        let mut non_local = manifest();
+        non_local["source_kind"] = json!("builtin");
+        assert!(validate_local_manifest(&non_local, "test-platform").is_err());
+        let mut traversal = manifest();
+        traversal["backend_entrypoints"]["test-platform"] = json!("../plugin");
+        assert!(validate_local_manifest(&traversal, "test-platform").is_err());
+        let mut inactive_platform_traversal = manifest();
+        inactive_platform_traversal["backend_entrypoints"]["windows-x64"] = json!("../plugin.exe");
+        assert!(validate_local_manifest(&inactive_platform_traversal, "test-platform").is_err());
+    }
+
+    #[test]
+    fn manifest_validation_fails_closed_and_enforces_public_v1_essentials() {
+        let mut undocumented_root = manifest();
+        undocumented_root["experimental"] = json!(true);
+        assert!(validate_local_manifest(&undocumented_root, "test-platform").is_err());
+
+        let mut invalid_id = manifest();
+        invalid_id["id"] = json!("Fixture");
+        assert!(validate_local_manifest(&invalid_id, "test-platform").is_err());
+
+        let mut recipient_api = manifest();
+        recipient_api["host_api_version"] = json!("planeai.plugin-host.v2");
+        assert!(validate_local_manifest(&recipient_api, "test-platform").is_ok());
+
+        let mut incompatible_api = manifest();
+        incompatible_api["host_api_version"] = json!("planeai.plugin-host.v5");
+        assert!(validate_local_manifest(&incompatible_api, "test-platform").is_err());
+
+        let mut unsupported_capability = manifest();
+        unsupported_capability["capabilities"] = json!(["storage"]);
+        assert!(validate_local_manifest(&unsupported_capability, "test-platform").is_err());
+
+        let mut undocumented_contribution = manifest();
+        undocumented_contribution["ui_contributions"][0]["experimental"] = json!(true);
+        assert!(validate_local_manifest(&undocumented_contribution, "test-platform").is_err());
+
+        let mut invalid_contribution = manifest();
+        invalid_contribution["ui_contributions"][0]["placement"] = json!("overlay");
+        assert!(validate_local_manifest(&invalid_contribution, "test-platform").is_err());
+        invalid_contribution["ui_contributions"][0]["placement"] = json!("preferences");
+        invalid_contribution["ui_contributions"][0]["order"] = json!(0);
+        assert!(validate_local_manifest(&invalid_contribution, "test-platform").is_err());
+        invalid_contribution["ui_contributions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("order");
+        invalid_contribution["ui_contributions"][0]["shortcut"] = json!("Mod+L");
+        assert!(validate_local_manifest(&invalid_contribution, "test-platform").is_err());
+        invalid_contribution["ui_contributions"][0]["placement"] = json!("session.panel");
+        assert!(validate_local_manifest(&invalid_contribution, "test-platform").is_ok());
+        invalid_contribution["ui_contributions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("shortcut");
+        invalid_contribution["ui_contributions"][0]["placement"] = json!("main-pane");
+        invalid_contribution["ui_contributions"][0]["entrypoint"] = json!("../entry.js");
+        assert!(validate_local_manifest(&invalid_contribution, "test-platform").is_err());
+    }
+
+    #[test]
+    fn host_callbacks_support_granted_settings_and_task_reads() {
+        let capabilities = HashSet::from(["settings".to_string(), "tasks.read".to_string()]);
+        let mut settings = json!({});
+        assert_eq!(
+            host_callback(
+                &mut settings,
+                &capabilities,
+                "host.settings.replace",
+                Some(json!({ "settings": { "greeting": "Hello" } })),
+            )
+            .unwrap(),
+            Some(json!({ "settings": { "greeting": "Hello" } }))
+        );
+        assert_eq!(
+            host_callback(&mut settings, &capabilities, "host.settings.get", None).unwrap(),
+            Some(json!({ "settings": { "greeting": "Hello" } }))
+        );
+        assert_eq!(
+            host_callback(
+                &mut settings,
+                &capabilities,
+                "host.settings.patch",
+                Some(json!({ "patch": { "github": { "pull_requests": { "session-1": { "url": "https://example.test/pr/1" } } } } })),
+            )
+            .unwrap(),
+            Some(json!({ "updated": true }))
+        );
+        assert_eq!(
+            host_callback(
+                &mut settings,
+                &capabilities,
+                "host.settings.get",
+                Some(json!({ "path": ["github", "pull_requests", "session-1"] })),
+            )
+            .unwrap(),
+            Some(json!({ "settings": { "url": "https://example.test/pr/1" } }))
+        );
+        assert_eq!(settings["greeting"], "Hello");
+        for method in ["host.tasks.read", "host.task.get"] {
+            assert_eq!(
+                host_callback(
+                    &mut settings,
+                    &capabilities,
+                    method,
+                    Some(json!({ "key": "PLN-1" })),
+                )
+                .unwrap(),
+                Some(json!({ "task": null }))
+            );
+            assert!(host_callback(&mut settings, &capabilities, method, None).is_err());
+        }
+        assert!(host_callback(
+            &mut settings,
+            &capabilities,
+            "host.settings.replace",
+            Some(json!(false))
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn denied_callbacks_match_runtime_capability_errors_and_unknown_callbacks_are_not_found() {
+        let mut settings = json!({});
+        let capabilities = HashSet::new();
+        for method in ["host.settings.get", "host.tasks.read", "host.task.get"] {
+            assert!(
+                host_callback(&mut settings, &capabilities, method, None)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("plugin capability is not granted"),
+                "{method}"
+            );
+        }
+        assert_eq!(
+            host_callback(&mut settings, &capabilities, "host.unknown", None).unwrap(),
+            None,
+        );
+        assert_eq!(
+            host_method_not_found_response(json!(42)),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 42,
+                "error": { "code": -32601, "message": "host method not found" },
+            })
+        );
+    }
+
+    #[test]
+    fn outbound_frame_limit_includes_the_newline_terminator() {
+        assert!(validate_outbound_frame_size(&"x".repeat(MAX_FRAME_BYTES - 1)).is_ok());
+        assert!(validate_outbound_frame_size(&"x".repeat(MAX_FRAME_BYTES)).is_err());
+    }
+
+    #[test]
+    fn handshake_advertises_manifest_granted_capabilities() {
+        assert_eq!(
+            handshake_params(&manifest_capabilities(&manifest()), HOST_API_VERSION),
+            json!({
+                "host_api_version": HOST_API_VERSION,
+                "host_capabilities": ["settings", "tasks.read", "task-events"],
+                "host_features": ["provider_sessions.reconcile"],
+            })
+        );
+    }
+
+    #[test]
+    fn task_lifecycle_requires_the_capability_and_subscription() {
+        let capabilities = vec!["task-events".to_string()];
+        let subscriptions = vec!["task.lifecycle".to_string()];
+        assert!(lifecycle_delivery_is_granted(&capabilities, &subscriptions));
+        assert!(!lifecycle_delivery_is_granted(&[], &subscriptions));
+        assert!(!lifecycle_delivery_is_granted(&capabilities, &[]));
+    }
+
+    #[test]
+    fn scenario_parser_accepts_stable_request_lines_and_rejects_invalid_shapes() {
+        assert_eq!(
+            parse_scenario_line(r#"{ "method": "fixture.persistSettings", "params": { "settings": { "nested": true } } }"#)
+                .unwrap(),
+            ScenarioRequest {
+                method: "fixture.persistSettings".to_string(),
+                params: json!({ "settings": { "nested": true } }),
+                timeout: None,
+            }
+        );
+        assert_eq!(
+            parse_scenario_line(r#"{ "method": "fixture.status" }"#)
+                .unwrap()
+                .params,
+            Value::Null
+        );
+        for line in [
+            "[]",
+            r#"{ "method": 1 }"#,
+            r#"{ "method": "" }"#,
+            r#"{ "method": "x", "id": 1 }"#,
+        ] {
+            assert!(parse_scenario_line(line).is_err(), "{line}");
+        }
+        for method in [
+            "plugin.handshake",
+            "plugin.shutdown",
+            "plugin.taskLifecycle",
+            "$/cancelRequest",
+        ] {
+            assert!(
+                parse_scenario_line(&format!(r#"{{ "method": "{method}" }}"#)).is_err(),
+                "{method}"
+            );
+        }
+    }
+
+    #[test]
+    fn cancellation_and_shutdown_windows_match_the_runtime_contract() {
+        assert_eq!(CANCELLATION_ACK_TIMEOUT, Duration::from_secs(3));
+        assert_eq!(SHUTDOWN_TIMEOUT, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn scenario_timeout_requests_and_verifies_cancellation() {
+        let request =
+            parse_scenario_line(r#"{ "method": "fixture.awaitCancellation", "timeout_ms": 25 }"#)
+                .unwrap();
+        assert_eq!(request.timeout, Some(Duration::from_millis(25)));
+        for line in [
+            r#"{ "method": "fixture.awaitCancellation", "timeout_ms": 0 }"#,
+            r#"{ "method": "fixture.awaitCancellation", "timeout_ms": 5001 }"#,
+            r#"{ "method": "fixture.awaitCancellation", "timeout_ms": "25" }"#,
+        ] {
+            assert!(parse_scenario_line(line).is_err(), "{line}");
+        }
+    }
+
+    #[test]
+    fn temporary_plugin_state_creates_and_removes_host_owned_directories() {
+        let state = TemporaryPluginState::new().unwrap();
+        let root = state.root.clone();
+        assert!(state.data_dir.is_dir());
+        assert!(state.secrets_dir.is_dir());
+        drop(state);
+        assert!(!root.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backend_entrypoint_may_be_a_safe_relative_symlink_to_an_external_target() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = std::env::temp_dir().join(format!(
+            "planeai-plugin-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let package = root.join("package");
+        let external = root.join("external-plugin");
+        fs::create_dir_all(package.join("bin")).unwrap();
+        fs::write(&external, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut permissions = fs::metadata(&external).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&external, permissions).unwrap();
+        symlink(&external, package.join("bin/plugin")).unwrap();
+
+        assert_eq!(
+            validate_entrypoint(&package, "bin/plugin").unwrap(),
+            external.canonicalize().unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn frame_validation_accepts_a_well_formed_response_and_callback() {
+        let response = parse_frame(r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#).unwrap();
+        match response {
+            Frame::Response { id, result } => {
+                assert_eq!(id, json!(1));
+                assert_eq!(result.unwrap(), json!({ "ok": true }));
+            }
+            _ => panic!("expected response"),
+        }
+        match parse_frame(
+            r#"{"jsonrpc":"2.0","id":"get","method":"host.settings.get","params":null}"#,
+        )
+        .unwrap()
+        {
+            Frame::Request { method, .. } => assert_eq!(method, "host.settings.get"),
+            _ => panic!("expected request"),
+        }
+        match parse_frame(
+            r#"{"jsonrpc":"2.0","method":"host.providerSession.status","params":{"session_id":"s","status":"idle"}}"#,
+        )
+        .unwrap()
+        {
+            Frame::Notification { method, params } => {
+                assert_eq!(method, "host.providerSession.status");
+                assert_eq!(params.unwrap()["status"], "idle");
+            }
+            _ => panic!("expected notification"),
+        }
+    }
+
+    #[test]
+    fn frame_validation_rejects_invalid_or_ambiguous_output() {
+        assert!(parse_frame(r#"{"jsonrpc":"1.0","id":1,"result":{}}"#).is_err());
+        assert!(parse_frame(r#"{"jsonrpc":"2.0","id":1,"result":{},"error":{}}"#).is_err());
+        // A callback without an id reads as a notification, which the checker then rejects
+        // as undocumented.
+        assert!(matches!(
+            parse_frame(r#"{"jsonrpc":"2.0","method":"host.settings.get"}"#).unwrap(),
+            Frame::Notification { .. }
+        ));
+        assert!(parse_frame(
+            r#"{"jsonrpc":"2.0","id":1,"method":"host.tasks.read","params":true}"#,
+        )
+        .is_err());
+    }
+}

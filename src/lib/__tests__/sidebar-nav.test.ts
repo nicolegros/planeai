@@ -4,6 +4,7 @@ import {
   setSelectedIndex,
   clampIndex,
   handleSidebarKey,
+  shouldBypassSidebarKeyboard,
 } from "../sidebar-nav.svelte";
 
 function key(overrides: Partial<KeyboardEvent>): KeyboardEvent {
@@ -165,6 +166,14 @@ describe("sidebar-nav", () => {
     });
   });
 
+  describe("native controls", () => {
+    it("preserves Enter activation for plugin sidebar actions", () => {
+      const button = document.createElement("button");
+      button.dataset.pluginSidebarAction = "minimal-logger:log";
+      expect(shouldBypassSidebarKeyboard(button)).toBe(true);
+    });
+  });
+
   describe("empty list", () => {
     it("returns null for any key on empty list", () => {
       expect(handleSidebarKey(key({ key: "Enter" }), 0)).toBeNull();
@@ -203,5 +212,15 @@ describe("sidebar-nav", () => {
 
       document.body.removeChild(container);
     });
+  });
+});
+
+describe("plugin sidebar focus", () => {
+  it("keeps unified keyboard navigation active for a focused sidebar section", () => {
+    const sidebarContribution = document.createElement("div");
+    sidebarContribution.dataset.pluginUiContribution = "jira:jira-sidebar-section";
+    sidebarContribution.dataset.pluginSidebarContribution = "";
+
+    expect(shouldBypassSidebarKeyboard(sidebarContribution)).toBe(false);
   });
 });

@@ -58,10 +58,7 @@ async fn handle_data_inner(
         .get(&session_id)
         .ok_or_else(|| anyhow::anyhow!("session not found: {session_id}"))?;
 
-    // Get snapshot and subscriber while holding lock
-    let snapshot = session.buffer_snapshot();
-    let mut output_rx = session.subscribe_output();
-    let alive = session.is_alive();
+    let (snapshot, mut output_rx) = session.snapshot_and_subscribe();
     drop(reg);
 
     let (mut reader, mut writer) = tokio::io::split(stream);
@@ -69,12 +66,6 @@ async fn handle_data_inner(
     // Step 1: Replay buffer snapshot in chunks
     for chunk in snapshot.chunks(CHUNK_SIZE) {
         write_frame(&mut writer, FRAME_OUTPUT, chunk).await?;
-    }
-
-    if !alive {
-        // Send EOF for exited sessions after replay
-        write_frame(&mut writer, FRAME_EOF, b"").await?;
-        return Ok(());
     }
 
     // Steps 2+3: Live stream output + read input concurrently

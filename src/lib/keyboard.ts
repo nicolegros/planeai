@@ -1,11 +1,23 @@
-import { focusTerminal, getActiveZone, toggleSessionsPanel, toggleTaskPanel } from "./focus.svelte";
+import {
+  focusTerminal,
+  getActiveZone,
+  toggleExplorerFocus,
+  toggleSessionsPanel,
+  toggleTaskPanel,
+} from "./focus.svelte";
 
 /** True on macOS/iOS, false on Windows/Linux */
 export const IS_MAC =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
+/** True on Windows, whose webview and shells differ from macOS/Linux ones */
+export const IS_WINDOWS = typeof navigator !== "undefined" && /Win/.test(navigator.platform);
+
 /** Returns the platform modifier label: ⌘ on macOS, Ctrl on Windows/Linux */
 export const MOD_LABEL = IS_MAC ? "⌘" : "Ctrl+";
+
+/** The Option/Alt modifier label: ⌥ on macOS, Alt on Windows/Linux */
+export const ALT_LABEL = IS_MAC ? "⌥" : "Alt+";
 
 /** Hint text for Mod+Enter submit shortcut */
 export const MOD_ENTER_HINT = IS_MAC ? "⌘↵" : "Ctrl+↵";
@@ -32,10 +44,10 @@ export type KeyboardAction =
   | { type: "next_tab" }
   | { type: "prev_tab" }
   | { type: "toggle_diff" }
+  | { type: "focus_file_explorer" }
   | { type: "toggle_file_explorer" }
   | { type: "toggle_sessions_panel" }
   | { type: "toggle_task_panel" }
-  | { type: "toggle_pr_panel" }
   | { type: "focus_merge_prompt" }
   | { type: "refresh_tasks" }
   | { type: "open_file" }
@@ -59,6 +71,8 @@ export type KeyboardAction =
  */
 export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   const mod = isPlatformMod(e);
+  // The modifier that is not Mod on this platform (Ctrl on macOS, Cmd/Win elsewhere).
+  const otherMod = IS_MAC ? e.ctrlKey : e.metaKey;
   const key = e.key.toLowerCase();
 
   // Escape — always return to terminal
@@ -136,19 +150,14 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "toggle_diff" };
   }
 
-  // Mod+E — toggle file explorer
-  if (mod && !e.shiftKey && key === "e") {
-    return { type: "toggle_file_explorer" };
+  // Mod+E — focus or open file explorer; Mod+Shift+E — toggle visibility
+  if (mod && key === "e") {
+    return e.shiftKey ? { type: "toggle_file_explorer" } : { type: "focus_file_explorer" };
   }
 
   // Mod+P — open file finder
   if (mod && !e.shiftKey && key === "p") {
     return { type: "open_file" };
-  }
-
-  // Mod+Shift+P — toggle PR panel
-  if (mod && e.shiftKey && key === "p") {
-    return { type: "toggle_pr_panel" };
   }
 
   // Mod+Shift+S — toggle sessions panel
@@ -187,7 +196,7 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   }
 
   // Mod+Shift+Arrow — focus split in direction
-  if (mod && e.shiftKey && !e.altKey && !e.ctrlKey) {
+  if (mod && e.shiftKey && !e.altKey && !otherMod) {
     if (e.key === "ArrowLeft") return { type: "focus_split_left" };
     if (e.key === "ArrowRight") return { type: "focus_split_right" };
     if (e.key === "ArrowUp") return { type: "focus_split_up" };
@@ -195,7 +204,7 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   }
 
   // Mod+Option+Arrow — move tab to split in direction
-  if (mod && e.altKey && !e.shiftKey && !e.ctrlKey) {
+  if (mod && e.altKey && !e.shiftKey && !otherMod) {
     if (e.key === "ArrowLeft") return { type: "move_tab_left" };
     if (e.key === "ArrowRight") return { type: "move_tab_right" };
     if (e.key === "ArrowUp") return { type: "move_tab_up" };
@@ -222,6 +231,17 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
 
 export type ActionHandler = (action: KeyboardAction) => void;
 
+function isExplorerSearchEvent(e: KeyboardEvent): boolean {
+  if (getActiveZone() !== "explorer") return false;
+
+  return e
+    .composedPath()
+    .some(
+      (target) =>
+        target instanceof HTMLInputElement && target.matches("[data-file-tree-search-input]"),
+    );
+}
+
 /**
  * Install the top-level keyboard router on the window.
  * Returns a cleanup function to remove the listener.
@@ -231,9 +251,12 @@ export function installKeyboardRouter(
   shouldPassEscape?: () => boolean,
   isEditorFocused?: () => boolean,
   shouldYieldEscape?: () => boolean,
+  /** True while a full-window takeover such as onboarding owns the keyboard. */
+  isSuspended?: () => boolean,
 ): () => void {
   const editorAllowedActions = new Set<KeyboardAction["type"]>([
     "open_file",
+    "focus_file_explorer",
     "toggle_file_explorer",
     "toggle_diff",
     "command_palette",
@@ -247,6 +270,7 @@ export function installKeyboardRouter(
     "next_session",
     "prev_session",
     "open_preferences",
+    "new_session",
     "split_vertical",
     "split_horizontal",
     "close_split",
@@ -254,46 +278,90 @@ export function installKeyboardRouter(
     "focus_split_right",
     "focus_split_up",
     "focus_split_down",
+    "move_tab_left",
+    "move_tab_right",
+    "move_tab_up",
+    "move_tab_down",
   ]);
 
-  function handler(e: KeyboardEvent) {
+  function routeAction(e: KeyboardEvent, action: KeyboardAction): void {
+    if (isSuspended?.()) return;
+    // Only filter editor shortcuts while CodeMirror actually owns focus.
+    // An editor tab can remain active underneath another focused pane such as Explorer.
+    if (
+      getActiveZone() === "editor" &&
+      isEditorFocused?.() &&
+      !editorAllowedActions.has(action.type)
+    ) {
+      return;
+    }
+
+    // Explorer owns Escape while its shadow-DOM search input is focused;
+    // let its capture handler close search and return focus to the tree row.
+    if (action.type === "focus_terminal" && isExplorerSearchEvent(e)) {
+      return;
+    }
+
+    // If Escape and terminal already focused with no overlays, let it pass through
+    if (
+      action.type === "focus_terminal" &&
+      getActiveZone() === "terminal" &&
+      (!shouldPassEscape || shouldPassEscape())
+    ) {
+      return;
+    }
+
+    // If Escape and a form controller is active, let it handle
+    if (action.type === "focus_terminal" && shouldYieldEscape?.()) {
+      return;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Built-in focus actions
+    if (action.type === "focus_terminal") {
+      if (getActiveZone() === "explorer") toggleExplorerFocus();
+      else focusTerminal();
+    } else if (action.type === "toggle_sessions_panel") {
+      toggleSessionsPanel();
+    } else if (action.type === "toggle_task_panel") {
+      toggleTaskPanel();
+    }
+
+    onAction(action);
+  }
+
+  function captureTabSwitcher(e: KeyboardEvent): void {
     const action = matchChord(e);
-    if (action) {
-      // When editor is focused, only intercept whitelisted actions
-      if (isEditorFocused?.() && !editorAllowedActions.has(action.type)) {
-        return;
-      }
-
-      // If Escape and terminal already focused with no overlays, let it pass through
-      if (
-        action.type === "focus_terminal" &&
-        getActiveZone() === "terminal" &&
-        (!shouldPassEscape || shouldPassEscape())
-      ) {
-        return;
-      }
-
-      // If Escape and a form controller is active, let it handle
-      if (action.type === "focus_terminal" && shouldYieldEscape?.()) {
-        return;
-      }
-
-      e.preventDefault();
-      e.stopPropagation();
-
-      // Built-in focus actions
-      if (action.type === "focus_terminal") {
-        focusTerminal();
-      } else if (action.type === "toggle_sessions_panel") {
-        toggleSessionsPanel();
-      } else if (action.type === "toggle_task_panel") {
-        toggleTaskPanel();
-      }
-
-      onAction(action);
+    if (action?.type === "tab_switch" || action?.type === "tab_switch_reverse") {
+      routeAction(e, action);
     }
   }
 
-  window.addEventListener("keydown", handler, true);
-  return () => window.removeEventListener("keydown", handler, true);
+  // Cmd/Ctrl+N opens global UI and must not be consumed by xterm or CodeMirror.
+  function captureNewSession(e: KeyboardEvent): void {
+    const action = matchChord(e);
+    if (action?.type === "new_session") routeAction(e, action);
+  }
+
+  function handler(e: KeyboardEvent): void {
+    // Contribution ShadowRoots receive composed key events before the host router.
+    // A plugin may cancel an event to claim any non-reserved shortcut while focused.
+    if (e.defaultPrevented) return;
+    const action = matchChord(e);
+    if (!action || action.type === "tab_switch" || action.type === "tab_switch_reverse") return;
+    routeAction(e, action);
+  }
+
+  // Ctrl+Tab is reserved for MRU session switching, even when focused content
+  // (such as xterm) consumes bubbling keyboard events.
+  window.addEventListener("keydown", captureTabSwitcher, true);
+  window.addEventListener("keydown", captureNewSession, true);
+  window.addEventListener("keydown", handler);
+  return () => {
+    window.removeEventListener("keydown", captureTabSwitcher, true);
+    window.removeEventListener("keydown", captureNewSession, true);
+    window.removeEventListener("keydown", handler);
+  };
 }

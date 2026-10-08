@@ -70,6 +70,7 @@ pub fn cleanup_stale_worktrees(
          JOIN projects p ON p.id = s.project_id
          WHERE s.status IN ('exited', 'destroyed', 'archived')
            AND s.worktree_path IS NOT NULL
+           AND COALESCE(s.worktree_owned, 1) = 1
            AND COALESCE(s.status_changed_at, s.updated_at) IS NOT NULL
            AND COALESCE(s.status_changed_at, s.updated_at) < ?1",
     ) {
@@ -128,6 +129,7 @@ pub fn list_stale_worktrees(conn: &rusqlite::Connection) -> Result<Vec<StaleWork
              JOIN projects p ON p.id = s.project_id
              WHERE s.status IN ('exited', 'destroyed', 'archived')
                AND s.worktree_path IS NOT NULL
+               AND COALESCE(s.worktree_owned, 1) = 1
                AND COALESCE(s.status_changed_at, s.updated_at) IS NOT NULL
                AND COALESCE(s.status_changed_at, s.updated_at) < ?1",
         )

@@ -186,3 +186,44 @@ pub fn task_move(repo: &dyn TaskProvider, key: &str, status: &str) -> (String, i
     };
     (render(&[field("task", task_detail_object(&task))]), 0)
 }
+
+/// AXI adapter for the canonical lifecycle-producing task creation path.
+pub fn task_add_with_lifecycle(
+    repo: &dyn TaskProvider,
+    params: crate::task_cli::AddParams,
+    context: &crate::task_cli::TaskLifecycleContext,
+) -> (String, i32) {
+    match crate::task_cli::run_task_add_with_lifecycle(repo, params, context)
+        .and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))
+    {
+        Ok(task) => {
+            let fields = vec![
+                field("task", task_detail_object(&task)),
+                field(
+                    "help",
+                    Value::List(vec![format!(
+                        "Run `planeai-cli axi task move {} in_progress` to start working on it",
+                        task.key
+                    )]),
+                ),
+            ];
+            (render(&fields), 0)
+        }
+        Err(error) => (emit_error(&error, &[]), 1),
+    }
+}
+
+/// AXI adapter for the canonical lifecycle-producing status move path.
+pub fn task_move_with_lifecycle(
+    repo: &dyn TaskProvider,
+    key: &str,
+    status: &str,
+    context: &crate::task_cli::TaskLifecycleContext,
+) -> (String, i32) {
+    match crate::task_cli::run_task_move_with_lifecycle(repo, key, status, context)
+        .and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))
+    {
+        Ok(task) => (render(&[field("task", task_detail_object(&task))]), 0),
+        Err(error) => (emit_error(&error, &[]), 1),
+    }
+}

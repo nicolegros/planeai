@@ -26,6 +26,21 @@ pub fn get_config(state: State<ConfigState>) -> Result<config::Config, String> {
     Ok(cfg.clone())
 }
 
+/// Built-in defaults, so the UI can offer "reset to default" without duplicating them.
+#[tauri::command]
+pub async fn get_config_defaults() -> config::Config {
+    config::Config::default()
+}
+
+/// Resolved binary per agent (configured providers plus presets), `None` when not found.
+#[tauri::command]
+pub async fn detect_providers(
+    state: State<'_, ConfigState>,
+) -> Result<std::collections::HashMap<String, Option<String>>, String> {
+    let cfg = state.0.lock().map_err(|e| e.to_string())?.clone();
+    crate::commands::blocking(move || Ok(config::detect_provider_binaries(&cfg))).await
+}
+
 #[tauri::command]
 pub fn update_config(
     state: State<ConfigState>,
@@ -40,6 +55,7 @@ pub fn update_config(
             Some(normalized)
         };
     }
+    config::validate(&new_config)?;
     let config_dir = config::config_dir(&app.package_info().name);
     config::save(&config_dir, &new_config)?;
     let mut cfg = state.0.lock().map_err(|e| e.to_string())?;
@@ -83,19 +99,6 @@ pub fn get_log_dir() -> String {
         .join("logs")
         .to_string_lossy()
         .into_owned()
-}
-
-/// List available WSL distributions. Returns empty vec on non-Windows
-/// or when WSL is not available.
-#[tauri::command]
-pub fn list_wsl_distros() -> Vec<String> {
-    planeai_core::wsl::list_distros().unwrap_or_default()
-}
-
-/// Check if WSL is available on this system.
-#[tauri::command]
-pub fn is_wsl_available() -> bool {
-    planeai_core::wsl::is_available()
 }
 
 #[tauri::command]

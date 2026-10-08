@@ -12,10 +12,14 @@ pub mod ipc;
 pub mod logging;
 pub mod paths;
 pub mod recipe_tick;
+pub mod rmux_client;
+pub mod rmux_ops;
+pub mod rmux_resources;
 pub mod session_ops;
 pub mod session_restart;
 pub mod stale_detection;
 pub mod task_cli;
-pub mod template;
+pub mod terminal_tabs;
 #[cfg(not(windows))]
 pub mod tmux;
+pub mod util;

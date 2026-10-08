@@ -4,89 +4,68 @@
    * Renders tabs with border-b-2 underline style, a "+" button, and an optional close button.
    */
   import { Bot, Terminal, GitCompare, FileCode, X } from "@lucide/svelte";
-  import type { Tab } from "../lib/session-tabs.svelte";
+  import type { PaneTab } from "../lib/task-workspace-layout.svelte";
+  import { tabDrag } from "../lib/tab-drag.svelte";
 
   interface Props {
-    tabs: Tab[];
-    activeTabIndex: number;
+    tabs: PaneTab[];
+    activeTabId: string;
     focused?: boolean;
     showAddButton?: boolean;
     showCloseButton?: boolean;
-    draggable?: boolean;
-    onSelectTab: (index: number) => void;
+    /** The pane these tabs belong to; set it with `onTabPress` to make tabs draggable. */
+    paneId?: string;
+    onSelectTab: (tabId: string) => void;
     onAddTab?: () => void;
     onClose?: () => void;
-    onTabDragStart?: (e: DragEvent, tabIndex: number) => void;
-    onTabDrop?: (e: DragEvent, insertIndex: number) => void;
-    onTabDragOver?: (e: DragEvent) => void;
+    onTabPress?: (e: PointerEvent, tabId: string) => void;
+    onTabDoubleClick?: (tabId: string) => void;
   }
 
-  let { tabs, activeTabIndex, focused = true, showAddButton = true, showCloseButton = false, draggable = false, onSelectTab, onAddTab, onClose, onTabDragStart, onTabDrop, onTabDragOver }: Props = $props();
+  let { tabs, activeTabId, focused = true, showAddButton = true, showCloseButton = false, paneId, onSelectTab, onAddTab, onClose, onTabPress, onTabDoubleClick }: Props = $props();
 
   const TAB_ICONS: Record<string, typeof Bot> = { bot: Bot, "git-compare": GitCompare, file: FileCode, terminal: Terminal };
 
-  let dropTargetIndex = $state<number | null>(null);
-
-  function handleDragOver(e: DragEvent, index: number) {
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    dropTargetIndex = index;
-    onTabDragOver?.(e);
-  }
-
-  function handleDragLeave() {
-    dropTargetIndex = null;
-  }
-
-  function handleDrop(e: DragEvent, index: number) {
-    e.preventDefault();
-    dropTargetIndex = null;
-    onTabDrop?.(e, index);
-  }
+  const draggable = $derived(!!paneId && !!onTabPress);
+  /** Insert position a dragged tab targets in this strip: before tab `i`, or `tabs.length` for the end. */
+  const dropIndex = $derived.by(() => {
+    const target = tabDrag.target;
+    return draggable && target?.kind === "strip" && target.paneId === paneId ? target.index : null;
+  });
 </script>
 
-<div class="flex items-stretch h-[38px] flex-1" role="tablist" aria-label="Pane tabs">
-  {#each tabs as tab, i (tab.index)}
+<!-- Anywhere on the strip past the tabs drops a dragged tab at the end. -->
+<div
+  class="flex items-stretch h-[38px] flex-1"
+  role="tablist"
+  aria-label="Pane tabs"
+  data-tab-strip={draggable ? paneId : undefined}
+  data-tab-count={draggable ? tabs.length : undefined}
+>
+  {#each tabs as tab, i (tab.id)}
     {@const Icon = TAB_ICONS[tab.icon ?? 'terminal'] ?? Terminal}
-    {@const isActive = tab.index === activeTabIndex}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="relative flex items-stretch"
-      ondragover={draggable ? (e) => handleDragOver(e, i) : undefined}
-      ondragleave={draggable ? handleDragLeave : undefined}
-      ondrop={draggable ? (e) => handleDrop(e, i) : undefined}
-    >
-      {#if dropTargetIndex === i}
+    {@const isActive = tab.id === activeTabId}
+    <div class="relative flex items-stretch" data-tab-index={i}>
+      {#if dropIndex === i}
         <div class="absolute left-0 top-[8px] bottom-[8px] w-[2px] bg-accent rounded-full"></div>
+      {:else if dropIndex === tabs.length && i === tabs.length - 1}
+        <div class="absolute right-0 top-[8px] bottom-[8px] w-[2px] bg-accent rounded-full"></div>
       {/if}
       <button
         role="tab"
         aria-selected={isActive}
         class="flex items-center gap-[7px] px-[13px] text-[12.5px] font-medium select-none border-b-2 transition-colors
           {isActive && focused ? 'border-accent text-t1' : isActive ? 'border-transparent text-t1' : 'border-transparent text-t2 hover:text-t1'}"
-        draggable={draggable ? "true" : undefined}
-        ondragstart={draggable ? (e) => onTabDragStart?.(e, tab.index) : undefined}
-        onclick={() => onSelectTab(tab.index)}
+        onpointerdown={draggable ? (e) => onTabPress?.(e, tab.id) : undefined}
+        onclick={() => onSelectTab(tab.id)}
+        ondblclick={onTabDoubleClick ? () => onTabDoubleClick(tab.id) : undefined}
       >
         <Icon size={13} class={isActive && focused ? 'text-accent' : 'text-t3'} />
         {tab.label}
+        {#if tab.detail}<span class="-ml-[3px] font-normal text-t3">· {tab.detail}</span>{/if}
       </button>
     </div>
   {/each}
-  <!-- Drop zone after last tab -->
-  {#if draggable}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="relative w-2 shrink-0"
-      ondragover={(e) => handleDragOver(e, tabs.length)}
-      ondragleave={handleDragLeave}
-      ondrop={(e) => handleDrop(e, tabs.length)}
-    >
-      {#if dropTargetIndex === tabs.length}
-        <div class="absolute left-0 top-[8px] bottom-[8px] w-[2px] bg-accent rounded-full"></div>
-      {/if}
-    </div>
-  {/if}
   {#if showAddButton && onAddTab}
     <button class="flex items-center px-[11px] text-[15px] text-t3 hover:text-t2" aria-label="New tab" onclick={onAddTab}>+</button>
   {/if}

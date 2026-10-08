@@ -1,13 +1,17 @@
 <script lang="ts">
-  import { Command, Dialog } from "bits-ui";
+  import { Command, Dialog, computeCommandScore } from "bits-ui";
   import { MOD_LABEL } from "../lib/keyboard";
-  import { sessions as sessionsApi, projects as projectsApi, tasks as tasksApi, git } from "../lib/api";
-  import type { Session, Project, TaskItem } from "../lib/types";
+  import { isPluginSession } from "../lib/plugin-providers";
+  import { sessions as sessionsApi, projects as projectsApi, git } from "../lib/api";
+  import type { Session, Project, TaskItem, PluginInventory, PluginUiContribution } from "../lib/types";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
+  import * as taskStore from "../lib/task-store.svelte";
+  import * as loopStore from "../lib/loop-store.svelte";
+  import { computeCommandMenuSessions, computeCommandMenuTaskRows, matchableValue, taskRowValue } from "../lib/command-menu-items";
 
   interface Props {
     open: boolean;
@@ -16,36 +20,65 @@
     onArchiveSession: () => void;
     onDeleteSession: () => void;
     onNewSession: () => void;
-    onRenameSession: () => void;
+    onRenameSession: (id: string, name: string) => void | Promise<void>;
     onRestoreSession: (id: string) => void;
     onDestroyArchivedSession: (id: string) => void;
     onResetTerminal: () => void;
     onArchiveProject: (id: string) => void;
+    onHideProject: (id: string) => void | Promise<void>;
+    onUnhideProject: (id: string) => void | Promise<void>;
     onDeleteProject: (id: string) => void;
     onRestoreProject: (id: string) => void;
-    onPickTask: (task: TaskItem) => void;
+    onSelectTask: (task: TaskItem, repoPath: string) => void;
     onCreateTask: () => void;
     onToggleDiff: () => void;
     onOpenFile?: (filePath: string) => void;
     onOpenLogViewer?: () => void;
-    onCreatePr?: () => void;
     onSplitVertical?: () => void;
     onSplitHorizontal?: () => void;
     onCloseSplit?: () => void;
+    pluginCommands?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
+    onOpenPluginContribution?: (pluginId: string, contributionId: string) => void;
     openFileMode?: boolean;
+    /** Open straight into renaming this session. */
+    renameSessionId?: string | null;
   }
 
-  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onCreatePr, onSplitVertical, onSplitHorizontal, onCloseSplit, openFileMode = false }: Props = $props();
+  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onHideProject, onUnhideProject, onDeleteProject, onRestoreProject, onSelectTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onSplitVertical, onSplitHorizontal, onCloseSplit, pluginCommands = [], onOpenPluginContribution, openFileMode = false, renameSessionId = null }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const sessions = $derived(orchestrator.getSessions());
   const activeSessionId = $derived(orchestrator.getActiveSessionId());
   const projects = $derived(projectStore.getProjects());
+  /** A chat session has no terminal to reset. */
+  const activeHasTerminal = $derived.by(() => {
+    const session = sessions.find((s) => s.id === activeSessionId);
+    return !!session && !isPluginSession(session);
+  });
+
+  /** Repo path of the project owning the active session — its tasks sort first. */
+  const activeProjectPath = $derived.by(() => {
+    const session = sessions.find((s) => s.id === activeSessionId);
+    if (!session) return null;
+    return projects.find((p) => p.id === session.project_id)?.path ?? null;
+  });
+
+  /** Every project's tasks, flattened and ordered for search. */
+  const taskRows = $derived(
+    computeCommandMenuTaskRows(projects, taskStore.getTasksByProject(), activeProjectPath, !!getSettings().hide_done_tasks),
+  );
+
+  /** Only sessions no visible task row can navigate to. */
+  const menuSessions = $derived(
+    computeCommandMenuSessions(sessions, taskRows, (id) => loopStore.getLoopIdForSession(id) !== null),
+  );
+
+  /** Root search query. Tasks only render once there is something to match. */
+  let query = $state("");
 
   let archivedSessions = $state<Session[]>([]);
-  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "deleteProject" | "restoreProject" | "pickTask" | "openFile" | "autoDispatch">("none");
+  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "hideProject" | "unhideProject" | "deleteProject" | "restoreProject" | "openFile" | "autoDispatch" | "renameSession">("none");
   let archivedProjects = $state<Project[]>([]);
-  let taskItems = $state<TaskItem[]>([]);
   let fileList = $state<string[]>([]);
   let projectAutoModes = $state<Record<string, boolean>>({});
 
@@ -59,21 +92,30 @@
     subMenu = "restoreProject";
   }
 
-  async function openTaskPicker() {
-    const session = sessions.find((s) => s.id === activeSessionId);
-    const project = session ? projects.find((p) => p.id === session.project_id) : projects[0];
-    const repoPath = project?.path;
-    if (!repoPath) { close(); return; }
-    try {
-      taskItems = await tasksApi.list(repoPath);
-    } catch {
-      taskItems = [];
-    }
-    subMenu = "pickTask";
-  }
-
   function openArchiveProject() {
     subMenu = "archiveProject";
+  }
+
+  function openHideProject() {
+    subMenu = "hideProject";
+  }
+
+  function openUnhideProject() {
+    subMenu = "unhideProject";
+  }
+
+  async function updateProjectVisibility(
+    id: string,
+    action: (projectId: string) => void | Promise<void>,
+    verb: "hide" | "unhide",
+  ) {
+    try {
+      await action(id);
+      close();
+    } catch (error) {
+      console.error(`Failed to ${verb} project:`, error);
+      showSnackbar(`Failed to ${verb} project.`);
+    }
   }
 
   export async function openFilePicker() {
@@ -86,6 +128,26 @@
       fileList = [];
     }
   }
+
+  let renameTargetId = $state<string | null>(null);
+  let renameValue = $state("");
+
+  function openRename(sessionId: string) {
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) { close(); return; }
+    renameTargetId = session.id;
+    renameValue = session.name || session.branch;
+    subMenu = "renameSession";
+  }
+
+  function commitRename() {
+    const name = renameValue.trim();
+    const id = renameTargetId;
+    close();
+    if (id && name) void onRenameSession(id, name);
+  }
+
+  function selectAll(node: HTMLInputElement) { requestAnimationFrame(() => { node.focus(); node.select(); }); }
 
   function openDeleteProject() {
     subMenu = "deleteProject";
@@ -106,6 +168,8 @@
 
   function close() {
     subMenu = "none";
+    renameTargetId = null;
+    query = "";
     onOpenChange(false);
   }
 
@@ -114,8 +178,11 @@
   $effect(() => {
     const isOpen = open;
     if (isOpen && !wasOpen) {
+      query = "";
       if (openFileMode) {
         openFilePicker();
+      } else if (renameSessionId) {
+        openRename(renameSessionId);
       } else {
         subMenu = "none";
       }
@@ -142,11 +209,24 @@
   <Dialog.Portal>
     <Dialog.Overlay class="fixed inset-0 z-50" />
     <Dialog.Content
+      onCloseAutoFocus={(event) => event.preventDefault()}
       class="fixed left-1/2 top-1/2 z-50 w-[600px] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border-s bg-panel shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] overflow-hidden"
     >
       <Dialog.Title class="sr-only">Command Menu</Dialog.Title>
       <Dialog.Description class="sr-only">Search sessions, archive, or create new.</Dialog.Description>
-      {#if subMenu === "archivedSessions"}
+      {#if subMenu === "renameSession"}
+        <div class="flex flex-col">
+          <input
+            use:selectAll
+            bind:value={renameValue}
+            aria-label="Session name"
+            class="h-11 w-full border-b border-border bg-transparent px-4 text-sm outline-none placeholder:text-t3"
+            placeholder="Session name"
+            onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitRename(); } }}
+          />
+          <p class="px-4 py-2.5 text-xs text-t3">Rename session · <kbd class="font-mono">Enter</kbd> to save, <kbd class="font-mono">Esc</kbd> to cancel</p>
+        </div>
+      {:else if subMenu === "archivedSessions"}
         <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
             class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
@@ -218,6 +298,57 @@
             </Command.Viewport>
           </Command.List>
         </Command.Root>
+      {:else if subMenu === "hideProject"}
+        <Command.Root class="flex flex-col" loop disablePointerSelection>
+          <Command.Input
+            class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
+            placeholder="Hide which project from the sidebar..."
+          />
+          <Command.List class="max-h-72 overflow-y-auto p-2">
+            <Command.Viewport>
+              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No visible projects.</Command.Empty>
+              <Command.Group>
+                <Command.GroupItems>
+                  {#each projects.filter(project => !project.hidden) as project (project.id)}
+                    <Command.Item
+                      value="hide {project.name}"
+                      class="flex h-9 cursor-pointer items-center rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
+                      onSelect={() => updateProjectVisibility(project.id, onHideProject, "hide")}
+                    >
+                      {project.name}
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            </Command.Viewport>
+          </Command.List>
+        </Command.Root>
+      {:else if subMenu === "unhideProject"}
+        <Command.Root class="flex flex-col" loop disablePointerSelection>
+          <Command.Input
+            class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
+            placeholder="Unhide which project..."
+          />
+          <Command.List class="max-h-72 overflow-y-auto p-2">
+            <Command.Viewport>
+              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No hidden projects.</Command.Empty>
+              <Command.Group>
+                <Command.GroupItems>
+                  {#each projects.filter(project => project.hidden) as project (project.id)}
+                    <Command.Item
+                      value="unhide {project.name}"
+                      class="flex h-9 cursor-pointer items-center justify-between rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
+                      onSelect={() => updateProjectVisibility(project.id, onUnhideProject, "unhide")}
+                    >
+                      <span>{project.name}</span>
+                      <span class="text-xs text-accent shrink-0 ml-2">Unhide</span>
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            </Command.Viewport>
+          </Command.List>
+        </Command.Root>
       {:else if subMenu === "deleteProject"}
         <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
@@ -262,33 +393,6 @@
                     >
                       <span>{project.name}</span>
                       <span class="text-xs text-accent shrink-0 ml-2">Restore</span>
-                    </Command.Item>
-                  {/each}
-                </Command.GroupItems>
-              </Command.Group>
-            </Command.Viewport>
-          </Command.List>
-        </Command.Root>
-      {:else if subMenu === "pickTask"}
-        <Command.Root class="flex flex-col" loop disablePointerSelection>
-          <Command.Input
-            class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
-            placeholder="Search tasks..."
-          />
-          <Command.List class="max-h-72 overflow-y-auto p-2">
-            <Command.Viewport>
-              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No tasks found.</Command.Empty>
-              <Command.Group>
-                <Command.GroupItems>
-                  {#each taskItems as task (task.key)}
-                    <Command.Item
-                      value="{task.key}: {task.title}"
-                      keywords={[task.key, task.title]}
-                      class="flex h-9 cursor-pointer items-center rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
-                      onSelect={() => { onPickTask(task); close(); }}
-                    >
-                      <span class="font-medium font-mono text-accent mr-2">{task.key}</span>
-                      <span class="truncate">{task.title}</span>
                     </Command.Item>
                   {/each}
                 </Command.GroupItems>
@@ -349,10 +453,11 @@
           </Command.List>
         </Command.Root>
       {:else}
-      <Command.Root class="flex flex-col" loop disablePointerSelection>
+      <Command.Root class="flex flex-col" loop disablePointerSelection filter={(value, search, keywords) => computeCommandScore(matchableValue(value), search, keywords)}>
         <Command.Input
+          bind:value={query}
           class="h-11 w-full border-b border-border bg-transparent px-4 text-sm outline-none placeholder:text-t3"
-          placeholder="Go to a session, task, or action…"
+          placeholder="Go to a task, session, or action…"
         />
         <Command.List class="max-h-72 overflow-y-auto p-2">
           <Command.Viewport>
@@ -361,20 +466,72 @@
             </Command.Empty>
 
             <Command.Group>
-              <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Sessions</Command.GroupHeading>
+              <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Quick actions</Command.GroupHeading>
               <Command.GroupItems>
-                {#each sessions as session (session.id)}
-                  <Command.Item
-                    value="session {session.name || session.branch} {session.id}"
-                    keywords={[session.name, session.branch]}
-                    class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg {session.id === activeSessionId ? 'font-medium' : ''}"
-                    onSelect={() => { onSelectSession(session.id); close(); }}
-                  >
-                    <span class="truncate">{session.name || session.branch}</span>
-                  </Command.Item>
-                {/each}
+                <Command.Item
+                  value="create new session"
+                  keywords={["new", "create", "add"]}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
+                  onSelect={() => { onNewSession(); close(); }}
+                >
+                  New session
+                </Command.Item>
               </Command.GroupItems>
             </Command.Group>
+
+            {#if query.trim().length > 0}
+              <Command.Separator class="my-1 h-px bg-border" />
+              <Command.Group>
+                <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Tasks</Command.GroupHeading>
+                <Command.GroupItems>
+                  {#each taskRows as row (`${row.repoPath}:${row.task.key}`)}
+                    <Command.Item
+                      value={taskRowValue(row)}
+                      keywords={[row.task.key, row.task.title]}
+                      class="flex h-9 cursor-pointer items-center rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
+                      onSelect={() => { onSelectTask(row.task, row.repoPath); close(); }}
+                    >
+                      <span class="font-medium font-mono text-accent mr-2">{row.task.key}</span>
+                      <span class="truncate">{row.task.title}</span>
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            {/if}
+
+            {#if menuSessions.length > 0}
+              <Command.Separator class="my-1 h-px bg-border" />
+              <Command.Group>
+                <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Sessions</Command.GroupHeading>
+                <Command.GroupItems>
+                  {#each menuSessions as session (session.id)}
+                    <Command.Item
+                      value="session {session.name || session.branch} {session.id}"
+                      keywords={[session.name, session.branch]}
+                      class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg {session.id === activeSessionId ? 'font-medium' : ''}"
+                      onSelect={() => { onSelectSession(session.id); close(); }}
+                    >
+                      <span class="truncate">{session.name || session.branch}</span>
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            {/if}
+
+            {#if pluginCommands.length > 0}
+              <Command.Separator class="my-1 h-px bg-border" />
+              <Command.Group>
+                <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Plugin panes</Command.GroupHeading>
+                <Command.GroupItems>
+                  {#each pluginCommands as item (`${item.plugin.id}:${item.contribution.id}`)}
+                    <Command.Item value={`plugin ${item.plugin.name} ${item.contribution.label}`} keywords={[item.plugin.name, item.contribution.label, "plugin"]} class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg" onSelect={() => { onOpenPluginContribution?.(item.plugin.id, item.contribution.id); close(); }}>
+                      <span class="truncate">{item.plugin.name} · {item.contribution.label}</span>
+                      {#if item.contribution.shortcut}<kbd class="ml-auto text-[10px] font-mono text-t3">{item.contribution.shortcut.replace("Mod", MOD_LABEL)}</kbd>{/if}
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            {/if}
 
             <Command.Separator class="my-1 h-px bg-border" />
 
@@ -395,7 +552,7 @@
                   keywords={["rename", "name", "edit"]}
                   disabled={!activeSessionId}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                  onSelect={() => { onRenameSession(); close(); }}
+                  onSelect={() => { if (activeSessionId) openRename(activeSessionId); }}
                 >
                   Rename session
                 </Command.Item>
@@ -418,22 +575,6 @@
                   Delete current session
                 </Command.Item>
                 <Command.Item
-                  value="create new session"
-                  keywords={["new", "create", "add"]}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
-                  onSelect={() => { onNewSession(); close(); }}
-                >
-                  New session
-                </Command.Item>
-                <Command.Item
-                  value="pick task"
-                  keywords={["task", "kanban", "issue", "ticket", "pick"]}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
-                  onSelect={openTaskPicker}
-                >
-                  Pick task…
-                </Command.Item>
-                <Command.Item
                   value="create task"
                   keywords={["task", "new", "add", "create", "ticket"]}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
@@ -445,7 +586,7 @@
                   value={getSettings().hide_done_tasks ? "show done tasks" : "hide done tasks"}
                   keywords={["done", "tasks", "hide", "show", "toggle", "completed"]}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
-                  onSelect={() => { updateSettings({ hide_done_tasks: !getSettings().hide_done_tasks }); close(); }}
+                  onSelect={() => { updateSettings({ hide_done_tasks: !getSettings().hide_done_tasks }).catch((error) => showSnackbar(`Failed to save settings: ${error}`, "error")); close(); }}
                 >
                   {getSettings().hide_done_tasks ? "Show done tasks" : "Hide done tasks"}
                 </Command.Item>
@@ -453,14 +594,14 @@
                   value={getSettings().hide_empty_projects ? "show empty projects" : "hide empty projects"}
                   keywords={["empty", "projects", "hide", "show", "toggle", "inactive"]}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
-                  onSelect={() => { updateSettings({ hide_empty_projects: !getSettings().hide_empty_projects }); close(); }}
+                  onSelect={() => { updateSettings({ hide_empty_projects: !getSettings().hide_empty_projects }).catch((error) => showSnackbar(`Failed to save settings: ${error}`, "error")); close(); }}
                 >
                   {getSettings().hide_empty_projects ? "Show empty projects" : "Hide empty projects"}
                 </Command.Item>
                 <Command.Item
                   value="reset terminal"
                   keywords={["reset", "clear", "redraw", "refresh", "fix"]}
-                  disabled={!activeSessionId}
+                  disabled={!activeHasTerminal}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={() => { onResetTerminal(); close(); }}
                 >
@@ -521,15 +662,6 @@
                   <kbd class="ml-auto text-[10px] font-mono text-t3">{MOD_LABEL}⇧W</kbd>
                 </Command.Item>
                 {/if}
-                <Command.Item
-                  value="pull request"
-                  keywords={["pr", "pull request", "github", "link", "review", "create"]}
-                  disabled={!activeSessionId}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                  onSelect={async () => { const s = sessions.find(x => x.id === activeSessionId); if (s?.pr_url) { openUrl(s.pr_url); close(); } else if (onCreatePr) { close(); onCreatePr(); } }}
-                >
-                  {sessions.find(x => x.id === activeSessionId)?.pr_url ? "View PR" : "Create PR"}
-                </Command.Item>
                 {#if onOpenLogViewer}
                 <Command.Item
                   value="session log viewer"
@@ -549,8 +681,26 @@
                   Archived sessions
                 </Command.Item>
                 <Command.Item
+                  value="hide project"
+                  keywords={["hide", "sidebar", "project"]}
+                  disabled={!projects.some(project => !project.hidden)}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={openHideProject}
+                >
+                  Hide project…
+                </Command.Item>
+                <Command.Item
+                  value="unhide project"
+                  keywords={["unhide", "show", "sidebar", "project"]}
+                  disabled={!projects.some(project => project.hidden)}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={openUnhideProject}
+                >
+                  Unhide project…
+                </Command.Item>
+                <Command.Item
                   value="archive project"
-                  keywords={["archive", "hide", "project"]}
+                  keywords={["archive", "project"]}
                   disabled={projects.length === 0}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={openArchiveProject}

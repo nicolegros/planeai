@@ -1,18 +1,24 @@
 <script lang="ts">
-  import { getActiveZone } from "../lib/focus.svelte";
-  import { getDiffTabActive } from "../lib/tab-layout.svelte";
-  import { getActiveSessionId } from "../lib/session-orchestrator.svelte";
-  import { MOD_LABEL } from "../lib/keyboard";
+  import { getActiveZone, getExplorerReturnZone } from "../lib/focus.svelte";
+  import { taskWorkspaceLayout } from "../lib/task-workspace-layout.svelte";
+  import { MOD_ENTER_HINT, MOD_LABEL } from "../lib/keyboard";
 
   const TERMINAL_HINTS = [
     { k: `${MOD_LABEL}K`, l: "Command" },
     { k: `${MOD_LABEL}N`, l: "New" },
     { k: `${MOD_LABEL}B`, l: "Sidebar" },
+    { k: `${MOD_LABEL}E`, l: "Files" },
     { k: "⌃⇥", l: "Switch" },
     { k: `${MOD_LABEL}1–9`, l: "Jump" },
     { k: `${MOD_LABEL}\\`, l: "Diff" },
     { k: `${MOD_LABEL}⇧P`, l: "PR" },
   ];
+
+  let explorerHints = $derived(TERMINAL_HINTS.map((hint) =>
+    hint.k === `${MOD_LABEL}E`
+      ? { ...hint, l: getExplorerReturnZone() === "editor" ? "Editor" : "Terminal" }
+      : hint,
+  ));
 
   const SIDEBAR_HINTS = [
     { k: "↑↓", l: "Navigate" },
@@ -37,18 +43,36 @@
     { k: "Esc", l: "Back" },
   ];
 
-  let isDiffActive = $derived((() => {
-    const sid = getActiveSessionId();
-    return sid ? (getDiffTabActive()[sid] ?? false) : false;
-  })());
+  const EDITOR_HINTS = [
+    { k: `${MOD_LABEL}⇧C`, l: "Comment" },
+    { k: MOD_ENTER_HINT, l: "Send feedback" },
+  ];
 
-  let hints = $derived(isDiffActive ? DIFF_HINTS : getActiveZone() === "sidebar" ? SIDEBAR_HINTS : TERMINAL_HINTS);
+  let isDiffActive = $derived(taskWorkspaceLayout.focusedTab()?.type === "diff");
+
+  let activeZone = $derived(getActiveZone());
+  let hints = $derived(activeZone === "explorer"
+    ? explorerHints
+    : activeZone === "editor"
+      ? EDITOR_HINTS
+      : isDiffActive
+        ? DIFF_HINTS
+        : activeZone === "sidebar"
+          ? SIDEBAR_HINTS
+          : TERMINAL_HINTS);
 </script>
 
+<!-- Hints that do not fit wrap onto a hidden second line, so none is ever cut in
+     half; the way to every shortcut stays pinned at the end. -->
 <div class="flex items-center gap-[18px] h-[34px] px-4 border-t border-border bg-chrome shrink-0">
-  {#each hints as hint (hint.k)}
-    <span class="flex items-center gap-[7px] text-[11px] text-t3">
-      <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">{hint.k}</span>{hint.l}
-    </span>
-  {/each}
+  <div class="flex flex-wrap items-center gap-x-[18px] flex-1 min-w-0 h-full overflow-hidden" data-helper-hints>
+    {#each hints as hint (hint.k)}
+      <span class="flex items-center gap-[7px] h-full text-[11px] text-t3 whitespace-nowrap">
+        <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">{hint.k}</span>{hint.l}
+      </span>
+    {/each}
+  </div>
+  <span class="flex items-center gap-[7px] text-[11px] text-t3 whitespace-nowrap shrink-0" data-helper-all-shortcuts>
+    <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">{MOD_LABEL}/</span>All shortcuts
+  </span>
 </div>

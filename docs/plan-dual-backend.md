@@ -101,7 +101,7 @@
 
 ### 3.4 Preferences — session backend dropdown
 
-- Add to `PreferencesPage.svelte`:
+- Add to `PreferencesPage.svelte` (since replaced by `src/components/settings/SessionsPage.svelte`):
   - Dropdown: Auto / tmux / Direct
   - Map to config: Auto = remove field, tmux/direct = set field
   - Inline warning if "tmux" selected but `tmux_available()` returns false

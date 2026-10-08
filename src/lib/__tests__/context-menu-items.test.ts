@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import type { Session, TaskItem } from "../types";
+import { vi } from "vitest";
+import { projectContextMenuItems } from "../project-context-menu";
+import type { Project, Session, TaskItem } from "../types";
 
 /**
  * Tests that verify context menu item construction logic matches the
@@ -21,11 +23,9 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     worktree_path: null,
     provider: null,
     backend: "direct",
-    tab_count: 1,
     base_branch: null,
     task_key: null,
-    pr_url: null,
-    pr_state: null,
+    task_project_id: null,
     ...overrides,
   };
 }
@@ -83,6 +83,10 @@ function buildActiveSessionMenu(_session: Session): MenuItem[] {
   ];
 }
 
+function makeProject(overrides: Partial<Project> = {}): Project {
+  return { id: "p1", name: "Project", path: "/project", hidden: false, ...overrides };
+}
+
 // Replicate the task context menu logic from UnifiedSidebar
 function buildTaskMenu(task: TaskItem, linkedSession: Session | null): MenuItem[] {
   const statusChildren: MenuItem[] = STATUS_OPTIONS.filter((s) => s.value !== task.status).map(
@@ -98,7 +102,6 @@ function buildTaskMenu(task: TaskItem, linkedSession: Session | null): MenuItem[
           ...(linkedSession.status === "exited"
             ? [{ label: "Restart session", onSelect: () => {} } as MenuItem]
             : []),
-          { label: "Rename session", onSelect: () => {} } as MenuItem,
           { label: "Archive session", onSelect: () => {} } as MenuItem,
           { label: "Delete session", danger: true, onSelect: () => {} } as MenuItem,
         ]
@@ -107,6 +110,36 @@ function buildTaskMenu(task: TaskItem, linkedSession: Session | null): MenuItem[
 }
 
 describe("context menu item construction", () => {
+  describe("project menu", () => {
+    it("shows Edit project first and invokes its production callback", () => {
+      const project = makeProject();
+      const onEdit = vi.fn();
+      const items = projectContextMenuItems(project, false, {
+        onEdit,
+        onToggleAutoDispatch: () => {},
+        onHide: () => {},
+        onArchive: () => {},
+        onDelete: () => {},
+      });
+
+      expect(items[0].label).toBe("Edit project");
+      items[0].onSelect();
+      expect(onEdit).toHaveBeenCalledWith(project);
+    });
+
+    it("keeps Delete project as a dangerous action", () => {
+      const items = projectContextMenuItems(makeProject(), false, {
+        onEdit: () => {},
+        onToggleAutoDispatch: () => {},
+        onHide: () => {},
+        onArchive: () => {},
+        onDelete: () => {},
+      });
+      const deleteItem = items.find((item) => item.label === "Delete project");
+      expect(deleteItem?.danger).toBe(true);
+    });
+  });
+
   describe("exited session menu", () => {
     it("includes Restart, Rename, Archive, Delete", () => {
       const session = makeSession({ status: "exited" });
@@ -238,7 +271,6 @@ describe("context menu item construction", () => {
         "Review diff",
         "Edit task",
         "Change status",
-        "Rename session",
         "Archive session",
         "Delete session",
       ]);
@@ -254,7 +286,6 @@ describe("context menu item construction", () => {
         "Edit task",
         "Change status",
         "Restart session",
-        "Rename session",
         "Archive session",
         "Delete session",
       ]);

@@ -10,6 +10,7 @@ pub enum SessionTarget {
     Local,
     Daemon,
     Tmux,
+    Rmux,
 }
 
 // ─── Shared config types (UI-neutral) ────────────────────────────────────────
@@ -43,25 +44,65 @@ fn default_provider() -> String {
     "kiro".to_string()
 }
 
+/// A provider PlaneAI configures out of the box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltinProvider {
+    pub key: &'static str,
+    pub command: &'static str,
+    pub yolo_flag: &'static str,
+    pub resume_command: &'static str,
+    /// Starts an interactive session on the prompt. `--` ends option parsing, so a prompt
+    /// starting with `-` stays a prompt.
+    pub prompt_command: &'static str,
+}
+
+pub const BUILTIN_PROVIDERS: [BuiltinProvider; 4] = [
+    BuiltinProvider {
+        key: "kiro",
+        command: "kiro-cli chat",
+        yolo_flag: "--trust-all-tools",
+        resume_command: "kiro-cli chat --resume",
+        prompt_command: "-- {prompt}",
+    },
+    BuiltinProvider {
+        key: "claude",
+        command: "claude",
+        yolo_flag: "--dangerously-skip-permissions",
+        resume_command: "claude --resume",
+        prompt_command: "-- {prompt}",
+    },
+    BuiltinProvider {
+        key: "copilot",
+        command: "copilot",
+        yolo_flag: "--allow-all-tools",
+        resume_command: "copilot --continue",
+        // `-i` reads a prompt starting with `-` as a flag; the `=` form never does.
+        prompt_command: "--interactive={prompt}",
+    },
+    BuiltinProvider {
+        key: "codex",
+        command: "codex",
+        yolo_flag: "--dangerously-bypass-approvals-and-sandbox",
+        resume_command: "codex resume --last",
+        prompt_command: "-- {prompt}",
+    },
+];
+
 impl Default for LaunchConfig {
     fn default() -> Self {
-        let mut providers = HashMap::new();
-        providers.insert(
-            "kiro".to_string(),
-            ProviderConfig {
-                command: "kiro-cli chat".to_string(),
-                yolo_flag: Some("--trust-all-tools".to_string()),
-                prompt_command: Some("{prompt}".to_string()),
-            },
-        );
-        providers.insert(
-            "claude".to_string(),
-            ProviderConfig {
-                command: "claude".to_string(),
-                yolo_flag: Some("--dangerously-skip-permissions".to_string()),
-                prompt_command: Some("-p {prompt}".to_string()),
-            },
-        );
+        let providers = BUILTIN_PROVIDERS
+            .iter()
+            .map(|builtin| {
+                (
+                    builtin.key.to_string(),
+                    ProviderConfig {
+                        command: builtin.command.to_string(),
+                        yolo_flag: Some(builtin.yolo_flag.to_string()),
+                        prompt_command: Some(builtin.prompt_command.to_string()),
+                    },
+                )
+            })
+            .collect();
         Self {
             providers,
             default_provider: "kiro".to_string(),
@@ -180,6 +221,23 @@ pub struct ProviderLaunchCommand {
     pub auto_approve_was_applied: bool,
 }
 
+/// Characters a task prompt may have: it travels as one command-line argument, and the
+/// system bounds a command line (macOS `ARG_MAX` is 1 MiB) with the environment included.
+pub const MAX_TASK_PROMPT_CHARS: usize = 100_000;
+
+/// Refuse a task prompt no agent command line can carry, before anything is created for it.
+pub fn check_task_prompt(prompt: &str) -> Result<(), String> {
+    if prompt.contains('\0') {
+        return Err("The task prompt contains a NUL character.".to_string());
+    }
+    if prompt.chars().count() > MAX_TASK_PROMPT_CHARS {
+        return Err(format!(
+            "The task prompt is longer than {MAX_TASK_PROMPT_CHARS} characters."
+        ));
+    }
+    Ok(())
+}
+
 /// Build the provider launch command from provider config + launch parameters.
 ///
 /// This is Layer A (provider/task command assembly), separate from Layer B
@@ -286,10 +344,16 @@ pub fn resolve_from_config(
     let mut seen = std::collections::HashSet::new();
     extra_path_dirs.retain(|d| seen.insert(d.clone()));
 
-    // Session target: CLI > config > default (daemon)
+    // Session target: CLI > config > default (daemon).
+    //
+    // Every known backend is named explicitly. Falling through to `Daemon` for a
+    // configured-but-unlisted backend is how `rmux` was silently launched on the
+    // daemon: the string is matched here, but `planeai-core` cannot see
+    // `planeai_rmux::BACKEND`, so a new backend has to be added in both places.
     let config_target = match config.session_backend.as_deref() {
         Some("tmux") => SessionTarget::Tmux,
         Some("local") => SessionTarget::Local,
+        Some("rmux") => SessionTarget::Rmux,
         _ => SessionTarget::Daemon,
     };
     let session_target = overrides.session_target.clone().unwrap_or(config_target);
@@ -419,6 +483,65 @@ mod tests {
             rows: 24,
             durable_logs: false,
         }
+    }
+
+    /// A config that only names a backend; provider defaults supply the command.
+    fn config_for_backend(backend: Option<&str>) -> LaunchConfig {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "kiro".to_string(),
+            ProviderConfig {
+                command: "kiro-cli chat".to_string(),
+                yolo_flag: None,
+                prompt_command: None,
+            },
+        );
+        LaunchConfig {
+            providers,
+            default_provider: "kiro".to_string(),
+            session_backend: backend.map(str::to_string),
+            session_log_dir: None,
+            extra_path_dirs: Vec::new(),
+        }
+    }
+
+    fn resolved_target(backend: Option<&str>) -> SessionTarget {
+        let overrides = SessionLaunchOverrides {
+            cwd: Some(env::temp_dir()),
+            ..Default::default()
+        };
+        resolve_from_config(&config_for_backend(backend), &overrides)
+            .expect("resolution should succeed")
+            .request
+            .session_target
+    }
+
+    #[test]
+    fn every_configured_backend_resolves_to_its_own_target() {
+        // `rmux` previously fell through to `Daemon`, which launches an agent on
+        // the wrong backend without reporting anything. Each name must map to
+        // itself, so adding a backend to the config without adding it here fails.
+        assert_eq!(resolved_target(Some("tmux")), SessionTarget::Tmux);
+        assert_eq!(resolved_target(Some("local")), SessionTarget::Local);
+        assert_eq!(resolved_target(Some("rmux")), SessionTarget::Rmux);
+        assert_eq!(resolved_target(Some("daemon")), SessionTarget::Daemon);
+    }
+
+    #[test]
+    fn an_absent_backend_still_defaults_to_the_daemon() {
+        assert_eq!(resolved_target(None), SessionTarget::Daemon);
+    }
+
+    #[test]
+    fn an_explicit_override_outranks_the_configured_backend() {
+        let overrides = SessionLaunchOverrides {
+            cwd: Some(env::temp_dir()),
+            session_target: Some(SessionTarget::Rmux),
+            ..Default::default()
+        };
+        let resolved = resolve_from_config(&config_for_backend(Some("tmux")), &overrides)
+            .expect("resolution should succeed");
+        assert_eq!(resolved.request.session_target, SessionTarget::Rmux);
     }
 
     #[test]

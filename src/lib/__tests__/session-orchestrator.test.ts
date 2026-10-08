@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 vi.mock("@tauri-apps/api/window", () => ({
@@ -21,9 +21,12 @@ vi.mock("../settings.svelte", () => ({
 vi.mock("../tab-switcher.svelte", () => ({
   getCycleState: vi.fn(() => ({ isCycling: false, cycleList: [], index: 0, isVisible: false })),
 }));
+vi.mock("../terminal-views", () => ({
+  disposeSessionTerminalViews: vi.fn(),
+  disposeTerminalView: vi.fn(),
+}));
 vi.mock("../mru.svelte", () => ({
-  activateSession: vi.fn(),
-  removeSession: vi.fn(),
+  removeMru: vi.fn(),
   touchMru: vi.fn(),
   getMruList: vi.fn(() => []),
   flushMru: vi.fn(() => Promise.resolve()),
@@ -35,25 +38,35 @@ vi.mock("../api", () => ({
     list: vi.fn(() => Promise.resolve([])),
     destroy: vi.fn(() => Promise.resolve()),
     archive: vi.fn(() => Promise.resolve()),
+    park: vi.fn(() => Promise.resolve()),
     restart: vi.fn(() => Promise.resolve()),
     markExited: vi.fn(),
     acknowledge: vi.fn(() => Promise.resolve()),
     saveMruOrder: vi.fn(() => Promise.resolve()),
-  },
-  pr: {
-    getCiChecks: vi.fn(() => Promise.resolve([])),
-    getPrComments: vi.fn(() => Promise.resolve(0)),
+    getLayout: vi.fn(() => Promise.resolve(null)),
+    saveLayout: vi.fn(() => Promise.resolve()),
   },
   pty: { closeTab: vi.fn(() => Promise.resolve()) },
   symphony: { getStatus: vi.fn(() => Promise.resolve("null")) },
-  tasks: { fireNotifyHook: vi.fn(() => Promise.resolve()) },
+  tasks: {
+    fireNotifyHook: vi.fn(() => Promise.resolve()),
+    fireResumeHook: vi.fn(() => Promise.resolve()),
+  },
   git: { getChangedFiles: vi.fn(() => Promise.resolve([])) },
 }));
 
 import { sessions as sessionsApi, symphony } from "../api";
+import { providerHandoff, taskWorkspaceLayout } from "../task-workspace-layout.svelte";
 import { getSettings } from "../settings.svelte";
 import type { Session } from "../types";
 import {
+  addEditorFeedback,
+  getEditorFeedbackCount,
+  _resetForTests as resetEditorFeedback,
+} from "../editor-feedback.svelte";
+import {
+  countSessionsLostOnQuit,
+  runningTurns,
   getSessions,
   getActiveSessionId,
   loadSessions,
@@ -61,20 +74,14 @@ import {
   createSession,
   deleteSession,
   archiveSession,
+  parkSession,
+  removeProjectSessions,
   restartSession,
-  getUnifiedTabs,
-  getUnifiedActiveIndex,
-  selectUnifiedTab,
-  handleNextTab,
-  handlePrevTab,
-  toggleDiff,
-  toggleEditor,
-  getDiffTabOpen,
-  getDiffTabActive,
-  getEditorTabOpen,
-  getEditorTabActive,
+  jumpToSession,
+  isSelectionExplicit,
   getAgentStates,
   clearAgentState,
+  recordUserInput,
   getReviewReady,
   clearReviewReady,
   startEventListeners,
@@ -97,11 +104,9 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     worktree_path: null,
     provider: "kiro",
     backend: "tmux",
-    tab_count: 1,
     base_branch: null,
     task_key: null,
-    pr_url: null,
-    pr_state: null,
+    task_project_id: null,
     ...overrides,
   };
 }
@@ -110,13 +115,31 @@ describe("session-orchestrator", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetForTests();
+    resetEditorFeedback();
     api.list.mockResolvedValue([]);
   });
+
+  const queuedFeedback = {
+    filePath: "src/example.ts",
+    startLine: 1,
+    endLine: 1,
+    language: "typescript",
+    selectedText: "const answer = 42;",
+    contextBefore: "",
+    contextAfter: "",
+    isUnsaved: false,
+    text: "Please revise this.",
+  };
+
+  function queueEditorFeedback(sessionId: string): void {
+    addEditorFeedback(sessionId, queuedFeedback);
+  }
 
   describe("loadSessions", () => {
     it("populates sessions from API", async () => {
       const s1 = makeSession({ id: "s1" }),
         s2 = makeSession({ id: "s2", name: "two" });
+
       api.list.mockResolvedValue([s1, s2]);
       await loadSessions();
       expect(getSessions()).toEqual([s1, s2]);
@@ -149,6 +172,24 @@ describe("session-orchestrator", () => {
       expect(getSessions()).toContainEqual(s);
       expect(getActiveSessionId()).toBe("new1");
     });
+
+    it("does not duplicate a session a concurrent reload already fetched", async () => {
+      // A `sessions-changed` reload can land between launch and createSession.
+      // A duplicated session yields duplicate tab keys, and a duplicate key in a
+      // Svelte keyed `{#each}` aborts the update flush — freezing the whole UI,
+      // which looks like session selection doing nothing.
+      const existing = makeSession({ id: "dup1", name: "from reload" });
+      api.list.mockResolvedValue([existing]);
+      await loadSessions();
+
+      createSession(makeSession({ id: "dup1", name: "from launch" }));
+
+      const matching = getSessions().filter((session) => session.id === "dup1");
+      expect(matching).toHaveLength(1);
+      // The newer object wins, so the caller's data is not discarded.
+      expect(matching[0].name).toBe("from launch");
+      expect(getActiveSessionId()).toBe("dup1");
+    });
   });
 
   describe("deleteSession", () => {
@@ -160,6 +201,17 @@ describe("session-orchestrator", () => {
       await deleteSession(s1);
       expect(getSessions()).not.toContainEqual(s1);
       expect(api.destroy).toHaveBeenCalledWith("s1");
+    });
+
+    it("clears queued editor feedback", async () => {
+      const s1 = makeSession({ id: "s1" });
+      api.list.mockResolvedValue([s1]);
+      await loadSessions();
+      queueEditorFeedback(s1.id);
+
+      await deleteSession(s1);
+
+      expect(getEditorFeedbackCount(s1.id)).toBe(0);
     });
 
     it("selects next session when active is deleted", async () => {
@@ -174,6 +226,9 @@ describe("session-orchestrator", () => {
   });
 
   describe("archiveSession", () => {
+    // Spies on the shared handoff singleton must not outlive their test, even a failing one.
+    afterEach(() => vi.restoreAllMocks());
+
     it("removes session from list", async () => {
       api.list.mockResolvedValue([makeSession({ id: "s1" })]);
       await loadSessions();
@@ -181,9 +236,55 @@ describe("session-orchestrator", () => {
       expect(getSessions()).toHaveLength(0);
       expect(api.archive).toHaveBeenCalledWith("s1");
     });
+
+    it("clears queued editor feedback", async () => {
+      const s1 = makeSession({ id: "s1" });
+      api.list.mockResolvedValue([s1]);
+      await loadSessions();
+      queueEditorFeedback(s1.id);
+
+      await archiveSession(s1);
+
+      expect(getEditorFeedbackCount(s1.id)).toBe(0);
+    });
+
+    it("closes a terminal still continuing the session", async () => {
+      const release = vi.spyOn(providerHandoff, "release").mockResolvedValue();
+      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
+      await loadSessions();
+      await archiveSession(makeSession({ id: "s1" }));
+      expect(release).toHaveBeenCalledWith("s1");
+    });
   });
 
   describe("restartSession", () => {
+    describe("parkSession", () => {
+      it("uses the non-completing endpoint and keeps a same-task agent selected", async () => {
+        const parked = makeSession({ id: "s1", task_key: "PLA-315" });
+        const sibling = makeSession({ id: "s2", task_key: "PLA-315" });
+        api.list.mockResolvedValue([parked, sibling]);
+        await loadSessions();
+        selectSession(parked.id);
+
+        await parkSession(parked);
+
+        expect(api.park).toHaveBeenCalledWith(parked.id);
+        expect(api.archive).not.toHaveBeenCalled();
+        expect(getSessions().map((session) => session.id)).toEqual([sibling.id]);
+        expect(getActiveSessionId()).toBe(sibling.id);
+      });
+
+      it("allows the final task-linked agent to park without selecting another session", async () => {
+        const parked = makeSession({ id: "s1", task_key: "PLA-315" });
+        api.list.mockResolvedValue([parked]);
+        await loadSessions();
+
+        await parkSession(parked);
+
+        expect(getSessions()).toEqual([]);
+        expect(getActiveSessionId()).toBeNull();
+      });
+    });
     it("replaces session with updated version", async () => {
       api.list.mockResolvedValue([makeSession({ id: "s1", status: "exited" })]);
       await loadSessions();
@@ -193,99 +294,72 @@ describe("session-orchestrator", () => {
     });
   });
 
-  describe("selectSession exited daemon fix (PLA-169)", () => {
-    it("waits for restart before activating pool for exited sessions", async () => {
-      const { activateSession: poolActivate } = await import("../mru.svelte");
-      const poolMock = vi.mocked(poolActivate);
+  describe("removeProjectSessions", () => {
+    it("removes every project session", async () => {
+      api.list.mockResolvedValue([
+        makeSession({ id: "p1-a", project_id: "p1" }),
+        makeSession({ id: "p1-b", project_id: "p1" }),
+        makeSession({ id: "p2-a", project_id: "p2" }),
+      ]);
+      await loadSessions();
 
+      expect(removeProjectSessions("p1")).toEqual(["p1-a", "p1-b"]);
+      expect(getSessions().map((session) => session.id)).toEqual(["p2-a"]);
+    });
+
+    it("clears queued feedback for every removed project session", async () => {
+      api.list.mockResolvedValue([
+        makeSession({ id: "p1-a", project_id: "p1" }),
+        makeSession({ id: "p1-b", project_id: "p1" }),
+        makeSession({ id: "p2-a", project_id: "p2" }),
+      ]);
+      await loadSessions();
+      queueEditorFeedback("p1-a");
+      queueEditorFeedback("p1-b");
+      queueEditorFeedback("p2-a");
+
+      removeProjectSessions("p1");
+
+      expect(getEditorFeedbackCount("p1-a")).toBe(0);
+      expect(getEditorFeedbackCount("p1-b")).toBe(0);
+      expect(getEditorFeedbackCount("p2-a")).toBe(1);
+    });
+  });
+
+  describe("terminal views", () => {
+    it("disposes the views of sessions that disappear on reload", async () => {
+      const { disposeSessionTerminalViews } = await import("../terminal-views");
+      const dispose = vi.mocked(disposeSessionTerminalViews);
+      api.list.mockResolvedValue([makeSession({ id: "s1" }), makeSession({ id: "s2" })]);
+      await loadSessions();
+      dispose.mockClear();
+
+      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
+      await loadSessions();
+
+      expect(dispose.mock.calls).toEqual([["s2"]]);
+    });
+  });
+
+  describe("selectSession exited daemon fix (PLA-169)", () => {
+    // Terminal views never connect while exited, so the session must stay
+    // exited until the restart has actually completed.
+    it("keeps an exited session exited until restart resolves", async () => {
       api.list.mockResolvedValue([
         makeSession({ id: "s1", status: "active" }),
         makeSession({ id: "s2", status: "exited", backend: "daemon" }),
       ]);
-      api.restart.mockResolvedValue(makeSession({ id: "s2", status: "active", backend: "daemon" }));
+      let finishRestart!: (session: Session) => void;
+      api.restart.mockReturnValue(new Promise((resolve) => (finishRestart = resolve)));
       await loadSessions();
 
-      poolMock.mockClear();
       selectSession("s2");
+      expect(getSessions().find((s) => s.id === "s2")?.status).toBe("exited");
 
-      // Pool should NOT be activated synchronously for exited sessions
-      expect(poolMock).not.toHaveBeenCalled();
-
-      // After restart resolves, pool is activated
-      await vi.waitFor(() => expect(poolMock).toHaveBeenCalledWith("s2"));
-    });
-
-    it("activates pool immediately for active sessions", async () => {
-      const { activateSession: poolActivate } = await import("../mru.svelte");
-      const poolMock = vi.mocked(poolActivate);
-
-      api.list.mockResolvedValue([makeSession({ id: "s1", status: "active" })]);
-      await loadSessions();
-
-      poolMock.mockClear();
-      selectSession("s1");
-
-      // Active sessions activate pool immediately
-      expect(poolMock).toHaveBeenCalledWith("s1");
-    });
-  });
-
-  describe("unified tab cycling", () => {
-    it("getUnifiedTabs returns shell tabs", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1", tab_count: 2 })]);
-      await loadSessions();
-      expect(getUnifiedTabs().length).toBe(2);
-    });
-
-    it("selectUnifiedTab changes active", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1", tab_count: 3 })]);
-      await loadSessions();
-      selectUnifiedTab(2);
-      expect(getUnifiedActiveIndex()).toBe(2);
-    });
-
-    it("handleNextTab cycles forward", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1", tab_count: 3 })]);
-      await loadSessions();
-      handleNextTab();
-      expect(getUnifiedActiveIndex()).toBe(1);
-      handleNextTab();
-      expect(getUnifiedActiveIndex()).toBe(2);
-      handleNextTab();
-      expect(getUnifiedActiveIndex()).toBe(0);
-    });
-
-    it("handlePrevTab cycles backward", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1", tab_count: 3 })]);
-      await loadSessions();
-      handlePrevTab();
-      expect(getUnifiedActiveIndex()).toBe(2);
-      handlePrevTab();
-      expect(getUnifiedActiveIndex()).toBe(1);
-    });
-
-    it("toggleDiff opens and activates", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
-      await loadSessions();
-      toggleDiff();
-      expect(getDiffTabOpen()["s1"]).toBe(true);
-      expect(getDiffTabActive()["s1"]).toBe(true);
-    });
-
-    it("toggleDiff closes when active", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
-      await loadSessions();
-      toggleDiff();
-      toggleDiff();
-      expect(getDiffTabOpen()["s1"]).toBe(false);
-    });
-
-    it("toggleEditor opens and activates", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
-      await loadSessions();
-      toggleEditor();
-      expect(getEditorTabOpen()["s1"]).toBe(true);
-      expect(getEditorTabActive()["s1"]).toBe(true);
+      finishRestart(makeSession({ id: "s2", status: "active", backend: "daemon" }));
+      await vi.waitFor(() =>
+        expect(getSessions().find((s) => s.id === "s2")?.status).toBe("active"),
+      );
     });
   });
 
@@ -326,6 +400,40 @@ describe("session-orchestrator", () => {
 
       handler({ payload: { session_id: "s1", state: "Idle" } });
       expect(playTaskComplete).not.toHaveBeenCalled();
+
+      cleanup();
+    });
+
+    it("fires resume only on agent-resumed, after the session's pending notify", async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const listenMock = vi.mocked(listen);
+      listenMock.mockClear();
+      const { tasks } = await import("../api");
+      let finishNotify!: () => void;
+      vi.mocked(tasks.fireNotifyHook)
+        .mockReset()
+        .mockReturnValue(new Promise<void>((resolve) => (finishNotify = resolve)) as never);
+      vi.mocked(tasks.fireResumeHook)
+        .mockReset()
+        .mockResolvedValue(undefined as never);
+
+      const cleanup = startEventListeners();
+      const handlerFor = (name: string) =>
+        listenMock.mock.calls.find((c) => c[0] === name)![1] as (event: {
+          payload: { session_id: string; state?: string };
+        }) => void;
+
+      handlerFor("agent-state-change")({ payload: { session_id: "s1", state: "Idle" } });
+      handlerFor("agent-state-change")({ payload: { session_id: "s1", state: "Busy" } });
+      await Promise.resolve();
+      expect(tasks.fireNotifyHook).toHaveBeenCalledWith("s1");
+      expect(tasks.fireResumeHook).not.toHaveBeenCalled();
+
+      handlerFor("agent-resumed")({ payload: { session_id: "s1" } });
+      await Promise.resolve();
+      expect(tasks.fireResumeHook).not.toHaveBeenCalled();
+      finishNotify();
+      await vi.waitFor(() => expect(tasks.fireResumeHook).toHaveBeenCalledWith("s1"));
 
       cleanup();
     });
@@ -395,6 +503,148 @@ describe("session-orchestrator", () => {
       cleanup();
     });
 
+    it("auto-opens the review tab in the workspace layout when the active agent finishes", async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const listenMock = vi.mocked(listen);
+      listenMock.mockClear();
+
+      vi.mocked(getSettings).mockReturnValue({
+        appearance: { mode: "system", theme: "default" },
+        terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
+        providers: {},
+        default_provider: "kiro",
+        task_management: null,
+        sound_enabled: false,
+        auto_open_review: true,
+      });
+
+      api.list.mockResolvedValue([
+        makeSession({ id: "s1", worktree_path: "/tmp/wt", base_branch: "main" }),
+      ]);
+      await loadSessions();
+      selectSession("s1");
+
+      taskWorkspaceLayout.clear();
+      await taskWorkspaceLayout.show(
+        { kind: "session", key: "session:s1", sessionId: "s1" },
+        {
+          agents: [{ sessionId: "s1", label: "Agent", icon: "bot" }],
+          selectedSessionId: "s1",
+          selectionIsExplicit: true,
+        },
+      );
+
+      const cleanup = startEventListeners();
+      const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
+      const handler = agentCall![1] as (event: {
+        payload: { session_id: string; state: string };
+      }) => void;
+
+      handler({ payload: { session_id: "s1", state: "Idle" } });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+      const leaf = taskWorkspaceLayout.focusedLeaf();
+      expect(leaf?.tabs.map((tab) => tab.ptyKey)).toEqual(["s1", "s1:diff"]);
+      expect(leaf?.activeTab).toBe("s1:diff");
+
+      cleanup();
+    });
+
+    it("leaves the review tab closed when auto-open review is unset", async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const listenMock = vi.mocked(listen);
+      listenMock.mockClear();
+
+      vi.mocked(getSettings).mockReturnValue({
+        appearance: { mode: "system", theme: "default" },
+        terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
+        providers: {},
+        default_provider: "kiro",
+        task_management: null,
+        sound_enabled: false,
+      });
+
+      api.list.mockResolvedValue([
+        makeSession({ id: "s1", worktree_path: "/tmp/wt", base_branch: "main" }),
+      ]);
+      await loadSessions();
+      selectSession("s1");
+
+      taskWorkspaceLayout.clear();
+      await taskWorkspaceLayout.show(
+        { kind: "session", key: "session:s1", sessionId: "s1" },
+        {
+          agents: [{ sessionId: "s1", label: "Agent", icon: "bot" }],
+          selectedSessionId: "s1",
+          selectionIsExplicit: true,
+        },
+      );
+
+      const cleanup = startEventListeners();
+      const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
+      const handler = agentCall![1] as (event: {
+        payload: { session_id: string; state: string };
+      }) => void;
+
+      handler({ payload: { session_id: "s1", state: "Idle" } });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+      const leaf = taskWorkspaceLayout.focusedLeaf();
+      expect(leaf?.tabs.map((tab) => tab.ptyKey)).toEqual(["s1"]);
+
+      cleanup();
+    });
+
+    it("does not close an already-open review tab when the agent finishes again", async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const listenMock = vi.mocked(listen);
+      listenMock.mockClear();
+
+      vi.mocked(getSettings).mockReturnValue({
+        appearance: { mode: "system", theme: "default" },
+        terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
+        providers: {},
+        default_provider: "kiro",
+        task_management: null,
+        sound_enabled: false,
+        auto_open_review: true,
+      });
+
+      api.list.mockResolvedValue([
+        makeSession({ id: "s1", worktree_path: "/tmp/wt", base_branch: "main" }),
+      ]);
+      await loadSessions();
+      selectSession("s1");
+
+      taskWorkspaceLayout.clear();
+      await taskWorkspaceLayout.show(
+        { kind: "session", key: "session:s1", sessionId: "s1" },
+        {
+          agents: [{ sessionId: "s1", label: "Agent", icon: "bot" }],
+          selectedSessionId: "s1",
+          selectionIsExplicit: true,
+        },
+      );
+
+      const cleanup = startEventListeners();
+      const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
+      const handler = agentCall![1] as (event: {
+        payload: { session_id: string; state: string };
+      }) => void;
+
+      handler({ payload: { session_id: "s1", state: "Idle" } });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      handler({ payload: { session_id: "s1", state: "Idle" } });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+      expect(taskWorkspaceLayout.focusedLeaf()?.tabs.map((tab) => tab.ptyKey)).toEqual([
+        "s1",
+        "s1:diff",
+      ]);
+
+      cleanup();
+    });
+
     it("startSymphonyPolling returns cleanup", () => {
       vi.mocked(getSettings).mockReturnValue({
         appearance: { mode: "system", theme: "default" },
@@ -458,5 +708,136 @@ describe("session-orchestrator", () => {
       expect(getReviewReady()["s2"]).toBeUndefined();
       expect(getReviewReady()["s1"]).toBe(true);
     });
+
+    it("recordUserInput clears review readiness before a write", async () => {
+      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
+      await loadSessions();
+      _setReviewReadyForTests("s1");
+
+      recordUserInput("s1");
+
+      expect(getReviewReady()["s1"]).toBeUndefined();
+    });
+  });
+});
+
+describe("selection explicitness", () => {
+  // Without its own reset this suite would run against state leaked from the
+  // suite above, and two of these tests would pass by id coincidence.
+  beforeEach(() => {
+    _resetForTests();
+  });
+
+  // A restored workspace layout keeps its remembered tab unless the selection was
+  // an explicit user choice, so every entry point must classify itself correctly.
+  it("marks a created session explicit", () => {
+    createSession(makeSession({ id: "s1" }));
+    expect(isSelectionExplicit("s1")).toBe(true);
+  });
+
+  it("marks a jump-to-index explicit", () => {
+    createSession(makeSession({ id: "s1" }));
+    createSession(makeSession({ id: "s2" }));
+    jumpToSession(0);
+    expect(isSelectionExplicit("s1")).toBe(true);
+  });
+
+  it("treats a plain selection as an arbitrary entry point", () => {
+    createSession(makeSession({ id: "s1" }));
+    selectSession("s1");
+    expect(isSelectionExplicit("s1")).toBe(false);
+  });
+
+  it("clears the mark when the selection moves to another session", () => {
+    createSession(makeSession({ id: "s1" }));
+    createSession(makeSession({ id: "s2" }));
+    selectSession("s1");
+    expect(isSelectionExplicit("s2")).toBe(false);
+    expect(isSelectionExplicit("s1")).toBe(false);
+  });
+
+  it("does not leak an explicit mark onto a fallback selection", async () => {
+    // Deleting the explicitly chosen session falls back to sessions[0]; treating
+    // that as a choice would override the remembered tab on the next load.
+    createSession(makeSession({ id: "s1" }));
+    const second = makeSession({ id: "s2" });
+    createSession(second);
+    expect(isSelectionExplicit("s2")).toBe(true);
+
+    await deleteSession(second);
+
+    const active = getActiveSessionId();
+    expect(active).toBe("s1");
+    expect(isSelectionExplicit(active!)).toBe(false);
+  });
+});
+
+describe("prompt delivery failures", () => {
+  it("tells the user a prompt never reached a chat session", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    const listenMock = vi.mocked(listen);
+    listenMock.mockClear();
+    const { showSnackbar } = await import("../snackbar.svelte");
+    vi.mocked(showSnackbar).mockClear();
+    createSession({
+      id: "chat",
+      name: "Refactor auth",
+      status: "active",
+      backend: "plugin",
+    } as Session);
+    const cleanup = startEventListeners();
+    const handler = listenMock.mock.calls.find(
+      (c) => c[0] === "prompt-delivery-failed",
+    )![1] as (event: { payload: { session_id: string; error: string } }) => void;
+    handler({ payload: { session_id: "chat", error: "plugin claude-chat is not running" } });
+    expect(showSnackbar).toHaveBeenCalledWith(
+      "A prompt for Refactor auth was not delivered: plugin claude-chat is not running",
+    );
+    cleanup();
+  });
+});
+
+describe("countSessionsLostOnQuit", () => {
+  it("counts active local sessions and busy provider sessions only", () => {
+    const sessions = [
+      { id: "local", status: "active", backend: "local" },
+      { id: "local-exited", status: "exited", backend: "local" },
+      { id: "daemon", status: "active", backend: "daemon" },
+      { id: "chat-busy", status: "active", backend: "plugin" },
+      { id: "chat-idle", status: "active", backend: "plugin" },
+    ] as const;
+    expect(countSessionsLostOnQuit([...sessions], new Set(["chat-busy", "daemon"]))).toBe(2);
+  });
+
+  it("keeps counting a running chat turn after its session is selected, until it ends or its plugin goes away", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    const listenMock = vi.mocked(listen);
+    listenMock.mockClear();
+    const { tasks } = await import("../api");
+    vi.mocked(tasks.fireNotifyHook)
+      .mockReset()
+      .mockResolvedValue(undefined as never);
+    const cleanup = startEventListeners();
+    const handlerFor = (name: string) =>
+      listenMock.mock.calls.find((c) => c[0] === name)![1] as (event: {
+        payload: { session_id: string; state?: string };
+      }) => void;
+
+    handlerFor("agent-state-change")({ payload: { session_id: "chat", state: "Busy" } });
+    expect(runningTurns().has("chat")).toBe(true);
+    // Selecting a session acknowledges it, which must not hide a turn still running.
+    clearAgentState("chat");
+    expect(runningTurns().has("chat")).toBe(true);
+
+    // A sidecar that went away ends the turn without it having finished.
+    handlerFor("agent-released")({ payload: { session_id: "chat" } });
+    expect(runningTurns().has("chat")).toBe(false);
+    await Promise.resolve();
+    expect(tasks.fireNotifyHook).not.toHaveBeenCalled();
+
+    handlerFor("agent-state-change")({ payload: { session_id: "chat", state: "Busy" } });
+    handlerFor("agent-state-change")({ payload: { session_id: "chat", state: "Idle" } });
+    expect(runningTurns().has("chat")).toBe(false);
+    cleanup();
   });
 });

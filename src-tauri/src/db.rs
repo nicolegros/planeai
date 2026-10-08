@@ -16,7 +16,6 @@ pub struct Session {
     pub provider: Option<String>,
     pub backend: String,
     pub provider_session_id: Option<String>,
-    pub tab_count: i64,
     pub auto_approve: bool,
     pub task_key: Option<String>,
     pub base_branch: Option<String>,
@@ -24,11 +23,30 @@ pub struct Session {
     pub pr_state: Option<String>,
     pub attached_once: bool,
     pub parent_session_id: Option<String>,
+    /// Project owning `task_key` when it differs from `project_id`.
+    pub task_project_id: Option<String>,
+}
+
+impl Session {
+    /// The project whose TaskWorkspace this session belongs to.
+    pub fn task_project_id(&self) -> &str {
+        self.task_project_id.as_deref().unwrap_or(&self.project_id)
+    }
+
+    /// The rmux workspace hosting it: two agents on the same task share one.
+    pub fn rmux_workspace(&self) -> planeai_rmux::WorkspaceName {
+        planeai_rmux::WorkspaceKey::for_session(
+            self.task_project_id(),
+            self.task_key.as_deref(),
+            &self.id,
+        )
+        .name()
+    }
 }
 
 /// Column list for SELECT statements returning a Session.
 /// Keep in sync with `row_to_session`.
-pub const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, attached_once, parent_session_id";
+pub const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, auto_approve, task_key, base_branch, pr_url, pr_state, attached_once, parent_session_id, task_project_id";
 
 /// Map a row (selected with SESSION_COLUMNS) to a Session struct.
 pub fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
@@ -44,14 +62,14 @@ pub fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
         provider: row.get(8)?,
         backend: row.get(9)?,
         provider_session_id: row.get(10)?,
-        tab_count: row.get(11)?,
-        auto_approve: row.get(12)?,
-        task_key: row.get(13)?,
-        base_branch: row.get(14)?,
-        pr_url: row.get(15)?,
-        pr_state: row.get(16)?,
-        attached_once: row.get(17)?,
-        parent_session_id: row.get(18)?,
+        auto_approve: row.get(11)?,
+        task_key: row.get(12)?,
+        base_branch: row.get(13)?,
+        pr_url: row.get(14)?,
+        pr_state: row.get(15)?,
+        attached_once: row.get(16)?,
+        parent_session_id: row.get(17)?,
+        task_project_id: row.get(18)?,
     })
 }
 
@@ -90,8 +108,11 @@ pub fn update_settings(conn: &Connection, settings: &Settings) -> Result<()> {
 pub fn migrate(conn: &Connection) -> Result<()> {
     // Project/session schema lives in planeai-core (single source of truth)
     planeai_core::services::migrate_project_session_schema(conn)?;
+    normalize_project_paths(conn)?;
     planeai_core::prompt_lock::migrate(conn)?;
     planeai_core::loop_service::LoopService::migrate(conn)?;
+    crate::rmux_resources::migrate(conn)?;
+    crate::terminal_tabs::migrate(conn)?;
 
     // Settings table is Tauri-specific (not needed by Iced)
     conn.execute_batch(
@@ -123,6 +144,26 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn normalize_project_paths(conn: &Connection) -> Result<()> {
+    let mut statement = conn.prepare("SELECT id, path FROM projects")?;
+    let projects: Vec<(String, String)> = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+
+    for (id, path) in projects {
+        if let Ok(canonical) = std::fs::canonicalize(&path) {
+            let canonical = canonical.to_string_lossy();
+            if canonical != path {
+                conn.execute(
+                    "UPDATE projects SET path = ?1 WHERE id = ?2",
+                    rusqlite::params![canonical, id],
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
 // ─── Shared-service adapter ──────────────────────────────────────────────────
 
 /// Convert a shared SessionRecord to the Tauri-facing Session struct.
@@ -139,7 +180,6 @@ fn record_to_session(r: planeai_core::services::SessionRecord) -> Session {
         provider: r.provider,
         backend: r.backend,
         provider_session_id: r.provider_session_id,
-        tab_count: r.tab_count,
         auto_approve: r.auto_approve,
         task_key: r.task_key,
         base_branch: r.base_branch,
@@ -147,6 +187,7 @@ fn record_to_session(r: planeai_core::services::SessionRecord) -> Session {
         pr_state: r.pr_state,
         attached_once: r.attached_once,
         parent_session_id: r.parent_session_id,
+        task_project_id: r.task_project_id,
     }
 }
 
@@ -154,6 +195,28 @@ fn record_to_session(r: planeai_core::services::SessionRecord) -> Session {
 
 pub fn create_project(conn: &Connection, name: &str, path: &str) -> Result<Project> {
     planeai_core::services::ProjectService::create(conn, name, path)
+}
+
+pub fn update_project(conn: &Connection, id: &str, name: &str, path: &str) -> Result<Project> {
+    planeai_core::services::ProjectService::update(conn, id, name, path)
+}
+
+pub fn project_path_in_use(conn: &Connection, path: &str, excluded_id: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM projects WHERE status = 'active' AND path = ?1 AND id != ?2",
+        rusqlite::params![path, excluded_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+pub fn project_has_worktree_sessions(conn: &Connection, project_id: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sessions WHERE project_id = ?1 AND worktree_path IS NOT NULL",
+        [project_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
 }
 
 pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
@@ -172,6 +235,14 @@ pub fn restore_project(conn: &Connection, id: &str) -> Result<()> {
     planeai_core::services::ProjectService::restore(conn, id)
 }
 
+pub fn hide_project(conn: &Connection, id: &str) -> Result<()> {
+    planeai_core::services::ProjectService::hide(conn, id)
+}
+
+pub fn unhide_project(conn: &Connection, id: &str) -> Result<()> {
+    planeai_core::services::ProjectService::unhide(conn, id)
+}
+
 pub fn delete_project(conn: &Connection, id: &str) -> Result<()> {
     planeai_core::services::ProjectService::delete(conn, id)
 }
@@ -183,14 +254,6 @@ pub fn get_project(conn: &Connection, id: &str) -> Result<Option<Project>> {
 pub fn get_project_sessions(conn: &Connection, project_id: &str) -> Result<Vec<Session>> {
     let records = planeai_core::services::SessionService::list_all_for_project(conn, project_id)?;
     Ok(records.into_iter().map(record_to_session).collect())
-}
-
-pub fn get_project_prefix(conn: &Connection, project_id: &str) -> String {
-    get_project(conn, project_id)
-        .ok()
-        .flatten()
-        .map(|p| p.prefix)
-        .unwrap_or_default()
 }
 
 // Session CRUD — thin wrappers over planeai_core::services::SessionService
@@ -237,23 +300,31 @@ pub fn create_session_with_id(
     base_branch: Option<&str>,
     parent_session_id: Option<&str>,
 ) -> Result<Session> {
-    let params = planeai_core::services::CreateSessionParams {
-        id: id.to_string(),
-        project_id: project_id.to_string(),
-        name: name.to_string(),
-        tmux_name: tmux_name.map(|s| s.to_string()),
-        branch: branch.to_string(),
-        worktree_path: worktree_path.map(|s| s.to_string()),
-        provider: provider.map(|s| s.to_string()),
-        backend: backend.to_string(),
-        auto_approve,
-        task_key: task_key.map(|s| s.to_string()),
-        base_branch: base_branch.map(|s| s.to_string()),
-        parent_session_id: parent_session_id.map(|s| s.to_string()),
-        ..Default::default()
-    };
-    let record = planeai_core::services::SessionService::create(conn, &params)?;
-    Ok(record_to_session(record))
+    create_session_with_params(
+        conn,
+        &planeai_core::services::CreateSessionParams {
+            id: id.to_string(),
+            project_id: project_id.to_string(),
+            name: name.to_string(),
+            tmux_name: tmux_name.map(str::to_string),
+            branch: branch.to_string(),
+            worktree_path: worktree_path.map(str::to_string),
+            provider: provider.map(str::to_string),
+            backend: backend.to_string(),
+            auto_approve,
+            task_key: task_key.map(str::to_string),
+            base_branch: base_branch.map(str::to_string),
+            parent_session_id: parent_session_id.map(str::to_string),
+            ..Default::default()
+        },
+    )
+}
+
+pub fn create_session_with_params(
+    conn: &Connection,
+    params: &planeai_core::services::CreateSessionParams,
+) -> Result<Session> {
+    planeai_core::services::SessionService::create(conn, params).map(record_to_session)
 }
 
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
@@ -308,10 +379,6 @@ pub fn set_provider_session_id(
     planeai_core::services::SessionService::set_provider_session_id(conn, id, provider_session_id)
 }
 
-pub fn update_tab_count(conn: &Connection, id: &str, tab_count: i64) -> Result<()> {
-    planeai_core::services::SessionService::update_tab_count(conn, id, tab_count)
-}
-
 pub fn save_mru_order(conn: &Connection, session_ids: &[&str]) -> Result<()> {
     planeai_core::services::SessionService::save_mru_order(conn, session_ids)
 }
@@ -320,12 +387,45 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
     Ok(planeai_core::services::SessionService::get(conn, id)?.map(record_to_session))
 }
 
-pub fn update_pr_state(conn: &Connection, id: &str, pr_url: &str, pr_state: &str) -> Result<()> {
-    planeai_core::services::SessionService::update_pr_state(conn, id, pr_url, pr_state)
+/// A provider plugin's sessions that still have a row and are not destroyed, as
+/// `(session id, provider id, status)`.
+pub fn list_plugin_provider_sessions(
+    conn: &Connection,
+    plugin_id: &str,
+) -> Result<Vec<(String, String, String)>> {
+    let prefix = format!("{plugin_id}:");
+    let mut stmt = conn.prepare(
+        "SELECT id, substr(provider, length(?2) + 1), status FROM sessions \
+         WHERE backend = ?1 AND status != 'destroyed' AND substr(provider, 1, length(?2)) = ?2",
+    )?;
+    let rows = stmt.query_map(params![crate::session_ops::PLUGIN_BACKEND, prefix], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    })?;
+    rows.collect()
+}
+
+pub fn session_owns_worktree(conn: &Connection, id: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT COALESCE(worktree_owned, 1) FROM sessions WHERE id = ?1",
+        params![id],
+        |row| row.get(0),
+    )
 }
 
 pub fn mark_attached(conn: &Connection, id: &str) -> Result<()> {
     planeai_core::services::SessionService::mark_attached(conn, id)
+}
+
+pub fn pending_prompt(conn: &Connection, id: &str) -> Result<Option<String>> {
+    planeai_core::services::SessionService::pending_prompt(conn, id)
+}
+
+pub fn take_pending_prompt(conn: &Connection, id: &str) -> Result<()> {
+    planeai_core::services::SessionService::take_pending_prompt(conn, id)
+}
+
+pub fn return_pending_prompt(conn: &Connection, id: &str, prompt: &str) -> Result<()> {
+    planeai_core::services::SessionService::return_pending_prompt(conn, id, prompt)
 }
 
 #[cfg(test)]
@@ -383,6 +483,68 @@ mod tests {
         let loaded = get_session(&conn, "sess-1").unwrap().unwrap();
         assert_eq!(loaded.backend, "daemon");
         assert!(loaded.tmux_name.is_none());
+    }
+
+    #[test]
+    fn test_task_project_id_links_a_session_to_another_projects_task() {
+        let conn = setup();
+        let owner = create_project(&conn, "owner", "/tmp/owner").unwrap();
+        let repo = create_project(&conn, "repo", "/tmp/repo").unwrap();
+        let create = |id: &str, task_project_id: Option<&str>| {
+            create_session_with_params(
+                &conn,
+                &planeai_core::services::CreateSessionParams {
+                    id: id.to_string(),
+                    project_id: repo.id.to_string(),
+                    name: "agent".to_string(),
+                    branch: "main".to_string(),
+                    backend: "daemon".to_string(),
+                    auto_approve: true,
+                    task_key: Some("OWN-1".to_string()),
+                    task_project_id: task_project_id.map(str::to_string),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+
+        let linked = create("sess-linked", Some(&owner.id));
+        assert_eq!(linked.task_project_id(), owner.id);
+        let loaded = get_session(&conn, "sess-linked").unwrap().unwrap();
+        assert_eq!(loaded.task_project_id.as_deref(), Some(owner.id.as_str()));
+
+        // Naming the session's own project stores no override.
+        let own = create("sess-own", Some(&repo.id));
+        assert_eq!(own.task_project_id, None);
+        assert_eq!(own.task_project_id(), repo.id);
+
+        delete_project(&conn, &owner.id).unwrap();
+        let orphaned = get_session(&conn, "sess-linked").unwrap().unwrap();
+        assert_eq!(orphaned.task_project_id, None);
+        assert_eq!(orphaned.task_project_id(), repo.id);
+    }
+
+    #[test]
+    fn test_reused_worktree_is_persisted_as_unowned() {
+        let conn = setup();
+        let project = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        create_session_with_params(
+            &conn,
+            &planeai_core::services::CreateSessionParams {
+                id: "sess-shared".to_string(),
+                project_id: project.id.to_string(),
+                name: "shared worktree session".to_string(),
+                branch: "feat/shared".to_string(),
+                worktree_path: Some("/tmp/shared-worktree".to_string()),
+                worktree_owned: Some(false),
+                backend: "daemon".to_string(),
+                auto_approve: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!session_owns_worktree(&conn, "sess-shared").unwrap());
     }
 
     #[test]
@@ -543,6 +705,59 @@ mod tests {
     }
 
     #[test]
+    fn test_project_path_in_use_excludes_current_project_and_archived_projects() {
+        let conn = setup();
+        let first = create_project(&conn, "first", "/tmp/first").unwrap();
+        let second = create_project(&conn, "second", "/tmp/second").unwrap();
+
+        assert!(!project_path_in_use(&conn, "/tmp/first", &first.id).unwrap());
+        assert!(project_path_in_use(&conn, "/tmp/first", &second.id).unwrap());
+        archive_project(&conn, &first.id).unwrap();
+        assert!(!project_path_in_use(&conn, "/tmp/first", &second.id).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_project_path_in_use_resolves_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let real_path = temp.path().join("project");
+        let alias_path = temp.path().join("project-alias");
+        std::fs::create_dir(&real_path).unwrap();
+        symlink(&real_path, &alias_path).unwrap();
+
+        let conn = setup();
+        create_project(&conn, "first", alias_path.to_str().unwrap()).unwrap();
+        normalize_project_paths(&conn).unwrap();
+        let second = create_project(&conn, "second", "/tmp/second").unwrap();
+
+        let canonical_real_path = std::fs::canonicalize(&real_path).unwrap();
+        assert!(
+            project_path_in_use(&conn, canonical_real_path.to_str().unwrap(), &second.id,).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_project_has_worktree_sessions() {
+        let conn = setup();
+        let project = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        assert!(!project_has_worktree_sessions(&conn, &project.id).unwrap());
+
+        create_session(
+            &conn,
+            &project.id,
+            "worktree session",
+            "planeai-myapp-aaa",
+            "feat/project-path",
+            Some("/tmp/worktree"),
+        )
+        .unwrap();
+
+        assert!(project_has_worktree_sessions(&conn, &project.id).unwrap());
+    }
+
+    #[test]
     fn test_rename_session() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
@@ -551,6 +766,46 @@ mod tests {
         rename_session(&conn, &s.id, "new name").unwrap();
         let updated = get_session(&conn, &s.id).unwrap().unwrap();
         assert_eq!(updated.name, "new name");
+    }
+
+    #[test]
+    fn plugin_provider_sessions_are_those_of_the_plugin_not_destroyed() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let session = |id: &str, provider: &str, backend: &str| {
+            create_session_with_id(
+                &conn,
+                id,
+                &p.id,
+                id,
+                None,
+                "main",
+                None,
+                Some(provider),
+                backend,
+                false,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        };
+        session("live", "chat:claude", "plugin");
+        session("archived", "chat:claude", "plugin");
+        session("destroyed", "chat:claude", "plugin");
+        session("other-plugin", "chatter:claude", "plugin");
+        session("configured", "claude", "tmux");
+        archive_session(&conn, "archived").unwrap();
+        destroy_session(&conn, "destroyed").unwrap();
+        let mut sessions = list_plugin_provider_sessions(&conn, "chat").unwrap();
+        sessions.sort();
+        assert_eq!(
+            sessions,
+            [
+                ("archived".into(), "claude".into(), "archived".into()),
+                ("live".into(), "claude".into(), "active".into()),
+            ]
+        );
     }
 
     #[test]
@@ -661,6 +916,32 @@ mod tests {
             loaded.provider_session_id,
             Some("f4165541-f370-4fdd-9ccd-14b103a4f712".to_string())
         );
+    }
+
+    #[test]
+    fn test_hide_project_keeps_it_active_and_persists() {
+        let conn = setup();
+        let project = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        create_session(
+            &conn,
+            &project.id,
+            "session",
+            "planeai-myapp-abc123",
+            "main",
+            None,
+        )
+        .unwrap();
+
+        hide_project(&conn, &project.id).unwrap();
+
+        let projects = list_projects(&conn).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].id, project.id);
+        assert!(projects[0].hidden);
+        assert_eq!(list_sessions(&conn).unwrap().len(), 1);
+
+        unhide_project(&conn, &project.id).unwrap();
+        assert!(!list_projects(&conn).unwrap()[0].hidden);
     }
 
     #[test]
@@ -956,140 +1237,5 @@ mod tests {
         assert_eq!(pos_c, Some(0));
         assert_eq!(pos_a, None);
         assert_eq!(pos_b, None);
-    }
-
-    #[test]
-    fn test_pr_state_round_trips_through_update_and_get() {
-        let conn = setup();
-        let proj = create_project(&conn, "test", "/tmp/test").unwrap();
-        let session =
-            create_session(&conn, &proj.id, "feat", "tmux-1", "feat/pr-test", None).unwrap();
-
-        // Initially null
-        let s = get_session(&conn, &session.id).unwrap().unwrap();
-        assert_eq!(s.pr_url, None);
-        assert_eq!(s.pr_state, None);
-
-        // Update
-        update_pr_state(
-            &conn,
-            &session.id,
-            "https://github.com/org/repo/pull/42",
-            "open",
-        )
-        .unwrap();
-
-        let s = get_session(&conn, &session.id).unwrap().unwrap();
-        assert_eq!(
-            s.pr_url.as_deref(),
-            Some("https://github.com/org/repo/pull/42")
-        );
-        assert_eq!(s.pr_state.as_deref(), Some("open"));
-
-        // Update again (state transition)
-        update_pr_state(
-            &conn,
-            &session.id,
-            "https://github.com/org/repo/pull/42",
-            "merged",
-        )
-        .unwrap();
-        let s = get_session(&conn, &session.id).unwrap().unwrap();
-        assert_eq!(s.pr_state.as_deref(), Some("merged"));
-    }
-
-    #[test]
-    fn test_list_sessions_excludes_done_task_sessions() {
-        let conn = setup();
-        // Run task migrations so the tasks table exists
-        planeai_tasks::sqlite::migrate(&conn).unwrap();
-
-        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-
-        // Session with no task_key — should always appear
-        let s1 = create_session_with_id(
-            &conn, "s1", &p.id, "no task", None, "main", None, None, "daemon", false, None, None,
-            None,
-        )
-        .unwrap();
-
-        // Active session linked to a done task — should still appear (active sessions always visible)
-        let s2 = create_session_with_id(
-            &conn,
-            "s2",
-            &p.id,
-            "done task active",
-            None,
-            "feat-a",
-            None,
-            None,
-            "daemon",
-            false,
-            Some("MYA-1"),
-            None,
-            None,
-        )
-        .unwrap();
-
-        // Exited session linked to a done task — should be excluded
-        let s3 = create_session_with_id(
-            &conn,
-            "s3",
-            &p.id,
-            "done task exited",
-            None,
-            "feat-c",
-            None,
-            None,
-            "daemon",
-            false,
-            Some("MYA-1"),
-            None,
-            None,
-        )
-        .unwrap();
-        mark_session_exited(&conn, &s3.id).unwrap();
-
-        // Session linked to an in_progress task — should appear
-        let s4 = create_session_with_id(
-            &conn,
-            "s4",
-            &p.id,
-            "active task",
-            None,
-            "feat-b",
-            None,
-            None,
-            "daemon",
-            false,
-            Some("MYA-2"),
-            None,
-            None,
-        )
-        .unwrap();
-
-        // Insert tasks
-        conn.execute(
-            "INSERT INTO task_projects (prefix, next_seq) VALUES ('MYA', 3)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at) VALUES ('MYA-1', 'MYA', 'Done task', 'done', '2024-01-01', '2024-01-01')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at) VALUES ('MYA-2', 'MYA', 'Active task', 'in_progress', '2024-01-01', '2024-01-01')",
-            [],
-        )
-        .unwrap();
-
-        let sessions = list_sessions(&conn).unwrap();
-        let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
-        assert!(ids.contains(&s1.id.as_str()));
-        assert!(ids.contains(&s2.id.as_str())); // active session with done task — visible
-        assert!(!ids.contains(&s3.id.as_str())); // exited session with done task — excluded
-        assert!(ids.contains(&s4.id.as_str()));
     }
 }

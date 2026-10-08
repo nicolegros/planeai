@@ -8,8 +8,29 @@ use crate::notify;
 use crate::pty;
 use crate::symphony;
 
+pub use crate::lsp::LspState;
+
 pub struct DbState(pub Arc<Mutex<Connection>>);
+
+#[derive(Default)]
+pub struct ProjectOperationState(
+    Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+);
+
+impl ProjectOperationState {
+    pub fn lock_for(&self, project_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.0.lock().expect("project operation lock poisoned");
+        locks
+            .entry(project_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+}
+
 pub struct PtyState(pub pty::PtyManager);
+pub struct TerminalTabsState(
+    pub Arc<crate::terminal_tabs::TerminalTabs<crate::commands::sessions::tabs::PtyTabHost>>,
+);
 pub struct NotifyHandle(pub notify::SharedNotifyState);
 pub struct ConfigState(pub Mutex<config::Config>);
 pub struct FileExplorerState(pub Mutex<file_explorer::WatcherManager>);

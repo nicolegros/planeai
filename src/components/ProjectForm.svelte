@@ -1,5 +1,7 @@
 <script lang="ts">
   import { projects as projectsApi, git } from "../lib/api";
+  import type { Project } from "../lib/types";
+  import * as projectStore from "../lib/project-store.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
@@ -10,11 +12,14 @@
   import { LoaderCircle } from "@lucide/svelte";
 
   interface Props {
-    onCreated: () => void;
+    project?: Project | null;
+    onCreated: (project: Project) => void | Promise<void>;
     onCancel: () => void;
+    onSubmittingChange?: (submitting: boolean) => void;
   }
 
-  let { onCreated, onCancel }: Props = $props();
+  let { project = null, onCreated, onCancel, onSubmittingChange }: Props = $props();
+  const isEditing = $derived(project !== null);
 
   const config = $derived(getSettings());
   const basePath = $derived(config.projects_base_path);
@@ -22,10 +27,14 @@
   type FormMode = "local" | "remote";
   let mode = $state<FormMode>("local");
 
-  // Local mode fields
-  let path = $state(getSettings().projects_base_path ? getSettings().projects_base_path + "/" : "");
-  let name = $state("");
-  let nameManuallyEdited = $state(false);
+  // Local mode fields. These capture the initial prop values on purpose: the form owns
+  // the fields once mounted, so later `project` changes must not overwrite user edits.
+  // svelte-ignore state_referenced_locally
+  let path = $state(project?.path ?? (getSettings().projects_base_path ? getSettings().projects_base_path + "/" : ""));
+  // svelte-ignore state_referenced_locally
+  let name = $state(project?.name ?? "");
+  // svelte-ignore state_referenced_locally
+  let nameManuallyEdited = $state(project !== null);
 
   // Remote mode fields
   let cloneUrl = $state("");
@@ -36,6 +45,10 @@
   let submitting = $state(false);
   let submitAttempted = $state(false);
   let wrapperEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    onSubmittingChange?.(submitting);
+  });
 
   // Auto-derive name from path (local mode)
   $effect(() => {
@@ -99,21 +112,29 @@
   }
 
   async function submitLocal() {
-    const valid = await projectsApi.validateGitRepo(path.trim());
-    if (!valid) {
-      showSnackbar("Not a valid git repository (no .git found).");
+    try {
+      const valid = await projectsApi.validateGitRepo(path.trim());
+      if (!valid) {
+        showSnackbar("Not a valid git repository (no .git found).");
+        submitting = false;
+        return;
+      }
+    } catch (e) {
+      showSnackbar(`Could not validate repository: ${String(e)}`);
       submitting = false;
       return;
     }
 
     try {
-      await projectsApi.create(name.trim(), path.trim());
+      const savedProject = project
+        ? await projectsApi.update(project.id, name.trim(), path.trim())
+        : await projectsApi.create(name.trim(), path.trim());
+      await projectStore.loadProjects();
+      await onCreated(savedProject);
     } catch (e) {
       showSnackbar(String(e));
       submitting = false;
-      return;
     }
-    onCreated();
   }
 
   async function submitRemote() {
@@ -135,13 +156,13 @@
     }
 
     try {
-      await projectsApi.create(repoName, fullPath);
+      const project = await projectsApi.create(repoName, fullPath);
+      await projectStore.loadProjects();
+      await onCreated(project);
     } catch (e) {
       showSnackbar(`Clone succeeded but project creation failed: ${String(e)}. The cloned directory remains at ${fullPath}.`);
       submitting = false;
-      return;
     }
-    onCreated();
   }
 
   function toggleMode() {
@@ -149,25 +170,28 @@
     submitAttempted = false;
   }
 
-  // Focus wrapper on mount
-  $effect(() => { if (wrapperEl) wrapperEl.focus(); });
-
   // Form keyboard controller
   const fk = createFormKeyboardController(
-    () => mode === "local"
+    () => isEditing
       ? [
-          { key: "t", toggle: () => toggleMode() },
           { key: "p", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='path'] input") ?? null },
           { key: "n", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='name'] input") ?? null },
           { key: "b", toggle: () => { pickFolder(); } },
         ]
-      : [
-          { key: "t", toggle: () => toggleMode() },
-          { key: "u", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='url'] input") ?? null },
-          { key: "d", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='destination'] input") ?? null },
-          { key: "b", toggle: () => { pickFolder(); } },
-          { key: "n", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='name'] input") ?? null },
-        ],
+      : mode === "local"
+        ? [
+            { key: "t", toggle: () => toggleMode() },
+            { key: "p", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='path'] input") ?? null },
+            { key: "n", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='name'] input") ?? null },
+            { key: "b", toggle: () => { pickFolder(); } },
+          ]
+        : [
+            { key: "t", toggle: () => toggleMode() },
+            { key: "u", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='url'] input") ?? null },
+            { key: "d", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='destination'] input") ?? null },
+            { key: "b", toggle: () => { pickFolder(); } },
+            { key: "n", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='name'] input") ?? null },
+          ],
     { wrapper: () => wrapperEl, onDismiss: () => onCancel() },
   );
 
@@ -180,9 +204,11 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div bind:this={wrapperEl} tabindex="-1" onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); return; } fk.handleKeydown(e); }} onfocusin={fk.handleFocusin} class="outline-none" data-form-keyboard>
 <form class="px-5 pb-0 space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }}>
 
+  {#if !isEditing}
   <!-- Mode toggle -->
   <div class="flex gap-1 rounded-md bg-panel-hi p-0.5" role="tablist" aria-label="Project source">
     <button type="button" role="tab" aria-selected={mode === "local"} aria-controls="panel-local" class="flex-1 text-xs py-1 px-2 rounded transition-colors {mode === 'local' ? 'bg-accent text-on-accent' : 'bg-panel border border-border text-t2 hover:bg-panel-hi'}" onclick={() => { mode = "local"; submitAttempted = false; }}>
@@ -192,6 +218,7 @@
       Git remote {#if mode !== "remote"}<span class="font-mono text-[10px] px-1 rounded {badge}">T</span>{/if}
     </button>
   </div>
+  {/if}
 
   {#if mode === "local"}
     <!-- Local mode: path + name (same as before) -->
@@ -248,7 +275,7 @@
   {/if}
 
   <div class="sticky bottom-0 bg-panel flex items-center justify-between pt-2 pb-4 border-t border-border mt-3">
-    <div class="flex items-center gap-2">
+    <div class="flex items-center gap-2" role="status" aria-live="polite">
       {#if fk.mode === "insert"}
         <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent font-medium">INSERT</span>
         <span class="text-[10px] text-t3">esc → normal mode</span>
@@ -260,7 +287,7 @@
     <div class="flex gap-2">
       <Button type="button" onclick={() => onCancel()}>Cancel</Button>
       <Button type="submit" variant="primary" disabled={!canSubmit}>
-        {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{:else}{mode === "local" ? "Add project" : "Clone & add"} <span class="ml-1 font-mono text-[10px] opacity-60">{MOD_ENTER_HINT}</span>{/if}
+        {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{:else}{isEditing ? "Save project" : mode === "local" ? "Add project" : "Clone & add"} <span class="ml-1 font-mono text-[10px] opacity-60">{MOD_ENTER_HINT}</span>{/if}
       </Button>
     </div>
   </div>

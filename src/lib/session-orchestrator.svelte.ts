@@ -1,78 +1,30 @@
 /**
  * Session Orchestrator — manages session lifecycle, agent states, event listeners, and symphony polling.
- * Tab layout state is delegated to tab-layout.svelte.ts.
  */
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sessions as sessionsApi, symphony, tasks } from "./api";
-import {
-  getCiStatus as _getCiStatus,
-  updateSessions as updateCiSessions,
-} from "./ci-checks.svelte";
-import { updateSessions as updatePrCommentSessions } from "./pr-comments.svelte";
-import type { Session } from "./types";
-import { initSession, getTabCount, destroySession as destroyTabState } from "./session-tabs.svelte";
-import {
-  touchMru,
-  getMruList,
-  flushMru,
-  seedMru,
-  activateSession as poolActivate,
-  removeSession as poolRemove,
-} from "./mru.svelte";
+import { sessionTaskProjectId, type Session } from "./types";
+import { touchMru, removeMru, getMruList, flushMru, seedMru } from "./mru.svelte";
+import { disposeSessionTerminalViews } from "./terminal-views";
 import { clearComments } from "./review-comments.svelte";
+import { clearEditorFeedback } from "./editor-feedback.svelte";
 import { destroySession as destroyViewedState } from "./diff-viewed.svelte";
 import { showSnackbar } from "./snackbar.svelte";
-import { showMergePrompt, dismissForSession } from "./post-merge-prompt.svelte";
-import { preloadPatches } from "./diff-preload";
+import { dismissForSession } from "./post-merge-prompt.svelte";
 import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
-import { getProjects } from "./project-store.svelte";
-import { moveTask } from "./task-store.svelte";
 import { getCycleState } from "./tab-switcher.svelte";
-import {
-  cleanup as tabLayoutCleanup,
-  resetAll as tabLayoutReset,
-  closeShellTab,
-  toggleDiff as _toggleDiff,
-} from "./tab-layout.svelte";
-
-// Re-export tab layout functions for consumers still importing from orchestrator
-export {
-  getDiffTabOpen,
-  getDiffTabActive,
-  getEditorTabOpen,
-  getEditorTabActive,
-  getDiffFileName,
-  getEditorFileName,
-  getEditorModified,
-  isEditorModified,
-  getUnifiedTabs,
-  getUnifiedActiveIndex,
-  selectUnifiedTab,
-  handleNewTab,
-  handleCloseTab,
-  handleNextTab,
-  handlePrevTab,
-  toggleEditor,
-  registerEditorRef,
-  unregisterEditorRef,
-  openFile,
-  saveActiveEditor,
-  setDiffFileName,
-  setEditorFileName,
-  setEditorModified,
-  closeDiffTab,
-  closeEditorTab,
-  closeShellTab,
-  focusEditorTab,
-} from "./tab-layout.svelte";
+import { providerHandoff, taskWorkspaceLayout } from "./task-workspace-layout.svelte";
+import { isPluginSession } from "./plugin-providers";
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
 let sessions = $state<Session[]>([]);
 let activeSessionId = $state<string | null>(null);
 let agentStates = $state<Record<string, string>>({});
+/** Sessions whose agent is mid-turn. Unlike `agentStates`, selecting a session does not clear it. */
+const turns = new Set<string>();
 
 let symphonyStatus = $state<{ active: boolean; slots_used: number; max_concurrent: number } | null>(
   null,
@@ -82,13 +34,12 @@ let reviewReady = $state<Record<string, boolean>>({});
 // ─── Testing helper ──────────────────────────────────────────────────────────
 
 export function _resetForTests(): void {
-  for (const s of sessions) destroyTabState(s.id);
   sessions = [];
-  activeSessionId = null;
+  setActiveSession(null);
   agentStates = {};
+  turns.clear();
   symphonyStatus = null;
   reviewReady = {};
-  tabLayoutReset();
 }
 
 export function _setReviewReadyForTests(sessionId: string): void {
@@ -128,24 +79,15 @@ export function clearReviewReady(sessionId: string): void {
   reviewReady = rest;
 }
 
-export function getCiStatus(sessionId: string): "passing" | "failing" | "running" | null {
-  return _getCiStatus(sessionId);
-}
-
-export function toggleDiff(): void {
-  _toggleDiff();
-  if (activeSessionId) clearReviewReady(activeSessionId);
-}
-
 // ─── Session Lifecycle ───────────────────────────────────────────────────────
 
 export async function loadSessions(): Promise<void> {
-  sessions = await sessionsApi.list();
-  updateCiSessions(sessions);
-  updatePrCommentSessions(sessions);
-  for (const s of sessions) {
-    if (getTabCount(s.id) === 0) initSession(s.id, s.tab_count);
-  }
+  const loadedSessions = await sessionsApi.list();
+  // Sessions can leave outside this module (e.g. CLI archive); a lingering view
+  // would be reused with a dead connection if the session came back.
+  const loadedIds = new Set(loadedSessions.map((s) => s.id));
+  for (const s of sessions) if (!loadedIds.has(s.id)) removeSessionViews(s.id);
+  sessions = loadedSessions;
   if (sessions.length > 0 && !activeSessionId) {
     seedMru(sessions.map((s) => s.id));
     selectSession(sessions[0].id);
@@ -157,25 +99,52 @@ export async function loadSessions(): Promise<void> {
   }
 }
 
-export function selectSession(id: string): void {
+/**
+ * Session the user explicitly asked for, as opposed to an arbitrary entry point
+ * such as boot or the post-delete fallback. A restored workspace layout keeps its
+ * remembered tab unless the selection was explicit.
+ */
+let explicitlySelectedSessionId = $state<string | null>(null);
+
+export function isSelectionExplicit(sessionId: string): boolean {
+  return explicitlySelectedSessionId === sessionId;
+}
+
+/**
+ * Sole writer of the active session, so the explicit mark is always either the
+ * current selection or absent. Fallbacks (delete/archive/park/project removal)
+ * pass no options and therefore clear it.
+ */
+function setActiveSession(id: string | null, opts: { explicit?: boolean } = {}): void {
+  explicitlySelectedSessionId = opts.explicit && id ? id : null;
   activeSessionId = id;
+}
+
+export function selectSession(id: string, opts: { explicit?: boolean } = {}): void {
+  console.log(`[DEBUG-lsr1] selectSession called`, {
+    id,
+    foundInSessions: sessions.some((s) => s.id === id),
+    sessionCount: sessions.length,
+    timestamp: Date.now(),
+  });
+  setActiveSession(id, opts);
   const session = sessions.find((s) => s.id === id);
   if (session?.status === "exited") {
-    // Await restart before activating the terminal pool. Without this,
-    // the terminal mounts and attaches to the still-exited daemon session,
-    // gets an immediate EOF, and re-emits pty-exited — causing a loop.
+    // The session stays `exited` until restart resolves, so its terminal view
+    // does not attach to the still-exited daemon session (immediate EOF, then
+    // pty-exited again: a loop).
     sessionsApi
       .restart(id)
       .then((updated) => {
         if (updated) sessions = sessions.map((x) => (x.id === id ? updated : x));
-        if (activeSessionId === id) poolActivate(id);
+        if (activeSessionId === id) touchMru(id);
       })
       .catch((e) => {
         showSnackbar(`Restart failed: ${e}`);
-        if (activeSessionId === id) poolActivate(id);
+        if (activeSessionId === id) touchMru(id);
       });
   } else {
-    poolActivate(id);
+    touchMru(id);
   }
   if (agentStates[id]) {
     clearAgentState(id);
@@ -185,23 +154,37 @@ export function selectSession(id: string): void {
 }
 
 export function createSession(session: Session): void {
-  sessions = [...sessions, session];
-  initSession(session.id, 1);
-  selectSession(session.id);
+  // Replace rather than append: a `sessions-changed` reload can already have
+  // fetched this session, and a duplicate entry produces duplicate tab keys,
+  // which is a Svelte runtime error that freezes the UI.
+  const existing = sessions.findIndex((candidate) => candidate.id === session.id);
+  sessions =
+    existing === -1
+      ? [...sessions, session]
+      : sessions.map((candidate) => (candidate.id === session.id ? session : candidate));
+  selectSession(session.id, { explicit: true });
+}
+
+/** A session leaving the app takes its terminal views (agent and shells) with it. */
+function removeSessionViews(sessionId: string): void {
+  removeMru(sessionId);
+  disposeSessionTerminalViews(sessionId);
+  void providerHandoff
+    .release(sessionId)
+    .catch((error) => console.warn("Failed to close a handoff terminal", sessionId, error));
 }
 
 export async function deleteSession(s: Session): Promise<void> {
   await sessionsApi.destroy(s.id);
   dismissForSession(s.id);
-  destroyTabState(s.id);
   clearComments(s.id);
+  clearEditorFeedback(s.id);
   destroyViewedState(s.id);
-  poolRemove(s.id);
-  tabLayoutCleanup(s.id);
+  removeSessionViews(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
-    activeSessionId = sessions[0]?.id ?? null;
-    if (activeSessionId) poolActivate(activeSessionId);
+    setActiveSession(sessions[0]?.id ?? null);
+    if (activeSessionId) touchMru(activeSessionId);
   }
 }
 
@@ -209,23 +192,42 @@ export async function archiveSession(s: Session): Promise<void> {
   await sessionsApi.archive(s.id);
   dismissForSession(s.id);
   clearComments(s.id);
+  clearEditorFeedback(s.id);
   destroyViewedState(s.id);
-  poolRemove(s.id);
+  removeSessionViews(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
-    activeSessionId = sessions[0]?.id ?? null;
-    if (activeSessionId) poolActivate(activeSessionId);
+    setActiveSession(sessions[0]?.id ?? null);
+    if (activeSessionId) touchMru(activeSessionId);
+  }
+}
+
+export async function parkSession(s: Session): Promise<void> {
+  await sessionsApi.park(s.id);
+  dismissForSession(s.id);
+  clearComments(s.id);
+  clearEditorFeedback(s.id);
+  destroyViewedState(s.id);
+  removeSessionViews(s.id);
+  sessions = sessions.filter((x) => x.id !== s.id);
+  if (activeSessionId === s.id) {
+    setActiveSession(
+      sessions.find(
+        (x) => sessionTaskProjectId(x) === sessionTaskProjectId(s) && x.task_key === s.task_key,
+      )?.id ?? null,
+    );
+    if (activeSessionId) touchMru(activeSessionId);
   }
 }
 
 export async function restartSession(s: Session): Promise<void> {
   const updated = await sessionsApi.restart(s.id);
   sessions = sessions.map((x) => (x.id === s.id ? updated : x));
-  selectSession(s.id);
+  selectSession(s.id, { explicit: true });
 }
 
 export function jumpToSession(index: number): void {
-  if (index < sessions.length) selectSession(sessions[index].id);
+  if (index < sessions.length) selectSession(sessions[index].id, { explicit: true });
 }
 
 // ─── State setters ───────────────────────────────────────────────────────────
@@ -234,6 +236,12 @@ export function clearAgentState(sessionId: string): void {
   const { [sessionId]: _, ...rest } = agentStates;
   agentStates = rest;
   sessionsApi.acknowledge(sessionId);
+}
+
+/** Invalidate review state before bytes from a user action reach the PTY. */
+export function recordUserInput(sessionId: string): void {
+  if (agentStates[sessionId]) clearAgentState(sessionId);
+  clearReviewReady(sessionId);
 }
 export function updateSessionStatus(sessionId: string, status: Session["status"]): void {
   sessions = sessions.map((s) => (s.id === sessionId ? { ...s, status } : s));
@@ -245,43 +253,79 @@ export function updateSessionName(sessionId: string, name: string): void {
 export function removeProjectSessions(projectId: string): string[] {
   const ids = sessions.filter((s) => s.project_id === projectId).map((s) => s.id);
   for (const id of ids) {
-    poolRemove(id);
-    destroyTabState(id);
+    removeSessionViews(id);
+    clearEditorFeedback(id);
   }
   sessions = sessions.filter((s) => s.project_id !== projectId);
   if (activeSessionId && ids.includes(activeSessionId)) {
-    activeSessionId = getMruList()[0] ?? null;
-    if (activeSessionId) poolActivate(activeSessionId);
+    setActiveSession(getMruList()[0] ?? null);
+    if (activeSessionId) touchMru(activeSessionId);
   }
   return ids;
 }
 
 // ─── Event Management ────────────────────────────────────────────────────────
 
+/** A session's hooks run in event order, so a quick resume cannot overtake the notify move it reverts. */
+const taskHookQueues = new Map<string, Promise<unknown>>();
+function queueTaskHook(sessionId: string, fire: (sessionId: string) => Promise<unknown>): void {
+  const next = (taskHookQueues.get(sessionId) ?? Promise.resolve())
+    .then(() => fire(sessionId))
+    .catch(() => {});
+  taskHookQueues.set(sessionId, next);
+  void next.then(() => {
+    if (taskHookQueues.get(sessionId) === next) taskHookQueues.delete(sessionId);
+  });
+}
+
 export function startEventListeners(): () => void {
   const unlisteners: Array<Promise<() => void>> = [];
+
+  // Emitted only when the agent's own hook reports work after a known idle.
+  unlisteners.push(
+    listen<{ session_id: string }>("agent-resumed", (event) => {
+      queueTaskHook(event.payload.session_id, tasks.fireResumeHook);
+    }),
+  );
+
+  // Its sender, a CLI command, loop or recipe, was already told the prompt was sent.
+  unlisteners.push(
+    listen<{ session_id: string; error: string }>("prompt-delivery-failed", (event) => {
+      const session = sessions.find((s) => s.id === event.payload.session_id);
+      showSnackbar(
+        `A prompt for ${session?.name ?? "a session"} was not delivered: ${event.payload.error}`,
+      );
+    }),
+  );
+
+  // A provider's sidecar went away mid-turn: the turn ended without finishing.
+  unlisteners.push(
+    listen<{ session_id: string }>("agent-released", (event) => {
+      const id = event.payload.session_id;
+      turns.delete(id);
+      if (agentStates[id] === "Busy") clearAgentState(id);
+    }),
+  );
 
   // Agent state changes (Busy/Idle)
   unlisteners.push(
     listen<{ session_id: string; state: string }>("agent-state-change", (event) => {
       agentStates = { ...agentStates, [event.payload.session_id]: event.payload.state };
+      if (event.payload.state === "Busy") turns.add(event.payload.session_id);
+      else turns.delete(event.payload.session_id);
       if (event.payload.state === "Idle") {
         if (getSettings().sound_enabled !== false) {
           playTaskComplete();
         }
-        tasks.fireNotifyHook(event.payload.session_id).catch((err) => {
-          if (err && typeof err === "string" && err.startsWith("pr_status:")) showSnackbar(err);
-        });
+        queueTaskHook(event.payload.session_id, tasks.fireNotifyHook);
         // Auto-open review tab when agent finishes
         const sid = event.payload.session_id;
         const session = sessions.find((s) => s.id === sid);
         if (session?.worktree_path && session.base_branch) {
-          // Preload combined patch so ReviewTab opens instantly
-          preloadPatches(sid, session.worktree_path!, session.base_branch!);
           if (sid === activeSessionId) {
-            if (getSettings().auto_open_review !== false) {
+            if (getSettings().auto_open_review === true) {
               // Defer to next frame so state updates don't block the current tick
-              requestAnimationFrame(() => toggleDiff());
+              requestAnimationFrame(() => taskWorkspaceLayout.openDiff(sid));
             }
           } else {
             reviewReady = { ...reviewReady, [sid]: true };
@@ -295,16 +339,9 @@ export function startEventListeners(): () => void {
   unlisteners.push(
     listen<{ pty_key: string }>("pty-exited", (event) => {
       const { pty_key } = event.payload;
-      const colonIdx = pty_key.indexOf(":");
-      if (colonIdx !== -1) {
-        const sessionId = pty_key.slice(0, colonIdx);
-        const tabIndex = parseInt(pty_key.slice(colonIdx + 1), 10);
-        closeShellTab(sessionId, tabIndex);
-      } else {
-        if (!sessions.find((x) => x.id === pty_key)) return;
-        sessions = sessions.map((x) => (x.id === pty_key ? { ...x, status: "exited" } : x));
-        sessionsApi.markExited(pty_key);
-      }
+      if (!sessions.find((x) => x.id === pty_key)) return;
+      sessions = sessions.map((x) => (x.id === pty_key ? { ...x, status: "exited" } : x));
+      sessionsApi.markExited(pty_key);
     }),
   );
 
@@ -327,40 +364,18 @@ export function startEventListeners(): () => void {
   // Refresh sessions when CLI creates a session
   unlisteners.push(
     listen<string>("session-created", async (event) => {
+      console.log(`[DEBUG-lsr1] session-created event received`, {
+        sessionId: event.payload,
+        timestamp: Date.now(),
+      });
       await loadSessions();
+      console.log(`[DEBUG-lsr1] loadSessions() resolved after session-created`, {
+        sessionId: event.payload,
+        sessionCount: sessions.length,
+        found: sessions.some((s) => s.id === event.payload),
+        timestamp: Date.now(),
+      });
       touchMru(event.payload);
-    }),
-  );
-
-  // PR merged — show post-merge prompt
-  unlisteners.push(
-    listen<{ session_id: string }>("pr-merged", (event) => {
-      const s = sessions.find((x) => x.id === event.payload.session_id);
-      if (s) {
-        showMergePrompt({
-          sessionId: s.id,
-          sessionName: s.name || s.branch,
-          taskKey: s.task_key,
-          onArchive: (id) => {
-            const found = sessions.find((x) => x.id === id);
-            if (found) return archiveSession(found);
-            return Promise.resolve();
-          },
-          onDestroy: (id) => {
-            const found = sessions.find((x) => x.id === id);
-            if (found) return deleteSession(found);
-            return Promise.resolve();
-          },
-          onTaskDone: s.task_key
-            ? async (id) => {
-                const sess = sessions.find((x) => x.id === id);
-                if (!sess?.task_key) return;
-                const proj = getProjects().find((p) => p.id === sess.project_id);
-                if (proj) await moveTask(sess.task_key, "done", proj.path);
-              }
-            : undefined,
-        });
-      }
     }),
   );
 
@@ -388,14 +403,25 @@ export function startSymphonyPolling(): () => void {
 
 // ─── Quit confirmation helper ────────────────────────────────────────────────
 
-export function getActiveDirectCount(): number {
-  return sessions.filter((s) => s.status === "active" && s.backend === "direct").length;
+/** Local PTYs die with the app, and so does a provider session's in-flight turn. */
+export function runningTurns(): ReadonlySet<string> {
+  return turns;
+}
+
+export function countSessionsLostOnQuit(
+  candidates: Pick<Session, "id" | "status" | "backend">[],
+  running: ReadonlySet<string>,
+): number {
+  return candidates.filter(
+    (s) =>
+      s.status === "active" && (s.backend === "local" || (isPluginSession(s) && running.has(s.id))),
+  ).length;
 }
 
 export function setupQuitGuard(onShowConfirm: (count: number) => void): Promise<() => void> {
   return getCurrentWindow().onCloseRequested(async (event) => {
     flushMru().catch(() => {});
-    const count = getActiveDirectCount();
+    const count = countSessionsLostOnQuit(sessions, turns);
     if (count > 0) {
       event.preventDefault();
       onShowConfirm(count);

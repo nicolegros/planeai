@@ -1,8 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { matchChord, IS_MAC } from "../keyboard";
 
 const modKey = IS_MAC ? "metaKey" : "ctrlKey";
-
 function key(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return {
     key: "",
@@ -14,16 +13,11 @@ function key(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   } as KeyboardEvent;
 }
 
-describe("toggle_pr_panel shortcut", () => {
-  it("returns toggle_pr_panel on Mod+Shift+P", () => {
-    expect(matchChord(key({ key: "p", [modKey]: true, shiftKey: true }))).toEqual({
-      type: "toggle_pr_panel",
-    });
+describe("retired legacy PR shortcut", () => {
+  it("does not reserve Mod+Shift+P", () => {
+    expect(matchChord(key({ key: "p", [modKey]: true, shiftKey: true }))).toBeNull();
   });
-
-  it("does not conflict with open_file (Mod+P without shift)", () => {
-    expect(matchChord(key({ key: "p", [modKey]: true }))).toEqual({
-      type: "open_file",
-    });
+  it("keeps Mod+P for the file finder", () => {
+    expect(matchChord(key({ key: "p", [modKey]: true }))).toEqual({ type: "open_file" });
   });
 });

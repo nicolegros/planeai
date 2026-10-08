@@ -19,7 +19,9 @@ pub use session::{
     session_children, session_create_output, session_ls, session_prompt,
     session_read_cursor_output, session_read_output, session_tree,
 };
-pub use task::{task_add, task_ls, task_move, task_show};
+pub use task::{
+    task_add, task_add_with_lifecycle, task_ls, task_move, task_move_with_lifecycle, task_show,
+};
 
 // ─── Recipe Commands (delegated to axi_recipe module) ────────────────────────
 

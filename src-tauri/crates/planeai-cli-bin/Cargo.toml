@@ -10,12 +10,15 @@ path = "src/main.rs"
 [dependencies]
 planeai = { path = "../.." }
 planeai-core = { path = "../../planeai-core" }
+planeai-rmux = { path = "../../planeai-rmux" }
 planeai-tasks = { path = "../../planeai-tasks" }
 planeai-toon = { path = "../../planeai-toon" }
 planeai-ipc = { path = "../../planeai-ipc", features = ["async"] }
 planeai-daemon = { path = "../../planeai-daemon" }
 planeai-paths = { path = "../../planeai-paths" }
+planeai-plugin-contract = { path = "../../planeai-plugin-contract" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde_json = { workspace = true }
+uuid = { version = "1", features = ["v4"] }

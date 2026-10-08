@@ -7,6 +7,9 @@ edition = "2021"
 name = "planeai_daemon"
 path = "src/lib.rs"
 
+[features]
+test-support = []
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -24,6 +27,7 @@ tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+planeai-daemon = { path = ".", features = ["test-support"] }
 tokio = { workspace = true, features = [
   "rt-multi-thread",
   "macros",

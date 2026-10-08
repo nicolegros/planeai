@@ -36,7 +36,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div bind:this={wrapperEl} role="alertdialog" aria-label="Post-merge actions" tabindex="-1" onkeydown={onKeydown} class="fixed bottom-4 left-4 z-[100] max-w-lg rounded-lg bg-emerald-700 px-4 py-3 shadow-lg outline-none">
-    <p class="text-sm text-white font-mono">PR merged ✓ — <span class="text-emerald-200">{prompt.sessionName}</span></p>
+    <p class="text-sm text-white font-mono">{prompt.message} ✓ — <span class="text-emerald-200">{prompt.sessionName}</span></p>
     <div class="mt-2 flex gap-2">
       {#if prompt.taskKey}
         <button

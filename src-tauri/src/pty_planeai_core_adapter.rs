@@ -1,28 +1,44 @@
 //! Tauri adapter for planeai-pty.
 //!
-//! Implements `PtyEventSink` to forward PTY output/exit/error events through
-//! the existing Tauri `Channel<Response>` and `AppHandle` event paths, so
+//! Implements `PtyEventSink` to forward PTY output through the Tauri
+//! `Channel<Response>` and exits through the PTY manager's exit sink, so
 //! the frontend does not know whether planeai-pty or the legacy backend is active.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use chrono::Utc;
-use planeai_pty::{LocalPtyConfig, LocalPtySession, PtyEvent, PtyEventSink, WslSpawnConfig};
+use planeai_pty::{LocalPtyConfig, LocalPtySession, PtyEvent, PtyEventSink};
 use tauri::ipc::{Channel, Response};
-use tauri::{AppHandle, Emitter};
 
 use crate::output_observer::OutputObserver;
-use crate::session_backend::SessionBackend;
+use crate::pty::ExitSink;
+use crate::session_backend::{SessionBackend, WriteAck};
+
+/// What a local PTY runs: a command line for the platform shell, or a program and its arguments.
+pub enum SpawnCommand {
+    Shell(String),
+    Argv(Vec<String>),
+}
+
+impl SpawnCommand {
+    /// As recorded in session logs.
+    fn display(&self) -> String {
+        match self {
+            Self::Shell(command) => command.clone(),
+            Self::Argv(argv) => argv.join(" "),
+        }
+    }
+}
 
 /// Forwards planeai-pty events to the Tauri frontend via the existing output channel.
 pub struct TauriPtySink {
     session_id: String,
-    on_data: Channel<Response>,
-    app: AppHandle,
+    on_data: Arc<RwLock<Option<Channel<Response>>>>,
+    exits: ExitSink,
     cancelled: Arc<AtomicBool>,
     observer: Arc<dyn OutputObserver>,
 }
@@ -31,14 +47,14 @@ impl TauriPtySink {
     pub fn new(
         session_id: String,
         on_data: Channel<Response>,
-        app: AppHandle,
+        exits: ExitSink,
         cancelled: Arc<AtomicBool>,
         observer: Arc<dyn OutputObserver>,
     ) -> Self {
         Self {
             session_id,
-            on_data,
-            app,
+            on_data: Arc::new(RwLock::new(Some(on_data))),
+            exits,
             cancelled,
             observer,
         }
@@ -50,16 +66,17 @@ impl PtyEventSink for TauriPtySink {
         match event {
             PtyEvent::Output { bytes, .. } => {
                 self.observer.on_output(&self.session_id, bytes.len());
-                self.on_data
-                    .send(Response::new(bytes))
-                    .map_err(|e| anyhow::anyhow!("channel send failed: {e}"))?;
+                let mut on_data = self.on_data.write().unwrap();
+                if let Some(channel) = on_data.as_ref() {
+                    if let Err(error) = channel.send(Response::new(bytes)) {
+                        tracing::debug!(session_id = %self.session_id, "frontend PTY channel closed: {error}");
+                        *on_data = None;
+                    }
+                }
             }
             PtyEvent::Exit { .. } => {
                 if !self.cancelled.load(Ordering::Acquire) {
-                    let _ = self.app.emit(
-                        "pty-exited",
-                        serde_json::json!({ "pty_key": self.session_id }),
-                    );
+                    (self.exits)(&self.session_id);
                 }
             }
             PtyEvent::Error { message, .. } => {
@@ -73,8 +90,7 @@ impl PtyEventSink for TauriPtySink {
 /// SessionBackend implementation backed by planeai-pty's LocalPtySession.
 pub struct PlaneaiPtyBackend {
     session: LocalPtySession,
-    /// Whether this session runs inside WSL (affects shutdown behavior).
-    is_wsl: bool,
+    tauri_sink: Arc<TauriPtySink>,
 }
 
 impl PlaneaiPtyBackend {
@@ -83,27 +99,23 @@ impl PlaneaiPtyBackend {
     /// `env` is the complete set of env vars to set on the PTY process.
     /// Callers should use `prepare_session()` to build the canonical env (PATH, TERM, etc.)
     /// and add any UI-specific vars (COLORFGBG, PLANEAI_SOCKET) before calling.
-    ///
-    /// `wsl` is an optional WSL spawn config. When set on Windows, the command spawns
-    /// inside the specified WSL distro via `wsl.exe`.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         session_id: &str,
-        command: &str,
+        command: SpawnCommand,
         cwd: &str,
         env: Vec<(String, String)>,
-        app: AppHandle,
+        exits: ExitSink,
         on_data: Channel<Response>,
         cancelled: Arc<AtomicBool>,
         observer: Arc<dyn OutputObserver>,
-        wsl: Option<WslSpawnConfig>,
     ) -> Result<Self, String> {
-        let full_command = command.to_string();
+        let full_command = command.display();
 
-        let tauri_sink: Arc<dyn PtyEventSink> = Arc::new(TauriPtySink::new(
+        let tauri_sink = Arc::new(TauriPtySink::new(
             session_id.to_string(),
             on_data,
-            app,
+            exits,
             cancelled,
             observer,
         ));
@@ -138,36 +150,58 @@ impl PlaneaiPtyBackend {
                         tracing::warn!("failed to write session metadata: {e}");
                     }
                     let tracking_sink = TrackingLogSink::new(log_sink, meta_path, meta);
-                    Arc::new(TeeSink::new(tauri_sink, vec![Arc::new(tracking_sink)]))
+                    Arc::new(TeeSink::new(
+                        tauri_sink.clone(),
+                        vec![Arc::new(tracking_sink)],
+                    ))
                 }
-                None => tauri_sink,
+                None => tauri_sink.clone(),
             }
         } else {
-            tauri_sink
+            tauri_sink.clone()
         };
 
-        let is_wsl = wsl.is_some();
-
+        let (command, program, args) = match command {
+            SpawnCommand::Shell(command) => (Some(command), None, Vec::new()),
+            SpawnCommand::Argv(mut argv) => {
+                if argv.is_empty() {
+                    return Err("cannot run an empty command".to_string());
+                }
+                let program = argv.remove(0);
+                (None, Some(program), argv)
+            }
+        };
         let config = LocalPtyConfig {
             session_id: 0,
-            command: Some(full_command),
+            command,
+            program,
+            args,
             cwd: Some(cwd.into()),
             env,
             cols: 80,
             rows: 24,
-            wsl,
             ..Default::default()
         };
 
         let session =
             LocalPtySession::spawn(config, sink).map_err(|e| format!("planeai-pty spawn: {e}"))?;
-        Ok(Self { session, is_wsl })
+        Ok(Self {
+            session,
+            tauri_sink,
+        })
+    }
+
+    fn replace_output_channel(&self, on_data: Channel<Response>) {
+        *self.tauri_sink.on_data.write().unwrap() = Some(on_data);
     }
 }
 
 impl SessionBackend for PlaneaiPtyBackend {
-    fn write(&self, data: &[u8]) -> Result<(), String> {
-        self.session.write(data).map_err(|e| e.to_string())
+    fn write(&self, data: &[u8]) -> Result<WriteAck, String> {
+        self.session
+            .write(data)
+            .map(|_| WriteAck::Immediate)
+            .map_err(|e| e.to_string())
     }
 
     fn resize(&self, rows: u16, cols: u16) -> Result<(), String> {
@@ -184,18 +218,19 @@ impl SessionBackend for PlaneaiPtyBackend {
         Ok(())
     }
 
-    fn detach(&self) {
-        if self.is_wsl {
-            // Graceful WSL shutdown: send Ctrl+C to allow the Linux process tree
-            // to handle SIGINT before we kill the wsl.exe wrapper process.
-            let _ = self
-                .session
-                .write(planeai_core::wsl::graceful_shutdown_bytes());
-            // Brief pause to let the signal propagate through the WSL PTY
-            std::thread::sleep(std::time::Duration::from_millis(
-                planeai_core::wsl::GRACEFUL_SHUTDOWN_DELAY_MS,
-            ));
+    fn has_exited(&self) -> bool {
+        self.session.has_exited()
+    }
+
+    fn rebind_output(&self, on_data: Channel<Response>) -> bool {
+        if self.session.has_exited() {
+            return false;
         }
+        self.replace_output_channel(on_data);
+        true
+    }
+
+    fn detach(&self) {
         let _ = self.session.kill();
     }
 }

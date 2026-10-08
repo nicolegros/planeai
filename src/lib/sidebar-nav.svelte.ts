@@ -10,7 +10,6 @@ export type SidebarNavAction =
   | { type: "rename" }
   | { type: "restart" }
   | { type: "edit" }
-  | { type: "open_pr" }
   | { type: "review" }
   | { type: "collapse" }
   | { type: "expand" }
@@ -33,6 +32,18 @@ export function clampIndex(length: number): void {
   if (selectedIndex >= length) selectedIndex = Math.max(0, length - 1);
 }
 
+/** Native controls must retain their browser keyboard semantics while the sidebar has focus. */
+export function shouldBypassSidebarKeyboard(element: Element | null): boolean {
+  return Boolean(
+    element?.matches(
+      "input, textarea, select, [data-plugin-ui-contribution]:not([data-plugin-sidebar-contribution])",
+    ) ||
+    element?.closest(
+      "[role='combobox'], [role='dialog'], [data-plugin-sidebar-action], [data-plugin-ui-contribution]:not([data-plugin-sidebar-contribution])",
+    ),
+  );
+}
+
 /**
  * Handle a keydown event for sidebar navigation.
  * Returns a SidebarNavAction if matched, or null if consumed as navigation / no match.
@@ -47,13 +58,13 @@ export function handleSidebarKey(e: KeyboardEvent, listLength: number): SidebarN
   if (key === "ArrowDown" || key === "j") {
     e.preventDefault();
     clearPending();
-    selectedIndex = Math.min(selectedIndex + 1, listLength - 1);
+    setSelectedIndex(Math.min(selectedIndex + 1, listLength - 1));
     return null;
   }
   if (key === "ArrowUp" || key === "k") {
     e.preventDefault();
     clearPending();
-    selectedIndex = Math.max(selectedIndex - 1, 0);
+    setSelectedIndex(Math.max(selectedIndex - 1, 0));
     return null;
   }
 
@@ -116,11 +127,6 @@ export function handleSidebarKey(e: KeyboardEvent, listLength: number): SidebarN
   if (key === "e") {
     e.preventDefault();
     return { type: "edit" };
-  }
-
-  if (key === "o") {
-    e.preventDefault();
-    return { type: "open_pr" };
   }
 
   if (key === "R") {

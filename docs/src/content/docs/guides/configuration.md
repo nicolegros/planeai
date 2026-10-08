@@ -6,6 +6,10 @@ draft: false
 
 planeai is configured via a single JSON file at `~/.config/planeai/config.json` (or `%APPDATA%\planeai\config.json` on Windows). The file supports JSONC (comments allowed).
 
+On first launch a short setup picks your agents (the ones found on your PATH are pre-selected), your projects folder and a look; run it again from **Preferences → General → Setup**.
+
+Most settings are also available in **Preferences** (⌘, / Ctrl+,). Pick a category in the sidebar, or press ⌘F / Ctrl+F to search every setting by name or keyword. A setting changed from its default shows a reset button next to it.
+
 ## Providers
 
 Each provider defines how planeai launches and communicates with an AI agent CLI.
@@ -16,8 +20,8 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
     "kiro": {
       // Command to start the agent
       "command": "kiro-cli chat",
-      // Command to send a prompt to an existing session
-      "prompt_command": "kiro-cli chat --message \"{{prompt}}\"",
+      // Arguments appended to `command` to start the session on a task prompt
+      "prompt_command": "-- {prompt}",
       // Template for autonomous prompts (task dispatch)
       "autonomous_prompt_template": "Complete this task: {{task.title}}\n\n{{task.description}}",
       // Flag to enable autonomous/yolo mode (no confirmations)
@@ -27,9 +31,15 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
     },
     "claude": {
       "command": "claude",
-      "prompt_command": "claude --message \"{{prompt}}\"",
+      "prompt_command": "-- {prompt}",
       "autonomous_prompt_template": "{{task.title}}: {{task.description}}",
       "yolo_flag": "--dangerously-skip-permissions",
+    },
+    "codex": {
+      "command": "codex --no-daemon",
+      "prompt_command": "-- {prompt}",
+      "yolo_flag": "--dangerously-bypass-approvals-and-sandbox",
+      "resume_command": "codex --no-daemon resume --last",
     },
   },
 }
@@ -38,10 +48,36 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
 | Field                        | Description                                                       |
 | ---------------------------- | ----------------------------------------------------------------- |
 | `command`                    | Shell command to start a new agent session                        |
-| `prompt_command`             | Command to send a prompt to a running session                     |
+| `prompt_command`             | Arguments appended to `command` to start on the task prompt       |
 | `autonomous_prompt_template` | Template rendered when auto-dispatch sends a task                 |
 | `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations            |
 | `resume_command`             | Command to resume interactively when restarting an exited session |
+
+`prompt_command` must keep the agent interactive: `{prompt}` becomes the shell-quoted task prompt, and `--` ends option parsing so a prompt starting with `-` stays a prompt.
+The built-in agents use `-- {prompt}`, except Copilot, which uses `--interactive={prompt}`.
+A built-in agent still holding an earlier default (`-p {prompt}` for Claude Code, `copilot --resume` for Copilot) is upgraded when the config loads; a value you changed is kept.
+
+Kiro, Claude Code, Copilot and Codex are always listed under **Preferences → Agents**. Turn one on to add its preset entry, or off to remove it. The default agent cannot be turned off. Each agent shows whether its binary was found on the session PATH, and **Search paths** adds folders to `extra_path_dirs`.
+
+### Notification hooks
+
+For Kiro, Claude Code, Copilot and Codex, planeai can install a notification hook into the agent's own config.
+The hook tells planeai the moment the agent starts working, finishes, or needs your attention, instead of waiting for 5 seconds of terminal silence.
+planeai offers to install missing hooks in a banner at startup and keeps installed hook scripts up to date on every launch.
+
+| Agent       | Hook config                                              |
+| ----------- | -------------------------------------------------------- |
+| Kiro        | `~/.kiro/agents/default.json`                            |
+| Claude Code | `~/.claude/settings.json`                                |
+| Copilot     | `$COPILOT_HOME/hooks/planeai-notify.json` (`~/.copilot`) |
+| Codex       | `$CODEX_HOME/hooks.json` (`~/.codex`)                    |
+
+Codex runs a hook only after you trust it, so the first Codex launch after installation asks you to review planeai's hooks.
+Until you trust them, Codex sessions keep showing as busy.
+
+Add `--no-daemon` to your Codex `command` and `resume_command` (for example `codex --no-daemon` and `codex --no-daemon resume --last`).
+Without it, Codex runs every session's hooks in one shared background server that keeps the environment of the session that started it, so all Codex sessions report as the same session and change status together.
+`--no-daemon` requires a Codex release that lists it in `codex --help`, and planeai's Codex sessions then no longer appear in `codex agents`.
 
 ## Session Backend
 
@@ -71,6 +107,69 @@ The `daemon` backend is experimental. It provides session persistence across app
 tmux is not supported on Windows. The `local` backend is used automatically on Windows regardless of this setting.
 :::
 
+## File Editor
+
+PlaneAI opens files using one global editor setting, available in **Preferences → Editor**. With no `editor` section, PlaneAI uses its built-in editor.
+
+```jsonc
+{
+  // "embedded" (default), "terminal", or "external"
+  "editor": {
+    "mode": "external",
+    "command": "code",
+    "args": ["--reuse-window", "--goto", "{file}"],
+  },
+}
+```
+
+For `terminal` and `external` modes, `command` is an executable resolved with PlaneAI's augmented `PATH`; `args` is an array, not a shell string. Each argument may use:
+
+- `{file}` — required for non-embedded modes; the absolute file path.
+- `{project}` — the active session's working directory: its worktree when one exists, otherwise the project root.
+- `{session_id}` — the PlaneAI session ID for the file being opened.
+
+The built-in presets are VS Code (`code --reuse-window --goto {file}`), Cursor (`cursor --reuse-window --goto {file}`), Vim, and Neovim. You can freely edit preset values. The Neovim preset passes the session ID to [`planeai.nvim`](https://github.com/nicolegros/planeai.nvim) through `g:planeai_session_id`; install that plugin to select code and send queued feedback to the launching PlaneAI session.
+
+For a custom Neovim configuration, use the same arguments as the built-in preset:
+
+```jsonc
+{
+  "editor": {
+    "mode": "terminal",
+    "command": "nvim",
+    "args": ["--cmd", "let g:planeai_session_id = '{session_id}'", "{file}"],
+  },
+}
+```
+
+`terminal` opens each file in a fresh PlaneAI shell tab and retains the tab after the editor exits. Shell-tab persistence follows the session backend: daemon tabs persist; local and tmux shell tabs are ephemeral. `external` launches the configured application asynchronously with the active worktree as its working directory and leaves PlaneAI focused. Launch failures are shown in the app.
+
+Existing embedded buffers are not reconciled when the global setting changes; an external editor may therefore open the last saved-on-disk version of a file.
+
+## Language Servers
+
+PlaneAI can start configured language servers for supported editor files. Built-in discovery covers TypeScript/JavaScript/JSON, Rust, Python, Go, and C/C++. Add custom trusted profiles in **Preferences → Editor → Language servers** when a server lives outside the standard PATH or needs specific arguments.
+
+```jsonc
+{
+  "language_servers": {
+    "enabled": true,
+    "profiles": [
+      {
+        "id": "local-rust-analyzer",
+        "language_id": "rust",
+        "extensions": ["rs"],
+        "command": "/Users/me/.local/bin/rust-analyzer",
+        "args": [],
+        "enabled": true,
+      },
+    ],
+  },
+}
+```
+
+Custom profiles override built-in discovery for their matching extensions. Profile commands are trusted user configuration: PlaneAI never reads server commands from a repository. In Preferences, enter one command argument per line so arguments containing spaces remain intact. Changes apply when opening a new editor file.
+
 ## Sound
 
 Controls whether planeai plays audio notifications.
@@ -86,7 +185,7 @@ Controls whether planeai plays audio notifications.
 | `true`  | Play a chime when an agent finishes a task (default) |
 | `false` | Disable all sound notifications                      |
 
-This setting is also available in **Preferences → Sound**.
+This setting is also available in **Preferences → General → Notifications**.
 
 ## Task Manager Integration
 
@@ -124,35 +223,29 @@ Available variables: `task.key`, `task.title`, `task.description`, `task.status`
 
 ### Lifecycle Hooks
 
-Hooks run shell commands at task state transitions.
+Hooks move the linked task to a status when its agent session changes state.
 
 ```jsonc
 {
-  "task_manager": {
-    "lifecycle_hooks": {
-      // Runs when a task is dispatched to an agent
-      "on_start": "echo 'Starting {{task.key}}'",
-      // Runs when the agent signals completion
-      "on_complete": "git add -A && git commit -m 'feat({{task.key | slugify}}): {{task.title}}'",
-      // Runs when a notification is received
-      "on_notify": "say '{{task.key}} needs attention'",
-      // Runs when a failed task is retried
-      "on_restart": "git stash && git pull --rebase",
-    },
+  "task_management": {
+    // Each hook moves the linked task to `move_to`; unset hooks never fire
+    "on_start": { "move_to": "in_progress" },
+    "on_notify": { "move_to": "in_review" },
+    // Only reverts a task still in the `on_notify` status
+    "on_resume": { "move_to": "in_progress" },
+    "on_restart": { "move_to": "in_progress" },
+    "on_complete": { "move_to": "done" },
   },
 }
 ```
 
-| Hook          | Trigger                             |
-| ------------- | ----------------------------------- |
-| `on_start`    | Task dispatched to an agent session |
-| `on_complete` | Agent signals task completion       |
-| `on_notify`   | Task receives a notification        |
-| `on_restart`  | Task is retried after failure       |
-
-:::note
-Hooks run in the working directory of the task's git worktree.
-:::
+| Hook          | Trigger                                      |
+| ------------- | -------------------------------------------- |
+| `on_start`    | Session created from the task                |
+| `on_notify`   | Agent goes idle and waits for you            |
+| `on_resume`   | Agent hook reports new work after going idle |
+| `on_restart`  | Exited task session restarted                |
+| `on_complete` | Task session archived or deleted             |
 
 ## Extra PATH Directories
 
@@ -165,7 +258,7 @@ GUI apps inherit a minimal system PATH that may not include directories where yo
 }
 ```
 
-These directories are prepended before the conventional ones, giving them highest priority.
+These directories are prepended before the conventional ones, giving them highest priority. They apply to agent sessions, shell tabs, and plugin backends — so a plugin that shells out to a CLI (for example a usage-reporting plugin that runs `kiro-cli`) resolves it even when planeai is launched from Spotlight, Finder, or the Dock.
 
 ### Environment Override
 
@@ -181,63 +274,16 @@ When `PLANEAI_EXTRA_PATH` is set, `extra_path_dirs` from the config file is igno
 
 ### Jira
 
-planeai can sync issues from Jira Cloud into the local task board and write status changes back to Jira. Configured via the `integrations.jira` block.
+Jira is a bundled plugin with configured-source synchronization, periodic refresh, lifecycle writeback, a sidebar, and departed-issue prompts. Configure the Jira Cloud site and JQL sources in **Preferences → Jira**, then use OAuth 2.0 with PKCE to connect. Syncing imports matching issues as PlaneAI tasks and refreshes the Jira sidebar; select an issue there to assign it to a PlaneAI project as a child task. The plugin stores public settings in its own namespace, OAuth credentials in backend-only plugin secrets, and its cache/link state in its plugin database.
 
-```jsonc
-{
-  "integrations": {
-    "jira": {
-      // Your Jira Cloud site URL
-      "site": "https://mycompany.atlassian.net",
-      // How often to poll Jira (milliseconds, default: 60000)
-      "sync_interval_ms": 60000,
-      // Named sync sources — each is a JQL filter
-      "sources": {
-        "my-sprint": {
-          // JQL query selecting which issues to sync
-          "jql": "project = ENG AND assignee = currentUser() AND sprint in openSprints()",
-          // Map Jira status names to planeai statuses
-          "status_map": {
-            "In Progress": "in_progress",
-            "In Review": "in_review",
-            "Done": "done",
-          },
-          // Optional: write local status changes back to Jira
-          "writeback": {
-            // Transition the Jira issue to this status when work starts
-            "on_start": "In Progress",
-            // Transition the Jira issue to this status when work completes
-            "on_complete": "Done",
-            // Add a comment to the Jira issue on each transition
-            "comment": true,
-          },
-        },
-      },
-    },
-  },
-}
-```
+#### Migrating legacy Jira
 
-| Field                       | Description                                                                      |
-| --------------------------- | -------------------------------------------------------------------------------- |
-| `site`                      | Jira Cloud site URL (e.g., `https://myco.atlassian.net`)                         |
-| `sync_interval_ms`          | Polling interval in milliseconds (default: 60000)                                |
-| `sources`                   | Named JQL filters to sync                                                        |
-| `sources.<name>.jql`        | JQL query selecting issues to import                                             |
-| `sources.<name>.status_map` | Map of Jira status → planeai status (`todo`, `in_progress`, `in_review`, `done`) |
-| `sources.<name>.writeback`  | Optional writeback configuration                                                 |
-| `writeback.on_start`        | Jira status to transition to when work starts locally                            |
-| `writeback.on_complete`     | Jira status to transition to when work completes locally                         |
-| `writeback.comment`         | Whether to add a comment on each transition (default: false)                     |
+Profiles that still contain `integrations.jira`, legacy Jira tokens, and legacy issue/link state are never migrated or enabled automatically. Open **Preferences → Plugins** and choose **Migrate and enable Jira plugin**. PlaneAI first freezes legacy ownership, creates a private on-disk backup, imports settings, refresh credentials/cloud identity, issue/source/sync state, links, and departed prompts, validates the target, then enables the bundled plugin.
+
+If PlaneAI is interrupted or validation/enablement fails, Jira remains safely fenced so legacy and plugin workers cannot run together. The same Plugins card shows diagnostics and **Retry migration**; retry reuses the frozen backup and is idempotent. The backup is retained for diagnostics/recovery and never exposed through the UI.
 
 #### Authentication
 
-Jira integration uses OAuth 2.0 with PKCE. Connect via **Preferences → Jira → Connect to Jira**, which opens the Atlassian consent screen in your browser. Tokens are stored locally in the app data directory.
+Connect via **Preferences → Jira → Connect**. Building from source requires `JIRA_CLIENT_ID` and `JIRA_CLIENT_SECRET`; without them, the build succeeds but OAuth cannot work at runtime.
 
-:::note
-Building from source requires `JIRA_CLIENT_ID` and `JIRA_CLIENT_SECRET` environment variables (see `.env.example`). Without them the build succeeds but OAuth will not work at runtime.
-:::
-
-#### Departed issues
-
-When a synced issue no longer matches its source JQL (e.g., it was reassigned or moved to another project), planeai marks it as "departed" and shows a prompt asking whether to mark the local task as done or dismiss it.
+Jira source synchronization includes departed-issue handling: when an issue no longer matches a configured source, its membership for that source is marked departed. An issue remains in the Jira sidebar while it matches any configured source.

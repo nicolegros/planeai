@@ -65,6 +65,32 @@ fn exited_session_older_than_48h_gets_worktree_removed() {
 }
 
 #[test]
+fn shared_worktree_is_never_removed_as_stale() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/myapp").unwrap();
+    let old = (chrono::Utc::now() - chrono::Duration::hours(72)).to_rfc3339();
+    insert_session(
+        &conn,
+        "sess-shared",
+        &project.id,
+        "exited",
+        Some("/tmp/wt/shared"),
+        &old,
+    );
+    conn.execute(
+        "UPDATE sessions SET worktree_owned = 0 WHERE id = 'sess-shared'",
+        [],
+    )
+    .unwrap();
+
+    let errors = cleanup_stale_worktrees(&conn, |_, _| {
+        panic!("shared worktrees must not be removed");
+    });
+
+    assert!(errors.is_empty());
+}
+
+#[test]
 fn exited_session_less_than_48h_is_skipped() {
     let conn = test_db();
     let project = ProjectService::ensure_project(&conn, "/tmp/myapp").unwrap();

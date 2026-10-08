@@ -10,10 +10,9 @@ use tokio::sync::broadcast;
 
 pub struct DaemonSession {
     session_id: String,
-    buffer: Arc<Mutex<RingBuffer>>,
+    output: Arc<SessionOutput>,
     alive: Arc<AtomicBool>,
     session: LocalPtySession,
-    tx: broadcast::Sender<Vec<u8>>,
 }
 
 impl DaemonSession {
@@ -27,14 +26,12 @@ impl DaemonSession {
         buffer_capacity: usize,
     ) -> anyhow::Result<Self> {
         let session_id = session_id.into();
-        let buffer = Arc::new(Mutex::new(RingBuffer::new(buffer_capacity)));
+        let output = Arc::new(SessionOutput::new(buffer_capacity));
         let alive = Arc::new(AtomicBool::new(true));
-        let (tx, _) = broadcast::channel(64);
 
         let sink: Arc<dyn PtyEventSink> = {
             let primary = Arc::new(DaemonPtySink {
-                buffer: Arc::clone(&buffer),
-                tx: tx.clone(),
+                output: Arc::clone(&output),
                 alive: Arc::clone(&alive),
             });
             if let Some(log_sink) = DurableLogSink::open(&session_id, command, cwd) {
@@ -96,10 +93,9 @@ impl DaemonSession {
 
         Ok(Self {
             session_id,
-            buffer,
+            output,
             alive,
             session,
-            tx,
         })
     }
 
@@ -122,24 +118,21 @@ impl DaemonSession {
     }
 
     pub fn buffer_snapshot(&self) -> Vec<u8> {
-        self.buffer.lock().unwrap().snapshot()
-    }
-
-    /// Return the current write offset for cursor-based reads.
-    pub fn buffer_write_offset(&self) -> u64 {
-        self.buffer.lock().unwrap().write_offset()
+        self.output.lock().buffer.snapshot()
     }
 
     /// Read buffer content written after `after_offset`, up to `max_bytes` (0 = unlimited).
     /// Returns (raw_bytes, new_write_offset, truncated).
     pub fn buffer_read_after(&self, after_offset: u64, max_bytes: usize) -> (Vec<u8>, u64, bool) {
-        let buf = self.buffer.lock().unwrap();
-        let (bytes, next_cursor, truncated) = buf.read_after(after_offset, max_bytes);
-        (bytes, next_cursor, truncated)
+        self.output
+            .lock()
+            .buffer
+            .read_after(after_offset, max_bytes)
     }
 
-    pub fn subscribe_output(&self) -> broadcast::Receiver<Vec<u8>> {
-        self.tx.subscribe()
+    /// The buffered output so far, and a receiver for the output after it.
+    pub fn snapshot_and_subscribe(&self) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
+        self.output.snapshot_and_subscribe()
     }
 
     pub fn session_id(&self) -> &str {
@@ -151,24 +144,69 @@ impl DaemonSession {
     }
 }
 
+// ─── SessionOutput ───────────────────────────────────────────────────────────
+
+/// A session's output: the replay buffer and the live stream that continues it.
+///
+/// One lock covers both, so an attach's snapshot ends exactly where its stream starts.
+struct SessionOutput(Mutex<OutputState>);
+
+struct OutputState {
+    buffer: RingBuffer,
+    /// Dropped when the session's output ends, which closes every subscriber's stream.
+    tx: Option<broadcast::Sender<Vec<u8>>>,
+}
+
+impl SessionOutput {
+    fn new(buffer_capacity: usize) -> Self {
+        Self(Mutex::new(OutputState {
+            buffer: RingBuffer::new(buffer_capacity),
+            tx: Some(broadcast::channel(64).0),
+        }))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, OutputState> {
+        self.0.lock().unwrap()
+    }
+
+    fn publish(&self, bytes: Vec<u8>) {
+        let mut state = self.lock();
+        state.buffer.write(&bytes);
+        if let Some(tx) = &state.tx {
+            let _ = tx.send(bytes);
+        }
+    }
+
+    fn close(&self) {
+        self.lock().tx.take();
+    }
+
+    /// The receiver yields `Closed` once the output ends, immediately if it already has.
+    fn snapshot_and_subscribe(&self) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
+        let state = self.lock();
+        let rx = match &state.tx {
+            Some(tx) => tx.subscribe(),
+            None => broadcast::channel(1).1,
+        };
+        (state.buffer.snapshot(), rx)
+    }
+}
+
 // ─── DaemonPtySink ───────────────────────────────────────────────────────────
 
-/// Bridges planeai-pty output events to the daemon's buffer + broadcast mechanism.
+/// Bridges planeai-pty output events to the session's output.
 struct DaemonPtySink {
-    buffer: Arc<Mutex<RingBuffer>>,
-    tx: broadcast::Sender<Vec<u8>>,
+    output: Arc<SessionOutput>,
     alive: Arc<AtomicBool>,
 }
 
 impl PtyEventSink for DaemonPtySink {
     fn send(&self, event: PtyEvent) -> anyhow::Result<()> {
         match event {
-            PtyEvent::Output { bytes, .. } => {
-                self.buffer.lock().unwrap().write(&bytes);
-                let _ = self.tx.send(bytes);
-            }
+            PtyEvent::Output { bytes, .. } => self.output.publish(bytes),
             PtyEvent::Exit { .. } => {
                 self.alive.store(false, Ordering::SeqCst);
+                self.output.close();
             }
             PtyEvent::Error { message, .. } => {
                 tracing::error!("planeai-pty error: {message}");
@@ -302,5 +340,63 @@ impl DurableLogSink {
             PtyEvent::Error { .. } => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::broadcast::error::RecvError;
+
+    fn last_line(snapshot: &[u8]) -> Option<u64> {
+        let text = std::str::from_utf8(snapshot).ok()?;
+        text.trim_end().rsplit('\n').next()?.parse().ok()
+    }
+
+    #[test]
+    fn an_attach_mid_output_continues_the_replay_exactly() {
+        let output = Arc::new(SessionOutput::new(64));
+        let stop = Arc::new(AtomicBool::new(false));
+        let publisher = {
+            let output = Arc::clone(&output);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let mut n: u64 = 0;
+                while !stop.load(Ordering::Relaxed) {
+                    output.publish(format!("{n}\n").into_bytes());
+                    n += 1;
+                }
+            })
+        };
+
+        let mut broken = Vec::new();
+        let mut checked = 0;
+        for _ in 0..20_000 {
+            let (snapshot, mut rx) = output.snapshot_and_subscribe();
+            let Some(replayed) = last_line(&snapshot) else {
+                continue;
+            };
+            let live = match rx.blocking_recv() {
+                Ok(bytes) => String::from_utf8(bytes).unwrap(),
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => unreachable!("output never closes here"),
+            };
+            checked += 1;
+            let live: u64 = live.trim_end().parse().unwrap();
+            if live != replayed + 1 {
+                broken.push((replayed, live));
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        publisher.join().unwrap();
+
+        assert!(checked > 1_000, "only {checked} attaches were checked");
+        assert_eq!(
+            broken.len(),
+            0,
+            "{} of {checked} attaches did not continue the replay, (replayed, first live): {:?}",
+            broken.len(),
+            &broken[..broken.len().min(5)]
+        );
     }
 }

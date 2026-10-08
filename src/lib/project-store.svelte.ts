@@ -25,10 +25,29 @@ export async function createProject(name: string, path: string): Promise<void> {
   await loadProjects();
 }
 
+export async function updateProject(id: string, name: string, path: string): Promise<void> {
+  await projectsApi.update(id, name, path);
+  await loadProjects();
+}
+
 export async function archiveProject(id: string): Promise<void> {
   await projectsApi.archive(id);
   removeProjectSessions(id);
   projects = projects.filter((p) => p.id !== id);
+}
+
+export async function hideProject(id: string): Promise<void> {
+  await projectsApi.hide(id);
+  projects = projects.map((project) =>
+    project.id === id ? { ...project, hidden: true } : project,
+  );
+}
+
+export async function unhideProject(id: string): Promise<void> {
+  await projectsApi.unhide(id);
+  projects = projects.map((project) =>
+    project.id === id ? { ...project, hidden: false } : project,
+  );
 }
 
 export async function deleteProject(id: string): Promise<void> {

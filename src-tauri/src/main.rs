@@ -10,14 +10,22 @@ mod daemon_client;
 mod db;
 mod file_explorer;
 mod git;
-mod jira;
+mod github_migration;
+mod jira_migration;
 mod logging;
+mod lsp;
 mod notify;
 mod output_observer;
 mod paths;
-mod pr;
+mod plugin_packages;
+mod plugin_providers;
+mod plugin_rpc;
+mod plugins;
 mod pty;
 mod pty_planeai_core_adapter;
+mod rmux_client;
+mod rmux_ops;
+mod rmux_resources;
 mod session_backend;
 mod session_logs;
 mod session_ops;
@@ -25,11 +33,11 @@ mod session_restart;
 mod startup;
 mod state;
 mod symphony;
-mod template;
+mod task_lifecycle;
+mod task_start;
+mod terminal_tabs;
 #[cfg(not(windows))]
 mod tmux;
-#[allow(dead_code)]
-mod tmux_wsl;
 mod updater;
 mod util;
 
@@ -37,7 +45,7 @@ use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, PredefinedMenuItem, Submenu},
-    Manager,
+    Emitter, Manager,
 };
 
 use commands::*;
@@ -64,6 +72,13 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // Only the Preferences window remembers its size; the main window manages its own layout.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(tauri_plugin_window_state::StateFlags::SIZE)
+                .with_filter(|label| label == "preferences")
+                .build(),
+        )
         .setup(|app| {
             let menu = Menu::with_items(
                 app,
@@ -119,7 +134,26 @@ fn main() {
             let conn = Connection::open(db_path).expect("failed to open database");
             db::migrate(&conn).expect("failed to run migrations");
             planeai_tasks::sqlite::migrate(&conn).expect("failed to run task migrations");
-            planeai_jira::db::migrate(&conn).expect("failed to run jira migrations");
+            plugins::migrate(&conn).expect("failed to run plugin runtime migrations");
+            match plugins::restore_session_panel_placements(&conn) {
+                Ok(0) => {}
+                Ok(count) => tracing::info!(count, "restored plugin session panel placements"),
+                Err(error) => {
+                    tracing::warn!(%error, "failed to restore plugin session panel placements")
+                }
+            }
+            let bundled_plugins =
+                plugins::bundled_manifests().expect("invalid bundled plugin manifest");
+            plugins::sync_inventory(&conn, &bundled_plugins)
+                .expect("failed to persist bundled plugin inventory");
+            let interrupted_plugins = plugins::reconcile_interrupted_runs(&conn)
+                .expect("failed to reconcile plugin runtime state");
+            if interrupted_plugins > 0 {
+                tracing::warn!(
+                    count = interrupted_plugins,
+                    "reconciled interrupted plugin runtimes"
+                );
+            }
             tracing::info!("database initialized");
 
             // Config: migrate from DB if needed, then load
@@ -128,34 +162,16 @@ fn main() {
                 let _ = config::migrate_from_db(&config_dir, &settings);
             }
             let (cfg, _warnings) = config::load(&config_dir);
+            jira_migration::initialize(&conn, &cfg)
+                .expect("failed to initialize Jira migration state");
+            github_migration::initialize(&conn, &app_dir, &config_dir.join("config.json"))
+                .expect("failed to initialize GitHub migration state");
             if std::env::var("PLANEAI_SESSION_LOG_DIR").is_err() {
                 if let Some(ref dir) = cfg.session_log_dir {
                     std::env::set_var("PLANEAI_SESSION_LOG_DIR", dir);
                 }
             }
             tracing::info!("config loaded");
-
-            // WSL: warm the distro in background to eliminate cold-start latency
-            if let Some(ref wsl) = cfg.wsl {
-                if wsl.enabled {
-                    let distro = wsl.distro.clone().unwrap_or_default();
-                    std::thread::spawn(move || {
-                        let start = std::time::Instant::now();
-                        match planeai_core::wsl::warm_distro(&distro) {
-                            Ok(()) => {
-                                tracing::info!(
-                                    distro = %distro,
-                                    elapsed_ms = start.elapsed().as_millis(),
-                                    "WSL distro warmed"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(distro = %distro, error = %e, "failed to warm WSL distro");
-                            }
-                        }
-                    });
-                }
-            }
 
             // Revive sessions
             #[cfg(not(windows))]
@@ -175,6 +191,10 @@ fn main() {
 
             // Reconcile daemon sessions (mark dead ones as exited)
             startup::reconcile_daemon_sessions(&conn, &cfg);
+
+            // Reconcile rmux sessions (the daemon exits with its last session).
+            // Backgrounded: it talks to the rmux daemon and must not block setup.
+            startup::spawn_rmux_reconciliation();
 
             // Reconcile local sessions (cannot survive app restart)
             startup::reconcile_local_sessions(&conn);
@@ -209,14 +229,13 @@ fn main() {
                     tracing::info!("stale worktree cleanup: complete");
                 }
             });
-            // Jira integration (before cfg is moved into ConfigState)
-            let jira_state = jira::init_jira(&cfg, app.handle().clone());
-
+            // Legacy Jira integration is intentionally inert while connection
+            // ownership lives in the bundled Jira plugin.
             app.manage(ConfigState(Mutex::new(cfg)));
-            app.manage(commands::JiraHandle(tokio::sync::Mutex::new(jira_state)));
 
             // Daemon state (lazily connects to daemon)
             app.manage(DaemonState(tokio::sync::Mutex::new(None)));
+            app.manage(LspState::default());
 
             // Scaffold themes dir with bundled themes if missing
             let themes_dir = config_dir.join("themes");
@@ -244,6 +263,12 @@ fn main() {
 
             let db_arc = Arc::new(Mutex::new(conn));
             app.manage(DbState(db_arc.clone()));
+            app.manage(ProjectOperationState::default());
+            app.manage(updater::UpdateAvailabilityState::default());
+            app.manage(plugins::PluginRuntimeHandle::new(
+                db_arc.clone(),
+                app.handle().clone(),
+            ));
 
             // Notification system
             let notify_state: notify::SharedNotifyState =
@@ -262,15 +287,43 @@ fn main() {
 
             // Refresh hook scripts to latest bundled version (idempotent, only updates
             // scripts for hooks that are already installed on the user's system).
-            planeai_core::notify::refresh_hook_scripts(&config::home_dir());
+            planeai_core::agent_hooks::refresh_hook_scripts(&config::home_dir());
 
             // PTY manager with notify wired in
-            let pty_mgr = pty::PtyManager::new();
+            let tabs = Arc::new(terminal_tabs::TerminalTabs::new(
+                PtyTabHost::new(app.handle().clone()),
+                Arc::new(terminal_tabs::SqliteTabStore(db_arc.clone())),
+                {
+                    let app = app.handle().clone();
+                    move |ended: &terminal_tabs::TabEnded| {
+                        let _ = app.emit("tab-ended", ended);
+                    }
+                },
+            ));
+            // A terminal tab's exit ends it; any other key's is an agent's, which the frontend
+            // marks exited.
+            let pty_mgr = pty::PtyManager::new({
+                let app = app.handle().clone();
+                let tabs = tabs.clone();
+                Arc::new(
+                    move |pty_key: &str| match terminal_tabs::TabId::parse(pty_key) {
+                        Some(tab) => {
+                            let tabs = tabs.clone();
+                            tauri::async_runtime::spawn(async move { tabs.exited(&tab).await });
+                        }
+                        None => {
+                            let _ =
+                                app.emit("pty-exited", serde_json::json!({ "pty_key": pty_key }));
+                        }
+                    },
+                )
+            });
             pty_mgr.set_observer(Arc::new(notify::NotifyObserver::new(
                 notify_state.clone(),
                 app.handle().clone(),
             )));
             app.manage(PtyState(pty_mgr));
+            app.manage(TerminalTabsState(tabs));
             app.manage(FileExplorerState(Mutex::new(
                 file_explorer::WatcherManager::new(),
             )));
@@ -278,15 +331,21 @@ fn main() {
             // Warm font cache in background
             startup::warm_font_cache();
 
-            // PR status background poll
-            startup::start_pr_poller(app.handle());
-
             // Daemon exit event listener
             startup::start_daemon_event_listener(app.handle());
 
             // Symphony orchestrator
             let symphony_state = startup::init_symphony(app, &app_dir, &db_arc);
             app.manage(SymphonyHandle(Mutex::new(symphony_state)));
+
+            // Last, so every state a session launch reads is managed. Plugin providers run
+            // before starts the app quit during are resumed, so those starts can name them.
+            let plugin_runtime = app.state::<plugins::PluginRuntimeHandle>().0.clone();
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                plugin_runtime.start_enabled().await;
+                task_start::resume_pending_starts(&handle).await;
+            });
 
             // Auto-update check (fire-and-forget on startup)
             updater::check_for_updates(app.handle());
@@ -297,10 +356,13 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             create_project,
+            update_project,
             list_projects,
             list_archived_projects,
             archive_project,
             restore_project,
+            hide_project,
+            unhide_project,
             get_project_auto_mode,
             set_project_auto_mode,
             delete_project,
@@ -323,16 +385,22 @@ fn main() {
             list_files,
             read_file,
             write_file,
+            get_terminal_editor_command,
+            open_external_editor,
             list_monospace_fonts,
             get_config,
+            lsp_connect,
+            lsp_send,
+            lsp_disconnect,
             get_log_dir,
             update_config,
             refresh_config,
+            get_config_defaults,
+            detect_providers,
             get_theme_css,
             list_themes,
-            list_wsl_distros,
-            is_wsl_available,
             launch_session,
+            start_task_session,
             attach_session,
             write_to_pty,
             resize_pty,
@@ -344,14 +412,20 @@ fn main() {
             acknowledge_session,
             mark_exited,
             save_mru_order,
-            spawn_tab,
+            open_tab,
+            attach_tab,
             close_tab,
-            increment_tab_count,
+            ended_tabs,
+            is_program_running,
             check_tmux_available,
+            check_rmux_available,
             save_session_layout,
             get_session_layout,
+            save_task_workspace_layout,
+            get_task_workspace_layout,
             restart_session,
             archive_session,
+            park_session,
             destroy_session,
             get_task_details,
             list_task_items,
@@ -360,26 +434,15 @@ fn main() {
             edit_task_item,
             move_task_item,
             fire_task_notify_hook,
-            list_jira_tasks,
+            fire_task_resume_hook,
             fe_list_directory,
+            fe_list_all_paths,
             fe_create_file,
             fe_create_directory,
             fe_rename_entry,
             fe_delete_to_trash,
             fe_watch_directory,
             fe_unwatch_directory,
-            fetch_pr_url,
-            create_pr,
-            generate_pr_defaults,
-            get_ci_checks,
-            get_ci_failure_logs,
-            get_pr_comments,
-            get_allowed_merge_strategies,
-            get_merge_conflict_status,
-            get_pr_status,
-            merge_pr,
-            mark_pr_ready,
-            get_merge_state,
             check_cli_installed,
             install_cli,
             list_stale_worktrees,
@@ -397,12 +460,30 @@ fn main() {
             session_logs::open_session_log_folder,
             session_logs::delete_session_log,
             session_logs::is_dogfood_log_viewer_enabled,
-            jira_connect,
-            jira_disconnect,
-            jira_sync_now,
-            jira_status,
-            assign_jira_task,
-            mark_jira_task_done,
+            list_plugins,
+            list_plugin_session_actions,
+            discover_plugins,
+            install_local_plugin,
+            remove_local_plugin,
+            plugin_call,
+            plugin_host_call,
+            plugin_settings,
+            update_plugin_settings,
+            local_plugin_ui_source,
+            local_plugin_provider_ui_source,
+            provider_session_ensure,
+            provider_session_send,
+            provider_session_interrupt,
+            provider_session_handoff,
+            provider_session_handback,
+            plugin_data_changed,
+            jira_migration_status,
+            migrate_legacy_jira,
+            github_migration_status,
+            migrate_legacy_github,
+            enable_plugin,
+            disable_plugin,
+            reload_plugin,
             list_loop_runs,
             get_loop_run_detail,
             list_loop_recipes,
@@ -411,8 +492,34 @@ fn main() {
             tick_loop,
             stop_loop,
             delete_loop,
+            updater::get_app_version,
+            updater::get_pending_update,
+            updater::check_for_update,
             updater::install_update,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                if code == Some(tauri::RESTART_EXIT_CODE) {
+                    tracing::warn!(
+                        "restart requested; plugin runtimes cannot be gracefully stopped"
+                    );
+                    return;
+                }
+                let runtime = app.state::<plugins::PluginRuntimeHandle>().0.clone();
+                if runtime.exit_is_permitted() {
+                    return;
+                }
+                api.prevent_exit();
+                if runtime.begin_shutdown() {
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        runtime.shutdown_all().await;
+                        runtime.permit_exit();
+                        app_handle.exit(0);
+                    });
+                }
+            }
+        });
 }

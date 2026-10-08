@@ -1,12 +1,8 @@
 /**
- * Sidebar session order — computes session IDs in the same order as the sidebar display.
- * Shared between App.svelte (for keyboard navigation) and UnifiedSidebar (for rendering).
+ * Sidebar navigation ID helpers. The display order itself lives in sidebar-model.ts.
  *
- * Loop dashboards are included as "loop:<id>" entries; regular sessions remain bare IDs.
+ * Loop dashboards are "loop:<id>" entries; regular sessions remain bare IDs.
  */
-import type { Session, Project, TaskItem, LoopRunSummary, LoopSessionItem } from "./types";
-
-const STATUS_ORDER = ["in_progress", "in_review", "todo", "done"] as const;
 
 /**
  * Pure predicate: should a project be hidden from the sidebar?
@@ -36,58 +32,19 @@ export function toLoopId(loopId: string): string {
   return `loop:${loopId}`;
 }
 
-export function computeSidebarSessionOrder(
-  projects: Project[],
-  sessions: Session[],
-  tasksByProject: Record<string, TaskItem[]>,
-  hideDone: boolean,
-  loopsByProject?: Record<string, LoopRunSummary[]>,
-  loopSessions?: Record<string, LoopSessionItem[]>,
-  loopSessionIds?: Set<string>,
-): string[] {
-  const allTaskKeys = new Set(
-    Object.values(tasksByProject)
-      .flat()
-      .map((t) => t.key),
-  );
-  const ids: string[] = [];
-  const loopSessionSet = loopSessionIds ?? new Set<string>();
+/** Create a task workspace ID for navigation and MRU state. */
+export function toTaskWorkspaceId(projectId: string, taskKey: string): string {
+  return `task:${projectId}:${taskKey}`;
+}
 
-  for (const project of projects) {
-    // Loops first (with their child sessions)
-    const projectLoops = loopsByProject?.[project.id] ?? [];
-    for (const loop of projectLoops) {
-      ids.push(toLoopId(loop.id));
-      // Include child sessions in order
-      const children = loopSessions?.[loop.id] ?? [];
-      for (const child of children) {
-        ids.push(child.session_id);
-      }
-    }
+/** Detect a task workspace navigation ID. */
+export function isTaskWorkspaceId(id: string): boolean {
+  return id.startsWith("task:");
+}
 
-    // Orphan sessions (no task_key or task not found, and not in a loop)
-    for (const s of sessions) {
-      if (
-        s.project_id === project.id &&
-        (!s.task_key || !allTaskKeys.has(s.task_key)) &&
-        !loopSessionSet.has(s.id)
-      ) {
-        ids.push(s.id);
-      }
-    }
-    // Task-linked sessions in status/priority order
-    const projectTasks = tasksByProject[project.path] ?? [];
-    for (const status of STATUS_ORDER) {
-      if (status === "done" && hideDone) continue;
-      const group = projectTasks
-        .filter((t) => t.status === status)
-        .sort((a, b) => b.priority - a.priority);
-      for (const t of group) {
-        const linked = sessions.find((s) => s.task_key === t.key);
-        if (linked) ids.push(linked.id);
-      }
-    }
-  }
-
-  return ids;
+/** Parse a task workspace navigation ID. */
+export function parseTaskWorkspaceId(id: string): { projectId: string; taskKey: string } | null {
+  const [, projectId, ...keyParts] = id.split(":");
+  const taskKey = keyParts.join(":");
+  return projectId && taskKey ? { projectId, taskKey } : null;
 }

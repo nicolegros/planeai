@@ -4,6 +4,8 @@ pub mod protocol;
 pub mod registry;
 pub mod server;
 pub mod session;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod transport;
 pub mod types;
 

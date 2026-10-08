@@ -401,10 +401,16 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
 
     // 2. Resolve role from recipe
     let role = ctx.snapshot.roles.get(role_id).cloned();
-    let provider = role
+    let provider_raw = role
         .as_ref()
         .map(|r| r.provider.clone())
         .unwrap_or_else(|| "default".to_string());
+    // Render provider through template engine so {{ inputs.x }} works
+    let provider = if provider_raw.contains("{{") {
+        render_prompt(&provider_raw, ctx.snapshot, ctx.loop_id)
+    } else {
+        provider_raw
+    };
     let isolation = role
         .as_ref()
         .map(|r| r.isolation.clone())
@@ -477,6 +483,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         yolo: ctx.snapshot.policy.auto_approve,
         provider: provider_opt,
         task_key: loop_run.task_key.clone(),
+        task_project: None,
         prompt: rendered_prompt,
         parent_session_id: loop_run.created_by_session_id.clone(),
     };
@@ -1373,6 +1380,7 @@ fn exec_candidates_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<Ti
             yolo: ctx.snapshot.policy.auto_approve,
             provider: provider_opt,
             task_key: loop_run.task_key.clone(),
+            task_project: None,
             prompt: rendered_prompt.clone(),
             parent_session_id: loop_run.created_by_session_id.clone(),
         };
@@ -1756,10 +1764,16 @@ fn exec_arbiter_rank(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
 
     // 2. Resolve role from recipe
     let role = ctx.snapshot.roles.get(role_id).cloned();
-    let provider = role
+    let provider_raw = role
         .as_ref()
         .map(|r| r.provider.clone())
         .unwrap_or_else(|| "default".to_string());
+    // Render provider through template engine so {{ inputs.x }} works
+    let provider = if provider_raw.contains("{{") {
+        render_prompt(&provider_raw, ctx.snapshot, ctx.loop_id)
+    } else {
+        provider_raw
+    };
     let isolation = role
         .as_ref()
         .map(|r| r.isolation.clone())
@@ -1848,6 +1862,7 @@ fn exec_arbiter_rank(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
         yolo: ctx.snapshot.policy.auto_approve,
         provider: provider_opt,
         task_key: loop_run.task_key.clone(),
+        task_project: None,
         prompt: rendered_prompt,
         parent_session_id: loop_run.created_by_session_id.clone(),
     };
@@ -2141,11 +2156,20 @@ fn render_prompt_inner(
     loop_id: &str,
     candidates_context: Option<&str>,
 ) -> String {
-    use minijinja::{context, Environment};
+    use minijinja::{context, escape_formatter, value::ValueKind, Environment};
 
     let mut env = Environment::new();
     // Disable auto-escaping (templates produce plain text, not HTML)
     env.set_auto_escape_callback(|_| minijinja::AutoEscape::None);
+    // Recipe inputs are JSON values; retain their lowercase JSON boolean representation.
+    env.set_formatter(|out, state, value| {
+        if value.kind() == ValueKind::Bool {
+            out.write_str(if value.is_true() { "true" } else { "false" })?;
+            Ok(())
+        } else {
+            escape_formatter(out, state, value)
+        }
+    });
 
     if let Err(e) = env.add_template("prompt", template) {
         tracing::warn!(error = %e, "recipe template parse failed; using raw template");
@@ -2239,15 +2263,17 @@ pub fn auto_advance_with_arc(
 ) {
     const MAX_AUTO_TICKS: usize = 10;
 
-    for _ in 0..MAX_AUTO_TICKS {
+    for i in 0..MAX_AUTO_TICKS {
         if check_human_wait_before_tick && is_human_wait_step(snapshot) {
             break;
         }
 
+        tracing::debug!(loop_id = %short_id(loop_id), tick = i, "[DEBUG-lsr1] auto_advance_with_arc: acquiring lock");
         let conn = match conn_arc.lock() {
             Ok(c) => c,
             Err(_) => break,
         };
+        tracing::debug!(loop_id = %short_id(loop_id), tick = i, "[DEBUG-lsr1] auto_advance_with_arc: lock acquired");
 
         let step_before = snapshot.runtime.current_step.clone();
 
@@ -2256,11 +2282,13 @@ pub fn auto_advance_with_arc(
         // tick_recipe → save_snapshot already persisted the snapshot with derived status
 
         if code != 0 {
+            tracing::debug!(loop_id = %short_id(loop_id), tick = i, "[DEBUG-lsr1] auto_advance_with_arc: tick failed, releasing lock");
             break;
         }
 
         // If the step didn't advance, the loop is waiting for external input.
         if snapshot.runtime.current_step == step_before {
+            tracing::debug!(loop_id = %short_id(loop_id), tick = i, "[DEBUG-lsr1] auto_advance_with_arc: step didn't advance, releasing lock");
             drop(conn);
             break;
         }
@@ -2271,6 +2299,7 @@ pub fn auto_advance_with_arc(
             false
         };
 
+        tracing::debug!(loop_id = %short_id(loop_id), tick = i, should_stop, "[DEBUG-lsr1] auto_advance_with_arc: releasing lock");
         drop(conn);
 
         if should_stop {
@@ -2500,6 +2529,28 @@ mod tests {
         let template = "{{ inputs.gate_command | default('make ci') }}";
         let result = render_prompt(template, &snapshot, "loop-1");
         assert_eq!(result, "cargo test");
+    }
+
+    #[test]
+    fn render_prompt_provider_template_with_default() {
+        // Simulates roles.provider = "{{ inputs.provider | default('default') }}"
+        let snapshot = minimal_snapshot(vec![], BTreeMap::new());
+        let template = "{{ inputs.provider | default('default') }}";
+        let result = render_prompt(template, &snapshot, "loop-1");
+        assert_eq!(result, "default");
+    }
+
+    #[test]
+    fn render_prompt_provider_template_with_input() {
+        let mut inputs = BTreeMap::new();
+        inputs.insert(
+            "provider".to_string(),
+            serde_json::Value::String("claude".to_string()),
+        );
+        let snapshot = minimal_snapshot(vec![], inputs);
+        let template = "{{ inputs.provider | default('default') }}";
+        let result = render_prompt(template, &snapshot, "loop-1");
+        assert_eq!(result, "claude");
     }
 
     #[test]

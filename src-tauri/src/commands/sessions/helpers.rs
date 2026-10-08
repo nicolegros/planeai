@@ -1,20 +1,18 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::config;
 use crate::db;
 
+use planeai_core::agent_hooks::AgentKind;
 use planeai_core::session_launch::{prepare_session, CreateSessionRequest, SessionTarget};
 
-static KIRO_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
-static CLAUDE_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
-static COPILOT_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
+static HOOK_CACHE: Mutex<Option<HashMap<AgentKind, bool>>> = Mutex::new(None);
 
 /// Invalidate cached hook-installed results (call after hook installation).
 pub fn invalidate_hook_cache() {
-    *KIRO_HOOK_CACHE.lock().unwrap() = None;
-    *CLAUDE_HOOK_CACHE.lock().unwrap() = None;
-    *COPILOT_HOOK_CACHE.lock().unwrap() = None;
+    *HOOK_CACHE.lock().unwrap() = None;
 }
 
 /// Resolve the working directory for a session's project.
@@ -34,68 +32,50 @@ pub(crate) fn fire_task_hook(
     cfg: &config::Config,
     session: &db::Session,
     hook_name: &str,
-    cwd: &str,
     conn: &rusqlite::Connection,
 ) {
-    crate::session_ops::fire_task_hook(cfg, session, hook_name, cwd, conn);
+    crate::session_ops::fire_task_hook(cfg, session, hook_name, conn);
 }
 
-pub(crate) fn resolve_task_manager(cfg: &config::Config) -> Result<&config::TaskManager, String> {
-    cfg.task_management
-        .as_ref()
-        .ok_or("No task management configured".to_string())
+/// Register a session for status tracking. Provider sessions take status only from
+/// their plugin, so hooks and silence detection never apply to them (ADR-0014).
+pub(crate) fn register_notify_session(
+    ns: &mut planeai_core::notify::NotifyState,
+    session: &db::Session,
+    project_name: &str,
+    cfg: &config::Config,
+) {
+    let display_name = if session.name.is_empty() {
+        &session.branch
+    } else {
+        &session.name
+    };
+    let provider_owned = session.backend == crate::session_ops::PLUGIN_BACKEND;
+    let hook_enabled = provider_owned
+        || session
+            .provider
+            .as_deref()
+            .is_some_and(|pk| provider_has_hook(pk, cfg));
+    ns.register_session(&session.id, display_name, project_name, hook_enabled);
+    if provider_owned {
+        ns.mark_provider_owned(&session.id);
+    }
 }
 
 /// Check if a provider has hook-based idle detection.
 pub(crate) fn provider_has_hook(provider_key: &str, cfg: &config::Config) -> bool {
-    let Some(provider) = cfg.providers.get(provider_key) else {
-        return false;
-    };
-    if provider.command.contains("kiro") {
-        is_kiro_hook_installed()
-    } else if provider.command.contains("claude") {
-        is_claude_hook_installed()
-    } else if provider.command.contains("copilot") {
-        is_copilot_hook_installed()
-    } else {
-        false
-    }
+    cfg.providers
+        .get(provider_key)
+        .and_then(|p| AgentKind::from_command(&p.command))
+        .is_some_and(is_hook_installed)
 }
 
-pub(crate) fn is_kiro_hook_installed() -> bool {
-    let mut cache = KIRO_HOOK_CACHE.lock().unwrap();
-    *cache.get_or_insert_with(|| {
-        let home = config::home_dir();
-        // Check v2 agent config location
-        let v2_path = std::path::PathBuf::from(format!("{home}/.kiro/agents/default.json"));
-        if crate::notify::is_kiro_hook_installed_at(&v2_path) {
-            return true;
-        }
-        // Check v3 hooks directory
-        let v3_dir = std::path::PathBuf::from(format!("{home}/.kiro/hooks"));
-        planeai_core::notify::is_kiro_v3_hook_installed_at(&v3_dir)
-    })
-}
-
-pub(crate) fn is_claude_hook_installed() -> bool {
-    let mut cache = CLAUDE_HOOK_CACHE.lock().unwrap();
-    *cache.get_or_insert_with(|| {
-        let home = config::home_dir();
-        let path = std::path::PathBuf::from(format!("{home}/.claude/settings.json"));
-        crate::notify::is_claude_hook_installed_at(&path)
-    })
-}
-
-pub(crate) fn is_copilot_hook_installed() -> bool {
-    let mut cache = COPILOT_HOOK_CACHE.lock().unwrap();
-    *cache.get_or_insert_with(|| {
-        let copilot_dir = std::env::var("COPILOT_HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| {
-                std::path::PathBuf::from(format!("{}/.copilot", config::home_dir()))
-            });
-        crate::notify::is_copilot_hook_installed_at(&copilot_dir)
-    })
+pub(crate) fn is_hook_installed(kind: AgentKind) -> bool {
+    let mut cache = HOOK_CACHE.lock().unwrap();
+    *cache
+        .get_or_insert_with(HashMap::new)
+        .entry(kind)
+        .or_insert_with(|| kind.is_hook_installed(&config::home_dir()))
 }
 
 /// Build the canonical PTY environment for a local/tmux session via `prepare_session()`.
@@ -138,26 +118,36 @@ mod tests {
 
     #[test]
     fn hook_cache_returns_consistent_value() {
-        // First call populates cache, subsequent calls return same value
-        let first = is_kiro_hook_installed();
-        let second = is_kiro_hook_installed();
+        let first = is_hook_installed(AgentKind::Kiro);
+        let second = is_hook_installed(AgentKind::Kiro);
         assert_eq!(first, second);
     }
 
     #[test]
     fn invalidate_resets_all_caches() {
-        // Populate caches
-        is_kiro_hook_installed();
-        is_claude_hook_installed();
-        is_copilot_hook_installed();
-
-        // Invalidate
+        for kind in AgentKind::ALL {
+            is_hook_installed(kind);
+        }
         invalidate_hook_cache();
+        assert!(HOOK_CACHE.lock().unwrap().is_none());
+    }
 
-        // Verify caches are cleared
-        assert!(KIRO_HOOK_CACHE.lock().unwrap().is_none());
-        assert!(CLAUDE_HOOK_CACHE.lock().unwrap().is_none());
-        assert!(COPILOT_HOOK_CACHE.lock().unwrap().is_none());
+    #[test]
+    fn registering_a_provider_session_hands_its_status_to_the_plugin() {
+        let cfg = config::Config::default();
+        let mut ns = planeai_core::notify::NotifyState::new();
+        let mut provider = test_session(None);
+        provider.backend = crate::session_ops::PLUGIN_BACKEND.into();
+        provider.provider = Some("claude-chat:claude".into());
+        register_notify_session(&mut ns, &provider, "proj", &cfg);
+        assert!(ns.is_provider_owned("test-id"));
+        assert!(ns.get_meta("test-id").unwrap().hook_enabled);
+
+        let mut local = test_session(None);
+        local.id = "local-id".into();
+        register_notify_session(&mut ns, &local, "proj", &cfg);
+        assert!(!ns.is_provider_owned("local-id"));
+        assert_eq!(ns.get_meta("local-id").unwrap().name, "test");
     }
 
     #[test]
@@ -183,7 +173,6 @@ mod tests {
             provider: None,
             backend: "tmux".into(),
             provider_session_id: None,
-            tab_count: 1,
             auto_approve: false,
             task_key: task_key.map(|s| s.to_string()),
             base_branch: None,
@@ -191,6 +180,7 @@ mod tests {
             pr_state: None,
             attached_once: false,
             parent_session_id: None,
+            task_project_id: None,
         }
     }
 
@@ -200,7 +190,7 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         let session = test_session(None);
         // Should not panic — just returns early
-        fire_task_hook(&cfg, &session, "on_complete", "/tmp/myapp", &conn);
+        fire_task_hook(&cfg, &session, "on_complete", &conn);
     }
 
     #[test]
@@ -212,11 +202,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         let session = test_session(Some("PROJ-1"));
         // Should not panic — returns early when no task_management configured
-        fire_task_hook(&cfg, &session, "on_complete", "/tmp/myapp", &conn);
+        fire_task_hook(&cfg, &session, "on_complete", &conn);
     }
 
     #[test]
-    fn fire_task_hook_with_matching_project_derives_prefix() {
+    fn fire_task_hook_unknown_task_project_returns_early() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
         db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
@@ -227,20 +217,18 @@ mod tests {
                 on_start: None,
                 on_notify: None,
                 on_restart: None,
+                on_resume: None,
                 on_complete: Some(config::LifecycleHook {
                     move_to: "done".into(),
                 }),
-                on_pr_open: None,
-                on_pr_merge: None,
                 auto_dispatch: None,
             }),
             ..config::Config::default()
         };
 
+        // `proj-1` is not a registered project, so the hook never opens the global task DB.
         let session = test_session(Some("MYA-1"));
-        // Runs through the full path — project matched, prefix derived.
-        // The task update won't find the task (no task tables), but doesn't error.
-        fire_task_hook(&cfg, &session, "on_complete", "/tmp/myapp/src", &conn);
+        fire_task_hook(&cfg, &session, "on_complete", &conn);
     }
 
     #[test]
@@ -255,11 +243,10 @@ mod tests {
                 on_start: None,
                 on_notify: None,
                 on_restart: None,
+                on_resume: None,
                 on_complete: Some(config::LifecycleHook {
                     move_to: "done".into(),
                 }),
-                on_pr_open: None,
-                on_pr_merge: None,
                 auto_dispatch: None,
             }),
             ..config::Config::default()
@@ -267,6 +254,6 @@ mod tests {
 
         let session = test_session(Some("MYA-1"));
         // Unknown hook name — does nothing
-        fire_task_hook(&cfg, &session, "on_unknown", "/tmp/myapp", &conn);
+        fire_task_hook(&cfg, &session, "on_unknown", &conn);
     }
 }

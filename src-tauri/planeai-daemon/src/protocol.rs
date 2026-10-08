@@ -18,7 +18,10 @@ pub const CONN_CONTROL: u8 = 0x00;
 pub const CONN_DATA: u8 = 0x01;
 
 /// Current protocol version.
-pub const PROTOCOL_VERSION: u8 = 2;
+/// Version 3 adds the advertised control-plane capability for correlated
+/// shell-tab spawn/cancellation. Clients must only use that lifecycle when a
+/// daemon reports this version (or newer) in its list response.
+pub const PROTOCOL_VERSION: u8 = 3;
 
 /// Write a binary frame: [1-byte type][4-byte big-endian length][payload]
 pub async fn write_frame(
@@ -50,6 +53,10 @@ pub async fn read_frame(stream: &mut (impl AsyncRead + Unpin)) -> anyhow::Result
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Request {
     Spawn {
+        /// Correlates a spawn with its response and cancellation lifecycle.
+        /// Optional for compatibility with existing daemon clients.
+        #[serde(default)]
+        request_id: Option<String>,
         session_id: String,
         command: String,
         #[serde(default)]
@@ -60,6 +67,10 @@ pub enum Request {
         env: Option<HashMap<String, String>>,
         #[serde(default)]
         mode: Option<SpawnMode>,
+    },
+    CancelSpawn {
+        /// The request ID of the spawn to cancel. The operation is idempotent.
+        request_id: String,
     },
     Kill {
         session_id: String,
@@ -94,6 +105,18 @@ fn default_read_lines() -> usize {
     100
 }
 
+impl Request {
+    /// Return the spawn request ID, when this request participates in the
+    /// cancellable spawn lifecycle.
+    pub fn request_id(&self) -> Option<&str> {
+        match self {
+            Self::Spawn { request_id, .. } => request_id.as_deref(),
+            Self::CancelSpawn { request_id } => Some(request_id),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum Response {
@@ -108,6 +131,9 @@ pub enum Response {
         error: String,
     },
     Sessions {
+        /// Advertises the daemon protocol so a newly updated app can safely
+        /// fall back when it encounters a retained pre-update daemon.
+        protocol_version: u8,
         sessions: Vec<SessionInfoDto>,
     },
     Event {

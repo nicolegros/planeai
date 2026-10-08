@@ -24,7 +24,7 @@ Open (or create) your config file at `~/.config/planeai/config.json`:
   "providers": {
     "claude": {
       "command": "claude",
-      "prompt_command": "claude --message \"{{prompt}}\"",
+      "prompt_command": "-- {prompt}",
       "yolo_flag": "--dangerously-skip-permissions",
     },
   },
@@ -33,12 +33,12 @@ Open (or create) your config file at `~/.config/planeai/config.json`:
 }
 ```
 
-Alternatively, configure this in **Preferences** (⌘, / Ctrl+,) under the **Models** tab.
+Alternatively, configure this in **Preferences** (⌘, / Ctrl+,) on the **Agents** page.
 
 This tells planeai:
 
 - **command** — launch Claude by running `claude`
-- **prompt_command** — send messages to a running Claude session
+- **prompt_command** - start Claude on a task's prompt, as `claude -- '<prompt>'`
 - **yolo_flag** — the flag for autonomous mode (used by auto-dispatch; not needed for manual sessions)
 - **session_backend** — use the local backend (no tmux required, sessions run in-process)
 
@@ -79,7 +79,7 @@ Claude reads your codebase and responds. You can continue the conversation, ask 
 
 When the agent makes changes:
 
-1. Open the diff viewer with **⌘D** (macOS) or **Ctrl+D** — this shows all file changes the agent made
+1. Open the diff viewer with **⌘\\** (macOS) or **Ctrl+\\** — this shows all file changes the agent made
 2. Review the diff and send feedback directly to the agent if needed
 3. When you're satisfied, archive the session from the context menu (right-click the session in the sidebar)
 

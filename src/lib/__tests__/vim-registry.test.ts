@@ -8,6 +8,7 @@ vi.mock("@replit/codemirror-vim", () => ({
     defineEx: vi.fn((name: string, _prefix: string, fn: Function) => {
       exCommands[name] = fn;
     }),
+    map: vi.fn(),
   },
   getCM: vi.fn((view: any) => view._mockCm),
 }));
@@ -33,6 +34,13 @@ function makeHandlers(overrides: Partial<VimHandlers> = {}): VimHandlers {
     saveAndClose: vi.fn(),
     nextBuffer: vi.fn(),
     prevBuffer: vi.fn(),
+    definition: vi.fn(),
+    references: vi.fn(),
+    rename: vi.fn(),
+    format: vi.fn(),
+    nextDiagnostic: vi.fn(),
+    previousDiagnostic: vi.fn(),
+    showDiagnostics: vi.fn(),
     onModeChange: vi.fn(),
     ...overrides,
   };
@@ -92,6 +100,26 @@ describe("vim-registry", () => {
     exCommands["wq"](cmB, {});
     expect(handlersB.saveAndClose).toHaveBeenCalledTimes(1);
     expect(handlersA.saveAndClose).not.toHaveBeenCalled();
+  });
+
+  it("routes LSP Ex commands to the correct editor", () => {
+    const { view: viewA, mockCm: cmA } = makeMockView("A");
+    const { view: viewB, mockCm: cmB } = makeMockView("B");
+    const handlersA = makeHandlers();
+    const handlersB = makeHandlers();
+
+    registerEditor(viewA, handlersA);
+    registerEditor(viewB, handlersB);
+
+    exCommands["LspDefinition"](cmA, {});
+    exCommands["LspReferences"](cmB, {});
+    exCommands["LspNextDiagnostic"](cmA, {});
+    exCommands["LspPrevDiagnostic"](cmB, {});
+
+    expect(handlersA.definition).toHaveBeenCalledOnce();
+    expect(handlersA.nextDiagnostic).toHaveBeenCalledOnce();
+    expect(handlersB.references).toHaveBeenCalledOnce();
+    expect(handlersB.previousDiagnostic).toHaveBeenCalledOnce();
   });
 
   it("unregister removes the editor from routing", () => {

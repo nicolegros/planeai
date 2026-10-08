@@ -3,6 +3,7 @@ import {
   addComment,
   removeComment,
   editComment,
+  reanchorComments,
   getComments,
   getFileCommentCount,
   getTotalCommentCount,
@@ -138,6 +139,31 @@ describe("review-comments", () => {
     expect(edited.startLine).toBe(5);
     expect(edited.endLine).toBe(10);
     expect(edited.createdAt).toBe(c.createdAt);
+  });
+
+  it("reanchors only comments for the refreshed file", () => {
+    const stale = addComment("s1", {
+      filePath: "a.ts",
+      type: "line",
+      startLine: 1,
+      endLine: 1,
+      comparisonKey: "main:WORKTREE",
+      fingerprint: "before",
+      text: "refresh me",
+    });
+    const untouched = addComment("s1", {
+      filePath: "b.ts",
+      type: "line",
+      startLine: 1,
+      endLine: 1,
+      comparisonKey: "main:WORKTREE",
+      fingerprint: "other",
+      text: "leave me",
+    });
+
+    reanchorComments("s1", "a.ts", "main:WORKTREE", "after");
+
+    expect(getComments("s1")).toEqual([{ ...stale, fingerprint: "after" }, untouched]);
   });
 
   it("editComment is no-op for unknown session or id", () => {

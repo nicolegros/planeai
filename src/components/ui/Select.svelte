@@ -17,10 +17,12 @@
     placeholder?: string;
     emptyText?: string;
     allowDeselect?: boolean;
+    /** Accessible name, for selects without a visible associated label. */
+    ariaLabel?: string;
     class?: string;
   }
 
-  let { items, value = $bindable(""), onValueChange, onInput, onkeydown, placeholder = "", emptyText = "No results", allowDeselect = false, class: className = "" }: Props = $props();
+  let { items, value = $bindable(""), onValueChange, onInput, onkeydown, placeholder = "", emptyText = "No results", allowDeselect = false, ariaLabel, class: className = "" }: Props = $props();
 
   let search = $state("");
   let open = $state(false);
@@ -95,6 +97,7 @@
       oninput={(e) => { search = e.currentTarget.value; onInput?.(search); }}
       onkeydown={handleKeydown}
       {placeholder}
+      aria-label={ariaLabel}
       autocomplete="off"
       autocorrect="off"
       autocapitalize="off"

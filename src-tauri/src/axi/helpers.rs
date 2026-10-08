@@ -71,7 +71,7 @@ pub(crate) fn resolve_project(
     } else {
         projects
             .into_iter()
-            .find(|p| cwd.starts_with(&p.path))
+            .find(|p| crate::util::is_project_path_or_descendant(cwd, &p.path))
             .ok_or_else(|| "could not resolve project from current directory".to_string())
     }
 }
