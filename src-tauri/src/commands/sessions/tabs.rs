@@ -433,58 +433,55 @@ fn prepare_tab_spawn(
         (TabBackend::Local, Some((argv, cwd))) => {
             TabLaunch::Local(pty::PtyTarget::Program { argv, cwd })
         }
-        (backend, None) => match backend {
-            TabBackend::Daemon | TabBackend::Rmux { .. } if runs_program => {
-                return Err(no_program_here());
-            }
-            TabBackend::Daemon => {
-                #[cfg(not(windows))]
-                let (command, args): (String, Vec<String>) = match spec {
-                    TabSpec::Command { .. } => (
-                        "/bin/sh".to_string(),
-                        vec!["-c".to_string(), shell_cmd.clone()],
-                    ),
-                    _ => (
-                        shell.clone(),
-                        shell_args().iter().map(|arg| (*arg).to_string()).collect(),
-                    ),
-                };
-                #[cfg(windows)]
-                let (command, args): (String, Vec<String>) = {
-                    let command_shell =
-                        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
-                    match spec {
-                        TabSpec::Command { command } => {
-                            (command_shell, vec!["/K".to_string(), command.clone()])
-                        }
-                        _ => (shell.clone(), Vec::new()),
+        (TabBackend::Daemon | TabBackend::Rmux { .. }, None) if runs_program => {
+            return Err(no_program_here());
+        }
+        (TabBackend::Daemon, None) => {
+            #[cfg(not(windows))]
+            let (command, args): (String, Vec<String>) = match spec {
+                TabSpec::Command { .. } => (
+                    "/bin/sh".to_string(),
+                    vec!["-c".to_string(), shell_cmd.clone()],
+                ),
+                _ => (
+                    shell.clone(),
+                    shell_args().iter().map(|arg| (*arg).to_string()).collect(),
+                ),
+            };
+            #[cfg(windows)]
+            let (command, args): (String, Vec<String>) = {
+                let command_shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
+                match spec {
+                    TabSpec::Command { command } => {
+                        (command_shell, vec!["/K".to_string(), command.clone()])
                     }
-                };
-                TabLaunch::Daemon(DaemonShellTabSpawn {
-                    command,
-                    args,
-                    cwd,
-                    env: env.iter().cloned().collect(),
-                })
+                    _ => (shell.clone(), Vec::new()),
+                }
+            };
+            TabLaunch::Daemon(DaemonShellTabSpawn {
+                command,
+                args,
+                cwd,
+                env: env.iter().cloned().collect(),
+            })
+        }
+        (TabBackend::Rmux { workspace }, None) => TabLaunch::Rmux {
+            session_id: session.id.clone(),
+            workspace,
+            argv: planeai_rmux::shell_argv(&shell_cmd),
+            cwd,
+        },
+        (TabBackend::Local, None) => TabLaunch::Local(match spec {
+            TabSpec::Program { argv } => {
+                let mut argv = argv.clone();
+                resolve_program(&mut argv, &env);
+                pty::PtyTarget::Program { argv, cwd }
             }
-            TabBackend::Rmux { workspace } => TabLaunch::Rmux {
-                session_id: session.id.clone(),
-                workspace,
-                argv: planeai_rmux::shell_argv(&shell_cmd),
+            _ => pty::PtyTarget::Shell {
+                command: shell_cmd,
                 cwd,
             },
-            TabBackend::Local => TabLaunch::Local(match spec {
-                TabSpec::Program { argv } => {
-                    let mut argv = argv.clone();
-                    resolve_program(&mut argv, &env);
-                    pty::PtyTarget::Program { argv, cwd }
-                }
-                _ => pty::PtyTarget::Shell {
-                    command: shell_cmd,
-                    cwd,
-                },
-            }),
-        },
+        }),
     };
 
     Ok(PreparedTab {
