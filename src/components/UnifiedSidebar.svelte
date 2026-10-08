@@ -18,7 +18,6 @@
   import { MOD_LABEL } from "../lib/keyboard";
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
   import { showSnackbar } from "../lib/snackbar.svelte";
-  import TaskPanel from "./TaskPanel.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
@@ -37,6 +36,7 @@
     onStartRename: (id: string) => void;
     onDeleteProject: (project: Project) => void;
     onEditProject: (project: Project) => void;
+    onEditTask: (task: TaskItem, project: Project) => void;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectTask?: (task: TaskItem, repoPath: string) => void;
     onCreateSession?: () => void;
@@ -58,7 +58,7 @@
     onPluginClose?: () => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedTaskWorkspace = null, selectedLoopId = null, pluginContributions = [], sessionIndicatorContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedTaskWorkspace = null, selectedLoopId = null, pluginContributions = [], sessionIndicatorContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
   function pluginContributionKey(item: { plugin: PluginInventory; contribution: PluginUiContribution }): string {
@@ -208,7 +208,6 @@
   }
 
   // External triggers
-  let taskPanelRef = $state<TaskPanel | undefined>(undefined);
 
   const previewId = $derived(getPreviewId());
   const previewTaskWorkspace = $derived(
@@ -479,7 +478,7 @@
       const { task, project, linkedSession: linked } = current.row;
       if (action.type === "select") handleTaskClick(task, project);
       else if (action.type === "start_session") onPickTask(task, project.path);
-      else if (action.type === "edit") taskPanelRef?.openEdit(task);
+      else if (action.type === "edit") onEditTask(task, project);
       else if (action.type === "status") moveTask(current.row, action.status, true);
       else if (action.type === "review") { if (linked) { onSelectSession(linked.id); onToggleDiff?.(); } }
       else if (action.type === "archive") { if (linked) fadeOutThenAct(linked.id, () => onArchiveSession(linked)); }
@@ -879,19 +878,6 @@
   </button>
 </aside>
 
-<!-- Hidden TaskPanel for edit dialog -->
-<div class="absolute w-0 h-0 overflow-hidden">
-  <TaskPanel
-    bind:this={taskPanelRef}
-    disableKeyboard={true}
-    {onPickTask}
-    {onSelectSession}
-    onArchiveSession={async (s) => { const full = sessions.find(x => x.id === s.id); if (full) fadeOutThenAct(full.id, () => onArchiveSession(full)); }}
-    onSessionsChanged={onSessionsChanged}
-    onSessionCreated={(session) => { orchestrator.createSession(session); }}
-  />
-</div>
-
 <!-- Session context menu -->
 {#if contextMenu}
   {@const menuSession = contextMenu.session}
@@ -968,7 +954,7 @@
       ...(linkedSession
         ? [{ label: "Review diff", onSelect: () => { onSelectSession(linkedSession.id); onToggleDiff?.(); } }]
         : []),
-      { label: "Edit task", onSelect: () => taskPanelRef?.openEdit(menuTask) },
+      { label: "Edit task", onSelect: () => onEditTask(menuTask, menuRow.project) },
       { label: "Change status", children: statusChildren },
       ...(linkedSession
         ? [

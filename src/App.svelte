@@ -1167,6 +1167,7 @@
         onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
         onDeleteProject={(p) => (projectToDelete = p)}
         onEditProject={openEditProject}
+        onEditTask={(task, project) => { taskWorkspaceToEdit = { task, project }; showTaskForm = true; }}
         onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); if (proj) openSessionForTask(task, proj); }}
         onSelectTask={selectWorkspaceTask}
         onAddProject={openAddProject}
@@ -1219,7 +1220,7 @@
     {/if}
 
     {#if showTaskForm}
-    <FormDialog title="New Task" onClose={() => { showTaskForm = false; tick().then(() => refocusTerminal()); }}>
+    <FormDialog title={taskWorkspaceToEdit ? "Edit Task" : "New Task"} size="xl" onClose={() => { taskWorkspaceToEdit = null; showTaskForm = false; tick().then(() => refocusTerminal()); }}>
       <TaskForm
         mode={taskWorkspaceToEdit ? "edit" : "create"}
         {projects}
