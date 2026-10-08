@@ -507,7 +507,9 @@ describe("sessions", () => {
 describe("wsl", () => {
   it("is not offered off Windows", async () => {
     await render("/?page=preferences&section=sessions");
-    expect(document.querySelector('[role="switch"][aria-label="Run sessions inside WSL"]')).toBeNull();
+    expect(
+      document.querySelector('[role="switch"][aria-label="Run sessions inside WSL"]'),
+    ).toBeNull();
     expect(mocks.listWslDistros).not.toHaveBeenCalled();
   });
 
