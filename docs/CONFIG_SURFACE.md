@@ -15,6 +15,7 @@ These are normal options users should configure.
 | `default_provider`        | string   | `"kiro"`                          | Which provider to use when launching sessions                                                                                                                    |
 | `session_backend`         | string   | `"local"`                         | Where sessions run: `local`, `tmux`, `daemon`                                                                                                                    |
 | `session_log_dir`         | string   | unset                             | Directory for durable `.ansi` session logs                                                                                                                       |
+| `wsl`                     | object   | unset                             | Windows only: `{ enabled, distro }` runs sessions inside a WSL distro; no `distro` means the system default                                                      |
 | `extra_path_dirs`         | string[] | `[]`                              | Extra dirs prepended to PATH for sessions and agent detection                                                                                                    |
 | `appearance`              | object   | —                                 | Theme, dark/light mode, terminal themes                                                                                                                          |
 | `terminal`                | object   | —                                 | font_family, font_size, option_as_meta                                                                                                                           |
@@ -93,6 +94,11 @@ These exist in the config file for compatibility but are migration-period option
 - **`tmux` is explicit optional behavior.** It is never auto-detected or silently selected.
 - **`daemon` is experimental** and provides session persistence across app restarts.
 - PTY core selection (`local_pty_core`, `daemon_pty_core`) is a separate concern and must NOT be conflated with session backend.
+
+### WSL
+
+`wsl` is orthogonal to `session_backend`.
+It changes where a session's process runs, not which backend manages it, so every backend honors it.
 
 ### Naming decision
 
