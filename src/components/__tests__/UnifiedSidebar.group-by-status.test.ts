@@ -247,12 +247,16 @@ describe("UnifiedSidebar grouped by status", () => {
     focusSidebar();
     flushSync();
     setSelectedIndex(navButtons(mounted.target).findIndex((b) => b.textContent!.includes("A-2")));
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true, cancelable: true }));
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "e", bubbles: true, cancelable: true }),
+    );
 
     const row = navButtons(mounted.target).find((b) => b.textContent!.includes("B-1"))!;
     row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     flushSync();
-    [...document.querySelectorAll<HTMLElement>("[role='menuitem']")].find((el) => el.textContent!.trim() === "Edit task")!.click();
+    [...document.querySelectorAll<HTMLElement>("[role='menuitem']")]
+      .find((el) => el.textContent!.trim() === "Edit task")!
+      .click();
     flushSync();
 
     expect(onEditTask.mock.calls.map(([t, p]) => [t.key, p.path])).toEqual([
