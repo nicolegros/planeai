@@ -507,7 +507,7 @@ describe("TaskForm with plugin providers", () => {
   });
 });
 
-describe("TaskForm - project change", () => {
+describe("TaskForm - project field", () => {
   const restoreLayoutStubs = stubLayoutAsVisible();
   const mounted: Record<string, unknown>[] = [];
 
@@ -542,14 +542,140 @@ describe("TaskForm - project change", () => {
     document
       .querySelector<HTMLElement>("[data-field='title']")!
       .closest<HTMLElement>("[data-form-keyboard]")!;
+  const titleInput = () => document.querySelector<HTMLInputElement>("[data-field='title'] input")!;
   const projectInput = () =>
     document.querySelector<HTMLInputElement>("[data-field='project'] input");
+  const submitButton = () =>
+    newTaskWrapper().querySelector<HTMLButtonElement>("button[type='submit']")!;
+  const dialogTitles = () =>
+    [...document.querySelectorAll("[data-dialog-content]")].map(
+      (d) => d.querySelector("[data-dialog-title]")?.textContent,
+    );
+  const newProjectButton = () =>
+    [...newTaskWrapper().querySelectorAll("button")].find((b) =>
+      b.textContent?.startsWith("New Project"),
+    )!;
 
   function typeInto(input: HTMLInputElement, value: string) {
     input.value = value;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flushSync();
   }
+
+  function pressEscape() {
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    flushSync();
+  }
+
+  function pressShiftO(wrapper: HTMLElement) {
+    wrapper.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "O", shiftKey: true, bubbles: true, cancelable: true }),
+    );
+    flushSync();
+  }
+
+  it("shows the project picker with a single project in create mode", () => {
+    const target = renderForm();
+    expect(target.querySelector<HTMLInputElement>("[data-field='project'] input")?.value).toBe(
+      "My Project",
+    );
+  });
+
+  it("does not show the project field in edit mode", () => {
+    const target = renderForm({ mode: "edit", initial: { key: "TASK-1", title: "Existing" } });
+    expect(target.querySelector("[data-field='project']")).toBeNull();
+    expect(target.textContent).not.toContain("New Project");
+  });
+
+  it("explains that a project is required when there are none, and blocks submit", () => {
+    const target = renderForm({ projects: [] });
+    const field = target.querySelector("[data-field='project']")!;
+    expect(field.querySelector("input")).toBeNull();
+    expect(field.textContent).toContain("No projects yet");
+    const submit = target.querySelector<HTMLButtonElement>("button[type='submit']")!;
+    expect(submit.disabled).toBe(true);
+    const note = target.querySelector(`#${submit.getAttribute("aria-describedby")}`);
+    expect(note?.textContent).toBe("Create a project to add this task.");
+  });
+
+  it("opens Add Project on top of New Task from the button, and Cancel keeps the title", async () => {
+    await openNewTaskDialog();
+    typeInto(titleInput(), "Keep me");
+
+    newProjectButton().click();
+    flushSync();
+    await flushFrames();
+    expect(dialogTitles()).toEqual(["New Task", "Add Project"]);
+
+    const addProject = document.querySelectorAll("[data-dialog-content]")[1];
+    [...addProject.querySelectorAll("button")].find((b) => b.textContent === "Cancel")!.click();
+    flushSync();
+    await flushFrames();
+    expect(dialogTitles()).toEqual(["New Task"]);
+    expect(titleInput().value).toBe("Keep me");
+  });
+
+  it("opens Add Project with Shift+O in normal mode", async () => {
+    await openNewTaskDialog();
+    const wrapper = newTaskWrapper();
+    pressEscape();
+
+    pressShiftO(wrapper);
+    await flushFrames();
+    expect(dialogTitles()).toEqual(["New Task", "Add Project"]);
+    expect(
+      document.querySelectorAll("[data-dialog-content]")[1].contains(document.activeElement),
+    ).toBe(true);
+  });
+
+  it("focuses the picker with plain O", async () => {
+    await openNewTaskDialog();
+    const wrapper = newTaskWrapper();
+    pressEscape();
+    wrapper.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "o", bubbles: true, cancelable: true }),
+    );
+    flushSync();
+    expect(document.activeElement).toBe(projectInput());
+    expect(dialogTitles()).toEqual(["New Task"]);
+  });
+
+  it("selects a project created from the form, focuses the title and creates the task in it", async () => {
+    savedProjects.list = [];
+    await openNewTaskDialog();
+    typeInto(titleInput(), "First task");
+    expect(submitButton().disabled).toBe(true);
+
+    newProjectButton().click();
+    flushSync();
+    await flushFrames();
+    const addProject = document.querySelectorAll("[data-dialog-content]")[1];
+    typeInto(
+      addProject.querySelector<HTMLInputElement>("[data-field='path'] input")!,
+      "/repos/fresh",
+    );
+    addProject
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() => expect(dialogTitles()).toEqual(["New Task"]));
+    await flushFrames();
+    expect(projectInput()?.value).toBe("fresh");
+    expect(document.activeElement).toBe(titleInput());
+    expect(titleInput().value).toBe("First task");
+    expect(submitButton().disabled).toBe(false);
+
+    newTaskWrapper()
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(mockCreateTask).toHaveBeenCalled());
+    expect(mockCreateTask.mock.calls[0][0]).toMatchObject({
+      repoPath: "/repos/fresh",
+      title: "First task",
+    });
+  });
 
   it("clears parent, blocked-by and base branch when the project changes", async () => {
     savedProjects.list = [

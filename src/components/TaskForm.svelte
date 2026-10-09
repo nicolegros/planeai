@@ -9,6 +9,9 @@
   import { taskSessionDefaults } from "../lib/task-session-defaults";
   import { randomTaskName } from "../lib/random-task-name";
   import { LoaderCircle } from "@lucide/svelte";
+  import { tick } from "svelte";
+  import FormDialog from "./ui/FormDialog.svelte";
+  import ProjectForm from "./ProjectForm.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import type { RuntimeProvider } from "../lib/plugin-providers";
   import { ProviderChoice } from "../lib/provider-choice.svelte";
@@ -49,6 +52,7 @@
   const titleUntouched = $derived(generatedTitle !== "" && formTitle === generatedTitle);
   const uid = $props.id();
   const titleNoteId = `${uid}-title-note`;
+  const projectNoteId = `${uid}-project-note`;
   // WebKit's mouseup after a click-to-focus would collapse the selection made on focus.
   let keepTitleSelection = false;
 
@@ -87,6 +91,16 @@
     formParentKey = "";
     formBlockedBy = [];
     formBaseBranch = "main";
+  }
+
+  let addingProject = $state(false);
+
+  async function projectCreated(project: Project) {
+    addingProject = false;
+    selectProject(project.path);
+    // Closing Add Project restores focus to what opened it; Title must win.
+    await tick();
+    formWrapper?.querySelector<HTMLElement>("[data-field='title'] input")?.focus();
   }
 
   // ─── Start session toggle ───────────────────────────────────────────────────
@@ -165,6 +179,7 @@
   );
 
   const selectedProject = $derived(projects.find((p) => p.path === formProjectPath));
+  const needsProject = $derived(mode === "create" && !selectedProject);
 
   const sessionBranchName = $derived(sessionBranch || sessionDefaults.branch);
   const branchExists = $derived(branches.some((b) => b.value === sessionBranchName));
@@ -177,7 +192,9 @@
 
   const fk = createFormKeyboardController(
     () => [
-      { key: "o", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='project'] input") ?? null },
+      ...(mode === "create" ? [
+        { key: "o", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='project'] input") ?? null, shiftToggle: () => { addingProject = true; } },
+      ] : []),
       { key: "t", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='title'] input") ?? null },
       { key: "d", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='desc'] textarea") ?? null },
       { key: "r", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='priority'] input") ?? null },
@@ -208,10 +225,9 @@
     submitting = true;
     try {
       if (mode === "create") {
-        const repoPath = formProjectPath || projects[0]?.path;
-        if (!repoPath) return;
+        if (!selectedProject) return;
         const createdTask = await taskStore.createTask({
-          repoPath,
+          repoPath: selectedProject.path,
           title: formTitle.trim(),
           description: formDescription,
           priority: formPriority,
@@ -221,7 +237,7 @@
           baseBranch: formBaseBranch,
         });
 
-        if (startSession && selectedProject) {
+        if (startSession) {
           if (!providers.key) {
             showSnackbar("Task created, but no provider configured. Select a provider to start a session.");
             onSubmitted();
@@ -267,7 +283,7 @@
   }
 
   function autofocusForm(node: HTMLFormElement) {
-    requestAnimationFrame(() => node.querySelector<HTMLInputElement>("input")?.focus());
+    requestAnimationFrame(() => node.querySelector<HTMLInputElement>("[data-field='title'] input")?.focus());
   }
 
   function autoResize(node: HTMLTextAreaElement) {
@@ -284,15 +300,27 @@
     use:autofocusForm
     onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
   >
-    {#if mode === "create" && projects.length > 1}
+    {#if mode === "create"}
       <div class="space-y-1" data-field="project">
-        <Label>Project <span class="font-mono text-[10px] px-1 rounded {badge}">O</span></Label>
-        <Select
-          items={projects.map(p => ({ value: p.path, label: p.name }))}
-          value={formProjectPath}
-          onValueChange={selectProject}
-          placeholder="Select project…"
-        />
+        <Label>Project {#if projects.length > 0}<span class="font-mono text-[10px] px-1 rounded {badge}">O</span>{/if}</Label>
+        <div class="flex gap-2">
+          {#if projects.length > 0}
+            <div class="flex-1 min-w-0">
+              <Select
+                items={projects.map(p => ({ value: p.path, label: p.name }))}
+                value={formProjectPath}
+                onValueChange={selectProject}
+                placeholder="Select project…"
+              />
+            </div>
+          {:else}
+            <p class="flex-1 self-center text-sm text-t3">No projects yet</p>
+          {/if}
+          <Button type="button" onclick={() => { addingProject = true; }}>New Project <span class="font-mono text-[10px] px-1 rounded {badge}">⇧O</span></Button>
+        </div>
+        {#if needsProject}
+          <p id={projectNoteId} class="text-xs text-t3">Create a project to add this task.</p>
+        {/if}
       </div>
     {/if}
 
@@ -450,10 +478,16 @@
       </div>
       <div class="flex gap-2">
         <Button type="button" onclick={onCancel}>Cancel</Button>
-        <Button type="submit" variant="primary" disabled={!formTitle.trim() || submitting}>
+        <Button type="submit" variant="primary" disabled={!formTitle.trim() || submitting || needsProject} aria-describedby={needsProject ? projectNoteId : undefined}>
           {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{:else}{mode === "create" && startSession ? "Create & Start" : mode === "create" ? "Create" : "Save"} <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span>{/if}
         </Button>
       </div>
     </div>
   </form>
 </div>
+
+{#if addingProject}
+  <FormDialog title="Add Project" onClose={() => { addingProject = false; }}>
+    <ProjectForm onCreated={projectCreated} onCancel={() => { addingProject = false; }} />
+  </FormDialog>
+{/if}

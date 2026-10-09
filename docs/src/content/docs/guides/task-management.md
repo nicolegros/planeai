@@ -64,6 +64,7 @@ There are three ways to create tasks, each suited to a different workflow.
 
 Press **⌘N** (macOS) or **Ctrl+N** (Linux/Windows) to open the new item modal, then press **T** to create a task. Alternatively, open the command menu (**⌘K** / **Ctrl+K**) and search for "create task". The create dialog has fields for:
 
+- **Project** — which project the task belongs to (required). **New Project** (**⇧O** in normal mode) opens Add Project on top of the form without losing what you typed; the new project is then selected. Changing the project clears the parent, blockers and base branch, since they belong to the previous project.
 - **Title** — short, actionable description (required). Prefilled with a random name such as `jubilant-waffle`; focusing the untouched name selects it, so typing replaces it.
 - **Description** — detailed context for the agent. Be thorough — the agent relies entirely on this.
 - **Priority** — numeric value. Higher priority tasks get dispatched first.

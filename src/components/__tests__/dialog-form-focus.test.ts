@@ -222,8 +222,8 @@ describe("New Task dialog initial focus", () => {
     flushSync();
     await flushFrames();
 
-    const firstInput = wrapperEl().querySelector<HTMLInputElement>("input")!;
-    expect(document.activeElement).toBe(firstInput);
+    const titleInput = wrapperEl().querySelector<HTMLInputElement>("[data-field='title'] input")!;
+    expect(document.activeElement).toBe(titleInput);
     expect(document.body.textContent).toContain("INSERT");
   });
 });
