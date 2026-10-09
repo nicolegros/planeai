@@ -1,9 +1,9 @@
 minimumReleaseAge: 10080
 
-# Security patch for GHSA-68fv-2mgg-jv7q, published 2026-09-30.
-# Remove once 1.2.2 is older than minimumReleaseAge (after 2026-10-07).
+# Security patch for GHSA-8r5x-fm3f-whwj and GHSA-p8wg-vrv2-v86f, published 2026-10-05.
+# Remove once 4.7.10 is older than minimumReleaseAge (after 2026-10-12).
 minimumReleaseAgeExclude:
-  - source-map-js@1.2.2
+  - handlebars@4.7.10
 
 onlyBuiltDependencies:
   - esbuild
@@ -12,6 +12,7 @@ onlyBuiltDependencies:
 overrides:
   brace-expansion: ">=5.0.11"
   devalue: ">=5.9.2 <6"
+  handlebars: ">=4.7.10 <5"
   nanoid: 3.3.18
   postcss: ">=8.5.18"
   source-map-js: ">=1.2.2 <2"
