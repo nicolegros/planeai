@@ -595,9 +595,9 @@
               <!-- Quick actions (show on hover) -->
               <span class="hidden group-hover:flex items-center gap-0.5 shrink-0">
                 {#if loop.status === "draft"}
-                  <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-t3" disabled={project.path_missing} onclick={(e) => { e.stopPropagation(); onStartLoop?.(loop.id); }} title={project.path_missing ? "Project folder not found. Locate it first." : "Start"} aria-label="Start loop"><Play class="size-3" /></button>
+                  <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1" onclick={(e) => { e.stopPropagation(); onStartLoop?.(loop.id); }} title="Start" aria-label="Start loop"><Play class="size-3" /></button>
                 {:else if isLoopActive(loop.status)}
-                  <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-t3" disabled={project.path_missing} onclick={(e) => { e.stopPropagation(); onTickLoop?.(loop.id); }} title={project.path_missing ? "Project folder not found. Locate it first." : "Tick"} aria-label="Tick loop"><Play class="size-3" /></button>
+                  <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1" onclick={(e) => { e.stopPropagation(); onTickLoop?.(loop.id); }} title="Tick" aria-label="Tick loop"><Play class="size-3" /></button>
                   <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-status-exited" onclick={(e) => { e.stopPropagation(); onStopLoop?.(loop.id); }} title="Stop" aria-label="Stop loop"><Square class="size-3" /></button>
                 {/if}
               </span>
@@ -987,7 +987,7 @@
     y={loopContextMenu.y}
     onClose={() => (loopContextMenu = null)}
     items={[
-      ...(loopContextMenu.loop.status === "draft" ? [{ label: "Start loop", disabled: projectStore.getProject(loopContextMenu.loop.project_id)?.path_missing, title: projectStore.getProject(loopContextMenu.loop.project_id)?.path_missing ? "Project folder not found. Locate it first." : undefined, onSelect: () => onStartLoop?.(loopContextMenu!.loop.id) }] : []),
+      ...(loopContextMenu.loop.status === "draft" ? [{ label: "Start loop", onSelect: () => onStartLoop?.(loopContextMenu!.loop.id) }] : []),
       ...(isLoopActive(loopContextMenu.loop.status) ? [{ label: "Stop loop", onSelect: () => onStopLoop?.(loopContextMenu!.loop.id) }] : []),
       { label: "Delete loop", danger: true, onSelect: () => onDeleteLoop?.(loopContextMenu!.loop.id) },
     ]}

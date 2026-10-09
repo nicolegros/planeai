@@ -46,7 +46,7 @@ By default the sidebar organizes everything by project: tasks appear under the p
 You can also group the sidebar by task status to see the work of every project in one list.
 
 If you move or rename a project's folder outside planeai, the sidebar flags the project with a warning icon.
-Click the icon, or right-click the project and choose **Locate folder…**, then pick the folder's new location.
+Click the icon, choose **Locate folder…** from the project's menu or from the New Task and New Session forms, then pick the folder's new location.
 planeai checks that it is a git repository and reattaches the project's worktree sessions to it.
 Tasks and sessions are kept, but agent conversations started in the old folder may not resume.
 Until the folder is located, planeai does not start new sessions or loops for that project.

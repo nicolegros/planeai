@@ -88,7 +88,7 @@ Rollback is best-effort: errors are logged as warnings but do not propagate. If 
 - tmux is optional — app works without it (daemon fallback)
 - Cross-platform: macOS and Windows (core functionality parity; tmux gracefully unavailable on Windows)
 - Project names must be unique
-- Paths stored for a project (verifier logs, loop artifacts and events, recipe snapshot paths, editor tabs) are relative to the project root, or the session working dir for editor tabs, when they live under it, and absolute otherwise (`planeai_core::project_path`). They are resolved at the read boundary, so the UI and APIs still see absolute paths. A worktree session that lands in the main checkout stores no `worktree_path`.
+- A worktree session that lands in the main checkout stores no `worktree_path`; it is a checkout session.
 
 ## Cross-platform strategy
 

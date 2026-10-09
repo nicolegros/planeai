@@ -10,14 +10,11 @@
   interface Props {
     loopId: string;
     projectPath: string;
-    /** The project folder moved away: starting or ticking would spawn agents nowhere. */
-    folderMissing?: boolean;
     onSelectSession: (sessionId: string) => void;
     onOpenArtifact?: (path: string) => void;
   }
 
-  let { loopId, projectPath, folderMissing = false, onSelectSession, onOpenArtifact }: Props = $props();
-  const launchBlockedTitle = $derived(folderMissing ? "Project folder not found. Locate it first." : undefined);
+  let { loopId, projectPath, onSelectSession, onOpenArtifact }: Props = $props();
 
   let detail = $state<LoopRunDetail | null>(null);
   let loading = $state(false);
@@ -124,10 +121,10 @@
     if (e.key === "r") {
       e.preventDefault();
       refresh();
-    } else if (e.key === "s" && detail?.run.status === "draft" && !folderMissing) {
+    } else if (e.key === "s" && detail?.run.status === "draft") {
       e.preventDefault();
       handleStart();
-    } else if (e.key === "t" && detail && isActive(detail.run.status) && !folderMissing) {
+    } else if (e.key === "t" && detail && isActive(detail.run.status)) {
       e.preventDefault();
       handleTick();
     } else if (e.key === "x" && detail && isActive(detail.run.status)) {
@@ -215,14 +212,14 @@
           <span class={hintBadge}>R</span>
         </Button>
         {#if detail.run.status === "draft"}
-          <Button variant="primary" size="sm" class="gap-1.5" onclick={handleStart} disabled={folderMissing} title={launchBlockedTitle}>
+          <Button variant="primary" size="sm" class="gap-1.5" onclick={handleStart}>
             <Play class="size-3.5" />
             Start
             <span class={hintBadge}>S</span>
           </Button>
         {/if}
         {#if isActive(detail.run.status)}
-          <Button variant="ghost" size="sm" class="gap-1.5" onclick={handleTick} disabled={folderMissing} title={launchBlockedTitle}>
+          <Button variant="ghost" size="sm" class="gap-1.5" onclick={handleTick}>
             <Play class="size-3.5" />
             Tick
             <span class={hintBadge}>T</span>

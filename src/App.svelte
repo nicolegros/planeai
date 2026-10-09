@@ -1484,12 +1484,11 @@
     {/if}
 
     {#if activeLoopId && !activePluginId}
-      {@const loopProject = (() => { const loops = projects.flatMap(p => loopStore.getLoopsForProject(p.id)); const loop = loops.find(l => l.id === activeLoopId); return loop ? projects.find(p => p.id === loop.project_id) : undefined; })()}
+      {@const loopProjectPath = (() => { const loops = projects.flatMap(p => loopStore.getLoopsForProject(p.id)); const loop = loops.find(l => l.id === activeLoopId); return loop ? (projects.find(p => p.id === loop.project_id)?.path ?? "") : ""; })()}
       <div class="w-full h-full bg-main">
         <LoopDashboard
           loopId={activeLoopId}
-          projectPath={loopProject?.path ?? ""}
-          folderMissing={loopProject?.path_missing ?? false}
+          projectPath={loopProjectPath}
           onSelectSession={selectWorkspaceSession}
           onOpenArtifact={(path) => {
             // If no active session, select the first session from this loop
