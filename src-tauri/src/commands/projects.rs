@@ -134,6 +134,18 @@ fn reattach_worktrees(repo_path: &str, sessions: &[db::Session]) -> Result<(), S
     }
 }
 
+/// Where the folder picker starts when locating a moved project.
+#[tauri::command]
+pub async fn existing_parent_dir(path: String) -> Result<Option<String>, String> {
+    crate::commands::blocking(move || {
+        Ok(Path::new(&path)
+            .parent()
+            .filter(|parent| parent.is_dir())
+            .map(|parent| parent.to_string_lossy().to_string()))
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn list_projects(state: State<'_, DbState>) -> Result<Vec<db::Project>, String> {
     let conn = state.0.clone();

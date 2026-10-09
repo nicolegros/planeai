@@ -11,7 +11,8 @@
   import { getSidebarModel } from "../lib/sidebar-model-store.svelte";
   import { sidebarViewMenuItems } from "../lib/sidebar-view-menu";
   import { projectContextMenuItems } from "../lib/project-context-menu";
-  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare, Play, Square } from "@lucide/svelte";
+  import { locateProjectFolder } from "../lib/locate-project";
+  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare, Play, Square, TriangleAlert } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getCollapsedSections, getLayoutWidth, setCollapsedSections, setLayoutWidth } from "../lib/layout-state";
@@ -507,10 +508,10 @@
   {#if showProjectLabels}<span class="shrink-0 max-w-[40%] truncate text-[10px] text-t3" title={project.path}>{project.name}</span>{/if}
 {/snippet}
 
-{#snippet sectionHeader(navIdx: number, collapsed: boolean, onToggle: () => void, label: string, count: number, extras: { dotClass?: string | null; title?: string; oncontextmenu?: (e: MouseEvent) => void; autoDispatch?: boolean })}
+{#snippet sectionHeader(navIdx: number, collapsed: boolean, onToggle: () => void, label: string, count: number, extras: { dotClass?: string | null; title?: string; oncontextmenu?: (e: MouseEvent) => void; autoDispatch?: boolean; leadingSpace?: boolean })}
   <button
     data-nav-index={navIdx}
-    class="w-full px-2 mb-1 text-[11px] font-semibold text-t2 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-panel-hi {zone === 'sidebar' && navIdx === getSelectedIndex() ? 'ring-2 ring-accent' : ''}"
+    class="w-full {extras.leadingSpace ? 'pl-6 pr-2' : 'px-2'} mb-1 text-[11px] font-semibold text-t2 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-panel-hi {zone === 'sidebar' && navIdx === getSelectedIndex() ? 'ring-2 ring-accent' : ''}"
     title={extras.title}
     aria-expanded={!collapsed}
     onclick={onToggle}
@@ -594,9 +595,9 @@
               <!-- Quick actions (show on hover) -->
               <span class="hidden group-hover:flex items-center gap-0.5 shrink-0">
                 {#if loop.status === "draft"}
-                  <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1" onclick={(e) => { e.stopPropagation(); onStartLoop?.(loop.id); }} title="Start" aria-label="Start loop"><Play class="size-3" /></button>
+                  <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-t3" disabled={project.path_missing} onclick={(e) => { e.stopPropagation(); onStartLoop?.(loop.id); }} title={project.path_missing ? "Project folder not found. Locate it first." : "Start"} aria-label="Start loop"><Play class="size-3" /></button>
                 {:else if isLoopActive(loop.status)}
-                  <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1" onclick={(e) => { e.stopPropagation(); onTickLoop?.(loop.id); }} title="Tick" aria-label="Tick loop"><Play class="size-3" /></button>
+                  <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-t3" disabled={project.path_missing} onclick={(e) => { e.stopPropagation(); onTickLoop?.(loop.id); }} title={project.path_missing ? "Project folder not found. Locate it first." : "Tick"} aria-label="Tick loop"><Play class="size-3" /></button>
                   <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-status-exited" onclick={(e) => { e.stopPropagation(); onStopLoop?.(loop.id); }} title="Stop" aria-label="Stop loop"><Square class="size-3" /></button>
                 {/if}
               </span>
@@ -809,12 +810,23 @@
           {@const project = section.project}
           {@const projectCollapsed = isCollapsed(section.key, section.defaultCollapsed)}
           {@const projectNavIdx = flatNavIndex.get(navKey.project(section.key)) ?? -1}
-          <div>
+          <div class="relative">
             {@render sectionHeader(projectNavIdx, projectCollapsed, () => toggleSection(section.key, section.defaultCollapsed), project.name, section.orphans.length + section.taskCount, {
               title: project.path,
               oncontextmenu: (e) => onProjectContextMenu(e, project),
               autoDispatch: projectAutoMode[project.id],
+              leadingSpace: project.path_missing,
             })}
+            {#if project.path_missing}
+              <button
+                type="button"
+                class="absolute left-1 top-[3px] size-[18px] flex items-center justify-center rounded text-status-review hover:bg-panel-hi"
+                title={`Folder not found: ${project.path}`}
+                aria-label={`Locate folder for ${project.name}. Folder not found: ${project.path}`}
+                data-testid="project-folder-missing"
+                onclick={() => locateProjectFolder(project)}
+              ><TriangleAlert class="size-3" /></button>
+            {/if}
 
             {#if !projectCollapsed}
               {@render loopList(section.loops)}
@@ -929,6 +941,7 @@
       projectAutoMode[projectContextMenu.project.id] ?? false,
       {
         onEdit: onEditProject,
+        onLocate: locateProjectFolder,
         onToggleAutoDispatch: toggleAutoMode,
         onHide: hideProject,
         onArchive: (id) => projectStore.archiveProject(id),
@@ -974,7 +987,7 @@
     y={loopContextMenu.y}
     onClose={() => (loopContextMenu = null)}
     items={[
-      ...(loopContextMenu.loop.status === "draft" ? [{ label: "Start loop", onSelect: () => onStartLoop?.(loopContextMenu!.loop.id) }] : []),
+      ...(loopContextMenu.loop.status === "draft" ? [{ label: "Start loop", disabled: projectStore.getProject(loopContextMenu.loop.project_id)?.path_missing, title: projectStore.getProject(loopContextMenu.loop.project_id)?.path_missing ? "Project folder not found. Locate it first." : undefined, onSelect: () => onStartLoop?.(loopContextMenu!.loop.id) }] : []),
       ...(isLoopActive(loopContextMenu.loop.status) ? [{ label: "Stop loop", onSelect: () => onStopLoop?.(loopContextMenu!.loop.id) }] : []),
       { label: "Delete loop", danger: true, onSelect: () => onDeleteLoop?.(loopContextMenu!.loop.id) },
     ]}

@@ -2,6 +2,7 @@ import type { Project } from "./types";
 
 interface ProjectContextMenuActions {
   onEdit: (project: Project) => void;
+  onLocate: (project: Project) => void;
   onToggleAutoDispatch: (project: Project) => void;
   onHide: (id: string) => void;
   onArchive: (id: string) => void;
@@ -14,6 +15,9 @@ export function projectContextMenuItems(
   actions: ProjectContextMenuActions,
 ) {
   return [
+    ...(project.path_missing
+      ? [{ label: "Locate folder…", onSelect: () => actions.onLocate(project) }]
+      : []),
     { label: "Edit project", onSelect: () => actions.onEdit(project) },
     {
       label: autoDispatchEnabled ? "✓ Auto-dispatch" : "Auto-dispatch",

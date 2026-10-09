@@ -3,10 +3,22 @@ import { flushSync, mount, tick } from "svelte";
 
 const { updateProject, createProject } = vi.hoisted(() => ({
   updateProject: vi.fn(() =>
-    Promise.resolve({ id: "p1", name: "New project", path: "/projects/new", hidden: false, path_missing: false }),
+    Promise.resolve({
+      id: "p1",
+      name: "New project",
+      path: "/projects/new",
+      hidden: false,
+      path_missing: false,
+    }),
   ),
   createProject: vi.fn(() =>
-    Promise.resolve({ id: "p2", name: "New project", path: "/projects/new", hidden: false, path_missing: false }),
+    Promise.resolve({
+      id: "p2",
+      name: "New project",
+      path: "/projects/new",
+      hidden: false,
+      path_missing: false,
+    }),
   ),
 }));
 
@@ -33,7 +45,13 @@ function renderForm() {
   mount(ProjectForm, {
     target,
     props: {
-      project: { id: "p1", name: "Old project", path: "/projects/old", hidden: false, path_missing: false },
+      project: {
+        id: "p1",
+        name: "Old project",
+        path: "/projects/old",
+        hidden: false,
+        path_missing: false,
+      },
       onCreated,
       onCancel: vi.fn(),
     },

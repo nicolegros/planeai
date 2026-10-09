@@ -897,6 +897,7 @@
 
     const cleanupEvents = orchestrator.startEventListeners();
     const cleanupSymphony = orchestrator.startSymphonyPolling();
+    const cleanupProjectFocus = projectStore.reloadProjectsOnFocus();
     const cleanupLoopListener = loopStore.startLoopEventListener(() => projectStore.getProjects().map((p) => p.id));
     const cleanupTaskListener = taskStore.startTaskEventListener(() => projectStore.getProjects().map((p) => p.path));
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
@@ -1126,7 +1127,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); unlistenFileDrop.then((fn) => fn()); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); cleanupTaskListener(); unlistenSettings.then((fn) => fn()); unlistenAppError.then((fn) => fn()); unlistenTabEnded.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); unlistenFileDrop.then((fn) => fn()); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); cleanupProjectFocus(); cleanupTaskListener(); unlistenSettings.then((fn) => fn()); unlistenAppError.then((fn) => fn()); unlistenTabEnded.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -1483,11 +1484,12 @@
     {/if}
 
     {#if activeLoopId && !activePluginId}
-      {@const loopProjectPath = (() => { const loops = projects.flatMap(p => loopStore.getLoopsForProject(p.id)); const loop = loops.find(l => l.id === activeLoopId); return loop ? (projects.find(p => p.id === loop.project_id)?.path ?? "") : ""; })()}
+      {@const loopProject = (() => { const loops = projects.flatMap(p => loopStore.getLoopsForProject(p.id)); const loop = loops.find(l => l.id === activeLoopId); return loop ? projects.find(p => p.id === loop.project_id) : undefined; })()}
       <div class="w-full h-full bg-main">
         <LoopDashboard
           loopId={activeLoopId}
-          projectPath={loopProjectPath}
+          projectPath={loopProject?.path ?? ""}
+          folderMissing={loopProject?.path_missing ?? false}
           onSelectSession={selectWorkspaceSession}
           onOpenArtifact={(path) => {
             // If no active session, select the first session from this loop

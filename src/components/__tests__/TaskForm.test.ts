@@ -40,7 +40,9 @@ const mockStartSession = vi.fn((_params?: unknown) =>
 );
 
 const savedProjects = vi.hoisted(() => ({
-  list: [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false }],
+  list: [
+    { id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false },
+  ],
 }));
 
 vi.mock("../../lib/api", () => ({
@@ -104,7 +106,9 @@ import * as projectStore from "../../lib/project-store.svelte";
 
 const baseProps = {
   mode: "create" as const,
-  projects: [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false }],
+  projects: [
+    { id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false },
+  ],
   tasks: [],
   sessions: [],
   onSubmitted: vi.fn(),
@@ -514,7 +518,9 @@ describe("TaskForm - project field", () => {
   afterEach(() => {
     while (mounted.length) unmount(mounted.pop()!, { outro: false });
     document.body.innerHTML = "";
-    savedProjects.list = [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false }];
+    savedProjects.list = [
+      { id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false },
+    ];
   });
   afterAll(restoreLayoutStubs);
 

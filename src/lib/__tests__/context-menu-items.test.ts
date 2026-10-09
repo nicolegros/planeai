@@ -84,7 +84,14 @@ function buildActiveSessionMenu(_session: Session): MenuItem[] {
 }
 
 function makeProject(overrides: Partial<Project> = {}): Project {
-  return { id: "p1", name: "Project", path: "/project", hidden: false, path_missing: false, ...overrides };
+  return {
+    id: "p1",
+    name: "Project",
+    path: "/project",
+    hidden: false,
+    path_missing: false,
+    ...overrides,
+  };
 }
 
 // Replicate the task context menu logic from UnifiedSidebar
@@ -116,6 +123,7 @@ describe("context menu item construction", () => {
       const onEdit = vi.fn();
       const items = projectContextMenuItems(project, false, {
         onEdit,
+        onLocate: () => {},
         onToggleAutoDispatch: () => {},
         onHide: () => {},
         onArchive: () => {},
@@ -130,6 +138,7 @@ describe("context menu item construction", () => {
     it("keeps Delete project as a dangerous action", () => {
       const items = projectContextMenuItems(makeProject(), false, {
         onEdit: () => {},
+        onLocate: () => {},
         onToggleAutoDispatch: () => {},
         onHide: () => {},
         onArchive: () => {},
@@ -137,6 +146,46 @@ describe("context menu item construction", () => {
       });
       const deleteItem = items.find((item) => item.label === "Delete project");
       expect(deleteItem?.danger).toBe(true);
+    });
+  });
+
+  describe("project menu for a moved folder", () => {
+    function labels(project: Project, onLocate = vi.fn()) {
+      return projectContextMenuItems(project, false, {
+        onEdit: () => {},
+        onLocate,
+        onToggleAutoDispatch: () => {},
+        onHide: () => {},
+        onArchive: () => {},
+        onDelete: () => {},
+      });
+    }
+
+    it("offers Locate folder… first only while the folder is missing", () => {
+      expect(labels(makeProject({ path_missing: true })).map((item) => item.label)).toEqual([
+        "Locate folder…",
+        "Edit project",
+        "Auto-dispatch",
+        "Hide project",
+        "Archive project",
+        "Delete project",
+      ]);
+      expect(labels(makeProject()).map((item) => item.label)).toEqual([
+        "Edit project",
+        "Auto-dispatch",
+        "Hide project",
+        "Archive project",
+        "Delete project",
+      ]);
+    });
+
+    it("hands the missing project to the locate action", () => {
+      const project = makeProject({ id: "moved", path: "/old/place", path_missing: true });
+      const onLocate = vi.fn();
+
+      labels(project, onLocate)[0].onSelect();
+
+      expect(onLocate).toHaveBeenCalledWith(project);
     });
   });
 

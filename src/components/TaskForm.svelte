@@ -203,7 +203,7 @@
       { key: "g", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='tags'] input") ?? null },
       { key: "b", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
       ...(mode === "create" ? [
-        { key: "s", toggle: () => { startSession = !startSession; } },
+        { key: "s", toggle: () => { if (!selectedProject?.path_missing) startSession = !startSession; } },
       ] : []),
       ...(startSession ? [
         { key: "p", toggle: () => providers.cycle(1), shiftToggle: () => providers.cycle(-1) },
@@ -237,7 +237,7 @@
           baseBranch: formBaseBranch,
         });
 
-        if (startSession) {
+        if (startSession && !selectedProject.path_missing) {
           if (!providers.key) {
             showSnackbar("Task created, but no provider configured. Select a provider to start a session.");
             onSubmitted();
@@ -399,12 +399,15 @@
     {#if mode === "create"}
       <div class="border-t border-border pt-4 mt-4">
         <div class="flex items-center gap-2">
-          <Checkbox id="start-session" label="Start session immediately" bind:checked={startSession} />
+          <Checkbox id="start-session" label="Start session immediately" bind:checked={startSession} disabled={selectedProject?.path_missing} />
           <span class="font-mono text-[10px] px-1 rounded {badge}">S</span>
         </div>
+        {#if selectedProject?.path_missing}
+          <p class="mt-1 text-xs text-status-review" data-testid="project-folder-missing">Project folder not found. Locate it first.</p>
+        {/if}
       </div>
 
-      {#if startSession}
+      {#if startSession && !selectedProject?.path_missing}
         <div class="space-y-3 pl-1 border-l-2 border-accent/30 ml-1">
           <!-- Provider -->
           {#if providers.keys.length > 1}
