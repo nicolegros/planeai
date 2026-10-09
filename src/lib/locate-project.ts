@@ -3,6 +3,7 @@ import { projects as projectsApi } from "./api";
 import * as projectStore from "./project-store.svelte";
 import { getSettings } from "./settings.svelte";
 import { showSnackbar } from "./snackbar.svelte";
+import * as taskStore from "./task-store.svelte";
 import type { Project } from "./types";
 
 /** Asks for the folder a missing project moved to and relinks the project to it. */
@@ -16,6 +17,8 @@ export async function locateProjectFolder(project: Project): Promise<void> {
     });
     if (typeof picked !== "string") return;
     await projectStore.updateProject(project.id, project.name, picked);
+    // Tasks are keyed by project path.
+    await taskStore.refresh(projectStore.getProjects().map((candidate) => candidate.path));
     showSnackbar(
       "Project relinked. Agent conversations started in the old folder may not resume.",
       "info",

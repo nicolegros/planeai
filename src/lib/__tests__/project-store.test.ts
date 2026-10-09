@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "../types";
 
-const { list, update, existingParentDir, focusHandlers, open, showSnackbar } = vi.hoisted(() => ({
-  list: vi.fn(),
-  update: vi.fn(),
-  existingParentDir: vi.fn(),
-  focusHandlers: [] as Array<() => void>,
-  open: vi.fn(),
-  showSnackbar: vi.fn(),
-}));
+const { list, update, existingParentDir, focusHandlers, open, showSnackbar, refreshTasks } =
+  vi.hoisted(() => ({
+    list: vi.fn(),
+    update: vi.fn(),
+    existingParentDir: vi.fn(),
+    focusHandlers: [] as Array<() => void>,
+    open: vi.fn(),
+    showSnackbar: vi.fn(),
+    refreshTasks: vi.fn(),
+  }));
 
 vi.mock("../api", () => ({
   projects: { list, update, existingParentDir },
@@ -23,6 +25,7 @@ vi.mock("../session-orchestrator.svelte", () => ({ removeProjectSessions: vi.fn(
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open }));
 vi.mock("../settings.svelte", () => ({ getSettings: () => ({ projects_base_path: "/base" }) }));
 vi.mock("../snackbar.svelte", () => ({ showSnackbar }));
+vi.mock("../task-store.svelte", () => ({ refresh: refreshTasks }));
 
 import * as projectStore from "../project-store.svelte";
 import { locateProjectFolder } from "../locate-project";
@@ -79,6 +82,7 @@ describe("locating a moved project folder", () => {
     expect(open).toHaveBeenCalledWith({ directory: true, multiple: false, defaultPath: "/old" });
     expect(update).toHaveBeenCalledWith("p1", "app", "/new/app");
     expect(projectStore.getProject("p1")?.path).toBe("/new/app");
+    expect(refreshTasks).toHaveBeenCalledWith(["/new/app"]);
     expect(showSnackbar).toHaveBeenCalledWith(
       "Project relinked. Agent conversations started in the old folder may not resume.",
       "info",
