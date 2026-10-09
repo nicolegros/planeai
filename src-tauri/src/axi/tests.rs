@@ -3485,7 +3485,8 @@ fn recipe_tick_session_create_reuses_active_session_when_session_reuse_enabled()
     use std::collections::BTreeMap;
 
     let conn = setup_db();
-    let project = crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let project = crate::db::create_project(&conn, "myapp", &dir.path().to_string_lossy()).unwrap();
 
     // Create a session in the DB that will be "reused"
     let existing_session_id = "eeeeeeee-1111-2222-3333-444444444444";
