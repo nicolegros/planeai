@@ -111,6 +111,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     normalize_project_paths(conn)?;
     planeai_core::prompt_lock::migrate(conn)?;
     planeai_core::loop_service::LoopService::migrate(conn)?;
+    crate::project_path_migration::migrate(conn)?;
     crate::rmux_resources::migrate(conn)?;
     crate::terminal_tabs::migrate(conn)?;
 

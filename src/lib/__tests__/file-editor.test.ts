@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { openFileWithConfiguredEditor, type FileEditorOpenHandlers } from "../file-editor";
+import {
+  openFileWithConfiguredEditor,
+  workingDirRelativePath,
+  type FileEditorOpenHandlers,
+} from "../file-editor";
 import type { EditorSettings } from "../settings.svelte";
 
 function handlers(): FileEditorOpenHandlers {
@@ -42,5 +46,21 @@ describe("openFileWithConfiguredEditor", () => {
     expect(actions.openEmbedded).not.toHaveBeenCalled();
     expect(actions.openTerminal).not.toHaveBeenCalled();
     expect(actions.openExternal).not.toHaveBeenCalled();
+  });
+});
+
+describe("workingDirRelativePath", () => {
+  it("stores files inside the session working dir relative to it", () => {
+    expect(workingDirRelativePath("/repos/app/src/main.rs", "/repos/app")).toBe("src/main.rs");
+    expect(workingDirRelativePath("/repos/app/src/main.rs", "/repos/app/")).toBe("src/main.rs");
+  });
+
+  it("keeps paths outside the working dir, already relative, or without one", () => {
+    expect(workingDirRelativePath("/repos/application/a.ts", "/repos/app")).toBe(
+      "/repos/application/a.ts",
+    );
+    expect(workingDirRelativePath("/etc/hosts", "/repos/app")).toBe("/etc/hosts");
+    expect(workingDirRelativePath("src/main.rs", "/repos/app")).toBe("src/main.rs");
+    expect(workingDirRelativePath("/repos/app/x.ts", null)).toBe("/repos/app/x.ts");
   });
 });
