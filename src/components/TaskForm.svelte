@@ -80,6 +80,15 @@
   let formProjectPath = $state(initial.projectPath ?? projects[0]?.path ?? "");
   let formWrapper = $state<HTMLDivElement | null>(null);
 
+  // Parent, blockers and base branch refer to the previous project's tasks and repo.
+  function selectProject(path: string) {
+    if (path === formProjectPath) return;
+    formProjectPath = path;
+    formParentKey = "";
+    formBlockedBy = [];
+    formBaseBranch = "main";
+  }
+
   // ─── Start session toggle ───────────────────────────────────────────────────
   // svelte-ignore state_referenced_locally
   let startSession = $state(mode === "create");
@@ -280,7 +289,8 @@
         <Label>Project <span class="font-mono text-[10px] px-1 rounded {badge}">O</span></Label>
         <Select
           items={projects.map(p => ({ value: p.path, label: p.name }))}
-          bind:value={formProjectPath}
+          value={formProjectPath}
+          onValueChange={selectProject}
           placeholder="Select project…"
         />
       </div>

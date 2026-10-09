@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mount, flushSync, tick } from "svelte";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
+import { mount, unmount, flushSync, tick } from "svelte";
+import { stubLayoutAsVisible, flushFrames } from "./dom-visibility";
 
 const mockCreateTask = vi.fn((_params?: unknown) =>
   Promise.resolve({
@@ -38,8 +39,22 @@ const mockStartSession = vi.fn((_params?: unknown) =>
   }),
 );
 
+const savedProjects = vi.hoisted(() => ({
+  list: [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false }],
+}));
+
 vi.mock("../../lib/api", () => ({
-  projects: { listBranches: vi.fn(() => Promise.resolve(["main", "develop"])) },
+  projects: {
+    listBranches: vi.fn(() => Promise.resolve(["main", "develop"])),
+    list: vi.fn(() => Promise.resolve(savedProjects.list)),
+    validateGitRepo: vi.fn(() => Promise.resolve(true)),
+    create: vi.fn((name: string, path: string) => {
+      const project = { id: "proj-new", name, path, hidden: false };
+      savedProjects.list = [...savedProjects.list, project];
+      return Promise.resolve(project);
+    }),
+  },
+  git: { cloneRepository: vi.fn() },
   tasks: {
     listAll: vi.fn(() => Promise.resolve([])),
     list: vi.fn(() => Promise.resolve([])),
@@ -49,6 +64,8 @@ vi.mock("../../lib/api", () => ({
     move: vi.fn(() => Promise.resolve()),
   },
 }));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 vi.mock("../../lib/snackbar.svelte", () => ({
   showSnackbar: vi.fn(),
@@ -83,6 +100,8 @@ vi.mock("../../lib/task-store.svelte", () => ({
 }));
 
 import TaskForm from "../TaskForm.svelte";
+import TaskFormDialogHarness from "./TaskFormDialogHarness.svelte";
+import * as projectStore from "../../lib/project-store.svelte";
 
 const baseProps = {
   mode: "create" as const,
@@ -484,6 +503,107 @@ describe("TaskForm with plugin providers", () => {
     expect(mockStartSession.mock.calls[0][0]).toMatchObject({
       branch: "feature/typed",
       prompt: "Do the typed thing",
+    });
+  });
+});
+
+describe("TaskForm - project change", () => {
+  const restoreLayoutStubs = stubLayoutAsVisible();
+  const mounted: Record<string, unknown>[] = [];
+
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    while (mounted.length) unmount(mounted.pop()!, { outro: false });
+    document.body.innerHTML = "";
+    savedProjects.list = [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false }];
+  });
+  afterAll(restoreLayoutStubs);
+
+  /** Mounts the New Task dialog the way App does: `projects` follows the project store. */
+  async function openNewTaskDialog(props = {}) {
+    await projectStore.loadProjects();
+    mounted.push(
+      mount(TaskFormDialogHarness, {
+        target: document.body,
+        props: {
+          ...baseProps,
+          get projects() {
+            return projectStore.getProjects();
+          },
+          ...props,
+        },
+      }) as Record<string, unknown>,
+    );
+    flushSync();
+    await flushFrames();
+  }
+
+  const newTaskWrapper = () =>
+    document
+      .querySelector<HTMLElement>("[data-field='title']")!
+      .closest<HTMLElement>("[data-form-keyboard]")!;
+  const projectInput = () =>
+    document.querySelector<HTMLInputElement>("[data-field='project'] input");
+
+  function typeInto(input: HTMLInputElement, value: string) {
+    input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+  }
+
+  it("clears parent, blocked-by and base branch when the project changes", async () => {
+    savedProjects.list = [
+      { id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false },
+      { id: "proj-2", name: "Other", path: "/tmp/other", hidden: false },
+    ];
+    const oldTask = {
+      key: "TASK-1",
+      title: "Old",
+      status: "todo",
+      description: "",
+      priority: 0,
+      blocked_by: [],
+      tags: [],
+      parent_key: null,
+      url: null,
+      base_branch: "main",
+    };
+    await openNewTaskDialog({
+      tasks: [oldTask],
+      initial: {
+        projectPath: "/tmp/myapp",
+        parentKey: "TASK-1",
+        blockedBy: ["TASK-1"],
+        baseBranch: "develop",
+      },
+    });
+    const field = (name: string) => document.querySelector(`[data-field='${name}']`)!;
+    expect(field("parent").querySelector("input")!.value).toBe("TASK-1: Old");
+    expect(field("blocked").textContent).toContain("TASK-1");
+    expect(field("base").querySelector("input")!.value).toBe("develop");
+
+    const picker = projectInput()!;
+    picker.focus();
+    await tick();
+    typeInto(picker, "Other");
+    await tick();
+    picker.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    flushSync();
+    await tick();
+
+    expect(field("parent").querySelector("input")!.value).toBe("");
+    expect(field("blocked").textContent).not.toContain("TASK-1");
+    expect(field("base").querySelector("input")!.value).toBe("main");
+
+    newTaskWrapper()
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(mockCreateTask).toHaveBeenCalled());
+    expect(mockCreateTask.mock.calls[0][0]).toMatchObject({
+      repoPath: "/tmp/other",
+      parentKey: null,
+      blockedBy: [],
+      baseBranch: "main",
     });
   });
 });
