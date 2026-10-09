@@ -109,6 +109,12 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     // Project/session schema lives in planeai-core (single source of truth)
     planeai_core::services::migrate_project_session_schema(conn)?;
     normalize_project_paths(conn)?;
+    // A worktree launch redirected into the main checkout is a checkout session.
+    conn.execute(
+        "UPDATE sessions SET worktree_path = NULL
+         WHERE worktree_path = (SELECT path FROM projects WHERE projects.id = sessions.project_id)",
+        [],
+    )?;
     planeai_core::prompt_lock::migrate(conn)?;
     planeai_core::loop_service::LoopService::migrate(conn)?;
     crate::rmux_resources::migrate(conn)?;
@@ -428,6 +434,41 @@ mod tests {
         migrate(&conn).unwrap();
         planeai_tasks::sqlite::migrate(&conn).unwrap();
         conn
+    }
+
+    #[test]
+    fn migrate_turns_main_checkout_redirects_into_checkout_sessions() {
+        let conn = setup();
+        let project = create_project(&conn, "app", "/repos/app").unwrap();
+        create_session(
+            &conn,
+            &project.id,
+            "main",
+            "t-1",
+            "main",
+            Some("/repos/app"),
+        )
+        .unwrap();
+        create_session(
+            &conn,
+            &project.id,
+            "wt",
+            "t-2",
+            "feat",
+            Some("/wt/app/ab12"),
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let paths: Vec<Option<String>> = conn
+            .prepare("SELECT worktree_path FROM sessions ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_>>()
+            .unwrap();
+        assert_eq!(paths, vec![None, Some("/wt/app/ab12".to_string())]);
     }
 
     #[test]
