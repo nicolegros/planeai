@@ -826,26 +826,29 @@ mod tests {
         .unwrap();
 
         let detail = load_loop_run_detail(&conn, &run.id).unwrap();
+        let moved = |relative: &str| {
+            std::path::Path::new("/moved/app")
+                .join(relative)
+                .to_string_lossy()
+                .into_owned()
+        };
 
         assert_eq!(
             detail.recipe_snapshot.unwrap()["recipe_path"],
-            "/moved/app/.planeai/loops/r.yaml"
+            moved(".planeai/loops/r.yaml")
         );
         assert_eq!(
             detail.events[0].payload_json["path"],
-            "/moved/app/.planeai/h.json"
+            moved(".planeai/h.json")
         );
         assert_eq!(
             detail.events[0].payload_json["output_path"],
             "/elsewhere/v.log"
         );
+        assert_eq!(detail.artifacts[0].path, Some(moved(".planeai/h.json")));
         assert_eq!(
-            detail.artifacts[0].path.as_deref(),
-            Some("/moved/app/.planeai/h.json")
-        );
-        assert_eq!(
-            detail.verifier_runs[0].output_path.as_deref(),
-            Some("/moved/app/.planeai/v.log")
+            detail.verifier_runs[0].output_path,
+            Some(moved(".planeai/v.log"))
         );
     }
 

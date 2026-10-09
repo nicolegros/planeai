@@ -392,6 +392,14 @@ mod tests {
         moved: std::path::PathBuf,
     }
 
+    /// Where the repo lived before the fixture moved it.
+    fn original_repo_path(fixture: &Fixture) -> String {
+        Path::new(&canonical(fixture._root.path()))
+            .join("repo")
+            .to_string_lossy()
+            .into_owned()
+    }
+
     /// A project with one worktree session whose repo was then moved with `mv`.
     fn moved_project_with_worktree() -> Fixture {
         let root = TempDir::new().unwrap();
@@ -467,8 +475,11 @@ mod tests {
             "feature"
         );
         assert_eq!(
-            git(&fixture.worktree, &["rev-parse", "--git-common-dir"]),
-            format!("{}/.git", canonical(&fixture.moved))
+            canonical(Path::new(&git(
+                &fixture.worktree,
+                &["rev-parse", "--git-common-dir"]
+            ))),
+            canonical(&fixture.moved.join(".git"))
         );
 
         let again = save_project(
@@ -501,10 +512,7 @@ mod tests {
             "Could not reattach worktree sessions to this folder: feature work."
         );
         assert_eq!(stored_path(&fixture), old_path);
-        assert_eq!(
-            old_path,
-            format!("{}/repo", canonical(fixture._root.path()))
-        );
+        assert_eq!(old_path, original_repo_path(&fixture));
     }
 
     #[test]
@@ -548,9 +556,6 @@ mod tests {
         let saved = save_project(&fixture.conn, &fixture.project_id, "renamed", &old_path).unwrap();
 
         assert_eq!((saved.name.as_str(), saved.path_missing), ("renamed", true));
-        assert_eq!(
-            saved.path,
-            format!("{}/repo", canonical(fixture._root.path()))
-        );
+        assert_eq!(saved.path, original_repo_path(&fixture));
     }
 }
