@@ -10,7 +10,7 @@ import {
 import type { LoopRunSummary, LoopSessionItem, Project, Session, TaskItem } from "../types";
 
 function project(id: string, overrides: Partial<Project> = {}): Project {
-  return { id, name: id, path: `/repos/${id}`, hidden: false, ...overrides };
+  return { id, name: id, path: `/repos/${id}`, hidden: false, path_missing: false, ...overrides };
 }
 
 function task(

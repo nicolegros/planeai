@@ -357,6 +357,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             create_project,
             update_project,
+            existing_parent_dir,
             list_projects,
             list_archived_projects,
             archive_project,
@@ -372,7 +373,6 @@ fn main() {
             rename_session,
             list_archived_sessions,
             restore_session,
-            validate_git_repo,
             list_branches,
             get_changed_files,
             get_file_diff,

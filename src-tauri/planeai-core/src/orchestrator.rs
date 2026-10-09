@@ -21,7 +21,6 @@ pub enum OrchestratorCommand {
 pub struct AutoProject {
     pub project_id: String,
     pub project_name: String,
-    pub project_path: String,
     pub task_source: Arc<dyn TaskSource>,
     pub on_start: Option<OnStartHook>,
     pub dispatch_config: DispatchConfig,
@@ -153,6 +152,11 @@ impl Orchestrator {
                 break;
             }
 
+            let Some(project_path) = self.backend.project_folder(&project.project_id) else {
+                tracing::debug!(project = %project.project_name, "skipping auto-dispatch: project folder not found");
+                continue;
+            };
+
             let dispatcher = TaskDispatcher::new(project.task_source.clone());
 
             let tasks = match dispatcher.fetch_dispatchable_tasks(&claimed).await {
@@ -180,7 +184,7 @@ impl Orchestrator {
                         .unwrap_or_else(|| project.dispatch_config.clone()),
                     project_id: project.project_id.clone(),
                     project_name: project.project_name.clone(),
-                    project_path: project.project_path.clone(),
+                    project_path: project_path.clone(),
                 };
 
                 match session_dispatcher.dispatch(&task, self.backend.as_ref()) {

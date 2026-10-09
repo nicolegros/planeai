@@ -134,6 +134,7 @@ pub(crate) async fn launch(
                 .map_err(|e| e.to_string())?
                 .filter(|project| project.status == "active")
                 .ok_or_else(|| "Project not found or archived.".to_string())?;
+            project.require_folder()?;
             if let Some(task_project_id) = &task_project_id {
                 db::get_project(&conn, task_project_id)
                     .map_err(|e| e.to_string())?
@@ -236,7 +237,8 @@ pub(crate) async fn launch(
                 warning = Some(format!(
                     "Branch '{branch}' is already in a worktree — session will run there"
                 ));
-                (existing_wt.clone(), Some(existing_wt), false, false)
+                let worktree_path = git::linked_worktree_path(&repo_path, &existing_wt);
+                (existing_wt, worktree_path, false, false)
             }
             Err(e) => return Err(e),
         }

@@ -288,13 +288,14 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     // For redirected sessions (branch already in another worktree), store that path.
     // For worktree-created sessions, store the new worktree path.
     // Cleanup guards against deleting non-loop-managed worktrees via branch name check.
-    let worktree_path = if was_redirected {
-        Some(effective_working_dir)
-    } else {
-        match &plan.branch_strategy {
-            BranchStrategy::Worktree { path, .. } => Some(path.clone()),
-            BranchStrategy::Checkout { .. } => None,
+    let worktree_path = match &plan.branch_strategy {
+        BranchStrategy::Checkout { repo, .. } | BranchStrategy::Worktree { repo, .. }
+            if was_redirected =>
+        {
+            git::linked_worktree_path(repo, &effective_working_dir)
         }
+        BranchStrategy::Worktree { path, .. } => Some(path.clone()),
+        BranchStrategy::Checkout { .. } => None,
     };
     let session = db::create_session_with_params(
         conn,
@@ -350,6 +351,7 @@ pub fn create_session(conn: &Connection, opts: SessionCreateOpts) -> Result<db::
         .iter()
         .find(|p| p.name == project_name)
         .ok_or_else(|| format!("unknown project: {project_name}"))?;
+    proj.require_folder()?;
 
     let task_project_id = resolve_task_project_id(&projects, proj, &opts)?;
 
@@ -489,6 +491,7 @@ mod tests {
             status: "active".to_string(),
             prefix: "MYA".to_string(),
             hidden: false,
+            path_missing: false,
         }
     }
 

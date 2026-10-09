@@ -2,6 +2,7 @@
   import { sessions as sessionsApi, projects as projectsApi, tasks as tasksApi } from "../lib/api";
   import { sessionTaskProjectId, type Session, type Project, type TaskItem } from "../lib/types";
   import { Button, Input, Label, Select, Checkbox } from "./ui";
+  import MissingProjectNotice from "./MissingProjectNotice.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -222,6 +223,7 @@
   async function submit() {
     if (submitting) return;
     if (!selectedProject) { error = "Select a project."; return; }
+    if (selectedProject.path_missing) return;
     if (!taskKey) { error = "Select a task."; return; }
     if ((useWorktree || isNewBranch) && !baseBranchValue && taskBaseMissing) { error = "Select a base branch."; return; }
     submitting = true;
@@ -283,6 +285,9 @@
   <div class="space-y-1" data-field="project">
     <Label>Project <span class="font-mono text-[10px] px-1 rounded {badge}">R</span></Label>
     <Select items={projectItems} bind:value={projectValue} onValueChange={onProjectChanged} onkeydown={metaEnter} placeholder="Search project..." emptyText="No projects found" />
+    {#if selectedProject?.path_missing}
+      <MissingProjectNotice project={selectedProject} />
+    {/if}
   </div>
 
   <div class="space-y-1" data-field="task">
@@ -386,7 +391,7 @@
     </div>
     <div class="flex gap-2">
       <Button type="button" onclick={onCancel}>Cancel</Button>
-      <Button type="submit" variant="primary" disabled={submitting}>
+      <Button type="submit" variant="primary" disabled={submitting || !!selectedProject?.path_missing}>
         {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{:else}Create session <span class="ml-1 font-mono text-[10px] opacity-60">{MOD_ENTER_HINT}</span>{/if}
       </Button>
     </div>

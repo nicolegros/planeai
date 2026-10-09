@@ -43,6 +43,9 @@ pub trait Backend: Send + Sync {
     fn fetch_base(&self, repo: &str, base: &str) -> Result<String, String>;
     /// Reload the dispatch config for a provider. Called before each dispatch to pick up config changes.
     fn reload_dispatch_config(&self, provider: &str) -> Option<DispatchConfig>;
+    /// The project's current folder, read live so a relinked project dispatches into its
+    /// new folder. None while the folder is missing on disk.
+    fn project_folder(&self, project_id: &str) -> Option<String>;
 }
 
 /// Data needed to insert a session into the DB.

@@ -324,6 +324,15 @@ impl Backend for TauriBackend {
             name_template: tm.templates.as_ref().and_then(|t| t.name.clone()),
         })
     }
+
+    fn project_folder(&self, project_id: &str) -> Option<String> {
+        let conn = self.db.lock().ok()?;
+        crate::db::get_project(&conn, project_id)
+            .ok()
+            .flatten()
+            .filter(|project| project.status == "active" && !project.path_missing)
+            .map(|project| project.path)
+    }
 }
 
 // ─── SqliteTaskSource: adapts planeai-tasks SqliteRepository to TaskSource ───
@@ -425,7 +434,6 @@ fn into_core_task(t: planeai_tasks::model::Task, subtasks: Vec<String>) -> Task 
 struct Project {
     id: String,
     name: String,
-    path: String,
     prefix: String,
 }
 
@@ -484,7 +492,6 @@ pub fn build_orchestrator_config(
         auto_projects.push(AutoProject {
             project_id: project.id.clone(),
             project_name: project.name.clone(),
-            project_path: project.path.clone(),
             task_source,
             on_start,
             dispatch_config: DispatchConfig {
@@ -521,9 +528,9 @@ pub fn build_orchestrator_config(
 }
 
 fn load_auto_projects(conn: &Connection) -> Vec<Project> {
-    let mut stmt = match conn.prepare(
-        "SELECT id, name, path, prefix FROM projects WHERE status = 'active' AND auto_mode = 1",
-    ) {
+    let mut stmt = match conn
+        .prepare("SELECT id, name, prefix FROM projects WHERE status = 'active' AND auto_mode = 1")
+    {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -531,8 +538,7 @@ fn load_auto_projects(conn: &Connection) -> Vec<Project> {
         Ok(Project {
             id: row.get(0)?,
             name: row.get(1)?,
-            path: row.get(2)?,
-            prefix: row.get(3)?,
+            prefix: row.get(2)?,
         })
     })
     .map(|rows| rows.filter_map(|r| r.ok()).collect())

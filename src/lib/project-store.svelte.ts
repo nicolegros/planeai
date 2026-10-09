@@ -2,7 +2,7 @@
  * Global project store — single source of truth for project state.
  * Coordinates with session orchestrator on delete/archive.
  */
-import { projects as projectsApi } from "./api";
+import { appWindow, projects as projectsApi } from "./api";
 import type { Project } from "./types";
 import { removeProjectSessions } from "./session-orchestrator.svelte";
 
@@ -18,6 +18,18 @@ export function getProject(id: string): Project | undefined {
 
 export async function loadProjects(): Promise<void> {
   projects = await projectsApi.list();
+}
+
+/** Reloads projects whenever the window regains focus, so folders moved meanwhile show as missing. */
+export function reloadProjectsOnFocus(): () => void {
+  let inFlight = false;
+  return appWindow.onFocused(() => {
+    if (inFlight) return;
+    inFlight = true;
+    loadProjects()
+      .catch((error) => console.warn("Failed to reload projects:", error))
+      .finally(() => (inFlight = false));
+  });
 }
 
 export async function createProject(name: string, path: string): Promise<void> {

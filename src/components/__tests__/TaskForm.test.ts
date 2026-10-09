@@ -40,16 +40,17 @@ const mockStartSession = vi.fn((_params?: unknown) =>
 );
 
 const savedProjects = vi.hoisted(() => ({
-  list: [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false }],
+  list: [
+    { id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false },
+  ],
 }));
 
 vi.mock("../../lib/api", () => ({
   projects: {
     listBranches: vi.fn(() => Promise.resolve(["main", "develop"])),
     list: vi.fn(() => Promise.resolve(savedProjects.list)),
-    validateGitRepo: vi.fn(() => Promise.resolve(true)),
     create: vi.fn((name: string, path: string) => {
-      const project = { id: "proj-new", name, path, hidden: false };
+      const project = { id: "proj-new", name, path, hidden: false, path_missing: false };
       savedProjects.list = [...savedProjects.list, project];
       return Promise.resolve(project);
     }),
@@ -66,6 +67,9 @@ vi.mock("../../lib/api", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+
+const mockLocateProjectFolder = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/locate-project", () => ({ locateProjectFolder: mockLocateProjectFolder }));
 
 vi.mock("../../lib/snackbar.svelte", () => ({
   showSnackbar: vi.fn(),
@@ -101,11 +105,14 @@ vi.mock("../../lib/task-store.svelte", () => ({
 
 import TaskForm from "../TaskForm.svelte";
 import TaskFormDialogHarness from "./TaskFormDialogHarness.svelte";
+import TaskFormProjectsHarness from "./TaskFormProjectsHarness.svelte";
 import * as projectStore from "../../lib/project-store.svelte";
 
 const baseProps = {
   mode: "create" as const,
-  projects: [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false }],
+  projects: [
+    { id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false },
+  ],
   tasks: [],
   sessions: [],
   onSubmitted: vi.fn(),
@@ -515,7 +522,9 @@ describe("TaskForm - project field", () => {
   afterEach(() => {
     while (mounted.length) unmount(mounted.pop()!, { outro: false });
     document.body.innerHTML = "";
-    savedProjects.list = [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false }];
+    savedProjects.list = [
+      { id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false },
+    ];
   });
   afterAll(restoreLayoutStubs);
 
@@ -679,8 +688,8 @@ describe("TaskForm - project field", () => {
 
   it("clears parent, blocked-by and base branch when the project changes", async () => {
     savedProjects.list = [
-      { id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false },
-      { id: "proj-2", name: "Other", path: "/tmp/other", hidden: false },
+      { id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false },
+      { id: "proj-2", name: "Other", path: "/tmp/other", hidden: false, path_missing: false },
     ];
     const oldTask = {
       key: "TASK-1",
@@ -731,5 +740,57 @@ describe("TaskForm - project field", () => {
       blockedBy: [],
       baseBranch: "main",
     });
+  });
+});
+
+describe("TaskForm - missing project folder", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("locates the moved folder and creates the task in it", async () => {
+    const missing = {
+      id: "proj-1",
+      name: "My Project",
+      path: "/tmp/myapp",
+      hidden: false,
+      path_missing: true,
+    };
+    const relinked = { ...missing, path: "/tmp/moved", path_missing: false };
+    const target = document.createElement("div");
+    const harness = mount(TaskFormProjectsHarness, {
+      target,
+      props: {
+        ...baseProps,
+        projects: [missing],
+        initial: { projectPath: missing.path, title: "Fix it" },
+      },
+    }) as { setProjects: (projects: (typeof relinked)[]) => void };
+    mockLocateProjectFolder.mockImplementation(async () => {
+      harness.setProjects([relinked]);
+      return relinked;
+    });
+    flushSync();
+
+    const notice = target.querySelector("[data-testid='project-folder-missing']")!;
+    expect(notice.textContent).toContain("Project folder not found.");
+    expect((target.querySelector("#start-session") as HTMLInputElement).disabled).toBe(true);
+
+    notice.querySelector("button")!.click();
+    await vi.waitFor(() =>
+      expect(target.querySelector("[data-testid='project-folder-missing']")).toBeNull(),
+    );
+
+    expect(mockLocateProjectFolder).toHaveBeenCalledWith(missing);
+    expect((target.querySelector("#start-session") as HTMLInputElement).disabled).toBe(false);
+    target
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(mockCreateTask).toHaveBeenCalled());
+    expect(mockCreateTask.mock.calls[0][0]).toMatchObject({
+      repoPath: "/tmp/moved",
+      title: "Fix it",
+    });
+    unmount(harness);
   });
 });

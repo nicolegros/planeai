@@ -104,7 +104,13 @@ function sidebarStatusLabel(status: string): string {
 }
 
 type JiraIssue = { key: string; title: string; description: string };
-type AssignmentProject = { id: string; name: string; path: string; hidden: boolean };
+type AssignmentProject = {
+  id: string;
+  name: string;
+  path: string;
+  hidden: boolean;
+  path_missing: boolean;
+};
 
 function openAssignment(context: PluginUiContext, key: string): PluginModalControls {
   const { interaction, projects: projectApi, tasks } = context.host;

@@ -6,13 +6,6 @@ use crate::util::expand_tilde;
 use super::blocking;
 
 #[tauri::command]
-pub fn validate_git_repo(path: String) -> Result<bool, String> {
-    let path = expand_tilde(&path);
-    let git_dir = std::path::Path::new(&path).join(".git");
-    Ok(git_dir.exists())
-}
-
-#[tauri::command]
 pub async fn list_branches(repo_path: String) -> Result<Vec<String>, String> {
     blocking(move || git::list_branches(&repo_path)).await
 }

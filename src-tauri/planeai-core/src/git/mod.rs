@@ -74,6 +74,30 @@ mod tests {
     }
 
     #[test]
+    fn a_branch_found_in_the_main_checkout_is_not_a_linked_worktree() {
+        let repo = init_repo();
+        let repo_path = repo.path().to_str().unwrap();
+        let linked = repo.path().join("linked");
+        git(
+            repo.path(),
+            &["worktree", "add", "-b", "feature", linked.to_str().unwrap()],
+        );
+
+        let main = find_worktree_for_branch(repo_path, "main").unwrap();
+        let feature = find_worktree_for_branch(repo_path, "feature").unwrap();
+
+        assert_eq!(linked_worktree_path(repo_path, &main), None);
+        assert_eq!(
+            linked_worktree_path(repo_path, &feature),
+            Some(feature.clone())
+        );
+        assert_eq!(
+            fs::canonicalize(&feature).unwrap(),
+            fs::canonicalize(&linked).unwrap()
+        );
+    }
+
+    #[test]
     fn resolve_base_branch_local_returns_unchanged() {
         let repo = init_repo();
         let result = resolve_base_branch(repo.path().to_str().unwrap(), "main").unwrap();

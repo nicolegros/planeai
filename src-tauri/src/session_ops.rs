@@ -1490,6 +1490,7 @@ mod tests {
             status: "active".to_string(),
             prefix: "MYA".to_string(),
             hidden: false,
+            path_missing: false,
         }];
         let sessions = vec![db::Session {
             id: "aaaabbbb-1111-2222-3333-444455556666".to_string(),

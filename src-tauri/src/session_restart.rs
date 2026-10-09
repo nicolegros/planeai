@@ -50,6 +50,10 @@ pub fn restart(
     if !matches!(session.status.as_str(), "exited" | "archived") {
         return Err("can only restart exited or archived sessions".to_string());
     }
+    let project = db::get_project(conn, &session.project_id).map_err(|e| e.to_string())?;
+    if let Some(project) = &project {
+        project.require_folder()?;
+    }
 
     // Provider sessions resume through their plugin when next used (ADR-0014).
     if session.backend == crate::session_ops::PLUGIN_BACKEND {
@@ -83,10 +87,7 @@ pub fn restart(
 
     let extra_path_dirs = config.resolved_extra_path_dirs();
 
-    let project_path = db::get_project(conn, &session.project_id)
-        .ok()
-        .flatten()
-        .map(|p| p.path);
+    let project_path = project.map(|p| p.path);
     let cwd = session
         .worktree_path
         .as_deref()
@@ -242,6 +243,15 @@ mod tests {
     use crate::db;
     use std::cell::RefCell;
 
+    /// A project folder that exists, so launches are not refused as a missing folder.
+    fn existing_project_dir() -> String {
+        tempfile::tempdir()
+            .unwrap()
+            .keep()
+            .to_string_lossy()
+            .to_string()
+    }
+
     fn setup_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
@@ -340,7 +350,7 @@ mod tests {
     #[test]
     fn restart_restores_exited_session() {
         let conn = setup_db();
-        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        db::create_project(&conn, "myapp", &existing_project_dir()).unwrap();
         let projects = db::list_projects(&conn).unwrap();
         let pid = &projects[0].id;
 
@@ -373,9 +383,42 @@ mod tests {
     }
 
     #[test]
+    fn restart_is_refused_while_the_project_folder_is_missing() {
+        let conn = setup_db();
+        let project = db::create_project(&conn, "myapp", "/nonexistent/planeai/myapp").unwrap();
+        let id = "abababab-1111-2222-3333-444455556666";
+        db::create_session_with_id(
+            &conn,
+            id,
+            &project.id,
+            "moved",
+            Some("planeai-myapp-aba"),
+            "main",
+            None,
+            None,
+            "tmux",
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        db::mark_session_exited(&conn, id).unwrap();
+        let ops = MockRestartOps::new();
+
+        let err = restart(&conn, id, &Config::default(), &ops).unwrap_err();
+
+        assert_eq!(err, "Project folder not found. Locate it first.");
+        assert_eq!(
+            db::get_session(&conn, id).unwrap().unwrap().status,
+            "exited"
+        );
+    }
+
+    #[test]
     fn restart_rejects_active_session() {
         let conn = setup_db();
-        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        db::create_project(&conn, "myapp", &existing_project_dir()).unwrap();
         let projects = db::list_projects(&conn).unwrap();
         let pid = &projects[0].id;
 
@@ -406,7 +449,7 @@ mod tests {
     #[test]
     fn restart_restores_archived_session() {
         let conn = setup_db();
-        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        db::create_project(&conn, "myapp", &existing_project_dir()).unwrap();
         let projects = db::list_projects(&conn).unwrap();
         let pid = &projects[0].id;
 
@@ -441,7 +484,7 @@ mod tests {
     #[test]
     fn restart_daemon_session_spawns_in_daemon() {
         let conn = setup_db();
-        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        db::create_project(&conn, "myapp", &existing_project_dir()).unwrap();
         let projects = db::list_projects(&conn).unwrap();
         let pid = &projects[0].id;
 
@@ -478,8 +521,8 @@ mod tests {
     #[test]
     fn restart_rmux_session_rejoins_its_tasks_workspace_across_projects() {
         let conn = setup_db();
-        let owner = db::create_project(&conn, "owner", "/tmp/owner").unwrap();
-        let repo = db::create_project(&conn, "repo", "/tmp/repo").unwrap();
+        let owner = db::create_project(&conn, "owner", &existing_project_dir()).unwrap();
+        let repo = db::create_project(&conn, "repo", &existing_project_dir()).unwrap();
         let id = "cccc2222-4444-5555-6666-777788889999";
         db::create_session_with_params(
             &conn,
@@ -510,7 +553,7 @@ mod tests {
     #[test]
     fn restart_rmux_session_spawns_in_rmux_only() {
         let conn = setup_db();
-        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        db::create_project(&conn, "myapp", &existing_project_dir()).unwrap();
         let projects = db::list_projects(&conn).unwrap();
         let pid = &projects[0].id;
 
@@ -548,7 +591,7 @@ mod tests {
     #[test]
     fn restart_local_session_restores_without_spawning() {
         let conn = setup_db();
-        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        db::create_project(&conn, "myapp", &existing_project_dir()).unwrap();
         let projects = db::list_projects(&conn).unwrap();
         let pid = &projects[0].id;
 
@@ -583,7 +626,7 @@ mod tests {
     #[test]
     fn restart_provider_session_restores_without_a_configured_provider() {
         let conn = setup_db();
-        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        db::create_project(&conn, "myapp", &existing_project_dir()).unwrap();
         let projects = db::list_projects(&conn).unwrap();
         let pid = &projects[0].id;
 
@@ -617,7 +660,7 @@ mod tests {
     #[test]
     fn restart_falls_back_to_fresh_when_resume_fails() {
         let conn = setup_db();
-        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        db::create_project(&conn, "myapp", &existing_project_dir()).unwrap();
         let projects = db::list_projects(&conn).unwrap();
         let pid = &projects[0].id;
 
@@ -662,7 +705,7 @@ mod tests {
         // Regression test for PLA-169: daemon sessions must use the interactive
         // resume command (e.g. "kiro-cli chat --resume") instead of a fresh launch.
         let conn = setup_db();
-        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        db::create_project(&conn, "myapp", &existing_project_dir()).unwrap();
         let projects = db::list_projects(&conn).unwrap();
         let pid = &projects[0].id;
 

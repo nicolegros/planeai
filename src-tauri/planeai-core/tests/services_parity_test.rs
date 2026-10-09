@@ -171,6 +171,42 @@ fn direct_backend_migrates_to_local() {
 // ─── CRUD parity ─────────────────────────────────────────────────────────────
 
 #[test]
+fn projects_whose_folder_is_gone_read_as_path_missing() {
+    let conn = test_db();
+    let present = tempfile::tempdir().unwrap();
+    let moved = tempfile::tempdir().unwrap();
+    let moved_path = moved.path().to_string_lossy().to_string();
+    let kept = ProjectService::create(&conn, "kept", &present.path().to_string_lossy()).unwrap();
+    let gone = ProjectService::create(&conn, "gone", &moved_path).unwrap();
+    drop(moved);
+
+    let missing: Vec<(String, bool)> = ProjectService::list_active(&conn)
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.name, p.path_missing))
+        .collect();
+    assert_eq!(
+        missing,
+        vec![("kept".to_string(), false), ("gone".to_string(), true)]
+    );
+    assert!(
+        ProjectService::get_by_id(&conn, &gone.id)
+            .unwrap()
+            .unwrap()
+            .path_missing
+    );
+
+    ProjectService::archive(&conn, &kept.id).unwrap();
+    ProjectService::archive(&conn, &gone.id).unwrap();
+    let archived: Vec<bool> = ProjectService::list_archived(&conn)
+        .unwrap()
+        .into_iter()
+        .map(|p| p.path_missing)
+        .collect();
+    assert_eq!(archived, vec![false, true]);
+}
+
+#[test]
 fn project_created_through_shared_service_readable_via_shared() {
     let conn = test_db();
     let p = ProjectService::create(&conn, "myapp", "/tmp/myapp").unwrap();

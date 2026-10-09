@@ -235,6 +235,7 @@ pub async fn create_loop_run(
         let project = crate::db::get_project(&conn, &project_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("project not found: {project_id}"))?;
+        project.require_folder()?;
 
         let project_root = std::path::Path::new(&project.path);
 
@@ -341,6 +342,13 @@ pub async fn create_loop_run(
     Ok(result)
 }
 
+fn require_project_folder(conn: &rusqlite::Connection, project_id: &str) -> Result<(), String> {
+    crate::db::get_project(conn, project_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("project not found: {project_id}"))?
+        .require_folder()
+}
+
 #[tauri::command]
 pub async fn tick_loop(
     db_state: State<'_, DbState>,
@@ -356,6 +364,7 @@ pub async fn tick_loop(
         let run = LoopService::get_loop(&conn, &loop_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("loop not found: {loop_id}"))?;
+        require_project_folder(&conn, &run.project_id)?;
 
         if run.status.is_executor_terminal() {
             return Err(format!(
@@ -413,6 +422,7 @@ pub async fn start_loop(
         let run = LoopService::get_loop(&conn, &loop_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("loop not found: {loop_id}"))?;
+        require_project_folder(&conn, &run.project_id)?;
 
         LoopService::transition_loop(&conn, &loop_id, LoopTrigger::Start)
             .map_err(|e| e.to_string())?;

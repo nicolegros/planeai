@@ -146,6 +146,21 @@ pub fn worktree_remove(repo_path: &str, worktree_path: &str) -> Result<(), Strin
     Ok(())
 }
 
+/// Point a linked worktree back at `repo_path`, e.g. after the main checkout moved.
+/// Fails without changes when the worktree belongs to another repository.
+pub fn worktree_repair(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+    let output = git_cmd()
+        .args(["worktree", "repair", worktree_path])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(())
+}
+
 /// Detect the default branch of a repo (main, master, etc.).
 /// Checks local branches for common names.
 pub fn detect_default_branch(repo_path: &str) -> Result<String, String> {
@@ -171,6 +186,13 @@ pub fn detect_default_branch(repo_path: &str) -> Result<String, String> {
 
 /// Find the worktree path where a given branch is checked out.
 /// Returns None if the branch is not checked out in any worktree.
+/// The worktree path a session records for `worktree_path`: None when it is the repo's
+/// main checkout, so the session is treated as a checkout session.
+pub fn linked_worktree_path(repo_path: &str, worktree_path: &str) -> Option<String> {
+    let canonical = |path: &str| std::fs::canonicalize(path).unwrap_or_else(|_| path.into());
+    (canonical(repo_path) != canonical(worktree_path)).then(|| worktree_path.to_string())
+}
+
 pub fn find_worktree_for_branch(repo_path: &str, branch: &str) -> Option<String> {
     let output = git_cmd()
         .args(["worktree", "list", "--porcelain"])

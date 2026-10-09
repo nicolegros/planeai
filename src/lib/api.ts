@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
   Session,
   LaunchResult,
@@ -81,6 +82,8 @@ export const projects = {
   create: (name: string, path: string) => invoke<Project>("create_project", { name, path }),
   update: (id: string, name: string, path: string) =>
     invoke<Project>("update_project", { id, name, path }),
+  /** The parent folder of `path`, when it still exists. */
+  existingParentDir: (path: string) => invoke<string | null>("existing_parent_dir", { path }),
   delete: (id: string) => invoke("delete_project", { id }),
   archive: (id: string) => invoke("archive_project", { id }),
   restore: (id: string) => invoke("restore_project", { id }),
@@ -88,9 +91,18 @@ export const projects = {
   unhide: (id: string) => invoke("unhide_project", { id }),
   setAutoMode: (id: string, enabled: boolean) => invoke("set_project_auto_mode", { id, enabled }),
   getAutoMode: (id: string) => invoke<boolean>("get_project_auto_mode", { id }),
-  validateGitRepo: (path: string) => invoke<boolean>("validate_git_repo", { path }),
   listBranches: (repoPath: string) => invoke<string[]>("list_branches", { repoPath }),
   detectDefaultBranch: (repoPath: string) => invoke<string>("detect_default_branch", { repoPath }),
+};
+
+export const appWindow = {
+  /** Runs `handler` each time the main window gains focus; returns the unsubscribe. */
+  onFocused: (handler: () => void): (() => void) => {
+    const unlisten = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused) handler();
+    });
+    return () => void unlisten.then((stop) => stop());
+  },
 };
 
 export const pty = {

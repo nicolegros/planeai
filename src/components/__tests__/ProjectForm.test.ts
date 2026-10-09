@@ -1,18 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, tick } from "svelte";
 
-const { updateProject, createProject, validateGitRepo } = vi.hoisted(() => ({
+const { updateProject, createProject } = vi.hoisted(() => ({
   updateProject: vi.fn(() =>
-    Promise.resolve({ id: "p1", name: "New project", path: "/projects/new", hidden: false }),
+    Promise.resolve({
+      id: "p1",
+      name: "New project",
+      path: "/projects/new",
+      hidden: false,
+      path_missing: false,
+    }),
   ),
   createProject: vi.fn(() =>
-    Promise.resolve({ id: "p2", name: "New project", path: "/projects/new", hidden: false }),
+    Promise.resolve({
+      id: "p2",
+      name: "New project",
+      path: "/projects/new",
+      hidden: false,
+      path_missing: false,
+    }),
   ),
-  validateGitRepo: vi.fn(() => Promise.resolve(true)),
 }));
 
 vi.mock("../../lib/api", () => ({
-  projects: { validateGitRepo, update: updateProject, create: createProject },
+  projects: { update: updateProject, create: createProject },
   git: { cloneRepository: vi.fn() },
 }));
 
@@ -34,7 +45,13 @@ function renderForm() {
   mount(ProjectForm, {
     target,
     props: {
-      project: { id: "p1", name: "Old project", path: "/projects/old", hidden: false },
+      project: {
+        id: "p1",
+        name: "Old project",
+        path: "/projects/old",
+        hidden: false,
+        path_missing: false,
+      },
       onCreated,
       onCancel: vi.fn(),
     },
@@ -45,7 +62,6 @@ function renderForm() {
 describe("ProjectForm editing", () => {
   beforeEach(() => {
     updateProject.mockClear();
-    validateGitRepo.mockClear();
   });
 
   it("prefills the selected project's name and path", () => {
@@ -62,7 +78,7 @@ describe("ProjectForm editing", () => {
     );
   });
 
-  it("validates and persists renamed project details", async () => {
+  it("persists renamed project details", async () => {
     const { target, onCreated } = renderForm();
     const pathInput = target.querySelector<HTMLInputElement>("[data-field='path'] input")!;
     const nameInput = target.querySelector<HTMLInputElement>("[data-field='name'] input")!;
@@ -77,7 +93,6 @@ describe("ProjectForm editing", () => {
 
     await vi.waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
 
-    expect(validateGitRepo).toHaveBeenCalledWith("/projects/new");
     expect(updateProject).toHaveBeenCalledWith("p1", "New project", "/projects/new");
   });
 });
