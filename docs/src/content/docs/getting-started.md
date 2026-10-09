@@ -11,6 +11,7 @@ Download the latest release for your platform:
 | Platform              | Format                                                                                                                                 |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | macOS (Apple Silicon) | [`.dmg`](https://github.com/nicolegros/planeai/releases/latest)                                                                        |
+| macOS (Intel)         | [`.dmg`](https://github.com/nicolegros/planeai/releases/latest)                                                                        |
 | Linux                 | [`.deb`](https://github.com/nicolegros/planeai/releases/latest) / [`.AppImage`](https://github.com/nicolegros/planeai/releases/latest) |
 | Windows               | [`.exe`](https://github.com/nicolegros/planeai/releases/latest)                                                                        |
 

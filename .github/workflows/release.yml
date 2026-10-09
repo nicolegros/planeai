@@ -125,6 +125,9 @@ jobs:
           - platform: macos-latest
             target: aarch64-apple-darwin
             args: "--target aarch64-apple-darwin"
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            args: "--target x86_64-apple-darwin"
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
@@ -136,8 +139,11 @@ jobs:
           node-version: 22
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      # rust-toolchain.toml pins the toolchain, so the target must be added to that one, not to stable.
+      - name: Add Rust target
+        shell: bash
+        run: rustup target add "${{ matrix.target }}"
 
       - name: Install pnpm
         run: npm install -g pnpm
