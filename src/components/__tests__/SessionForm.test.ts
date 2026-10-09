@@ -50,7 +50,7 @@ vi.mock("../../lib/settings.svelte", () => ({
 import SessionForm from "../SessionForm.svelte";
 
 const baseProps = {
-  projects: [{ id: "p1", name: "Project", path: "/tmp/proj", hidden: false }],
+  projects: [{ id: "p1", name: "Project", path: "/tmp/proj", hidden: false, path_missing: false }],
   sessions: [],
   onCreated: vi.fn(),
   onCancel: vi.fn(),
@@ -330,8 +330,8 @@ it("resets a typed name when another task is picked", async () => {
 
 describe("cross-project task link", () => {
   const twoProjects = [
-    { id: "p1", name: "Project", path: "/tmp/proj", hidden: false },
-    { id: "p2", name: "Other", path: "/tmp/other", hidden: false },
+    { id: "p1", name: "Project", path: "/tmp/proj", hidden: false, path_missing: false },
+    { id: "p2", name: "Other", path: "/tmp/other", hidden: false, path_missing: false },
   ];
   const prefill = {
     key: "PROJ-1",

@@ -84,7 +84,7 @@ function buildActiveSessionMenu(_session: Session): MenuItem[] {
 }
 
 function makeProject(overrides: Partial<Project> = {}): Project {
-  return { id: "p1", name: "Project", path: "/project", hidden: false, ...overrides };
+  return { id: "p1", name: "Project", path: "/project", hidden: false, path_missing: false, ...overrides };
 }
 
 // Replicate the task context menu logic from UnifiedSidebar

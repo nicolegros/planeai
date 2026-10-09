@@ -918,6 +918,7 @@ mod tests {
                 status: "active".into(),
                 prefix: "PLA".into(),
                 hidden: false,
+                path_missing: false,
             };
             Ok((project, task("Users land on /home."), vec!["main".into()]))
         }

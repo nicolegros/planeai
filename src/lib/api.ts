@@ -88,7 +88,6 @@ export const projects = {
   unhide: (id: string) => invoke("unhide_project", { id }),
   setAutoMode: (id: string, enabled: boolean) => invoke("set_project_auto_mode", { id, enabled }),
   getAutoMode: (id: string) => invoke<boolean>("get_project_auto_mode", { id }),
-  validateGitRepo: (path: string) => invoke<boolean>("validate_git_repo", { path }),
   listBranches: (repoPath: string) => invoke<string[]>("list_branches", { repoPath }),
   detectDefaultBranch: (repoPath: string) => invoke<string>("detect_default_branch", { repoPath }),
 };

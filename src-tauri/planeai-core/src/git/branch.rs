@@ -146,6 +146,21 @@ pub fn worktree_remove(repo_path: &str, worktree_path: &str) -> Result<(), Strin
     Ok(())
 }
 
+/// Point a linked worktree back at `repo_path`, e.g. after the main checkout moved.
+/// Fails without changes when the worktree belongs to another repository.
+pub fn worktree_repair(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+    let output = git_cmd()
+        .args(["worktree", "repair", worktree_path])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(())
+}
+
 /// Detect the default branch of a repo (main, master, etc.).
 /// Checks local branches for common names.
 pub fn detect_default_branch(repo_path: &str) -> Result<String, String> {

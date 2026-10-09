@@ -113,19 +113,6 @@
 
   async function submitLocal() {
     try {
-      const valid = await projectsApi.validateGitRepo(path.trim());
-      if (!valid) {
-        showSnackbar("Not a valid git repository (no .git found).");
-        submitting = false;
-        return;
-      }
-    } catch (e) {
-      showSnackbar(`Could not validate repository: ${String(e)}`);
-      submitting = false;
-      return;
-    }
-
-    try {
       const savedProject = project
         ? await projectsApi.update(project.id, name.trim(), path.trim())
         : await projectsApi.create(name.trim(), path.trim());

@@ -234,6 +234,36 @@ pub struct Project {
     pub status: String,
     pub prefix: String,
     pub hidden: bool,
+    /// Derived on read: the stored folder is gone, e.g. moved outside PlaneAI.
+    pub path_missing: bool,
+}
+
+pub const PROJECT_FOLDER_NOT_FOUND: &str = "Project folder not found. Locate it first.";
+
+impl Project {
+    /// Refuses work that would spawn an agent in a folder that is gone.
+    pub fn require_folder(&self) -> Result<(), String> {
+        if self.path_missing {
+            Err(PROJECT_FOLDER_NOT_FOUND.to_string())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+const PROJECT_COLUMNS: &str = "id, name, path, status, prefix, hidden";
+
+fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
+    let path: String = row.get(2)?;
+    Ok(Project {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        path_missing: !Path::new(&path).is_dir(),
+        path,
+        status: row.get(3)?,
+        prefix: row.get(4)?,
+        hidden: row.get(5)?,
+    })
 }
 
 // ─── Session types (matches production db::Session) ──────────────────────────
@@ -328,19 +358,10 @@ impl ProjectService {
     /// Find or create a project for the given path. Returns existing if path matches.
     pub fn ensure_project(conn: &Connection, path: &str) -> SqlResult<Project> {
         let existing: Option<Project> = conn
-            .prepare(
-                "SELECT id, name, path, status, prefix, hidden FROM projects WHERE path = ?1 AND status = 'active'",
-            )?
-            .query_row(params![path], |row| {
-                Ok(Project {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    path: row.get(2)?,
-                    status: row.get(3)?,
-                    prefix: row.get(4)?,
-                    hidden: row.get(5)?,
-                })
-            })
+            .prepare(&format!(
+                "SELECT {PROJECT_COLUMNS} FROM projects WHERE path = ?1 AND status = 'active'"
+            ))?
+            .query_row(params![path], row_to_project)
             .ok();
 
         if let Some(p) = existing {
@@ -358,65 +379,33 @@ impl ProjectService {
             "INSERT INTO projects (id, name, path, status, prefix) VALUES (?1, ?2, ?3, 'active', ?4)",
             params![id, name, path, prefix],
         )?;
-        Ok(Project {
-            id,
-            name,
-            path: path.to_string(),
-            status: "active".to_string(),
-            prefix,
-            hidden: false,
-        })
+        Self::get_by_id(conn, &id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
     }
 
     pub fn list_active(conn: &Connection) -> SqlResult<Vec<Project>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, path, status, prefix, hidden FROM projects WHERE status = 'active'",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Project {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                path: row.get(2)?,
-                status: row.get(3)?,
-                prefix: row.get(4)?,
-                hidden: row.get(5)?,
-            })
-        })?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PROJECT_COLUMNS} FROM projects WHERE status = 'active'"
+        ))?;
+        let rows = stmt.query_map([], row_to_project)?;
         rows.collect()
     }
 
     pub fn get_by_path(conn: &Connection, path: &str) -> SqlResult<Option<Project>> {
-        conn.prepare(
-            "SELECT id, name, path, status, prefix, hidden FROM projects WHERE path = ?1 AND status = 'active'",
-        )?
-        .query_row(params![path], |row| {
-            Ok(Project {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                path: row.get(2)?,
-                status: row.get(3)?,
-                prefix: row.get(4)?,
-                hidden: row.get(5)?,
-            })
-        })
+        conn.prepare(&format!(
+            "SELECT {PROJECT_COLUMNS} FROM projects WHERE path = ?1 AND status = 'active'"
+        ))?
+        .query_row(params![path], row_to_project)
         .ok()
         .map_or(Ok(None), |p| Ok(Some(p)))
     }
 
     pub fn get_by_id(conn: &Connection, id: &str) -> SqlResult<Option<Project>> {
-        conn.prepare("SELECT id, name, path, status, prefix, hidden FROM projects WHERE id = ?1")?
-            .query_row(params![id], |row| {
-                Ok(Project {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    path: row.get(2)?,
-                    status: row.get(3)?,
-                    prefix: row.get(4)?,
-                    hidden: row.get(5)?,
-                })
-            })
-            .ok()
-            .map_or(Ok(None), |p| Ok(Some(p)))
+        conn.prepare(&format!(
+            "SELECT {PROJECT_COLUMNS} FROM projects WHERE id = ?1"
+        ))?
+        .query_row(params![id], row_to_project)
+        .ok()
+        .map_or(Ok(None), |p| Ok(Some(p)))
     }
 
     pub fn create(conn: &Connection, name: &str, path: &str) -> SqlResult<Project> {
@@ -426,14 +415,7 @@ impl ProjectService {
             "INSERT INTO projects (id, name, path, prefix) VALUES (?1, ?2, ?3, ?4)",
             params![id, name, path, prefix],
         )?;
-        Ok(Project {
-            id,
-            name: name.to_string(),
-            path: path.to_string(),
-            status: "active".to_string(),
-            prefix,
-            hidden: false,
-        })
+        Self::get_by_id(conn, &id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
     }
 
     /// Update display metadata for a project without changing its stable task prefix.
@@ -461,19 +443,10 @@ impl ProjectService {
     }
 
     pub fn list_archived(conn: &Connection) -> SqlResult<Vec<Project>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, path, status, prefix, hidden FROM projects WHERE status = 'archived'",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Project {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                path: row.get(2)?,
-                status: row.get(3)?,
-                prefix: row.get(4)?,
-                hidden: row.get(5)?,
-            })
-        })?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PROJECT_COLUMNS} FROM projects WHERE status = 'archived'"
+        ))?;
+        let rows = stmt.query_map([], row_to_project)?;
         rows.collect()
     }
 

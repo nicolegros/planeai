@@ -32,6 +32,8 @@ export interface Project {
   name: string;
   path: string;
   hidden: boolean;
+  /** The folder is gone from disk, e.g. moved outside PlaneAI. */
+  path_missing: boolean;
 }
 
 export interface TaskItem {

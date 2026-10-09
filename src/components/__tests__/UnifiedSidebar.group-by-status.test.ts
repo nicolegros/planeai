@@ -52,8 +52,8 @@ import { getSelectedIndex, setSelectedIndex } from "../../lib/sidebar-nav.svelte
 import { loadTasks } from "../../lib/task-store.svelte";
 import { getSettings, loadSettings } from "../../lib/settings.svelte";
 
-const alpha: Project = { id: "alpha", name: "alpha", path: "/repos/alpha", hidden: false };
-const beta: Project = { id: "beta", name: "beta-service", path: "/repos/beta", hidden: false };
+const alpha: Project = { id: "alpha", name: "alpha", path: "/repos/alpha", hidden: false, path_missing: false };
+const beta: Project = { id: "beta", name: "beta-service", path: "/repos/beta", hidden: false, path_missing: false };
 
 function task(key: string, status: string, priority = 0): TaskItem {
   return {

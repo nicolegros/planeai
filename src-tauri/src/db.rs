@@ -210,15 +210,6 @@ pub fn project_path_in_use(conn: &Connection, path: &str, excluded_id: &str) -> 
     Ok(count > 0)
 }
 
-pub fn project_has_worktree_sessions(conn: &Connection, project_id: &str) -> Result<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sessions WHERE project_id = ?1 AND worktree_path IS NOT NULL",
-        [project_id],
-        |row| row.get(0),
-    )?;
-    Ok(count > 0)
-}
-
 pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
     planeai_core::services::ProjectService::list_active(conn)
 }
@@ -736,25 +727,6 @@ mod tests {
         assert!(
             project_path_in_use(&conn, canonical_real_path.to_str().unwrap(), &second.id,).unwrap()
         );
-    }
-
-    #[test]
-    fn test_project_has_worktree_sessions() {
-        let conn = setup();
-        let project = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        assert!(!project_has_worktree_sessions(&conn, &project.id).unwrap());
-
-        create_session(
-            &conn,
-            &project.id,
-            "worktree session",
-            "planeai-myapp-aaa",
-            "feat/project-path",
-            Some("/tmp/worktree"),
-        )
-        .unwrap();
-
-        assert!(project_has_worktree_sessions(&conn, &project.id).unwrap());
     }
 
     #[test]

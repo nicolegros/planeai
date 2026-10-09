@@ -350,6 +350,7 @@ pub fn create_session(conn: &Connection, opts: SessionCreateOpts) -> Result<db::
         .iter()
         .find(|p| p.name == project_name)
         .ok_or_else(|| format!("unknown project: {project_name}"))?;
+    proj.require_folder()?;
 
     let task_project_id = resolve_task_project_id(&projects, proj, &opts)?;
 
@@ -489,6 +490,7 @@ mod tests {
             status: "active".to_string(),
             prefix: "MYA".to_string(),
             hidden: false,
+            path_missing: false,
         }
     }
 

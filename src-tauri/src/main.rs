@@ -372,7 +372,6 @@ fn main() {
             rename_session,
             list_archived_sessions,
             restore_session,
-            validate_git_repo,
             list_branches,
             get_changed_files,
             get_file_diff,

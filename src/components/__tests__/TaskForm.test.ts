@@ -40,16 +40,15 @@ const mockStartSession = vi.fn((_params?: unknown) =>
 );
 
 const savedProjects = vi.hoisted(() => ({
-  list: [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false }],
+  list: [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false }],
 }));
 
 vi.mock("../../lib/api", () => ({
   projects: {
     listBranches: vi.fn(() => Promise.resolve(["main", "develop"])),
     list: vi.fn(() => Promise.resolve(savedProjects.list)),
-    validateGitRepo: vi.fn(() => Promise.resolve(true)),
     create: vi.fn((name: string, path: string) => {
-      const project = { id: "proj-new", name, path, hidden: false };
+      const project = { id: "proj-new", name, path, hidden: false, path_missing: false };
       savedProjects.list = [...savedProjects.list, project];
       return Promise.resolve(project);
     }),
@@ -105,7 +104,7 @@ import * as projectStore from "../../lib/project-store.svelte";
 
 const baseProps = {
   mode: "create" as const,
-  projects: [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false }],
+  projects: [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false }],
   tasks: [],
   sessions: [],
   onSubmitted: vi.fn(),
@@ -515,7 +514,7 @@ describe("TaskForm - project field", () => {
   afterEach(() => {
     while (mounted.length) unmount(mounted.pop()!, { outro: false });
     document.body.innerHTML = "";
-    savedProjects.list = [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false }];
+    savedProjects.list = [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false }];
   });
   afterAll(restoreLayoutStubs);
 
@@ -679,8 +678,8 @@ describe("TaskForm - project field", () => {
 
   it("clears parent, blocked-by and base branch when the project changes", async () => {
     savedProjects.list = [
-      { id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false },
-      { id: "proj-2", name: "Other", path: "/tmp/other", hidden: false },
+      { id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false, path_missing: false },
+      { id: "proj-2", name: "Other", path: "/tmp/other", hidden: false, path_missing: false },
     ];
     const oldTask = {
       key: "TASK-1",
