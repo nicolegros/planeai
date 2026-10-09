@@ -2,6 +2,7 @@
   import { sessions as sessionsApi, projects as projectsApi, tasks as tasksApi } from "../lib/api";
   import { sessionTaskProjectId, type Session, type Project, type TaskItem } from "../lib/types";
   import { Button, Input, Label, Select, Checkbox } from "./ui";
+  import MissingProjectNotice from "./MissingProjectNotice.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -285,7 +286,7 @@
     <Label>Project <span class="font-mono text-[10px] px-1 rounded {badge}">R</span></Label>
     <Select items={projectItems} bind:value={projectValue} onValueChange={onProjectChanged} onkeydown={metaEnter} placeholder="Search project..." emptyText="No projects found" />
     {#if selectedProject?.path_missing}
-      <p class="text-xs text-status-review" data-testid="project-folder-missing">Project folder not found. Locate it first.</p>
+      <MissingProjectNotice project={selectedProject} />
     {/if}
   </div>
 

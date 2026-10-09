@@ -12,6 +12,7 @@
   import { tick } from "svelte";
   import FormDialog from "./ui/FormDialog.svelte";
   import ProjectForm from "./ProjectForm.svelte";
+  import MissingProjectNotice from "./MissingProjectNotice.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import type { RuntimeProvider } from "../lib/plugin-providers";
   import { ProviderChoice } from "../lib/provider-choice.svelte";
@@ -403,7 +404,9 @@
           <span class="font-mono text-[10px] px-1 rounded {badge}">S</span>
         </div>
         {#if selectedProject?.path_missing}
-          <p class="mt-1 text-xs text-status-review" data-testid="project-folder-missing">Project folder not found. Locate it first.</p>
+          <div class="mt-1">
+            <MissingProjectNotice project={selectedProject} onLocated={(project) => { formProjectPath = project.path; }} />
+          </div>
         {/if}
       </div>
 

@@ -47,6 +47,9 @@ vi.mock("../../lib/settings.svelte", () => ({
   }),
 }));
 
+const mockLocateProjectFolder = vi.hoisted(() => vi.fn(() => Promise.resolve(null)));
+vi.mock("../../lib/locate-project", () => ({ locateProjectFolder: mockLocateProjectFolder }));
+
 import SessionForm from "../SessionForm.svelte";
 
 const baseProps = {
@@ -64,6 +67,23 @@ function renderForm(props = {}) {
 }
 
 describe("SessionForm", () => {
+  it("offers to locate the folder of a project that moved", () => {
+    const missing = {
+      id: "p1",
+      name: "Project",
+      path: "/tmp/proj",
+      hidden: false,
+      path_missing: true,
+    };
+    const target = renderForm({ projects: [missing] });
+
+    const notice = target.querySelector("[data-testid='project-folder-missing']")!;
+    expect(notice.textContent).toContain("Project folder not found.");
+    notice.querySelector("button")!.click();
+
+    expect(mockLocateProjectFolder).toHaveBeenCalledWith(missing);
+  });
+
   it("always renders task selection and a New task route", () => {
     const target = renderForm();
     expect(target.querySelector("[data-field='task']")).not.toBeNull();

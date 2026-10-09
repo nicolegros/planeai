@@ -6,8 +6,8 @@ import { showSnackbar } from "./snackbar.svelte";
 import * as taskStore from "./task-store.svelte";
 import type { Project } from "./types";
 
-/** Asks for the folder a missing project moved to and relinks the project to it. */
-export async function locateProjectFolder(project: Project): Promise<void> {
+/** Asks for the folder a missing project moved to and relinks the project to it. Returns the relinked project, or null when cancelled or refused. */
+export async function locateProjectFolder(project: Project): Promise<Project | null> {
   try {
     const parent = await projectsApi.existingParentDir(project.path);
     const picked = await open({
@@ -15,7 +15,7 @@ export async function locateProjectFolder(project: Project): Promise<void> {
       multiple: false,
       defaultPath: parent ?? getSettings().projects_base_path ?? undefined,
     });
-    if (typeof picked !== "string") return;
+    if (typeof picked !== "string") return null;
     await projectStore.updateProject(project.id, project.name, picked);
     // Tasks are keyed by project path.
     await taskStore.refresh(projectStore.getProjects().map((candidate) => candidate.path));
@@ -23,7 +23,9 @@ export async function locateProjectFolder(project: Project): Promise<void> {
       "Project relinked. Agent conversations started in the old folder may not resume.",
       "info",
     );
+    return projectStore.getProject(project.id) ?? null;
   } catch (error) {
     showSnackbar(String(error));
+    return null;
   }
 }

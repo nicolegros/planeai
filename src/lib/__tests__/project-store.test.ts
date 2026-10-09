@@ -77,8 +77,9 @@ describe("locating a moved project folder", () => {
     update.mockResolvedValue(project({ path: "/new/app" }));
     list.mockResolvedValue([project({ path: "/new/app" })]);
 
-    await locateProjectFolder(project({ path_missing: true }));
+    const located = await locateProjectFolder(project({ path_missing: true }));
 
+    expect(located?.path).toBe("/new/app");
     expect(open).toHaveBeenCalledWith({ directory: true, multiple: false, defaultPath: "/old" });
     expect(update).toHaveBeenCalledWith("p1", "app", "/new/app");
     expect(projectStore.getProject("p1")?.path).toBe("/new/app");
@@ -94,8 +95,9 @@ describe("locating a moved project folder", () => {
     open.mockResolvedValue("/elsewhere/clone");
     update.mockRejectedValue("Could not reattach worktree sessions to this folder: fix login.");
 
-    await locateProjectFolder(project({ path_missing: true }));
+    const located = await locateProjectFolder(project({ path_missing: true }));
 
+    expect(located).toBeNull();
     expect(open).toHaveBeenCalledWith({ directory: true, multiple: false, defaultPath: "/base" });
     expect(showSnackbar).toHaveBeenCalledWith(
       "Could not reattach worktree sessions to this folder: fix login.",
