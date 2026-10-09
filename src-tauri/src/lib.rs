@@ -11,7 +11,6 @@ pub mod git;
 pub mod ipc;
 pub mod logging;
 pub mod paths;
-pub mod project_path_migration;
 pub mod recipe_tick;
 pub mod rmux_client;
 pub mod rmux_ops;

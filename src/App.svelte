@@ -24,7 +24,7 @@
   import { pluginPreferencesLocation, settingsLocationQuery, type SettingsLocation } from "./lib/settings-registry";
   import { shouldShowOnboarding } from "./lib/onboarding";
   import Onboarding from "./components/Onboarding.svelte";
-  import { openFileWithConfiguredEditor, workingDirRelativePath } from "./lib/file-editor";
+  import { openFileWithConfiguredEditor } from "./lib/file-editor";
   import { loadTheme } from "./lib/theme-loader";
   import { errorMessage } from "./lib/errors";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
@@ -499,16 +499,11 @@
     }
   }
 
-  function sessionWorkingDir(sessionId: string): string | undefined {
-    const session = sessions.find((candidate) => candidate.id === sessionId);
-    return session?.worktree_path ?? projects.find((project) => project.id === session?.project_id)?.path;
-  }
-
   /** Open a file with the globally configured editor. */
   async function openFile(sessionId: string, filePath: string): Promise<void> {
     if (filePath.split(/[/\\]/).includes("..")) return;
     const result = await openFileWithConfiguredEditor(getSettings().editor, {
-      openEmbedded: () => { workspaceLayout.openEditor(sessionId, workingDirRelativePath(filePath, sessionWorkingDir(sessionId))); },
+      openEmbedded: () => { workspaceLayout.openEditor(sessionId, filePath); },
       openTerminal: () => openTerminalEditor(sessionId, filePath),
       openExternal: async () => {
         try {

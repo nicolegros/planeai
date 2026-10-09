@@ -28,21 +28,3 @@ export async function openFileWithConfiguredEditor(
   }
   return "opened";
 }
-
-/**
- * The path an editor tab stores for `filePath`: relative to the session's working dir when
- * inside it, so saved layouts survive the project folder moving.
- */
-export function workingDirRelativePath(
-  filePath: string,
-  workingDir: string | null | undefined,
-): string {
-  if (!workingDir) return filePath;
-  const root = workingDir.replace(/[/\\]+$/, "");
-  for (const separator of ["/", "\\"]) {
-    if (filePath.startsWith(root + separator) && filePath.length > root.length + 1) {
-      return filePath.slice(root.length + 1);
-    }
-  }
-  return filePath;
-}

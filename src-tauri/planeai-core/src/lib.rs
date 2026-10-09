@@ -11,7 +11,6 @@ pub mod loop_run;
 pub mod loop_service;
 pub mod notify;
 pub mod orchestrator;
-pub mod project_path;
 pub mod prompt_lock;
 pub mod services;
 pub mod session;

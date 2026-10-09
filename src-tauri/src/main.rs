@@ -21,7 +21,6 @@ mod plugin_packages;
 mod plugin_providers;
 mod plugin_rpc;
 mod plugins;
-mod project_path_migration;
 mod pty;
 mod pty_planeai_core_adapter;
 mod rmux_client;
