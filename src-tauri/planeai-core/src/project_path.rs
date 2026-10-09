@@ -4,9 +4,11 @@
 use std::path::Path;
 
 /// The stored form of `path`: relative to `project_root` when under it, else unchanged.
+/// Relative forms always use `/`, so the stored value is the same on every platform.
 pub fn encode(project_root: &str, path: &str) -> String {
     let path = Path::new(path);
-    if !path.is_absolute() {
+    // `has_root`, not `is_absolute`: on Windows `/repos/app` is rooted but not absolute.
+    if !path.has_root() {
         return path.to_string_lossy().into_owned();
     }
     let relative = strip(Path::new(project_root), path).or_else(|| {
@@ -22,7 +24,11 @@ fn strip(root: &Path, path: &Path) -> Option<String> {
     Some(if relative.as_os_str().is_empty() {
         ".".to_string()
     } else {
-        relative.to_string_lossy().into_owned()
+        relative
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
     })
 }
 
