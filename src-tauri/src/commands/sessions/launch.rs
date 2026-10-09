@@ -237,7 +237,8 @@ pub(crate) async fn launch(
                 warning = Some(format!(
                     "Branch '{branch}' is already in a worktree — session will run there"
                 ));
-                (existing_wt.clone(), Some(existing_wt), false, false)
+                let worktree_path = git::linked_worktree_path(&repo_path, &existing_wt);
+                (existing_wt, worktree_path, false, false)
             }
             Err(e) => return Err(e),
         }
