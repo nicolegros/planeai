@@ -45,6 +45,12 @@ A project is a registered directory on your filesystem — typically a git repos
 By default the sidebar organizes everything by project: tasks appear under the project they belong to, and sessions are grouped by their associated project. You can have multiple projects registered simultaneously.
 You can also group the sidebar by task status to see the work of every project in one list.
 
+If you move or rename a project's folder outside planeai, the sidebar flags the project with a warning icon.
+Click the icon, or right-click the project and choose **Locate folder…**, then pick the folder's new location.
+planeai checks that it is a git repository and reattaches the project's worktree sessions to it.
+Tasks and sessions are kept, but agent conversations started in the old folder may not resume.
+Until the folder is located, planeai does not start new sessions or loops for that project.
+
 ## Tasks
 
 Tasks are planeai's built-in work tracker. Each task represents a unit of work — a bug to fix, a feature to build, a refactor to perform. Tasks live inside a project and have:
