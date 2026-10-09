@@ -281,6 +281,26 @@ mod tests {
     }
 
     #[test]
+    fn database_migration_rewrites_paths_once_per_database() {
+        let conn = setup();
+        let verifier_path = "SELECT output_path FROM verifier_runs";
+
+        crate::db::migrate(&conn).unwrap();
+        assert_eq!(
+            text(&conn, verifier_path),
+            "/repos/app/.planeai/loops/l1/verifiers/v1.log"
+        );
+
+        conn.execute("DELETE FROM applied_data_migrations", [])
+            .unwrap();
+        crate::db::migrate(&conn).unwrap();
+        assert_eq!(
+            text(&conn, verifier_path),
+            ".planeai/loops/l1/verifiers/v1.log"
+        );
+    }
+
+    #[test]
     fn paths_under_a_project_become_relative_and_rerunning_changes_nothing() {
         let conn = setup();
 

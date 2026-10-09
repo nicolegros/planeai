@@ -111,7 +111,11 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     normalize_project_paths(conn)?;
     planeai_core::prompt_lock::migrate(conn)?;
     planeai_core::loop_service::LoopService::migrate(conn)?;
-    crate::project_path_migration::migrate(conn)?;
+    run_once(
+        conn,
+        "project_relative_paths",
+        crate::project_path_migration::migrate,
+    )?;
     crate::rmux_resources::migrate(conn)?;
     crate::terminal_tabs::migrate(conn)?;
 
@@ -142,6 +146,29 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(
         "UPDATE settings SET terminal_theme_dark = terminal_theme WHERE terminal_theme IS NOT NULL",
     );
+    Ok(())
+}
+
+/// Runs a data migration once per database; schema migrations stay re-runnable.
+fn run_once(conn: &Connection, name: &str, migration: fn(&Connection) -> Result<()>) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS applied_data_migrations (name TEXT PRIMARY KEY)",
+    )?;
+    let applied: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM applied_data_migrations WHERE name = ?1)",
+        [name],
+        |row| row.get(0),
+    )?;
+    if applied {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    migration(&tx)?;
+    tx.execute(
+        "INSERT INTO applied_data_migrations (name) VALUES (?1)",
+        [name],
+    )?;
+    tx.commit()?;
     Ok(())
 }
 
