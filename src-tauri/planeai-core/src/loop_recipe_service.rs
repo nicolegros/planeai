@@ -424,10 +424,11 @@ impl RecipeService {
         }
     }
 
-    /// Create a snapshot for storing in policy_json.
+    /// Create a snapshot for storing in policy_json, for a loop of the project at `project_root`.
     pub fn create_snapshot(
         discovered: &DiscoveredRecipe,
         inputs: BTreeMap<String, serde_json::Value>,
+        project_root: &str,
     ) -> RecipeSnapshot {
         let recipe = &discovered.recipe;
         let first_step_id = recipe
@@ -442,7 +443,10 @@ impl RecipeService {
             recipe_name: Some(recipe.name.clone()),
             recipe_description: recipe.description.clone(),
             recipe_source: discovered.source.as_str().to_string(),
-            recipe_path: discovered.path.as_ref().map(|p| p.display().to_string()),
+            recipe_path: discovered
+                .path
+                .as_ref()
+                .map(|p| crate::project_path::encode(project_root, &p.to_string_lossy())),
             inputs,
             input_defs: recipe.inputs.clone(),
             runtime: RecipeRuntime {
@@ -744,7 +748,7 @@ mod tests {
             serde_json::Value::String("implement feature X".to_string()),
         );
 
-        let snapshot = RecipeService::create_snapshot(&discovered, inputs.clone());
+        let snapshot = RecipeService::create_snapshot(&discovered, inputs.clone(), "/repos/app");
         assert_eq!(snapshot.recipe_schema, RECIPE_SCHEMA_V1);
         assert_eq!(snapshot.recipe_id, "maker-verifier");
         assert_eq!(snapshot.recipe_source, "builtin");
@@ -772,6 +776,22 @@ mod tests {
     }
 
     #[test]
+    fn project_recipe_paths_are_stored_relative_to_the_project() {
+        let discovered = DiscoveredRecipe {
+            recipe: RecipeService::parse_yaml(BUILTIN_MAKER_VERIFIER).unwrap(),
+            source: RecipeSource::Project,
+            path: Some(PathBuf::from("/repos/app/.planeai/loops/review.yaml")),
+        };
+
+        let snapshot = RecipeService::create_snapshot(&discovered, BTreeMap::new(), "/repos/app");
+
+        assert_eq!(
+            snapshot.recipe_path.as_deref(),
+            Some(".planeai/loops/review.yaml")
+        );
+    }
+
+    #[test]
     fn snapshot_input_defs_match_recipe_inputs() {
         let recipe = RecipeService::parse_yaml(BUILTIN_MAKER_VERIFIER).unwrap();
         let discovered = DiscoveredRecipe {
@@ -780,7 +800,7 @@ mod tests {
             path: None,
         };
         let inputs = BTreeMap::new();
-        let snapshot = RecipeService::create_snapshot(&discovered, inputs);
+        let snapshot = RecipeService::create_snapshot(&discovered, inputs, "/repos/app");
 
         // All recipe inputs should appear in snapshot.input_defs
         assert_eq!(snapshot.input_defs.len(), recipe.inputs.len());
@@ -825,7 +845,7 @@ mod tests {
             path: None,
         };
         let inputs = BTreeMap::new();
-        let snapshot = RecipeService::create_snapshot(&discovered, inputs);
+        let snapshot = RecipeService::create_snapshot(&discovered, inputs, "/repos/app");
         let json = serde_json::to_string(&snapshot).expect("snapshot should serialize to JSON");
         assert!(json.contains("maker-verifier"));
     }
@@ -908,7 +928,7 @@ mod tests {
             serde_json::Value::String("feat/my-feature".to_string()),
         );
 
-        let snapshot = RecipeService::create_snapshot(&discovered, inputs);
+        let snapshot = RecipeService::create_snapshot(&discovered, inputs, "/repos/app");
         assert_eq!(snapshot.recipe_id, "no-mistakes");
         assert_eq!(snapshot.runtime.current_step, "rebase");
         assert_eq!(snapshot.policy.max_rounds, 5);

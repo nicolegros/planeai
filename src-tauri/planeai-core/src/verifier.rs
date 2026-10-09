@@ -232,6 +232,9 @@ pub fn run_verifier_gate(
     };
 
     // 6. Atomically complete: update verifier_run + append event
+    let stored_output_path = output_path
+        .as_deref()
+        .map(|path| crate::project_path::encode(&request.project_path, path));
     let event_payload = serde_json::json!({
         "verifier_run_id": verifier_run.id,
         "name": request.name,
@@ -239,7 +242,7 @@ pub fn run_verifier_gate(
         "status": status.as_str(),
         "exit_code": exit_code,
         "cwd": &cwd,
-        "output_path": &output_path,
+        "output_path": &stored_output_path,
     });
 
     LoopService::complete_verifier_run(
@@ -247,7 +250,7 @@ pub fn run_verifier_gate(
         &verifier_run.id,
         status.as_str(),
         exit_code,
-        output_path.as_deref(),
+        stored_output_path.as_deref(),
         &event_payload,
     )
     .map_err(|e| VerifyGateError::Db(format!("failed to complete verifier run: {e}")))?;
@@ -611,7 +614,7 @@ mod tests {
         let project_path = dir.path().to_string_lossy().to_string();
         let (loop_id, session_id) = setup_loop_and_session(&conn, &project_path, None);
 
-        run_verifier_gate(
+        let result = run_verifier_gate(
             &conn,
             VerifyGateRequest {
                 loop_id: loop_id.clone(),
@@ -636,7 +639,19 @@ mod tests {
         assert_eq!(payload["status"].as_str().unwrap(), "pass");
         assert_eq!(payload["exit_code"].as_i64().unwrap(), 0);
         assert!(payload["cwd"].as_str().is_some());
-        assert!(payload["output_path"].as_str().is_some());
+        let stored = format!(
+            ".planeai/loops/{loop_id}/verifiers/{}.log",
+            result.verifier_run_id
+        );
+        assert_eq!(payload["output_path"].as_str(), Some(stored.as_str()));
+        let row_path: Option<String> = conn
+            .query_row(
+                "SELECT output_path FROM verifier_runs WHERE id = ?1",
+                [&result.verifier_run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(row_path.as_deref(), Some(stored.as_str()));
     }
 
     #[test]

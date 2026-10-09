@@ -1207,6 +1207,46 @@ fn handoff_record_persists_artifact_and_event() {
 }
 
 #[test]
+fn handoff_record_stores_the_artifact_path_relative_to_the_project() {
+    use planeai_core::loop_service::LoopService;
+
+    let conn = setup_loop_db();
+    let dir = tempfile::tempdir().unwrap();
+    let project_path = dir.path().to_string_lossy().to_string();
+    let (loop_id, session_id) = create_test_loop_with_session_in_dir(&conn, &project_path, None);
+    let handoff_dir = dir.path().join(".planeai").join("handoffs");
+    std::fs::create_dir_all(&handoff_dir).unwrap();
+    let handoff_path = handoff_dir.join("handoff.json");
+    let handoff_json = serde_json::json!({
+        "schema": "planeai.handoff.v1",
+        "loop_id": loop_id,
+        "session_id": session_id,
+        "status": "completed",
+        "summary": "Done"
+    });
+    std::fs::write(&handoff_path, handoff_json.to_string()).unwrap();
+
+    let (output, code) =
+        loop_handoff_record(&conn, &loop_id, &session_id, &handoff_path, &project_path);
+    assert_eq!(code, 0, "output:\n{output}");
+
+    let artifact_path: String = conn
+        .query_row(
+            "SELECT path FROM loop_artifacts WHERE loop_id = ?1",
+            [&loop_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(artifact_path, ".planeai/handoffs/handoff.json");
+    let events = LoopService::list_loop_events(&conn, &loop_id).unwrap();
+    let event = events
+        .iter()
+        .find(|e| e.kind == "handoff_recorded")
+        .unwrap();
+    assert_eq!(event.payload_json["path"], ".planeai/handoffs/handoff.json");
+}
+
+#[test]
 fn handoff_record_fails_on_invalid_json() {
     let conn = setup_loop_db();
     let (loop_id, session_id) = create_test_loop_with_session(&conn);

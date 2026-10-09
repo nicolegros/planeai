@@ -147,7 +147,7 @@ pub fn loop_create(
             if let Err(e) = RecipeService::validate_inputs(&snapshot_inputs, &dr.recipe.inputs) {
                 return (emit_error(&format!("input validation failed: {e}"), &[]), 1);
             }
-            let snapshot = RecipeService::create_snapshot(dr, snapshot_inputs);
+            let snapshot = RecipeService::create_snapshot(dr, snapshot_inputs, &project.path);
             let max_r = snapshot.policy.max_rounds as i64;
             let json_val = serde_json::to_value(&snapshot).ok();
             ResolvedRecipe {
@@ -847,11 +847,18 @@ pub fn loop_handoff_record(
     // Atomically record: artifact + event + session status + loop transition
     let handoff_json: serde_json::Value = serde_json::to_value(&handoff).unwrap_or_default();
     let session_status = handoff.status.as_str();
+    let stored_path = match crate::db::get_project(conn, &loop_run.project_id) {
+        Ok(Some(project)) => {
+            planeai_core::project_path::encode(&project.path, &canonical_path.to_string_lossy())
+        }
+        Ok(None) => canonical_path.to_string_lossy().into_owned(),
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
 
     let event_payload = serde_json::json!({
         "session_id": session.session_id,
         "status": session_status,
-        "path": canonical_path.to_string_lossy(),
+        "path": stored_path,
     });
 
     let result = match LoopService::record_handoff(
@@ -859,7 +866,7 @@ pub fn loop_handoff_record(
         planeai_core::loop_service::RecordHandoffParams {
             loop_id: loop_run.id.clone(),
             session_id: session.session_id.clone(),
-            artifact_path: Some(canonical_path.to_string_lossy().to_string()),
+            artifact_path: Some(stored_path.clone()),
             content_json: Some(handoff_json),
             handoff_status: session_status.to_string(),
             event_payload,

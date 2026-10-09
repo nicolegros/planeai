@@ -103,6 +103,35 @@ pub struct LoopRunDetail {
     pub recipe_snapshot: Option<serde_json::Value>,
 }
 
+impl LoopRunDetail {
+    /// Turns the project-relative paths stored for this loop back into absolute ones.
+    fn resolve_paths(&mut self, project_root: &str) {
+        let resolve = |stored: &mut String| {
+            *stored = planeai_core::project_path::resolve(project_root, stored);
+        };
+        let resolve_key = |value: &mut serde_json::Value, key: &str| {
+            if let Some(serde_json::Value::String(stored)) = value.get_mut(key) {
+                resolve(stored);
+            }
+        };
+        self.artifacts
+            .iter_mut()
+            .filter_map(|artifact| artifact.path.as_mut())
+            .for_each(resolve);
+        self.verifier_runs
+            .iter_mut()
+            .filter_map(|run| run.output_path.as_mut())
+            .for_each(resolve);
+        for event in &mut self.events {
+            resolve_key(&mut event.payload_json, "path");
+            resolve_key(&mut event.payload_json, "output_path");
+        }
+        if let Some(snapshot) = self.recipe_snapshot.as_mut() {
+            resolve_key(snapshot, "recipe_path");
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecipeSummary {
     pub id: String,
@@ -130,6 +159,62 @@ pub async fn list_loop_runs(
     .await
 }
 
+/// A loop with its sessions, events, artifacts and verifier runs, paths made absolute.
+fn load_loop_run_detail(
+    conn: &rusqlite::Connection,
+    loop_id: &str,
+) -> Result<LoopRunDetail, String> {
+    let run = LoopService::get_loop(conn, loop_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("loop not found: {loop_id}"))?;
+
+    let sessions = LoopService::list_loop_sessions(conn, loop_id)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|s| LoopSessionItem {
+            session_id: s.session_id,
+            role: s.role,
+            round: s.round,
+            provider: s.provider,
+            status: s.status,
+            created_at: s.created_at,
+        })
+        .collect();
+
+    let events = LoopService::list_loop_events(conn, loop_id)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|e| LoopEventItem {
+            id: e.id,
+            ts: e.ts,
+            kind: e.kind,
+            payload_json: e.payload_json,
+        })
+        .collect();
+
+    let artifacts = list_loop_artifacts_query(conn, loop_id)?;
+    let verifier_runs = list_verifier_runs_query(conn, loop_id)?;
+
+    // Pass the raw policy_json (which is the RecipeSnapshot) to the frontend
+    let recipe_snapshot = run.policy_json.clone();
+    let project_root = crate::db::get_project(conn, &run.project_id)
+        .map_err(|e| e.to_string())?
+        .map(|project| project.path);
+
+    let mut detail = LoopRunDetail {
+        run: LoopRunSummary::from(run),
+        sessions,
+        events,
+        artifacts,
+        verifier_runs,
+        recipe_snapshot,
+    };
+    if let Some(project_root) = project_root {
+        detail.resolve_paths(&project_root);
+    }
+    Ok(detail)
+}
+
 #[tauri::command]
 pub async fn get_loop_run_detail(
     db_state: State<'_, DbState>,
@@ -139,48 +224,7 @@ pub async fn get_loop_run_detail(
     let conn = db_state.0.clone();
     blocking(move || {
         let conn = conn.lock().map_err(|e| e.to_string())?;
-        let run = LoopService::get_loop(&conn, &loop_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("loop not found: {loop_id}"))?;
-
-        let sessions = LoopService::list_loop_sessions(&conn, &loop_id)
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|s| LoopSessionItem {
-                session_id: s.session_id,
-                role: s.role,
-                round: s.round,
-                provider: s.provider,
-                status: s.status,
-                created_at: s.created_at,
-            })
-            .collect();
-
-        let events = LoopService::list_loop_events(&conn, &loop_id)
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|e| LoopEventItem {
-                id: e.id,
-                ts: e.ts,
-                kind: e.kind,
-                payload_json: e.payload_json,
-            })
-            .collect();
-
-        let artifacts = list_loop_artifacts_query(&conn, &loop_id)?;
-        let verifier_runs = list_verifier_runs_query(&conn, &loop_id)?;
-
-        // Pass the raw policy_json (which is the RecipeSnapshot) to the frontend
-        let recipe_snapshot = run.policy_json.clone();
-
-        Ok(LoopRunDetail {
-            run: LoopRunSummary::from(run),
-            sessions,
-            events,
-            artifacts,
-            verifier_runs,
-            recipe_snapshot,
-        })
+        load_loop_run_detail(&conn, &loop_id)
     })
     .await
 }
@@ -276,7 +320,7 @@ pub async fn create_loop_run(
             .map(|s| s.to_string());
 
         // Build snapshot for policy_json
-        let snapshot = RecipeService::create_snapshot(&discovered, inputs_map);
+        let snapshot = RecipeService::create_snapshot(&discovered, inputs_map, &project.path);
         let resolved_max_rounds = max_rounds.unwrap_or(snapshot.policy.max_rounds as i64);
         let policy_json = serde_json::to_value(&snapshot).ok();
         let policy_json_for_tick = policy_json.clone();
@@ -712,39 +756,7 @@ mod tests {
         )
         .unwrap();
 
-        // Query detail
-        let detail_run = LoopService::get_loop(&conn, &run.id).unwrap().unwrap();
-        let sessions = LoopService::list_loop_sessions(&conn, &run.id).unwrap();
-        let events = LoopService::list_loop_events(&conn, &run.id).unwrap();
-        let artifacts = list_loop_artifacts_query(&conn, &run.id).unwrap();
-        let verifier_runs = list_verifier_runs_query(&conn, &run.id).unwrap();
-
-        let detail = LoopRunDetail {
-            run: LoopRunSummary::from(detail_run),
-            sessions: sessions
-                .into_iter()
-                .map(|s| LoopSessionItem {
-                    session_id: s.session_id,
-                    role: s.role,
-                    round: s.round,
-                    provider: s.provider,
-                    status: s.status,
-                    created_at: s.created_at,
-                })
-                .collect(),
-            events: events
-                .into_iter()
-                .map(|e| LoopEventItem {
-                    id: e.id,
-                    ts: e.ts,
-                    kind: e.kind,
-                    payload_json: e.payload_json,
-                })
-                .collect(),
-            artifacts,
-            verifier_runs,
-            recipe_snapshot: None,
-        };
+        let detail = load_loop_run_detail(&conn, &run.id).unwrap();
 
         assert_eq!(detail.run.goal, "Fix auth bug");
         assert_eq!(detail.run.task_key, Some("PLA-42".to_string()));
@@ -756,6 +768,85 @@ mod tests {
         assert_eq!(detail.verifier_runs.len(), 1);
         assert_eq!(detail.verifier_runs[0].name, "tests");
         assert_eq!(detail.verifier_runs[0].command, "cargo test");
+    }
+
+    #[test]
+    fn loop_detail_resolves_stored_paths_against_the_current_project_folder() {
+        let conn = test_db();
+        let project_id = seed_project(&conn);
+        let run = LoopService::create_loop(
+            &conn,
+            CreateLoopParams {
+                project_id: project_id.clone(),
+                task_key: None,
+                created_by_session_id: None,
+                strategy: LoopStrategy::new("maker-verifier"),
+                goal: "Ship".into(),
+                max_rounds: 3,
+                policy_json: Some(serde_json::json!({"recipe_path": ".planeai/loops/r.yaml"})),
+                budget_json: None,
+            },
+        )
+        .unwrap();
+        LoopService::append_loop_event(
+            &conn,
+            &run.id,
+            "handoff_recorded",
+            &serde_json::json!({"path": ".planeai/h.json", "output_path": "/elsewhere/v.log"}),
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO loop_artifacts (id, loop_id, kind, path, created_at) VALUES ('a1', ?1, 'handoff', '.planeai/h.json', '2026-01-01')",
+            [&run.id],
+        )
+        .unwrap();
+        let verifier = LoopService::add_verifier_run(
+            &conn,
+            AddVerifierRunParams {
+                loop_id: run.id.clone(),
+                session_id: None,
+                verifier_type: "command".into(),
+                name: "tests".into(),
+                command: "true".into(),
+            },
+        )
+        .unwrap();
+        LoopService::update_verifier_run(
+            &conn,
+            &verifier.id,
+            "pass",
+            Some(0),
+            Some(".planeai/v.log"),
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE projects SET path = '/moved/app' WHERE id = ?1",
+            [&project_id],
+        )
+        .unwrap();
+
+        let detail = load_loop_run_detail(&conn, &run.id).unwrap();
+
+        assert_eq!(
+            detail.recipe_snapshot.unwrap()["recipe_path"],
+            "/moved/app/.planeai/loops/r.yaml"
+        );
+        assert_eq!(
+            detail.events[0].payload_json["path"],
+            "/moved/app/.planeai/h.json"
+        );
+        assert_eq!(
+            detail.events[0].payload_json["output_path"],
+            "/elsewhere/v.log"
+        );
+        assert_eq!(
+            detail.artifacts[0].path.as_deref(),
+            Some("/moved/app/.planeai/h.json")
+        );
+        assert_eq!(
+            detail.verifier_runs[0].output_path.as_deref(),
+            Some("/moved/app/.planeai/v.log")
+        );
     }
 
     #[test]
