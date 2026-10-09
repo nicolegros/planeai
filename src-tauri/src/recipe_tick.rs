@@ -2039,6 +2039,7 @@ fn resolve_loop_project(
     let project = crate::db::get_project(ctx.conn, &loop_run.project_id)
         .map_err(|e| format!("failed to resolve project: {e}"))?
         .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
+    project.require_folder()?;
     Ok((loop_run, project))
 }
 

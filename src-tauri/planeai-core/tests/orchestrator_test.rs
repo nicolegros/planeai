@@ -60,10 +60,13 @@ impl TaskSource for MockTaskSource {
 #[derive(Default)]
 struct TestBackend {
     sessions: Mutex<Vec<NewSession>>,
+    missing_projects: HashSet<String>,
+    worktree_repos: Mutex<Vec<String>>,
 }
 
 impl Backend for TestBackend {
-    fn create_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+    fn create_worktree(&self, repo: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+        self.worktree_repos.lock().unwrap().push(repo.to_string());
         Ok(())
     }
     fn create_tmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
@@ -97,6 +100,9 @@ impl Backend for TestBackend {
     }
     fn reload_dispatch_config(&self, _: &str) -> Option<DispatchConfig> {
         None
+    }
+    fn project_folder(&self, project_id: &str) -> Option<String> {
+        (!self.missing_projects.contains(project_id)).then(|| format!("/tmp/{project_id}"))
     }
 }
 
@@ -139,7 +145,6 @@ async fn orchestrator_polls_dispatches_and_stops_on_channel_command() {
         projects: vec![AutoProject {
             project_id: "p1".to_string(),
             project_name: "testproj".to_string(),
-            project_path: "/tmp/testproj".to_string(),
             task_source: source.clone(),
             on_start: Some(OnStartHook {
                 move_to: "in_progress".to_string(),
@@ -170,6 +175,57 @@ async fn orchestrator_polls_dispatches_and_stops_on_channel_command() {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].task_key, "KAN-1");
     assert!(sessions[0].auto_dispatched);
+}
+
+#[tokio::test]
+async fn orchestrator_skips_projects_whose_folder_is_missing() {
+    let task = |key: &str| Task {
+        key: key.into(),
+        title: "Fix bug".into(),
+        status: "todo".into(),
+        description: "".into(),
+        priority: 1,
+        parent_key: None,
+        blocked_by: vec![],
+        subtasks: vec![],
+        base_branch: "main".to_string(),
+    };
+    let project = |id: &str, key: &str| AutoProject {
+        project_id: id.to_string(),
+        project_name: id.to_string(),
+        task_source: Arc::new(MockTaskSource::new(vec![task(key)], vec!["done".into()])),
+        on_start: None,
+        dispatch_config: default_dispatch_config("/tmp/worktrees"),
+    };
+    let config = OrchestratorConfig {
+        poll_interval_ms: 50,
+        max_concurrent: 4,
+        projects: vec![project("moved", "MOV-1"), project("present", "PRE-1")],
+    };
+    let backend = Arc::new(TestBackend {
+        missing_projects: HashSet::from(["moved".to_string()]),
+        ..Default::default()
+    });
+    let orchestrator = Orchestrator::new(config, backend.clone());
+    let (tx, rx) = mpsc::channel(8);
+    let handle = tokio::spawn(async move { orchestrator.run(CancellationToken::new(), rx).await });
+
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    tx.send(OrchestratorCommand::Stop).await.unwrap();
+    handle.await.unwrap().unwrap();
+
+    let dispatched: Vec<String> = backend
+        .sessions
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|s| s.task_key.clone())
+        .collect();
+    assert_eq!(dispatched, vec!["PRE-1".to_string()]);
+    assert_eq!(
+        *backend.worktree_repos.lock().unwrap(),
+        vec!["/tmp/present".to_string()]
+    );
 }
 
 #[tokio::test]
@@ -239,6 +295,9 @@ async fn orchestrator_kills_session_when_task_becomes_terminal() {
         fn reload_dispatch_config(&self, _: &str) -> Option<DispatchConfig> {
             None
         }
+        fn project_folder(&self, _: &str) -> Option<String> {
+            Some("/tmp/testproj".to_string())
+        }
     }
 
     let backend = Arc::new(KillTrackingBackend {
@@ -253,7 +312,6 @@ async fn orchestrator_kills_session_when_task_becomes_terminal() {
         projects: vec![AutoProject {
             project_id: "p1".to_string(),
             project_name: "testproj".to_string(),
-            project_path: "/tmp/testproj".to_string(),
             task_source: source.clone(),
             on_start: None,
             dispatch_config: default_dispatch_config("/tmp/wt"),
@@ -398,6 +456,9 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
         fn reload_dispatch_config(&self, _: &str) -> Option<DispatchConfig> {
             None
         }
+        fn project_folder(&self, _: &str) -> Option<String> {
+            Some("/tmp/testproj".to_string())
+        }
     }
 
     let backend = Arc::new(PreloadedBackend::default());
@@ -408,7 +469,6 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
         projects: vec![AutoProject {
             project_id: "p1".to_string(),
             project_name: "testproj".to_string(),
-            project_path: "/tmp/testproj".to_string(),
             task_source: source,
             on_start: None,
             dispatch_config: default_dispatch_config("/tmp/wt"),
@@ -498,6 +558,9 @@ async fn orchestrator_does_not_redispatch_task_with_exited_session() {
         fn reload_dispatch_config(&self, _: &str) -> Option<DispatchConfig> {
             None
         }
+        fn project_folder(&self, _: &str) -> Option<String> {
+            Some("/tmp/testproj".to_string())
+        }
     }
 
     let backend = Arc::new(ExitedSessionBackend::default());
@@ -508,7 +571,6 @@ async fn orchestrator_does_not_redispatch_task_with_exited_session() {
         projects: vec![AutoProject {
             project_id: "p1".to_string(),
             project_name: "planeai".to_string(),
-            project_path: "/tmp/planeai".to_string(),
             task_source: source,
             on_start: None,
             dispatch_config: default_dispatch_config("/tmp/wt"),

@@ -134,6 +134,9 @@ impl Backend for RecordingBackend {
     fn reload_dispatch_config(&self, _provider: &str) -> Option<DispatchConfig> {
         None
     }
+    fn project_folder(&self, _: &str) -> Option<String> {
+        Some("/tmp/testproj".to_string())
+    }
 }
 
 #[test]

@@ -318,6 +318,15 @@ fn session_read_cursor_truncated_flag() {
 
 // ─── Session children/tree TOON output ───────────────────────────────────────
 
+/// A project folder that exists, so launches are not refused as a missing folder.
+fn existing_project_dir() -> String {
+    tempfile::tempdir()
+        .unwrap()
+        .keep()
+        .to_string_lossy()
+        .to_string()
+}
+
 fn setup_db() -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     crate::db::migrate(&conn).unwrap();
@@ -1526,12 +1535,13 @@ fn loop_create_strategy_alias_works() {
 #[test]
 fn recipe_tick_session_create_fails_gracefully_when_backend_unavailable() {
     let conn = setup_db();
-    crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+    let project_dir = existing_project_dir();
+    crate::db::create_project(&conn, "myapp", &project_dir).unwrap();
 
     // Create a loop with recipe and start=false (draft)
     let (create_output, create_code) = loop_create(
         &conn,
-        "/tmp/myapp",
+        &project_dir,
         None,
         None,
         "maker-verifier",
@@ -1547,7 +1557,7 @@ fn recipe_tick_session_create_fails_gracefully_when_backend_unavailable() {
     assert!(!loop_id.is_empty(), "failed to extract loop_id");
 
     // First tick: draft->running transition + session.create step fails because
-    // /tmp/myapp is not a valid git repo and no backend is available
+    // the project folder is not a git repo and no backend is available
     let (output, code) = loop_tick(&conn, &loop_id);
     assert_eq!(code, 1, "tick output:\n{output}");
     assert!(
@@ -1925,7 +1935,7 @@ fn setup_maker_verifier_flow(
     use planeai_core::loop_recipe_service::*;
     use std::collections::BTreeMap;
 
-    let project = crate::db::create_project(conn, "testapp", "/tmp/testapp").unwrap();
+    let project = crate::db::create_project(conn, "testapp", &existing_project_dir()).unwrap();
 
     // Parse the actual built-in recipe to get the real steps
     let recipe = RecipeService::parse_yaml(include_str!(
@@ -3247,7 +3257,7 @@ fn verifier_refreshes_activity() {
     use std::collections::BTreeMap;
 
     let conn = setup_db();
-    let project = crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+    let project = crate::db::create_project(&conn, "myapp", &existing_project_dir()).unwrap();
 
     let ten_min_ago = (chrono::Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -3585,7 +3595,7 @@ fn recipe_tick_session_create_spawns_fresh_when_session_reuse_disabled() {
     use std::collections::BTreeMap;
 
     let conn = setup_db();
-    let project = crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+    let project = crate::db::create_project(&conn, "myapp", &existing_project_dir()).unwrap();
 
     // Create an existing session that should NOT be reused
     let existing_session_id = "ffffffff-1111-2222-3333-444444444444";
@@ -3715,7 +3725,7 @@ fn recipe_tick_session_create_falls_through_to_fresh_when_existing_session_inact
     use std::collections::BTreeMap;
 
     let conn = setup_db();
-    let project = crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+    let project = crate::db::create_project(&conn, "myapp", &existing_project_dir()).unwrap();
 
     // Create a session and mark it as stopped (inactive)
     let existing_session_id = "dddddddd-aaaa-bbbb-cccc-444444444444";
