@@ -2,6 +2,7 @@
 # Refreshes src-tauri/resources/ghostty-themes from mbadolato/iTerm2-Color-Schemes (MIT).
 # Usage: scripts/update-ghostty-themes.sh [commit-sha]   (defaults to the latest upstream commit)
 # The bundled commit is recorded in src-tauri/resources/ghostty-themes/UPSTREAM.
+# .github/workflows/update-ghostty-themes.yml runs this weekly and opens a PR when upstream changed.
 set -euo pipefail
 
 REPO="mbadolato/iTerm2-Color-Schemes"
