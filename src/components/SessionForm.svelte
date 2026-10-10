@@ -88,7 +88,7 @@
         branches = names.map((s) => {
           const remote = s.startsWith("remote:");
           const name = remote ? s.slice(7) : s;
-          return { value: remote ? `remote:${name}` : name, label: name, remote };
+          return { value: remote ? `remote:${name}` : name, label: name, badge: remote ? "remote" : undefined };
         });
         defaultBranch = detected;
         branchesProjectId = project.id;

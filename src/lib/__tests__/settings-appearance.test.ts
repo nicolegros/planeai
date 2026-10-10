@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../api", () => ({ config: {} }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn() }));
-vi.mock("../theme-loader", () => ({ loadTheme: vi.fn() }));
+vi.mock("../theme-loader", () => ({ applyThemeMode: vi.fn(), loadTheme: vi.fn() }));
 
 describe("system appearance", () => {
   const originalMatchMedia = window.matchMedia;

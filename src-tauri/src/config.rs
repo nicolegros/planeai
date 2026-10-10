@@ -159,8 +159,33 @@ pub struct Appearance {
     pub diff_theme_dark: String,
     #[serde(default)]
     pub diff_theme_light: String,
-    #[serde(default = "default_theme")]
-    pub theme: String,
+    #[serde(default)]
+    pub theme: ThemeChoice,
+}
+
+/// One hand-written CSS theme for both modes, or a source per mode.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ThemeChoice {
+    Css(String),
+    PerMode {
+        light: ThemeSource,
+        dark: ThemeSource,
+    },
+}
+
+/// A Ghostty color scheme by name, or a hand-written CSS theme by file stem.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ThemeSource {
+    Scheme(String),
+    Css { css: String },
+}
+
+impl Default for ThemeChoice {
+    fn default() -> Self {
+        ThemeChoice::Css("default".to_string())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -181,10 +206,6 @@ fn default_auto_open_review() -> Option<bool> {
 
 fn default_sound_enabled() -> Option<bool> {
     Some(true)
-}
-
-fn default_theme() -> String {
-    "default".to_string()
 }
 
 fn default_font_family() -> &'static str {
@@ -373,7 +394,7 @@ impl Default for Config {
                 terminal_theme_light: String::new(),
                 diff_theme_dark: String::new(),
                 diff_theme_light: String::new(),
-                theme: "default".to_string(),
+                theme: ThemeChoice::default(),
             },
             terminal: Terminal {
                 font_family: default_font_family().to_string(),

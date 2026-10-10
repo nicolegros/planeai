@@ -1,0 +1,78 @@
+name: Update Ghostty themes
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-ghostty-themes
+  cancel-in-progress: false
+
+env:
+  BRANCH: chore/ghostty-themes
+  THEMES_DIR: src-tauri/resources/ghostty-themes
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Update themes from upstream
+        id: update
+        run: |
+          previous="$(cat "$THEMES_DIR/UPSTREAM")"
+          scripts/update-ghostty-themes.sh
+          git add --all "$THEMES_DIR"
+          count() { git diff --cached --name-only --diff-filter="$1" -- "$THEMES_DIR" | grep -cvE '/(CREDITS\.md|LICENSE|UPSTREAM)$' || true; }
+          {
+            echo "previous=$previous"
+            echo "current=$(cat "$THEMES_DIR/UPSTREAM")"
+            if git diff --cached --quiet; then
+              echo "changed=false"
+            else
+              echo "changed=true"
+              echo "added=$(count A)"
+              echo "changed_count=$(count M)"
+              echo "removed=$(count D)"
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the pull request
+        if: steps.update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS: ${{ steps.update.outputs.previous }}
+          CURRENT: ${{ steps.update.outputs.current }}
+          ADDED: ${{ steps.update.outputs.added }}
+          CHANGED: ${{ steps.update.outputs.changed_count }}
+          REMOVED: ${{ steps.update.outputs.removed }}
+        run: |
+          title="chore(themes): update Ghostty color schemes to ${CURRENT:0:7}"
+          body="$(cat <<EOF
+          Updates the bundled color schemes from [mbadolato/iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) to \`${CURRENT:0:7}\`.
+
+          - Schemes added: $ADDED
+          - Schemes changed: $CHANGED
+          - Schemes removed: $REMOVED
+          - Upstream changes: https://github.com/mbadolato/iTerm2-Color-Schemes/compare/$PREVIOUS...$CURRENT
+
+          CI does not start on PRs opened by this workflow; close and reopen the PR to run it.
+          EOF
+          )"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create "$BRANCH"
+          git commit --quiet --message "$title"
+          git push --force origin "$BRANCH"
+          number="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')"
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --title "$title" --body "$body"
+          else
+            gh pr create --base main --head "$BRANCH" --title "$title" --body "$body" --label dependencies
+          fi

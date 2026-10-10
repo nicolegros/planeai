@@ -3,10 +3,10 @@ import "@fontsource-variable/ibm-plex-sans";
 import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/500.css";
 import "./app.css";
-import { injectTheme } from "./lib/theme-loader";
+import { NO_THEME, injectTheme } from "./lib/theme-loader";
 
 // Inject default theme CSS synchronously before mount so CSS variables are defined immediately
-injectTheme("");
+injectTheme(NO_THEME);
 
 const page = new URLSearchParams(window.location.search).get("page");
 

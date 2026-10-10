@@ -1,6 +1,6 @@
 import { config as configApi } from "./api";
 import { emit } from "@tauri-apps/api/event";
-import { loadTheme } from "./theme-loader";
+import { applyThemeMode, loadTheme } from "./theme-loader";
 import type { SidebarGroupBy } from "./sidebar-model";
 
 export type AppearanceMode = "system" | "light" | "dark";
@@ -63,10 +63,16 @@ export interface EditorSettings {
   args: string[];
 }
 
+/** A color scheme by name, or a hand-written CSS theme by file stem. */
+export type ThemeSource = string | { css: string };
+
+/** One hand-written CSS theme for both modes, or a source per mode. */
+export type ThemeChoice = string | { light: ThemeSource; dark: ThemeSource };
+
 export interface AppConfig {
   appearance: {
     mode: AppearanceMode;
-    theme: string;
+    theme: ThemeChoice;
   };
   terminal: {
     font_family: string;
@@ -96,7 +102,11 @@ export interface AppConfig {
   onboarding_completed?: boolean | null;
 }
 
-const INITIAL_THEME = "default";
+const INITIAL_THEME: ThemeChoice = "default";
+
+function themeKey(theme: ThemeChoice): string {
+  return JSON.stringify(theme);
+}
 
 let config = $state<AppConfig>({
   appearance: {
@@ -130,6 +140,7 @@ function applyDarkClass() {
   const dark = isDark();
   document.documentElement.classList.toggle("dark", dark);
   document.documentElement.style.colorScheme = dark ? "dark" : "light";
+  applyThemeMode();
   // Force scrollbar repaint in WebView
   document.querySelectorAll("[class*='overflow-y']").forEach((el) => {
     const htmlEl = el as HTMLElement;
@@ -158,23 +169,24 @@ export function getTerminalSettings() {
 }
 
 /** Theme of the config the backend last confirmed; theme CSS reloads only when it changes. */
-let confirmedTheme = INITIAL_THEME;
+let confirmedTheme = themeKey(INITIAL_THEME);
 
 function confirmTheme() {
-  if (config.appearance.theme === confirmedTheme) return;
-  confirmedTheme = config.appearance.theme;
+  const key = themeKey(config.appearance.theme);
+  if (key === confirmedTheme) return;
+  confirmedTheme = key;
   loadTheme();
 }
 
 export async function loadSettings(): Promise<void> {
   config = await configApi.get();
-  confirmedTheme = config.appearance.theme;
+  confirmedTheme = themeKey(config.appearance.theme);
   applyDarkClass();
 }
 
 export async function refreshSettings(): Promise<void> {
   config = await configApi.refresh();
-  confirmedTheme = config.appearance.theme;
+  confirmedTheme = themeKey(config.appearance.theme);
   applyDarkClass();
   loadTheme();
   emit("settings-changed");

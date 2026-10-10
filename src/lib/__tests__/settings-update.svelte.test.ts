@@ -7,7 +7,7 @@ vi.mock("../api", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn() }));
 const loadTheme = vi.fn();
-vi.mock("../theme-loader", () => ({ loadTheme: () => loadTheme() }));
+vi.mock("../theme-loader", () => ({ applyThemeMode: vi.fn(), loadTheme: () => loadTheme() }));
 
 const { getSettings, updateSettings } = await import("../settings.svelte");
 
@@ -107,5 +107,17 @@ describe("updateSettings", () => {
     await updateSettings({ sound_enabled: true });
 
     expect(loadTheme).not.toHaveBeenCalled();
+  });
+
+  it("reloads a scheme pair theme only when its value changes", async () => {
+    update.mockResolvedValue(undefined);
+    const appearance = getSettings().appearance;
+
+    await updateSettings({ appearance: { ...appearance, theme: { light: "A", dark: "B" } } });
+    await updateSettings({ appearance: { ...appearance, theme: { light: "A", dark: "B" } } });
+    expect(loadTheme).toHaveBeenCalledOnce();
+
+    await updateSettings({ appearance: { ...appearance, theme: { light: "A", dark: "C" } } });
+    expect(loadTheme).toHaveBeenCalledTimes(2);
   });
 });

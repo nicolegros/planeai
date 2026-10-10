@@ -47,6 +47,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
       ...actual.preferences,
       listMonospaceFonts: vi.fn(() => Promise.resolve([])),
       listThemes: vi.fn(() => Promise.resolve(["default", "nord"])),
+      listTerminalSchemes: vi.fn(() => Promise.resolve([])),
       checkTmuxAvailable: vi.fn(() => Promise.resolve(true)),
       checkRmuxAvailable: mocks.checkRmuxAvailable,
       checkCliInstalled: vi.fn(() => Promise.resolve(true)),
@@ -69,7 +70,7 @@ vi.mock("../../lib/settings.svelte", () => ({
   updateSettings: mocks.updateSettings,
   refreshSettings: mocks.refreshSettings,
 }));
-vi.mock("../../lib/theme-loader", () => ({ loadTheme: vi.fn() }));
+vi.mock("../../lib/theme-loader", () => ({ applyThemeMode: vi.fn(), loadTheme: vi.fn() }));
 vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: mocks.showSnackbar }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ close: mocks.closeWindow }),
