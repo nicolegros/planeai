@@ -941,7 +941,7 @@ mod tests {
                 terminal_theme_light: String::new(),
                 diff_theme_dark: String::new(),
                 diff_theme_light: String::new(),
-                theme: "default".to_string(),
+                theme: crate::config::ThemeChoice::default(),
             },
             terminal: Terminal {
                 font_family: "Menlo".to_string(),

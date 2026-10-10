@@ -40,7 +40,7 @@ fn load_reads_existing_config_file() {
             terminal_theme_light: "one-light".to_string(),
             diff_theme_dark: "vs-dark".to_string(),
             diff_theme_light: "vs".to_string(),
-            theme: "default".to_string(),
+            theme: ThemeChoice::default(),
         },
         terminal: Terminal {
             font_family: "JetBrains Mono".to_string(),
@@ -1231,4 +1231,37 @@ fn provider_keys_with_a_colon_are_reserved_for_plugins() {
     assert!(validate(&config)
         .unwrap_err()
         .contains("reserved for plugin providers"));
+}
+
+#[test]
+fn appearance_theme_accepts_a_css_theme_name() {
+    let json = r#"{"mode": "dark", "theme": "one"}"#;
+    let appearance: Appearance = serde_json::from_str(json).unwrap();
+    assert_eq!(appearance.theme, ThemeChoice::Css("one".to_string()));
+    let saved = serde_json::to_value(&appearance).unwrap();
+    assert_eq!(saved["theme"], serde_json::json!("one"));
+}
+
+#[test]
+fn appearance_theme_accepts_a_light_and_dark_scheme_pair() {
+    let json = r#"{"mode": "system", "theme": {"light": "A", "dark": "B"}}"#;
+    let appearance: Appearance = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        appearance.theme,
+        ThemeChoice::Schemes {
+            light: "A".to_string(),
+            dark: "B".to_string()
+        }
+    );
+    let saved = serde_json::to_value(&appearance).unwrap();
+    assert_eq!(
+        saved["theme"],
+        serde_json::json!({"light": "A", "dark": "B"})
+    );
+}
+
+#[test]
+fn appearance_theme_defaults_to_the_default_css_theme() {
+    let appearance: Appearance = serde_json::from_str(r#"{"mode": "system"}"#).unwrap();
+    assert_eq!(appearance.theme, ThemeChoice::Css("default".to_string()));
 }

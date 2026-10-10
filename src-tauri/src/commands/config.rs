@@ -2,6 +2,7 @@ use tauri::State;
 
 use crate::config;
 use crate::state::ConfigState;
+use crate::terminal_scheme;
 
 #[tauri::command]
 pub fn refresh_config(
@@ -64,33 +65,64 @@ pub fn update_config(
 }
 
 #[tauri::command]
-pub fn get_theme_css(state: State<ConfigState>, app: tauri::AppHandle) -> Result<String, String> {
-    let cfg = state.0.lock().map_err(|e| e.to_string())?;
-    let theme_name = &cfg.appearance.theme;
-    let config_dir = config::config_dir(&app.package_info().name);
-    let theme_path = config_dir
-        .join("themes")
-        .join(format!("{}.css", theme_name));
-    std::fs::read_to_string(&theme_path).map_err(|e| e.to_string())
+pub async fn get_theme_css(
+    state: State<'_, ConfigState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let theme = state
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .appearance
+        .theme
+        .clone();
+    let themes_dir = config::config_dir(&app.package_info().name).join("themes");
+    crate::commands::blocking(move || match theme {
+        config::ThemeChoice::Css(name) => {
+            std::fs::read_to_string(themes_dir.join(format!("{name}.css")))
+                .map_err(|e| e.to_string())
+        }
+        config::ThemeChoice::Schemes { light, dark } => {
+            let user_dir = themes_dir.join("ghostty");
+            let find = |name: &str| {
+                terminal_scheme::find_scheme(&user_dir, name).map_err(|e| e.to_string())
+            };
+            Ok(terminal_scheme::schemes_css(&find(&light)?, &find(&dark)?))
+        }
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn list_themes(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let config_dir = config::config_dir(&app.package_info().name);
-    let themes_dir = config_dir.join("themes");
-    let mut names = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&themes_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "css") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    names.push(stem.to_string());
+pub async fn list_themes(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let themes_dir = config::config_dir(&app.package_info().name).join("themes");
+    crate::commands::blocking(move || {
+        let mut names = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&themes_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "css") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        names.push(stem.to_string());
+                    }
                 }
             }
         }
-    }
-    names.sort();
-    Ok(names)
+        names.sort();
+        Ok(names)
+    })
+    .await
+}
+
+/// Bundled Ghostty color schemes plus the user's own from `<config_dir>/themes/ghostty/`.
+#[tauri::command]
+pub async fn list_terminal_schemes(
+    app: tauri::AppHandle,
+) -> Result<Vec<terminal_scheme::SchemeSummary>, String> {
+    let user_dir = config::config_dir(&app.package_info().name)
+        .join("themes")
+        .join("ghostty");
+    crate::commands::blocking(move || Ok(terminal_scheme::list_schemes(&user_dir))).await
 }
 
 #[tauri::command]

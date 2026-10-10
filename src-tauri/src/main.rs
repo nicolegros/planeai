@@ -35,6 +35,7 @@ mod state;
 mod symphony;
 mod task_lifecycle;
 mod task_start;
+mod terminal_scheme;
 mod terminal_tabs;
 #[cfg(not(windows))]
 mod tmux;
@@ -399,6 +400,7 @@ fn main() {
             detect_providers,
             get_theme_css,
             list_themes,
+            list_terminal_schemes,
             launch_session,
             start_task_session,
             attach_session,
