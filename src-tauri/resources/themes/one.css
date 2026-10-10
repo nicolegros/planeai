@@ -1,76 +1,76 @@
-/* One (Atom One Light / One Half Dark) */
+/* One (One Half Light / One Half Dark) */
 
 :root {
-  /* ── Role tokens (One Light) ── */
+  /* ── Role tokens (One Half Light) ── */
   --color-canvas: #f0f0f0;
   --color-chrome: #f0f0f0;
   --color-sidebar: #f0f0f0;
-  --color-main: #f9f9f9;
-  --color-panel: #f9f9f9;
-  --color-panel-hi: #e5e5e6;
+  --color-main: #fafafa;
+  --color-panel: #fafafa;
+  --color-panel-hi: #e5e5e5;
   --color-t1: #383a42;
   --color-t2: #4f525e;
   --color-t3: #696c77;
   --color-border: rgba(56, 58, 66, 0.08);
   --color-border-s: rgba(56, 58, 66, 0.14);
-  --color-accent: #4078f2;
-  --color-on-accent: #ffffff;
-  --color-accent-bg: rgba(64, 120, 242, 0.08);
+  --color-accent: #0184bc;
+  --color-on-accent: #fafafa;
+  --color-accent-bg: rgba(1, 132, 188, 0.08);
   --color-scrim: rgba(56, 58, 66, 0.3);
-  --color-status-running: #3f953a;
+  --color-status-running: #50a14f;
   --color-status-review: #c18401;
-  --color-status-exited: #de3e35;
+  --color-status-exited: #e45649;
   --color-status-idle: #a0a1a7;
 
   --radius-base: 0.25rem;
   --radius-container: 0.5rem;
 
-  /* ── Terminal (Atom One Light) ── */
-  --terminal-background: #f9f9f9;
-  --terminal-foreground: #2a2c33;
-  --terminal-cursor: #bbbbbb;
-  --terminal-selection: #ededed;
-  --terminal-black: #000000;
-  --terminal-red: #de3e35;
-  --terminal-green: #3f953a;
-  --terminal-yellow: #d2b67c;
-  --terminal-blue: #2f5af3;
-  --terminal-magenta: #950095;
-  --terminal-cyan: #3f953a;
-  --terminal-white: #bbbbbb;
-  --terminal-bright-black: #000000;
-  --terminal-bright-red: #de3e35;
-  --terminal-bright-green: #3f953a;
-  --terminal-bright-yellow: #d2b67c;
-  --terminal-bright-blue: #2f5af3;
-  --terminal-bright-magenta: #a00095;
-  --terminal-bright-cyan: #3f953a;
+  /* ── Terminal (One Half Light, as shipped by Ghostty) ── */
+  --terminal-background: #fafafa;
+  --terminal-foreground: #383a42;
+  --terminal-cursor: #a5b4e5;
+  --terminal-selection: #bfceff;
+  --terminal-black: #383a42;
+  --terminal-red: #e45649;
+  --terminal-green: #50a14f;
+  --terminal-yellow: #c18401;
+  --terminal-blue: #0184bc;
+  --terminal-magenta: #a626a4;
+  --terminal-cyan: #0997b3;
+  --terminal-white: #bababa;
+  --terminal-bright-black: #4f525e;
+  --terminal-bright-red: #e06c75;
+  --terminal-bright-green: #98c379;
+  --terminal-bright-yellow: #d8b36e;
+  --terminal-bright-blue: #61afef;
+  --terminal-bright-magenta: #c678dd;
+  --terminal-bright-cyan: #56b6c2;
   --terminal-bright-white: #ffffff;
 
   /* ── Diff ── */
-  --diff-add-bg: #d4f8db;
-  --diff-del-bg: #fdd8d8;
-  --diff-add-color: #3f953a;
-  --diff-del-color: #de3e35;
+  --diff-add-bg: #e1ede0;
+  --diff-del-bg: #f7e1df;
+  --diff-add-color: #50a14f;
+  --diff-del-color: #e45649;
 
   /* ── Editor ── */
-  --editor-background: #f9f9f9;
-  --editor-foreground: #2a2c33;
-  --editor-selection: #ededed;
-  --editor-line-number: #a0a1a7;
-  --editor-added: #3f953a;
-  --editor-deleted: #de3e35;
-  --editor-added-bg: #d4f8db;
-  --editor-deleted-bg: #fdd8d8;
+  --editor-background: #fafafa;
+  --editor-foreground: #383a42;
+  --editor-selection: #bfceff;
+  --editor-line-number: #d4d4d4;
+  --editor-added: #50a14f;
+  --editor-deleted: #e45649;
+  --editor-added-bg: #e1ede0;
+  --editor-deleted-bg: #f7e1df;
   --editor-keyword: #a626a4;
   --editor-string: #50a14f;
   --editor-comment: #a0a1a7;
-  --editor-number: #986801;
+  --editor-number: #c18401;
   --editor-variable: #383a42;
   --editor-type: #c18401;
-  --editor-function: #4078f2;
-  --editor-property: #4078f2;
-  --editor-operator: #0184bc;
+  --editor-function: #0184bc;
+  --editor-property: #0184bc;
+  --editor-operator: #0997b3;
   --editor-punctuation: #383a42;
   --editor-meta: #a626a4;
 }
