@@ -31,7 +31,7 @@ Themes live in `~/.config/planeai/themes/` (or `%APPDATA%\planeai\themes\` on Wi
 | `github`     | GitHub Light / Dark                         |
 | `catppuccin` | Catppuccin Latte (light) / Macchiato (dark) |
 | `dracula`    | Dracula color palette                       |
-| `one`        | Atom One Light / Dark                       |
+| `one`        | One Half Light / Dark                       |
 
 ## Creating a custom theme
 
