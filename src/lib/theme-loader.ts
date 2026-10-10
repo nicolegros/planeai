@@ -22,11 +22,15 @@ export function injectTheme(css: string): void {
 export function extractTerminalTheme(): ITheme {
   const s = getComputedStyle(document.documentElement);
   const v = (name: string) => s.getPropertyValue(name).trim();
+  // Hand-written CSS themes omit these; undefined keeps xterm's defaults.
+  const optional = (name: string) => v(name) || undefined;
   return {
     background: v("--terminal-background"),
     foreground: v("--terminal-foreground"),
     cursor: v("--terminal-cursor"),
+    cursorAccent: optional("--terminal-cursor-text"),
     selectionBackground: v("--terminal-selection"),
+    selectionForeground: optional("--terminal-selection-foreground"),
     black: v("--terminal-black"),
     red: v("--terminal-red"),
     green: v("--terminal-green"),

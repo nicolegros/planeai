@@ -78,5 +78,20 @@ describe("extractTerminalTheme", () => {
     expect(theme.white).toBe("#bac2de");
     expect(theme.brightBlack).toBe("#585b70");
     expect(theme.brightWhite).toBe("#a6adc8");
+    expect(theme.selectionForeground).toBeUndefined();
+    expect(theme.cursorAccent).toBeUndefined();
+  });
+
+  it("reads selection foreground and cursor text when the theme defines them", () => {
+    injectTheme(`
+      :root {
+        --terminal-selection-foreground: #fbf1c7;
+        --terminal-cursor-text: #282828;
+      }
+    `);
+
+    const theme = extractTerminalTheme();
+    expect(theme.selectionForeground).toBe("#fbf1c7");
+    expect(theme.cursorAccent).toBe("#282828");
   });
 });

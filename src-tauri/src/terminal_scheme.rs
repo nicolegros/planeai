@@ -116,7 +116,9 @@ pub struct TerminalScheme {
     pub background: Rgb,
     pub foreground: Rgb,
     pub cursor: Option<Rgb>,
+    pub cursor_text: Option<Rgb>,
     pub selection_background: Option<Rgb>,
+    pub selection_foreground: Option<Rgb>,
     pub palette: [Rgb; 16],
 }
 
@@ -153,7 +155,9 @@ impl TerminalScheme {
             })
         };
         let mut palette = XTERM_PALETTE;
-        let (mut background, mut foreground, mut cursor, mut selection) = (None, None, None, None);
+        let (mut background, mut foreground) = (None, None);
+        let (mut cursor, mut cursor_text, mut selection, mut selection_fg) =
+            (None, None, None, None);
         for line in source.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -179,7 +183,9 @@ impl TerminalScheme {
                 "background" => background = Some(color(key, value)?),
                 "foreground" => foreground = Some(color(key, value)?),
                 "cursor-color" => cursor = Some(color(key, value)?),
+                "cursor-text" => cursor_text = Some(color(key, value)?),
                 "selection-background" => selection = Some(color(key, value)?),
+                "selection-foreground" => selection_fg = Some(color(key, value)?),
                 _ => {}
             }
         }
@@ -188,7 +194,9 @@ impl TerminalScheme {
             background: background.ok_or(SchemeError::Missing("background"))?,
             foreground: foreground.ok_or(SchemeError::Missing("foreground"))?,
             cursor,
+            cursor_text,
             selection_background: selection,
+            selection_foreground: selection_fg,
             palette,
         })
     }
@@ -281,7 +289,13 @@ static TOKENS: &[(&str, Rule)] = &[
     ("--terminal-background", |d| d.bg().hex()),
     ("--terminal-foreground", |d| d.fg().hex()),
     ("--terminal-cursor", |d| d.s.cursor.unwrap_or(d.fg()).hex()),
+    ("--terminal-cursor-text", |d| {
+        d.s.cursor_text.unwrap_or(d.bg()).hex()
+    }),
     ("--terminal-selection", |d| d.selection.hex()),
+    ("--terminal-selection-foreground", |d| {
+        d.s.selection_foreground.unwrap_or(d.fg()).hex()
+    }),
     ("--terminal-black", |d| d.p[0].hex()),
     ("--terminal-red", |d| d.p[1].hex()),
     ("--terminal-green", |d| d.p[2].hex()),

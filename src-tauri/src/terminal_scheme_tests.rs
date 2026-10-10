@@ -51,7 +51,9 @@ selection-foreground = #fefefe
             background: Rgb([0x10, 0x10, 0x10]),
             foreground: Rgb([0xf0, 0xf0, 0xf0]),
             cursor: Some(Rgb([0xab, 0xcd, 0xef])),
+            cursor_text: Some(Rgb([0x12, 0x34, 0x56])),
             selection_background: Some(Rgb([0x20, 0x20, 0x20])),
+            selection_foreground: Some(Rgb([0xfe, 0xfe, 0xfe])),
             palette: [
                 Rgb([0x00, 0x00, 0x00]),
                 Rgb([0x11, 0x00, 0x00]),
@@ -160,6 +162,14 @@ fn one_half_dark_terminal_tokens_match_the_ghostty_file() {
     for (name, value) in expected {
         assert_eq!(t[name], value, "{name}");
     }
+}
+
+#[test]
+fn selection_and_cursor_text_colors_come_from_the_scheme() {
+    let t = tokens(&bundled("Gruvbox Light"));
+    assert_eq!(t["--terminal-selection"], "#3c3836");
+    assert_eq!(t["--terminal-selection-foreground"], "#fbf1c7");
+    assert_eq!(t["--terminal-cursor-text"], "#fbf1c7");
 }
 
 #[test]
