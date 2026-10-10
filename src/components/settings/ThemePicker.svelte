@@ -66,11 +66,8 @@
       >{theme}</button>
     {/each}
   </div>
-  <div class="space-y-1.5">
-    <div class="text-[12px] font-medium text-t2">Color schemes</div>
-    <div class="flex gap-3">
-      {@render schemeSelect("light", "Light")}
-      {@render schemeSelect("dark", "Dark")}
-    </div>
+  <div class="flex gap-3">
+    {@render schemeSelect("light", "Light")}
+    {@render schemeSelect("dark", "Dark")}
   </div>
 </div>
