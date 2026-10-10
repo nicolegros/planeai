@@ -100,9 +100,7 @@ describe("ThemePicker", () => {
     component = mount(ThemePicker, { target });
     await flush();
 
-    const input = target.querySelector<HTMLInputElement>(
-      'input[aria-label="Light color scheme"]',
-    )!;
+    const input = target.querySelector<HTMLInputElement>('input[aria-label="Light color scheme"]')!;
     input.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
     await flush();
 
