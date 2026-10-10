@@ -47,6 +47,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
       ...actual.preferences,
       listMonospaceFonts: vi.fn(() => Promise.resolve([])),
       listThemes: vi.fn(() => Promise.resolve(["default", "nord"])),
+      listTerminalSchemes: vi.fn(() => Promise.resolve([])),
       checkTmuxAvailable: vi.fn(() => Promise.resolve(true)),
       checkRmuxAvailable: mocks.checkRmuxAvailable,
       checkCliInstalled: vi.fn(() => Promise.resolve(true)),

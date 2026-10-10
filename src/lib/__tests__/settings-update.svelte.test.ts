@@ -108,4 +108,16 @@ describe("updateSettings", () => {
 
     expect(loadTheme).not.toHaveBeenCalled();
   });
+
+  it("reloads a scheme pair theme only when its value changes", async () => {
+    update.mockResolvedValue(undefined);
+    const appearance = getSettings().appearance;
+
+    await updateSettings({ appearance: { ...appearance, theme: { light: "A", dark: "B" } } });
+    await updateSettings({ appearance: { ...appearance, theme: { light: "A", dark: "B" } } });
+    expect(loadTheme).toHaveBeenCalledOnce();
+
+    await updateSettings({ appearance: { ...appearance, theme: { light: "A", dark: "C" } } });
+    expect(loadTheme).toHaveBeenCalledTimes(2);
+  });
 });

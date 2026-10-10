@@ -193,8 +193,9 @@ impl TerminalScheme {
         })
     }
 
+    /// Polarity follows the surface, not fg vs bg, so text can always reach contrast on it.
     pub fn is_dark(&self) -> bool {
-        self.background.luminance() < self.foreground.luminance()
+        prefers_light_text(self.background)
     }
 }
 
@@ -213,8 +214,7 @@ struct Derived<'a> {
 impl<'a> Derived<'a> {
     fn new(s: &'a TerminalScheme) -> Self {
         let (bg, fg) = (s.background, s.foreground);
-        // Polarity follows the surface, not fg vs bg, so text can always reach contrast on both surfaces.
-        let dark = prefers_light_text(bg);
+        let dark = s.is_dark();
         let frame = bg.mix(BLACK, if dark { 0.175 } else { 0.04 });
         // Text sits on both the frame and the main surface, so it must read on each.
         let surfaces = [frame, bg];

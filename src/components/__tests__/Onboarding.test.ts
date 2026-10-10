@@ -36,6 +36,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
     preferences: {
       ...actual.preferences,
       listThemes: vi.fn(() => Promise.resolve(["default", "nord"])),
+      listTerminalSchemes: vi.fn(() => Promise.resolve([])),
     },
   };
 });

@@ -327,9 +327,19 @@ export const providerSessions = {
     invokeProviderSession<void>("provider_session_handback", { sessionId }),
 };
 
+/** A Ghostty color scheme as listed by the backend; colors are `#rrggbb`. */
+export interface TerminalSchemeSummary {
+  name: string;
+  dark: boolean;
+  background: string;
+  foreground: string;
+  accent: string;
+}
+
 export const preferences = {
   listMonospaceFonts: () => invoke<string[]>("list_monospace_fonts"),
   listThemes: () => invoke<string[]>("list_themes"),
+  listTerminalSchemes: () => invoke<TerminalSchemeSummary[]>("list_terminal_schemes"),
   checkTmuxAvailable: () => invoke<boolean>("check_tmux_available"),
   checkRmuxAvailable: () => invoke<boolean>("check_rmux_available"),
   checkCliInstalled: () => invoke<boolean>("check_cli_installed"),
