@@ -118,19 +118,21 @@ fn conventional_dirs(home: &str) -> Vec<String> {
     ]
 }
 
-/// Build the standard environment map for a daemon session spawn.
-/// Includes augmented PATH, TERM, and PLANEAI_SESSION_ID.
-pub fn build_daemon_env<'a>(
-    extra_path_dirs: &'a [String],
-    session_id: &'a str,
-    path_buf: &'a mut String,
-) -> std::collections::HashMap<&'a str, &'a str> {
-    *path_buf = augmented_path(extra_path_dirs);
-    let mut env = std::collections::HashMap::new();
-    env.insert("PATH", path_buf.as_str());
-    env.insert("TERM", "xterm-256color");
-    env.insert("PLANEAI_SESSION_ID", session_id);
-    env
+/// The argv running `cmd` from `cwd`, and the cwd its host process starts in: the
+/// platform shell natively, `sh` inside the distro under WSL.
+pub fn launch_argv(
+    cmd: &str,
+    cwd: &str,
+    wsl: Option<&crate::wsl::WslTarget>,
+) -> (Vec<String>, String) {
+    match wsl {
+        Some(target) => (target.shell_argv(cmd, cwd), target.cwds(cwd).0),
+        None => {
+            let (program, args) = shell_args(cmd);
+            let argv = std::iter::once(program.to_string()).chain(args).collect();
+            (argv, cwd.to_string())
+        }
+    }
 }
 
 /// Return the shell program and args needed to execute a command string.

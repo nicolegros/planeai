@@ -983,6 +983,7 @@ mod tests {
             language_servers: None,
             editor: None,
             onboarding_completed: None,
+            wsl: None,
         }
     }
 

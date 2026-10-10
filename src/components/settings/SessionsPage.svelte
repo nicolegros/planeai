@@ -1,8 +1,9 @@
 <script lang="ts">
   import { CircleAlert } from "@lucide/svelte";
   import { preferences } from "../../lib/api";
+  import { IS_WINDOWS } from "../../lib/keyboard";
   import { getSettings } from "../../lib/settings.svelte";
-  import { Button, Dialog, SegmentedControl } from "../ui";
+  import { Button, Dialog, SegmentedControl, Select, Switch } from "../ui";
   import SettingRow from "./SettingRow.svelte";
   import SettingsSection from "./SettingsSection.svelte";
   import { saveSettings } from "../../lib/save-settings";
@@ -28,6 +29,19 @@
   let tmuxAvailable = $state(true);
   let rmuxAvailable = $state(true);
   const missingBinary = $derived((backend === "tmux" && !tmuxAvailable) || (backend === "rmux" && !rmuxAvailable));
+
+  // Unset until listed, so "no distro" never flashes before the list arrives.
+  let wslDistros = $state<string[] | null>(null);
+  const wsl = $derived(config.wsl ?? { enabled: false });
+  const distroItems = $derived([
+    { value: "", label: wslDistros?.[0] ? `Default (${wslDistros[0]})` : "Default" },
+    ...(wslDistros ?? []).map((distro) => ({ value: distro, label: distro })),
+  ]);
+
+  $effect(() => {
+    if (!IS_WINDOWS) return;
+    preferences.listWslDistros().then((distros) => (wslDistros = distros)).catch(() => (wslDistros = []));
+  });
 
   let staleWorktrees = $state<{ session_name: string; worktree_path: string; branch: string }[]>([]);
   let showCleanupDialog = $state(false);
@@ -86,6 +100,33 @@
     />
   </SettingRow>
 </SettingsSection>
+
+{#if IS_WINDOWS}
+  <SettingsSection title="WSL" help="Changes apply to new sessions and terminals.">
+    <SettingRow id="wsl">
+      {#snippet note()}
+        {#if wslDistros?.length === 0}
+          <p class="mt-1 flex items-center gap-1.5 text-[12px] text-status-review" role="alert">
+            <CircleAlert size={12} />No WSL distro is installed. Install one with <code class="font-mono">wsl --install</code>.
+          </p>
+        {/if}
+      {/snippet}
+      <Switch
+        label="Run sessions inside WSL"
+        checked={wsl.enabled}
+        disabled={!wsl.enabled && wslDistros?.length === 0}
+        onCheckedChange={(enabled) => saveSettings({ wsl: { ...wsl, enabled } })}
+      />
+    </SettingRow>
+    {#if wsl.enabled}
+      <SettingRow id="wsl-distro">
+        <div class="w-64">
+          <Select items={distroItems} value={wsl.distro ?? ""} onValueChange={(distro) => saveSettings({ wsl: { ...wsl, distro: distro || null } })} ariaLabel="WSL distro" />
+        </div>
+      </SettingRow>
+    {/if}
+  </SettingsSection>
+{/if}
 
 <SettingsSection title="Maintenance">
   <SettingRow id="stale-worktrees">

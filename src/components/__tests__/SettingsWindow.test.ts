@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   defaults: vi.fn(),
   detectProviders: vi.fn(),
   checkRmuxAvailable: vi.fn(),
+  listWslDistros: vi.fn(),
+  isWindows: false,
   getVersion: vi.fn(),
   getPending: vi.fn(),
   check: vi.fn(),
@@ -49,6 +51,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
       listThemes: vi.fn(() => Promise.resolve(["default", "nord"])),
       checkTmuxAvailable: vi.fn(() => Promise.resolve(true)),
       checkRmuxAvailable: mocks.checkRmuxAvailable,
+      listWslDistros: mocks.listWslDistros,
       checkCliInstalled: vi.fn(() => Promise.resolve(true)),
       listStaleWorktrees: vi.fn(() => Promise.resolve([])),
       runStaleWorktreeCleanup: vi.fn(() => Promise.resolve([])),
@@ -68,6 +71,12 @@ vi.mock("../../lib/settings.svelte", () => ({
   getSettings: () => mocks.config,
   updateSettings: mocks.updateSettings,
   refreshSettings: mocks.refreshSettings,
+}));
+vi.mock("../../lib/keyboard", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/keyboard")>()),
+  get IS_WINDOWS() {
+    return mocks.isWindows;
+  },
 }));
 vi.mock("../../lib/theme-loader", () => ({ loadTheme: vi.fn() }));
 vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: mocks.showSnackbar }));
@@ -157,6 +166,8 @@ beforeEach(() => {
   mocks.defaults.mockResolvedValue(baseConfig());
   mocks.detectProviders.mockResolvedValue({});
   mocks.checkRmuxAvailable.mockResolvedValue(true);
+  mocks.listWslDistros.mockResolvedValue(["Ubuntu", "Debian"]);
+  mocks.isWindows = false;
   mocks.getVersion.mockResolvedValue("1.80.0");
   mocks.getPending.mockResolvedValue(null);
   mocks.listen.mockResolvedValue(() => {});
@@ -490,6 +501,40 @@ describe("sessions", () => {
     await render("/?page=preferences&section=sessions");
     expect(document.body.textContent).not.toContain("rmux not found on PATH");
     expect(document.body.textContent).toContain("requires rmux");
+  });
+});
+
+describe("wsl", () => {
+  it("is not offered off Windows", async () => {
+    await render("/?page=preferences&section=sessions");
+    expect(
+      document.querySelector('[role="switch"][aria-label="Run sessions inside WSL"]'),
+    ).toBeNull();
+    expect(mocks.listWslDistros).not.toHaveBeenCalled();
+  });
+
+  it("turns on for new sessions on Windows", async () => {
+    mocks.isWindows = true;
+    await render("/?page=preferences&section=sessions");
+    toggle("Run sessions inside WSL").click();
+    await flush();
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ wsl: { enabled: true } });
+  });
+
+  it("picks a distro once on, defaulting to the system's own", async () => {
+    mocks.isWindows = true;
+    mocks.config.wsl = { enabled: true };
+    await render("/?page=preferences&section=sessions");
+    const picker = document.querySelector<HTMLInputElement>('input[aria-label="WSL distro"]');
+    expect(picker?.value).toBe("Default (Ubuntu)");
+  });
+
+  it("cannot be turned on without a distro, and says how to get one", async () => {
+    mocks.isWindows = true;
+    mocks.listWslDistros.mockResolvedValue([]);
+    await render("/?page=preferences&section=sessions");
+    expect(toggle("Run sessions inside WSL").disabled).toBe(true);
+    expect(document.body.textContent).toContain("No WSL distro is installed");
   });
 });
 

@@ -228,46 +228,31 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
         let scrollback = 1_048_576;
         crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
-        let extra_path_dirs = env.config.resolved_extra_path_dirs();
-        let mut path_buf = String::new();
-        let session_env = planeai_core::command::build_daemon_env(
-            &extra_path_dirs,
+        crate::session_ops::agent_spawn(
             &plan.session_id,
-            &mut path_buf,
-        );
-        let (program, args) = planeai_core::command::shell_args(&plan.command);
-        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        crate::daemon::spawn_session(
-            &plan.session_id,
-            program,
-            &args_refs,
+            &plan.command,
             &effective_working_dir,
-            Some(&session_env),
-        )?;
+            &env.config.resolved_extra_path_dirs(),
+            env.config.wsl_target(),
+        )?
+        .in_daemon(&plan.session_id)?;
     } else if plan.backend == planeai_rmux::BACKEND {
         // Without this branch the session row would be written with no process
         // behind it, leaving a session that looks active and is empty.
-        let extra_path_dirs = env.config.resolved_extra_path_dirs();
-        let mut path_buf = String::new();
-        let session_env = planeai_core::command::build_daemon_env(
-            &extra_path_dirs,
-            &plan.session_id,
-            &mut path_buf,
-        );
         let workspace = planeai_rmux::WorkspaceKey::for_session(
             plan.workspace_project_id(),
             plan.task_key.as_deref(),
             &plan.session_id,
         )
         .name();
-        crate::rmux_ops::spawn_resource_blocking(
+        crate::session_ops::agent_spawn(
             &plan.session_id,
-            &plan.session_id,
-            &workspace,
             &plan.command,
             &effective_working_dir,
-            &session_env,
-        )?;
+            &env.config.resolved_extra_path_dirs(),
+            env.config.wsl_target(),
+        )?
+        .in_rmux(&plan.session_id, &workspace)?;
     } else if let Some(tmux_name) = &plan.tmux_name {
         #[cfg(not(windows))]
         {

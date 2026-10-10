@@ -174,6 +174,9 @@ pub fn resolve_attach_plan(
         .ok_or("session not found")?;
 
     let mut first_prompt = None;
+    let wsl = (session.backend == "local")
+        .then(|| cfg.wsl_target())
+        .flatten();
     // Resolve pty_target and agent_command based on backend type
     let (pty_target, resolved_agent_command) = if session.backend == "tmux" {
         let tmux_name = session
@@ -236,9 +239,15 @@ pub fn resolve_attach_plan(
             provider_def.first_launch_command(session.auto_approve, first_prompt.as_deref())
         };
 
-        let target = pty::PtyTarget::Shell {
-            command: cmd.clone(),
-            cwd,
+        let target = match &wsl {
+            Some(target) => pty::PtyTarget::Program {
+                argv: target.shell_argv(&cmd, &cwd),
+                cwd: target.cwds(&cwd).0,
+            },
+            None => pty::PtyTarget::Shell {
+                command: cmd.clone(),
+                cwd,
+            },
         };
         (target, Some(cmd))
     };
@@ -272,6 +281,7 @@ pub fn resolve_attach_plan(
             agent_command,
             dark_mode.unwrap_or(true),
             extra_path_dirs,
+            wsl,
         )?
     } else {
         vec![]

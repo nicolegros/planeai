@@ -20,6 +20,7 @@ pub trait RestartOps {
         cmd: &str,
         cwd: &str,
         extra_path_dirs: &[String],
+        wsl: Option<&planeai_core::wsl::WslTarget>,
     ) -> Result<(), String>;
 
     /// Spawn the agent resource in its task workspace.
@@ -33,6 +34,7 @@ pub trait RestartOps {
         cmd: &str,
         cwd: &str,
         extra_path_dirs: &[String],
+        wsl: Option<&planeai_core::wsl::WslTarget>,
     ) -> Result<(), String>;
 }
 
@@ -103,16 +105,24 @@ pub fn restart(
 
     let tmux_name = session.tmux_name.as_deref();
     let rmux_workspace = session.rmux_workspace();
+    let wsl = config.wsl_target();
     let try_spawn = |cmd: &str| -> Result<(), String> {
         match session.backend.as_str() {
             "tmux" => {
                 let tn = tmux_name.ok_or("tmux session has no tmux_name")?;
                 restart_ops.create_tmux_session(tn, cwd, cmd, id, &extra_path_dirs)
             }
-            "daemon" => restart_ops.spawn_daemon_session(id, cmd, cwd, &extra_path_dirs),
-            planeai_rmux::BACKEND => {
-                restart_ops.spawn_rmux_session(id, &rmux_workspace, cmd, cwd, &extra_path_dirs)
+            "daemon" => {
+                restart_ops.spawn_daemon_session(id, cmd, cwd, &extra_path_dirs, wsl.as_ref())
             }
+            planeai_rmux::BACKEND => restart_ops.spawn_rmux_session(
+                id,
+                &rmux_workspace,
+                cmd,
+                cwd,
+                &extra_path_dirs,
+                wsl.as_ref(),
+            ),
             "local" => Ok(()), // PTY spawned on attach, nothing to pre-create
             other => Err(format!("unsupported backend: {other}")),
         }
@@ -187,6 +197,7 @@ pub fn real_restart_ops() -> impl RestartOps {
             cmd: &str,
             cwd: &str,
             extra_path_dirs: &[String],
+            wsl: Option<&planeai_core::wsl::WslTarget>,
         ) -> Result<(), String> {
             tracing::info!(
                 session_id = &session_id[..8.min(session_id.len())],
@@ -195,14 +206,8 @@ pub fn real_restart_ops() -> impl RestartOps {
                 workspace = %workspace,
                 "restart_ops: spawning rmux resource"
             );
-
-            let mut path_buf = String::new();
-            let env =
-                planeai_core::command::build_daemon_env(extra_path_dirs, session_id, &mut path_buf);
-            crate::rmux_ops::spawn_resource_blocking(
-                session_id, session_id, workspace, cmd, cwd, &env,
-            )
-            .map(|_| ())
+            crate::session_ops::agent_spawn(session_id, cmd, cwd, extra_path_dirs, wsl.cloned())?
+                .in_rmux(session_id, workspace)
         }
 
         fn spawn_daemon_session(
@@ -211,6 +216,7 @@ pub fn real_restart_ops() -> impl RestartOps {
             cmd: &str,
             cwd: &str,
             extra_path_dirs: &[String],
+            wsl: Option<&planeai_core::wsl::WslTarget>,
         ) -> Result<(), String> {
             tracing::info!(
                 session_id = &session_id[..8.min(session_id.len())],
@@ -225,12 +231,8 @@ pub fn real_restart_ops() -> impl RestartOps {
             let scrollback = 1_048_576;
             crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
-            let mut path_buf = String::new();
-            let env =
-                planeai_core::command::build_daemon_env(extra_path_dirs, session_id, &mut path_buf);
-            let (program, args) = planeai_core::command::shell_args(cmd);
-            let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            crate::daemon::spawn_session(session_id, program, &args_refs, cwd, Some(&env))
+            crate::session_ops::agent_spawn(session_id, cmd, cwd, extra_path_dirs, wsl.cloned())?
+                .in_daemon(session_id)
         }
     }
     RealRestartOps
@@ -297,6 +299,7 @@ mod tests {
             cmd: &str,
             cwd: &str,
             _extra_path_dirs: &[String],
+            _wsl: Option<&planeai_core::wsl::WslTarget>,
         ) -> Result<(), String> {
             self.rmux_workspaces
                 .borrow_mut()
@@ -334,6 +337,7 @@ mod tests {
             cmd: &str,
             cwd: &str,
             _extra_path_dirs: &[String],
+            _wsl: Option<&planeai_core::wsl::WslTarget>,
         ) -> Result<(), String> {
             if self.fail_resume && cmd.contains("--resume") {
                 return Err("resume failed".to_string());

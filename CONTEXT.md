@@ -95,6 +95,7 @@ Rollback is best-effort: errors are logged as warnings but do not propagate. If 
 | Concern               | macOS                                             | Windows                                                |
 | --------------------- | ------------------------------------------------- | ------------------------------------------------------ |
 | **Session backend**   | tmux (persistent) or daemon (persistent)          | daemon only (tmux unavailable)                         |
+| **WSL**               | N/A                                               | Opt-in `wsl` setting runs sessions inside a distro     |
 | **Notification IPC**  | Unix socket (`notify.sock`)                       | Named pipe (`\\.\pipe\planeai-notify`)                 |
 | **Daemon IPC**        | Unix socket (`daemon.sock` in XDG_RUNTIME_DIR)    | Named pipe (`\\.\pipe\planeai-daemon`)                 |
 | **Stop hook**         | Bash script (`.sh`) via `nc -U`                   | PowerShell script (`.ps1`) via `NamedPipeClientStream` |
@@ -430,6 +431,17 @@ Ownership rules:
 - The AXI cursor is capture-based (like tmux), not a byte offset: rmux has no "resume at sequence N" input.
 - Agent state continues to come from provider hooks, identically to the local, tmux, and daemon backends. rmux events are used for exit detection only.
 - Existing sessions are never migrated in place: `backend` is recorded per session at creation.
+
+## WSL
+
+WSL is a launch environment, not a session backend.
+When `wsl.enabled` is set on Windows, `planeai_core::command::launch_argv` wraps every session command as `wsl.exe -d <distro> --cd <linux cwd> -- sh -c <cmd>`, and shell tabs start the user's login shell with a bare `wsl.exe -d <distro> --cd <cwd>`.
+Local, daemon and rmux sessions get this through the shared launch service (`prepare_session`) and `session_ops::agent_spawn`, so no backend has WSL-specific code, and tmux is never involved.
+
+- `planeai_core::wsl::WslTarget` owns the translation: a Linux cwd is reached from the host through its `\\wsl.localhost\<distro>` share, and a Windows cwd from Linux through its `/mnt/<drive>` mount.
+- `wsl.exe` only forwards the variables listed in `WSLENV`, so the launch service adds every variable PlaneAI sets except `PATH`, which WSL translates itself.
+- New worktrees are created in the distro's home with `GitContext::wsl`, because git on the distro's own filesystem is far faster than through `/mnt`.
+- Known gaps: the diff viewer, worktree cleanup and the stop hook's notify socket still assume host paths, so they do not yet work for a worktree inside the distro. Plugin-provided sessions and their terminal handoff stay on the host.
 
 ## Worktree support
 

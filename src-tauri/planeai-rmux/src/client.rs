@@ -30,8 +30,8 @@ pub struct ResourceSpawn {
     /// `session_id:tab_index`). Used as the rmux window name so a live daemon is
     /// inspectable with `rmux list-windows`.
     pub pty_key: String,
-    /// Command line, run as explicit argv under the platform shell.
-    pub command: String,
+    /// The process to run, as explicit argv: [`shell_argv`] for a command line.
+    pub argv: Vec<String>,
     /// Working directory: the worktree or project checkout for this resource.
     pub cwd: String,
     /// Environment entries as `KEY=VALUE`, already carrying PlaneAI's augmented PATH.
@@ -296,7 +296,7 @@ impl RmuxClient {
                 EnsureSession::named(name.clone())
                     .create_or_reuse()
                     .detached(true)
-                    .argv(shell_argv(&spawn.command))
+                    .argv(spawn.argv.clone())
                     .working_directory(spawn.cwd.clone())
                     .environment(spawn.env.clone())
                     // Named here rather than renamed afterwards so the name a
@@ -328,7 +328,7 @@ impl RmuxClient {
         let mut builder = session
             .new_window_with()
             .name(spawn.pty_key.clone())
-            .spawn(shell_argv(&spawn.command))
+            .spawn(spawn.argv.clone())
             .cwd(spawn.cwd.clone());
         for entry in &spawn.env {
             if let Some((key, value)) = entry.split_once('=') {

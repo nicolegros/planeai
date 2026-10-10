@@ -71,6 +71,7 @@ export interface SettingDefinition {
   description?: string;
   keywords?: readonly string[];
   macOnly?: boolean;
+  windowsOnly?: boolean;
   /** Whether the setting is on its page for this config; hidden settings are left out of search. */
   available?: (config: AppConfig) => boolean;
   /** Effective value; present only for scalar settings that offer Reset. */
@@ -298,6 +299,24 @@ export const SETTINGS: readonly SettingDefinition[] = [
     ...optional("session_backend", "local"),
   },
   {
+    id: "wsl",
+    category: "sessions",
+    section: "WSL",
+    label: "Run sessions inside WSL",
+    description: "Agents and terminals run in a Linux distro, with worktrees on its filesystem.",
+    keywords: ["wsl", "linux", "windows subsystem", "distro", "ubuntu"],
+    windowsOnly: true,
+  },
+  {
+    id: "wsl-distro",
+    category: "sessions",
+    section: "WSL",
+    label: "Distro",
+    keywords: ["wsl", "distribution", "ubuntu", "debian"],
+    windowsOnly: true,
+    available: (config) => config.wsl?.enabled === true,
+  },
+  {
     id: "stale-worktrees",
     category: "sessions",
     section: "Maintenance",
@@ -477,10 +496,16 @@ export function searchSettings(
   if (!normalized) return [];
   const words = normalized.split(/\s+/);
   const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+  const isWindows = typeof navigator !== "undefined" && /Win/.test(navigator.platform);
 
   const scored: { result: SettingsSearchResult; score: number; order: number }[] = [];
   SETTINGS.forEach((setting, order) => {
-    if ((setting.macOnly && !isMac) || setting.available?.(config) === false) return;
+    if (
+      (setting.macOnly && !isMac) ||
+      (setting.windowsOnly && !isWindows) ||
+      setting.available?.(config) === false
+    )
+      return;
     const label = setting.label.toLowerCase();
     const haystack = [
       label,

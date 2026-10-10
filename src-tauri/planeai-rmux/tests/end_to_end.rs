@@ -49,7 +49,7 @@ fn spawn_spec(workspace: &WorkspaceName, pty_key: &str, command: &str, cwd: &str
     ResourceSpawn {
         workspace: workspace.clone(),
         pty_key: pty_key.to_string(),
-        command: command.to_string(),
+        argv: planeai_rmux::shell_argv(command),
         cwd: cwd.to_string(),
         // rmux gives a pane its own minimal environment rather than the client's,
         // so production passes PATH and TERM explicitly and so must this.

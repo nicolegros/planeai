@@ -82,6 +82,7 @@ fn load_reads_existing_config_file() {
         language_servers: None,
         editor: None,
         onboarding_completed: Some(true),
+        wsl: None,
     };
 
     let json = serde_json::to_string_pretty(&custom).unwrap();

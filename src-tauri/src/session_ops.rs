@@ -534,6 +534,80 @@ fn daemon_send_frames(
 /// `sessions.backend` for sessions whose runtime is a plugin provider (ADR-0014).
 pub const PLUGIN_BACKEND: &str = "plugin";
 
+/// Start `cmd` for a session outside the launch flow (restart, orchestration, the CLI): the
+/// shared launch service's argv, host cwd and environment, inside WSL when `wsl` is set.
+pub fn agent_spawn(
+    session_id: &str,
+    cmd: &str,
+    cwd: &str,
+    extra_path_dirs: &[String],
+    wsl: Option<planeai_core::wsl::WslTarget>,
+) -> Result<AgentSpawn, String> {
+    use planeai_core::session_launch::{prepare_session, CreateSessionRequest, SessionTarget};
+    let launch = prepare_session(&CreateSessionRequest {
+        session_id: session_id.to_string(),
+        project_cwd: cwd.into(),
+        session_target: SessionTarget::Daemon,
+        agent_command: cmd.to_string(),
+        env: std::collections::HashMap::new(),
+        extra_path_dirs: extra_path_dirs.to_vec(),
+        cols: 80,
+        rows: 24,
+        durable_logs: false,
+        wsl,
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(AgentSpawn {
+        argv: std::iter::once(launch.program).chain(launch.args).collect(),
+        cwd: launch.cwd.to_string_lossy().into_owned(),
+        env: launch.env,
+    })
+}
+
+pub struct AgentSpawn {
+    pub argv: Vec<String>,
+    pub cwd: String,
+    pub env: std::collections::HashMap<String, String>,
+}
+
+impl AgentSpawn {
+    pub fn env_refs(&self) -> std::collections::HashMap<&str, &str> {
+        self.env
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect()
+    }
+
+    /// Run it as a session of PlaneAI's daemon.
+    pub fn in_daemon(&self, session_id: &str) -> Result<(), String> {
+        let args: Vec<&str> = self.argv[1..].iter().map(String::as_str).collect();
+        crate::daemon::spawn_session(
+            session_id,
+            &self.argv[0],
+            &args,
+            &self.cwd,
+            Some(&self.env_refs()),
+        )
+    }
+
+    /// Run it as a resource of an rmux workspace.
+    pub fn in_rmux(
+        &self,
+        session_id: &str,
+        workspace: &planeai_rmux::WorkspaceName,
+    ) -> Result<(), String> {
+        crate::rmux_ops::spawn_resource_blocking(
+            session_id,
+            session_id,
+            workspace,
+            self.argv.clone(),
+            &self.cwd,
+            &self.env_refs(),
+        )
+        .map(|_| ())
+    }
+}
+
 /// The task prompt a new session keeps for its first attach: only a backend that runs nothing
 /// at launch (`local`) keeps it; every other backend already started the agent with it.
 pub fn pending_prompt(backend: &str, task_prompt: Option<String>) -> Option<String> {

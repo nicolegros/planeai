@@ -107,6 +107,26 @@ The `daemon` backend is experimental. It provides session persistence across app
 tmux is not supported on Windows. The `local` backend is used automatically on Windows regardless of this setting.
 :::
 
+## WSL
+
+On Windows, sessions can run inside a WSL distro instead of on the host.
+Turn it on in **Preferences → Sessions → WSL**, or in `config.json`:
+
+```jsonc
+{
+  "wsl": { "enabled": true, "distro": "Ubuntu" }, // omit distro for the system default
+}
+```
+
+Agents, shell tabs and terminal commands run inside the distro on every session backend.
+New worktrees are created on the distro's own filesystem, under `~/.planeai/worktrees`.
+A project on a Windows drive is opened from its `/mnt/<drive>` mount.
+
+:::note
+Changes apply to new sessions and terminals.
+The setting is ignored on macOS and Linux.
+:::
+
 ## File Editor
 
 PlaneAI opens files using one global editor setting, available in **Preferences → Editor**. With no `editor` section, PlaneAI uses its built-in editor.

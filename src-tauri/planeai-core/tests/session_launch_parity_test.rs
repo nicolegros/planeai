@@ -23,6 +23,7 @@ fn tauri_style_request(cwd: PathBuf) -> CreateSessionRequest {
         cols: 80,
         rows: 24,
         durable_logs: true,
+        wsl: None,
     }
 }
 
@@ -37,6 +38,7 @@ fn iced_style_request(cwd: PathBuf) -> CreateSessionRequest {
         cols: 80,
         rows: 24,
         durable_logs: true,
+        wsl: None,
     }
 }
 
@@ -137,6 +139,7 @@ fn tmux_target_is_explicit_not_default() {
         cols: 80,
         rows: 24,
         durable_logs: false,
+        wsl: None,
     };
     let result = prepare_session(&req).unwrap();
     assert_eq!(result.target, SessionTarget::Tmux);
@@ -830,6 +833,7 @@ fn local_target_gets_augmented_path() {
         cols: 80,
         rows: 24,
         durable_logs: false,
+        wsl: None,
     };
     let result = prepare_session(&req).unwrap();
     assert!(
@@ -857,6 +861,7 @@ fn local_and_daemon_targets_produce_same_path() {
         cols: 80,
         rows: 24,
         durable_logs: false,
+        wsl: None,
     };
 
     let daemon_req = CreateSessionRequest {
@@ -869,6 +874,7 @@ fn local_and_daemon_targets_produce_same_path() {
         cols: 80,
         rows: 24,
         durable_logs: false,
+        wsl: None,
     };
 
     let local_result = prepare_session(&local_req).unwrap();
@@ -879,45 +885,30 @@ fn local_and_daemon_targets_produce_same_path() {
 // ─── Shell tab parity: daemon tabs get same PATH as local tabs ───────────────
 
 #[test]
-fn daemon_shell_tab_env_includes_usr_local_bin() {
-    // Regression test for PLA-190: daemon backend shell tabs must include
+fn daemon_sessions_get_conventional_tool_dirs_on_path() {
+    // Regression test for PLA-190: daemon-backed sessions and tabs must include
     // /usr/local/bin in PATH so tools like tgf are accessible.
-    use planeai_core::command::build_daemon_env;
-
-    let extra_path_dirs: Vec<String> = vec![];
-    let mut path_buf = String::new();
-    let env = build_daemon_env(&extra_path_dirs, "session:1", &mut path_buf);
-
-    let path = env.get("PATH").unwrap();
-    assert!(
-        path.contains("/usr/local/bin"),
-        "daemon shell tab PATH must include /usr/local/bin: {path}"
-    );
-    assert!(
-        path.contains("/opt/homebrew/bin"),
-        "daemon shell tab PATH must include /opt/homebrew/bin: {path}"
-    );
+    let result = prepare_session(&tauri_style_request(std::env::temp_dir())).unwrap();
+    let path = &result.env["PATH"];
+    assert!(path.contains("/usr/local/bin"), "{path}");
+    assert!(path.contains("/opt/homebrew/bin"), "{path}");
+    assert_eq!(result.env["PLANEAI_SESSION_ID"], "tauri-uuid-1234");
 }
 
 #[test]
-fn daemon_shell_tab_and_local_shell_tab_have_same_path() {
-    // Regression test for PLA-190: verify parity between daemon and local shell tab env.
-    use planeai_core::command::{augmented_path, build_daemon_env};
-
-    let extra_path_dirs = vec!["/custom/shims".to_string()];
-
-    // Daemon shell tab uses build_daemon_env
-    let mut path_buf = String::new();
-    let daemon_env = build_daemon_env(&extra_path_dirs, "tab:1", &mut path_buf);
-    let daemon_path = daemon_env.get("PATH").unwrap();
-
-    // Local shell tab uses augmented_path (via prepare_session)
-    let local_path = augmented_path(&extra_path_dirs);
-
-    assert_eq!(
-        *daemon_path, local_path,
-        "daemon and local shell tabs must produce the same PATH"
-    );
+fn daemon_and_local_sessions_get_the_same_path() {
+    // Regression test for PLA-190: verify parity between daemon and local env.
+    let daemon = CreateSessionRequest {
+        extra_path_dirs: vec!["/custom/shims".to_string()],
+        ..tauri_style_request(std::env::temp_dir())
+    };
+    let local = CreateSessionRequest {
+        session_target: SessionTarget::Local,
+        ..daemon.clone()
+    };
+    let daemon_path = prepare_session(&daemon).unwrap().env["PATH"].clone();
+    assert!(daemon_path.contains("/custom/shims"), "{daemon_path}");
+    assert_eq!(prepare_session(&local).unwrap().env["PATH"], daemon_path);
 }
 
 /// The shell that runs a launch command hands the agent the prompt byte for byte.

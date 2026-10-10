@@ -101,6 +101,12 @@ pub fn get_log_dir() -> String {
         .into_owned()
 }
 
+/// The installed WSL distros, the system default first; empty off Windows or without WSL.
+#[tauri::command]
+pub async fn list_wsl_distros() -> Result<Vec<String>, String> {
+    crate::commands::blocking(|| Ok(planeai_core::wsl::list_distros().unwrap_or_default())).await
+}
+
 #[tauri::command]
 pub async fn list_monospace_fonts() -> Result<Vec<String>, String> {
     use font_kit::family_name::FamilyName;
