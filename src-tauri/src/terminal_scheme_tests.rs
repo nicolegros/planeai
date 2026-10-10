@@ -229,13 +229,11 @@ fn every_bundled_scheme_parses_and_derives_readable_text() {
 }
 
 #[test]
-fn schemes_css_has_a_light_root_block_and_a_dark_block() {
-    let css = schemes_css(&bundled("One Half Light"), &bundled("One Half Dark"));
-    let dark_at = css.find(".dark {").unwrap();
-    let root_at = css.find(":root {").unwrap();
-    assert!(root_at < dark_at);
-    assert!(css[root_at..dark_at].contains("--terminal-background: #fafafa;"));
-    assert!(css[dark_at..].contains("--terminal-background: #282c34;"));
+fn scheme_css_applies_to_both_modes() {
+    let css = scheme_css(&bundled("One Half Dark"));
+    assert!(css.starts_with("/* One Half Dark */\n:root,\n.dark {\n"));
+    assert!(css.contains("  --terminal-background: #282c34;\n"));
+    assert!(css.ends_with("}\n"));
 }
 
 #[test]

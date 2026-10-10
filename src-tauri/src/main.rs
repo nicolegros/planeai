@@ -37,6 +37,7 @@ mod task_lifecycle;
 mod task_start;
 mod terminal_scheme;
 mod terminal_tabs;
+mod theme_css;
 #[cfg(not(windows))]
 mod tmux;
 mod updater;

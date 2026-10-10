@@ -70,7 +70,7 @@ vi.mock("../../lib/settings.svelte", () => ({
   updateSettings: mocks.updateSettings,
   refreshSettings: mocks.refreshSettings,
 }));
-vi.mock("../../lib/theme-loader", () => ({ loadTheme: vi.fn() }));
+vi.mock("../../lib/theme-loader", () => ({ applyThemeMode: vi.fn(), loadTheme: vi.fn() }));
 vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: mocks.showSnackbar }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ close: mocks.closeWindow }),

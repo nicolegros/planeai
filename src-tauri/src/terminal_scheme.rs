@@ -347,15 +347,13 @@ pub fn derive_tokens(scheme: &TerminalScheme) -> Vec<(&'static str, String)> {
         .collect()
 }
 
-pub fn schemes_css(light: &TerminalScheme, dark: &TerminalScheme) -> String {
-    let block = |selector: &str, scheme: &TerminalScheme| {
-        let body: String = derive_tokens(scheme)
-            .into_iter()
-            .map(|(name, value)| format!("  {name}: {value};\n"))
-            .collect();
-        format!("/* {} */\n{selector} {{\n{body}}}\n", scheme.name)
-    };
-    format!("{}\n{}", block(":root", light), block(".dark", dark))
+/// Applies in both modes, so it overrides the built-in `.dark` defaults when used for dark mode.
+pub fn scheme_css(scheme: &TerminalScheme) -> String {
+    let body: String = derive_tokens(scheme)
+        .into_iter()
+        .map(|(name, value)| format!("  {name}: {value};\n"))
+        .collect();
+    format!("/* {} */\n:root,\n.dark {{\n{body}}}\n", scheme.name)
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

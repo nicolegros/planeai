@@ -1243,20 +1243,22 @@ fn appearance_theme_accepts_a_css_theme_name() {
 }
 
 #[test]
-fn appearance_theme_accepts_a_light_and_dark_scheme_pair() {
-    let json = r#"{"mode": "system", "theme": {"light": "A", "dark": "B"}}"#;
+fn appearance_theme_accepts_a_source_per_mode() {
+    let json = r#"{"mode": "system", "theme": {"light": {"css": "default"}, "dark": "Dracula"}}"#;
     let appearance: Appearance = serde_json::from_str(json).unwrap();
     assert_eq!(
         appearance.theme,
-        ThemeChoice::Schemes {
-            light: "A".to_string(),
-            dark: "B".to_string()
+        ThemeChoice::PerMode {
+            light: ThemeSource::Css {
+                css: "default".to_string()
+            },
+            dark: ThemeSource::Scheme("Dracula".to_string()),
         }
     );
     let saved = serde_json::to_value(&appearance).unwrap();
     assert_eq!(
         saved["theme"],
-        serde_json::json!({"light": "A", "dark": "B"})
+        serde_json::json!({"light": {"css": "default"}, "dark": "Dracula"})
     );
 }
 

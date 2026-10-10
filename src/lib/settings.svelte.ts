@@ -1,6 +1,6 @@
 import { config as configApi } from "./api";
 import { emit } from "@tauri-apps/api/event";
-import { loadTheme } from "./theme-loader";
+import { applyThemeMode, loadTheme } from "./theme-loader";
 import type { SidebarGroupBy } from "./sidebar-model";
 
 export type AppearanceMode = "system" | "light" | "dark";
@@ -63,8 +63,11 @@ export interface EditorSettings {
   args: string[];
 }
 
-/** A hand-written CSS theme by name, or a pair of Ghostty color schemes by name. */
-export type ThemeChoice = string | { light: string; dark: string };
+/** A color scheme by name, or a hand-written CSS theme by file stem. */
+export type ThemeSource = string | { css: string };
+
+/** One hand-written CSS theme for both modes, or a source per mode. */
+export type ThemeChoice = string | { light: ThemeSource; dark: ThemeSource };
 
 export interface AppConfig {
   appearance: {
@@ -137,6 +140,7 @@ function applyDarkClass() {
   const dark = isDark();
   document.documentElement.classList.toggle("dark", dark);
   document.documentElement.style.colorScheme = dark ? "dark" : "light";
+  applyThemeMode();
   // Force scrollbar repaint in WebView
   document.querySelectorAll("[class*='overflow-y']").forEach((el) => {
     const htmlEl = el as HTMLElement;

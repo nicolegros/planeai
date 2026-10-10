@@ -77,7 +77,18 @@ describe("ThemePicker", () => {
     expect(checked).toEqual(["one"]);
   });
 
-  it("saves the picked dark scheme with the default light one when a CSS theme is active", async () => {
+  it("shows the active CSS theme in both mode selects", async () => {
+    component = mount(ThemePicker, { target });
+    await flush();
+
+    const values = ["Light", "Dark"].map(
+      (side) =>
+        target.querySelector<HTMLInputElement>(`input[aria-label="${side} color scheme"]`)!.value,
+    );
+    expect(values).toEqual(["One", "One"]);
+  });
+
+  it("keeps the light CSS theme when a dark scheme is picked", async () => {
     component = mount(ThemePicker, { target });
     await flush();
 
@@ -85,18 +96,18 @@ describe("ThemePicker", () => {
     input.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
     flushSync();
     await tick();
-    input.value = "drac";
+    input.value = "half";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     await tick();
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await tick();
 
     expect(mocks.updateSettings).toHaveBeenCalledWith({
-      appearance: { mode: "system", theme: { light: "One Half Light", dark: "Dracula" } },
+      appearance: { mode: "system", theme: { light: { css: "one" }, dark: "One Half Dark" } },
     });
   });
 
-  it("lists only light schemes in the light select", async () => {
+  it("lists CSS themes, then only light schemes, in the light select", async () => {
     component = mount(ThemePicker, { target });
     await flush();
 
@@ -104,9 +115,14 @@ describe("ThemePicker", () => {
     input.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
     await flush();
 
-    const options = [...document.querySelectorAll("[data-combobox-item]")].map((el) =>
-      el.textContent?.trim(),
-    );
-    expect(options).toEqual(["One Half Light"]);
+    const options = [...document.querySelectorAll("[data-combobox-item]")].map((el) => ({
+      label: el.querySelector("span")?.textContent,
+      badge: el.querySelectorAll("span")[1]?.textContent ?? null,
+    }));
+    expect(options).toEqual([
+      { label: "Default", badge: "planeai" },
+      { label: "One", badge: "planeai" },
+      { label: "One Half Light", badge: null },
+    ]);
   });
 });

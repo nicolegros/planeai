@@ -1,22 +1,33 @@
 import type { ITheme } from "@xterm/xterm";
-import { preferences } from "./api";
+import { preferences, type ThemeCss } from "./api";
 
 const STYLE_ID = "planeai-theme";
 
+export const NO_THEME: ThemeCss = { light: "", dark: "" };
+
+let current = NO_THEME;
+
 /**
- * Inject a theme CSS string into the document.
- * The theme file overrides CSS custom properties defined in app.css.
- * Passing empty string removes any custom theme (app.css defaults apply).
+ * Set the theme CSS for each appearance mode; each overrides the CSS custom properties defined in app.css.
+ * Empty CSS for a mode leaves the app.css defaults in place.
  */
-export function injectTheme(css: string): void {
+export function injectTheme(css: ThemeCss): void {
+  current = css;
+  applyThemeMode();
+  window.dispatchEvent(new Event("planeai-theme-changed"));
+}
+
+/** Show the CSS for the active mode; call after toggling the `dark` class on <html>. */
+export function applyThemeMode(): void {
   let el = document.getElementById(STYLE_ID) as HTMLStyleElement | null;
   if (!el) {
     el = document.createElement("style");
     el.id = STYLE_ID;
     document.head.appendChild(el);
   }
-  el.textContent = css;
-  window.dispatchEvent(new Event("planeai-theme-changed"));
+  el.textContent = document.documentElement.classList.contains("dark")
+    ? current.dark
+    : current.light;
 }
 
 export function extractTerminalTheme(): ITheme {
@@ -55,6 +66,6 @@ export async function loadTheme(): Promise<void> {
     const css = await preferences.getThemeCss();
     injectTheme(css);
   } catch {
-    injectTheme("");
+    injectTheme(NO_THEME);
   }
 }

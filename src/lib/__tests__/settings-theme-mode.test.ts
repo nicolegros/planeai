@@ -1,20 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../api", () => ({ config: {} }));
+vi.mock("../api", () => ({ config: {}, preferences: {} }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn() }));
-vi.mock("../theme-loader", () => ({ applyThemeMode: vi.fn(), loadTheme: vi.fn() }));
 
-describe("system appearance", () => {
+describe("theme CSS per appearance mode", () => {
   const originalMatchMedia = window.matchMedia;
 
   afterEach(() => {
     window.matchMedia = originalMatchMedia;
     document.documentElement.classList.remove("dark");
-    document.documentElement.style.colorScheme = "";
+    document.head.innerHTML = "";
     vi.resetModules();
   });
 
-  it("notifies theme consumers after the OS appearance changes", async () => {
+  it("applies the dark CSS before notifying theme consumers of an OS appearance change", async () => {
     let onChange: ((event: { matches: boolean }) => void) | undefined;
     window.matchMedia = ((query: string) => ({
       matches: false,
@@ -24,14 +23,22 @@ describe("system appearance", () => {
       },
       removeEventListener: () => {},
     })) as unknown as typeof window.matchMedia;
+    const { injectTheme } = await import("../theme-loader");
     await import("../settings.svelte");
+    injectTheme({
+      light: ":root { --terminal-background: #fafafa; }",
+      dark: ":root, .dark { --terminal-background: #282a36; }",
+    });
 
-    const seen: boolean[] = [];
-    const listener = () => seen.push(document.documentElement.classList.contains("dark"));
+    const seen: string[] = [];
+    const listener = () =>
+      seen.push(
+        getComputedStyle(document.documentElement).getPropertyValue("--terminal-background").trim(),
+      );
     window.addEventListener("planeai-theme-changed", listener);
     onChange?.({ matches: true });
     window.removeEventListener("planeai-theme-changed", listener);
 
-    expect(seen).toEqual([true]);
+    expect(seen).toEqual(["#282a36"]);
   });
 });

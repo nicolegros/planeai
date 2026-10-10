@@ -163,12 +163,23 @@ pub struct Appearance {
     pub theme: ThemeChoice,
 }
 
-/// A hand-written CSS theme by file stem, or a pair of Ghostty color schemes by name.
+/// One hand-written CSS theme for both modes, or a source per mode.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum ThemeChoice {
     Css(String),
-    Schemes { light: String, dark: String },
+    PerMode {
+        light: ThemeSource,
+        dark: ThemeSource,
+    },
+}
+
+/// A Ghostty color scheme by name, or a hand-written CSS theme by file stem.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ThemeSource {
+    Scheme(String),
+    Css { css: String },
 }
 
 impl Default for ThemeChoice {

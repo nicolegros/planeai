@@ -36,19 +36,26 @@ Themes live in `~/.config/planeai/themes/` (or `%APPDATA%\planeai\themes\` on Wi
 ## Color schemes
 
 planeai bundles every color scheme that Ghostty ships, from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) (MIT license).
-In **Preferences → Appearance**, pick one scheme in the **Light** dropdown and one in the **Dark** dropdown, below the theme buttons.
-The terminal uses the scheme's colors exactly.
+In **Preferences → Appearance**, the **Light** and **Dark** dropdowns below the theme buttons set what each mode uses.
+Each lists the CSS themes first, tagged **planeai**, then the color schemes for that mode.
+Picking one mode keeps the other, so you can pair the default theme in light mode with a color scheme in dark mode.
+The theme buttons still apply one CSS theme to both modes.
+
+With a color scheme, the terminal uses the scheme's colors exactly.
 The rest of the UI (sidebar, panels, text, accent, diffs, and editor highlighting) is derived from the scheme, with a minimum text contrast enforced.
 
-In the config file, a color scheme choice is a pair of scheme names:
+In the config file, `theme` is either a CSS theme name for both modes, or one entry per mode.
+An entry is a color scheme name, or `{ "css": "<name>" }` for a CSS theme:
 
 ```jsonc
 {
   "appearance": {
-    "theme": { "light": "One Half Light", "dark": "Dracula" },
+    "theme": { "light": { "css": "default" }, "dark": "Dracula" },
   },
 }
 ```
+
+If a mode's theme cannot be found, that mode falls back to the built-in default colors.
 
 To add your own scheme, drop a file in Ghostty's theme format into `~/.config/planeai/themes/ghostty/`.
 The file name is the scheme name, and a file with the same name as a bundled scheme replaces it.

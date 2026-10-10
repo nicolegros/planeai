@@ -7,7 +7,7 @@ vi.mock("../api", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn() }));
 const loadTheme = vi.fn();
-vi.mock("../theme-loader", () => ({ loadTheme: () => loadTheme() }));
+vi.mock("../theme-loader", () => ({ applyThemeMode: vi.fn(), loadTheme: () => loadTheme() }));
 
 const { getSettings, updateSettings } = await import("../settings.svelte");
 

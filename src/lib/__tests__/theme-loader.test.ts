@@ -1,34 +1,49 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { injectTheme, extractTerminalTheme } from "../theme-loader";
+import { NO_THEME, applyThemeMode, injectTheme, extractTerminalTheme } from "../theme-loader";
+
+const LIGHT = ":root { --color-panel: #fff; }";
+const DARK = ":root { --color-panel: #000; }";
+
+function themeStyle(): HTMLStyleElement {
+  return document.getElementById("planeai-theme") as HTMLStyleElement;
+}
 
 describe("injectTheme", () => {
   beforeEach(() => {
     document.head.innerHTML = "";
+    document.documentElement.classList.remove("dark");
   });
 
-  it("injects a <style> tag into <head>", () => {
-    injectTheme(":root { --color-panel: #fff; }");
+  it("injects the light CSS into a <style> tag in light mode", () => {
+    injectTheme({ light: LIGHT, dark: DARK });
 
-    const style = document.getElementById("planeai-theme") as HTMLStyleElement;
-    expect(style).not.toBeNull();
-    expect(style.textContent).toBe(":root { --color-panel: #fff; }");
+    expect(themeStyle().textContent).toBe(LIGHT);
   });
 
-  it("replaces existing theme style on re-inject", () => {
-    injectTheme(":root { --color-panel: #fff; }");
-    injectTheme(":root { --color-panel: #000; }");
+  it("injects the dark CSS in dark mode", () => {
+    document.documentElement.classList.add("dark");
+    injectTheme({ light: LIGHT, dark: DARK });
 
-    const styles = document.querySelectorAll("#planeai-theme");
-    expect(styles.length).toBe(1);
-    expect(styles[0].textContent).toBe(":root { --color-panel: #000; }");
+    expect(themeStyle().textContent).toBe(DARK);
   });
 
-  it("clears theme when given empty string", () => {
-    injectTheme(":root { --color-panel: #fff; }");
-    injectTheme("");
+  it("swaps to the other mode's CSS when the mode changes", () => {
+    injectTheme({ light: LIGHT, dark: DARK });
+    document.documentElement.classList.add("dark");
+    applyThemeMode();
 
-    const style = document.getElementById("planeai-theme") as HTMLStyleElement;
-    expect(style.textContent).toBe("");
+    expect(document.querySelectorAll("#planeai-theme").length).toBe(1);
+    expect(themeStyle().textContent).toBe(DARK);
+    expect(
+      getComputedStyle(document.documentElement).getPropertyValue("--color-panel").trim(),
+    ).toBe("#000");
+  });
+
+  it("clears the theme when given no CSS", () => {
+    injectTheme({ light: LIGHT, dark: DARK });
+    injectTheme(NO_THEME);
+
+    expect(themeStyle().textContent).toBe("");
   });
 });
 
@@ -38,7 +53,7 @@ describe("extractTerminalTheme", () => {
   });
 
   it("reads --terminal-* CSS vars and returns an ITheme object", () => {
-    injectTheme(`
+    const css = `
       :root {
         --terminal-background: #1e1e2e;
         --terminal-foreground: #cdd6f4;
@@ -61,7 +76,8 @@ describe("extractTerminalTheme", () => {
         --terminal-bright-cyan: #94e2d5;
         --terminal-bright-white: #a6adc8;
       }
-    `);
+    `;
+    injectTheme({ light: css, dark: css });
 
     const theme = extractTerminalTheme();
     expect(theme.background).toBe("#1e1e2e");
@@ -83,12 +99,9 @@ describe("extractTerminalTheme", () => {
   });
 
   it("reads selection foreground and cursor text when the theme defines them", () => {
-    injectTheme(`
-      :root {
-        --terminal-selection-foreground: #fbf1c7;
-        --terminal-cursor-text: #282828;
-      }
-    `);
+    const css =
+      ":root { --terminal-selection-foreground: #fbf1c7; --terminal-cursor-text: #282828; }";
+    injectTheme({ light: css, dark: css });
 
     const theme = extractTerminalTheme();
     expect(theme.selectionForeground).toBe("#fbf1c7");

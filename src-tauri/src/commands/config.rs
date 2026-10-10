@@ -3,6 +3,7 @@ use tauri::State;
 use crate::config;
 use crate::state::ConfigState;
 use crate::terminal_scheme;
+use crate::theme_css;
 
 #[tauri::command]
 pub fn refresh_config(
@@ -68,7 +69,7 @@ pub fn update_config(
 pub async fn get_theme_css(
     state: State<'_, ConfigState>,
     app: tauri::AppHandle,
-) -> Result<String, String> {
+) -> Result<theme_css::ThemeCss, String> {
     let theme = state
         .0
         .lock()
@@ -77,20 +78,7 @@ pub async fn get_theme_css(
         .theme
         .clone();
     let themes_dir = config::config_dir(&app.package_info().name).join("themes");
-    crate::commands::blocking(move || match theme {
-        config::ThemeChoice::Css(name) => {
-            std::fs::read_to_string(themes_dir.join(format!("{name}.css")))
-                .map_err(|e| e.to_string())
-        }
-        config::ThemeChoice::Schemes { light, dark } => {
-            let user_dir = themes_dir.join("ghostty");
-            let find = |name: &str| {
-                terminal_scheme::find_scheme(&user_dir, name).map_err(|e| e.to_string())
-            };
-            Ok(terminal_scheme::schemes_css(&find(&light)?, &find(&dark)?))
-        }
-    })
-    .await
+    crate::commands::blocking(move || Ok(theme_css::resolve(&theme, &themes_dir))).await
 }
 
 #[tauri::command]
