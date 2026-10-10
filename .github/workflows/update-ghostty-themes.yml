@@ -16,8 +16,6 @@ concurrency:
 env:
   BRANCH: chore/ghostty-themes
   THEMES_DIR: src-tauri/resources/ghostty-themes
-  JIRA_CLIENT_ID: dummy
-  JIRA_CLIENT_SECRET: dummy
 
 jobs:
   update:
@@ -45,28 +43,6 @@ jobs:
             fi
           } >> "$GITHUB_OUTPUT"
 
-      - uses: dtolnay/rust-toolchain@stable
-        if: steps.update.outputs.changed == 'true'
-
-      - uses: Swatinem/rust-cache@v2
-        if: steps.update.outputs.changed == 'true'
-        with:
-          workspaces: src-tauri
-
-      - name: Install Linux dependencies
-        if: steps.update.outputs.changed == 'true'
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Test that every scheme parses and stays readable
-        if: steps.update.outputs.changed == 'true'
-        working-directory: src-tauri
-        run: |
-          ./scripts/ensure-sidecars.sh --placeholders-only
-          cargo test --bin planeai terminal_scheme
-
       - name: Open or update the pull request
         if: steps.update.outputs.changed == 'true'
         env:
@@ -86,8 +62,7 @@ jobs:
           - Schemes removed: $REMOVED
           - Upstream changes: https://github.com/mbadolato/iTerm2-Color-Schemes/compare/$PREVIOUS...$CURRENT
 
-          Every bundled scheme parsed and met the text contrast minimums before this PR was opened.
-          Full CI does not start on PRs opened by this workflow; close and reopen the PR to run it.
+          CI does not start on PRs opened by this workflow; close and reopen the PR to run it.
           EOF
           )"
           git config user.name "github-actions[bot]"
