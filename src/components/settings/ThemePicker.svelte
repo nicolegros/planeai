@@ -30,7 +30,7 @@
     preferences
       .listTerminalSchemes()
       .then((list) => (terminalSchemes = list))
-      .catch((error) => console.warn("Failed to list Ghostty themes:", error));
+      .catch((error) => console.warn("Failed to list color schemes:", error));
   });
 
   function pickScheme(side: Side, name: string) {
@@ -48,7 +48,7 @@
       value={schemes?.[side] ?? ""}
       placeholder={DEFAULT_SCHEMES[side]}
       emptyText="No matching themes"
-      ariaLabel="{label} Ghostty theme"
+      ariaLabel="{label} color scheme"
       onValueChange={(name) => pickScheme(side, name)}
     />
   </div>
@@ -67,7 +67,7 @@
     {/each}
   </div>
   <div class="space-y-1.5">
-    <div class="text-[12px] font-medium text-t2">Ghostty themes</div>
+    <div class="text-[12px] font-medium text-t2">Color schemes</div>
     <div class="flex gap-3">
       {@render schemeSelect("light", "Light")}
       {@render schemeSelect("dark", "Dark")}

@@ -33,14 +33,14 @@ Themes live in `~/.config/planeai/themes/` (or `%APPDATA%\planeai\themes\` on Wi
 | `dracula`    | Dracula color palette                       |
 | `one`        | One Half Light / Dark                       |
 
-## Ghostty themes
+## Color schemes
 
 planeai bundles every color scheme that Ghostty ships, from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) (MIT license).
-In **Preferences → Appearance**, pick one scheme for light mode and one for dark mode under **Ghostty themes**.
+In **Preferences → Appearance**, pick one scheme for light mode and one for dark mode under **Color schemes**.
 The terminal uses the scheme's colors exactly.
 The rest of the UI (sidebar, panels, text, accent, diffs, and editor highlighting) is derived from the scheme, with a minimum text contrast enforced.
 
-In the config file, a Ghostty theme is a pair of scheme names:
+In the config file, a color scheme choice is a pair of scheme names:
 
 ```jsonc
 {

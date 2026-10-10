@@ -70,7 +70,7 @@ Rollback is best-effort: errors are logged as warnings but do not propagate. If 
 - **xterm.js** for terminal rendering
 - **Tailwind CSS v4** with custom `@theme` block mapping CSS custom properties to utility classes
 - **Custom theming** via CSS files in `~/.config/planeai/themes/`. Theme file defines UI, terminal, and editor tokens for both light and dark modes.
-- **Ghostty themes**: `appearance.theme` can instead be a `{ light, dark }` pair of Ghostty scheme names. The backend (`terminal_scheme.rs`) copies the terminal colors exactly and derives the other tokens, emitting the same `:root` / `.dark` CSS a theme file has.
+- **Color schemes**: `appearance.theme` can instead be a `{ light, dark }` pair of Ghostty scheme names. The backend (`terminal_scheme.rs`) copies the terminal colors exactly and derives the other tokens, emitting the same `:root` / `.dark` CSS a theme file has.
 - **SQLite via rusqlite** on the Rust backend for persistence
 - **planeai-plugin-jira** executable for Jira Cloud connection ownership (OAuth 2.0 PKCE, plugin-scoped settings and backend-only secrets); manual configured-source synchronization imports and updates tasks and the Jira sidebar; writeback and periodic sync remain deferred
 - **tmux** for optional process persistence (explicit opt-in; see Session backend)
