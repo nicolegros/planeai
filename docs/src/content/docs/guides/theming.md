@@ -36,6 +36,7 @@ Themes live in `~/.config/planeai/themes/` (or `%APPDATA%\planeai\themes\` on Wi
 ## Color schemes
 
 planeai bundles every color scheme that Ghostty ships, from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) (MIT license).
+Each scheme belongs to its author, credited in the bundled [CREDITS.md](https://github.com/mbadolato/iTerm2-Color-Schemes/blob/master/CREDITS.md).
 In **Preferences → Appearance**, the **Light** and **Dark** dropdowns below the theme buttons set what each mode uses.
 Each lists the CSS themes first, tagged **planeai**, then the color schemes for that mode.
 Picking one mode keeps the other, so you can pair the default theme in light mode with a color scheme in dark mode.

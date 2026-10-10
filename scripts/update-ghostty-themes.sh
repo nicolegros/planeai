@@ -25,12 +25,13 @@ trap 'rm -rf "$TMP"' EXIT
 
 curl -fsSL "https://codeload.github.com/$REPO/tar.gz/$SHA" -o "$TMP/repo.tar.gz"
 mkdir "$TMP/src"
-tar -xzf "$TMP/repo.tar.gz" -C "$TMP/src" --strip-components=1 "iTerm2-Color-Schemes-$SHA/ghostty" "iTerm2-Color-Schemes-$SHA/LICENSE"
+tar -xzf "$TMP/repo.tar.gz" -C "$TMP/src" --strip-components=1 "iTerm2-Color-Schemes-$SHA/ghostty" "iTerm2-Color-Schemes-$SHA/LICENSE" "iTerm2-Color-Schemes-$SHA/CREDITS.md"
 
 rm -rf "$DEST"
 mkdir -p "$DEST"
 cp "$TMP/src/ghostty/"* "$DEST/"
 cp "$TMP/src/LICENSE" "$DEST/LICENSE"
+cp "$TMP/src/CREDITS.md" "$DEST/CREDITS.md"
 echo "$SHA" > "$DEST/UPSTREAM"
 
-echo "Updated $(find "$DEST" -type f ! -name LICENSE ! -name UPSTREAM | wc -l | tr -d ' ') Ghostty themes from $REPO@$SHA (was $PREVIOUS)"
+echo "Updated $(find "$DEST" -type f ! -name LICENSE ! -name CREDITS.md ! -name UPSTREAM | wc -l | tr -d ' ') Ghostty themes from $REPO@$SHA (was $PREVIOUS)"

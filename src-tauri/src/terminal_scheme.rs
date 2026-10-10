@@ -378,7 +378,7 @@ impl From<&TerminalScheme> for SchemeSummary {
 }
 
 /// Provenance files shipped beside the bundled schemes.
-const METADATA_FILES: [&str; 2] = ["LICENSE", "UPSTREAM"];
+const METADATA_FILES: [&str; 3] = ["CREDITS.md", "LICENSE", "UPSTREAM"];
 
 /// Bundled scheme files as `(name, source)`.
 fn bundled_sources() -> impl Iterator<Item = (&'static str, &'static str)> {
