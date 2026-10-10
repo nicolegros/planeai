@@ -13,7 +13,7 @@
 
   let { projectPath, value = $bindable(""), onValueChange, onkeydown, placeholder = "Select branch…", emptyText = "No branches found" }: Props = $props();
 
-  let branches = $state<{ value: string; label: string; remote?: boolean }[]>([]);
+  let branches = $state<{ value: string; label: string; badge?: string }[]>([]);
   let loaded = $state(false);
 
   $effect(() => {
@@ -24,7 +24,7 @@
         branches = b.map((s) => {
           const remote = s.startsWith("remote:");
           const name = remote ? s.slice(7) : s;
-          return { value: remote ? `remote:${name}` : name, label: name, remote };
+          return { value: remote ? `remote:${name}` : name, label: name, badge: remote ? "remote" : undefined };
         });
         if (branches.length === 0) {
           console.error("[BranchSelect] No branches found for project:", projectPath);

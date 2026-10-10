@@ -5,7 +5,8 @@
   interface Item {
     value: string;
     label: string;
-    remote?: boolean;
+    /** Short tag shown at the end of the row, e.g. "remote". */
+    badge?: string;
   }
 
   interface Props {
@@ -119,7 +120,7 @@
       {#each filtered as item (item.value)}
         <Combobox.Item value={item.value} label={item.label} class="flex items-center justify-between cursor-pointer px-3 py-2 text-sm text-t2 data-[highlighted]:bg-panel-hi">
           <span>{item.label}</span>
-          {#if item.remote}<span class="rounded bg-panel-hi px-1.5 py-0.5 text-[10px] text-t3">remote</span>{/if}
+          {#if item.badge}<span class="rounded bg-panel-hi px-1.5 py-0.5 text-[10px] text-t3">{item.badge}</span>{/if}
         </Combobox.Item>
       {:else}
         <span class="block px-3 py-2 text-sm text-t3">{emptyText}</span>

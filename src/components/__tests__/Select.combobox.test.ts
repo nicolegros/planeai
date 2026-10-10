@@ -5,7 +5,7 @@ import Select from "../ui/Select.svelte";
 const branches = [
   { value: "main", label: "main" },
   { value: "pol-127/test", label: "pol-127/test" },
-  { value: "remote:pol-127/test", label: "pol-127/test", remote: true },
+  { value: "remote:pol-127/test", label: "pol-127/test", badge: "remote" },
   { value: "feature/other", label: "feature/other" },
 ];
 
