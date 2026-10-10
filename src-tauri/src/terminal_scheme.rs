@@ -377,18 +377,25 @@ impl From<&TerminalScheme> for SchemeSummary {
     }
 }
 
+/// Provenance files shipped beside the bundled schemes.
+const METADATA_FILES: [&str; 2] = ["LICENSE", "UPSTREAM"];
+
+/// Bundled scheme files as `(name, source)`.
+fn bundled_sources() -> impl Iterator<Item = (&'static str, &'static str)> {
+    BUNDLED.files().filter_map(|file| {
+        let name = file.path().file_name()?.to_str()?;
+        if METADATA_FILES.contains(&name) {
+            return None;
+        }
+        Some((name, file.contents_utf8()?))
+    })
+}
+
 fn bundled_schemes() -> &'static [TerminalScheme] {
     static PARSED: OnceLock<Vec<TerminalScheme>> = OnceLock::new();
     PARSED.get_or_init(|| {
-        BUNDLED
-            .files()
-            .filter_map(|file| {
-                let name = file.path().file_name()?.to_str()?;
-                if name == "LICENSE" {
-                    return None;
-                }
-                TerminalScheme::parse(name, file.contents_utf8()?).ok()
-            })
+        bundled_sources()
+            .filter_map(|(name, source)| TerminalScheme::parse(name, source).ok())
             .collect()
     })
 }

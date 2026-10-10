@@ -201,14 +201,13 @@ fn one_half_light_uses_a_light_frame_and_scrim() {
 
 #[test]
 fn every_bundled_scheme_parses_and_derives_readable_text() {
-    let names: Vec<&str> = BUNDLED
-        .files()
-        .filter_map(|f| f.path().file_name()?.to_str())
-        .filter(|n| *n != "LICENSE")
-        .collect();
-    assert!(names.len() > 700, "only {} bundled schemes", names.len());
-    for name in names {
-        let source = BUNDLED.get_file(name).unwrap().contents_utf8().unwrap();
+    let sources: Vec<_> = bundled_sources().collect();
+    assert!(
+        sources.len() > 700,
+        "only {} bundled schemes",
+        sources.len()
+    );
+    for (name, source) in sources {
         let scheme = TerminalScheme::parse(name, source)
             .unwrap_or_else(|e| panic!("{name} failed to parse: {e}"));
         let t = tokens(&scheme);
@@ -265,7 +264,7 @@ fn user_schemes_override_bundled_ones_and_are_listed() {
     assert!(list.windows(2).all(|w| w[0].name < w[1].name));
     assert!(!list
         .iter()
-        .any(|s| s.name == "Broken" || s.name == "LICENSE"));
+        .any(|s| s.name == "Broken" || METADATA_FILES.contains(&s.name.as_str())));
     assert_eq!(
         list.iter().find(|s| s.name == "My Scheme"),
         Some(&SchemeSummary {

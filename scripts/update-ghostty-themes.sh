@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
 # Refreshes src-tauri/resources/ghostty-themes from mbadolato/iTerm2-Color-Schemes (MIT).
-# Usage: scripts/update-ghostty-themes.sh [commit-sha]
+# Usage: scripts/update-ghostty-themes.sh [commit-sha]   (defaults to the latest upstream commit)
+# The bundled commit is recorded in src-tauri/resources/ghostty-themes/UPSTREAM.
 set -euo pipefail
 
-SHA="${1:-c02052159ff9a1c438ff419b7451cd33f9ab4934}"
 REPO="mbadolato/iTerm2-Color-Schemes"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$ROOT/src-tauri/resources/ghostty-themes"
+
+SHA="${1:-$(curl -fsSL -H "Accept: application/vnd.github.sha" "https://api.github.com/repos/$REPO/commits/master")}"
+if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Expected a full 40-character commit SHA, got: $SHA" >&2
+  exit 1
+fi
+
+PREVIOUS="$(cat "$DEST/UPSTREAM" 2>/dev/null || echo none)"
+if [[ "$PREVIOUS" == "$SHA" ]]; then
+  echo "Ghostty themes are already at $REPO@$SHA"
+  exit 0
+fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -19,5 +31,6 @@ rm -rf "$DEST"
 mkdir -p "$DEST"
 cp "$TMP/src/ghostty/"* "$DEST/"
 cp "$TMP/src/LICENSE" "$DEST/LICENSE"
+echo "$SHA" > "$DEST/UPSTREAM"
 
-echo "Updated $(find "$DEST" -type f ! -name LICENSE | wc -l | tr -d ' ') Ghostty themes from $REPO@$SHA"
+echo "Updated $(find "$DEST" -type f ! -name LICENSE ! -name UPSTREAM | wc -l | tr -d ' ') Ghostty themes from $REPO@$SHA (was $PREVIOUS)"
