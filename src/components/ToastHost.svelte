@@ -169,10 +169,10 @@
   {#if underlinesInitial(label, key)}<span class="underline">{label.charAt(0)}</span>{label.slice(1)}{:else}{label}{/if}{#if key === "Enter"}<span class="ml-1 text-on-toast/70">↵</span>{/if}
 {/snippet}
 
-<div data-toast-host class="pointer-events-none fixed bottom-4 left-4 z-[100] flex max-w-lg flex-col gap-2">
+<div data-toast-host class="pointer-events-none fixed bottom-4 left-4 z-[100] flex w-[28rem] max-w-[calc(100vw-2rem)] flex-col gap-2">
   {#each visible as toast, index (toast.id)}
     {@const footer = hint(toast, index === visible.length - 1)}
-    <!-- Keys are handled on the focused toast; clicking the body is the mouse dismiss. -->
+    <!-- Keys are handled on the focused toast; clicking the body is the mouse dismiss and must not steal focus. -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -181,7 +181,8 @@
       role="alertdialog"
       aria-label={toast.message}
       tabindex="-1"
-      class="pointer-events-auto rounded-lg px-4 py-3 shadow-lg outline-none {KIND_CLASS[toast.kind]} {toast.dismiss === 'disabled' ? '' : 'cursor-pointer'}"
+      class="pointer-events-auto rounded-lg px-4 py-3 shadow-lg outline-none focus:ring-2 focus:ring-on-toast/70 focus:ring-inset {KIND_CLASS[toast.kind]} {toast.dismiss === 'disabled' ? '' : 'cursor-pointer'}"
+      onmousedown={(event) => event.preventDefault()}
       onclick={() => close(requestDismissToast(toast.id))}
       onkeydown={(event) => onKeydown(event, toast)}
       onfocusin={(event) => onFocusIn(event, toast)}

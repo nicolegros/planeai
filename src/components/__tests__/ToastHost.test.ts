@@ -236,4 +236,20 @@ describe("ToastHost", () => {
       expect.stringContaining("visible"),
     ]);
   });
+
+  it("leaves keyboard focus in place when a toast is clicked", () => {
+    render();
+    showToast("first");
+    showToast("second");
+    flushSync();
+
+    const mousedown = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    toastEls()[1].dispatchEvent(mousedown);
+    toastEls()[1].click();
+    flushSync();
+
+    expect(mousedown.defaultPrevented).toBe(true);
+    expect(toastEls()).toHaveLength(1);
+    expect(document.activeElement).toBe(outside);
+  });
 });
