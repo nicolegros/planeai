@@ -29,6 +29,12 @@
   --color-status-review: #9a6700;
   --color-status-exited: #cf222e;
   --color-status-idle: #aeaeb5;
+  /* Toasts keep saturated fills in both appearances, so they need no dark override. */
+  --color-toast-error: oklch(57.7% 0.245 27.325);
+  --color-toast-warning: oklch(66.6% 0.179 58.318);
+  --color-toast-info: oklch(54.6% 0.245 262.881);
+  --color-toast-success: oklch(62.7% 0.194 149.214);
+  --color-on-toast: #ffffff;
   /* ── Radii ── */
   --radius-base: var(--radius-base);
   --radius-container: var(--radius-container);
