@@ -18,6 +18,7 @@
       { keys: `${MOD_LABEL}K`, description: "Command menu" },
       { keys: `${MOD_LABEL}/`, description: "Keyboard shortcuts" },
       { keys: `${MOD_LABEL},`, description: "Preferences" },
+      { keys: `${MOD_LABEL}U`, description: "Focus toast" },
       { keys: `Escape`, description: "Dismiss / focus terminal" },
     ]},
     { section: "Sessions", items: [

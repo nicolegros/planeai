@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, unmount } from "svelte";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
-vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
+vi.mock("../../lib/toasts.svelte", () => ({ showToast: vi.fn() }));
 
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { showSnackbar } from "../../lib/snackbar.svelte";
+import { showToast } from "../../lib/toasts.svelte";
 import MarkdownView from "../MarkdownView.svelte";
 
 const mounted: Array<ReturnType<typeof mount>> = [];
@@ -13,7 +13,7 @@ afterEach(() => {
   for (const component of mounted.splice(0)) unmount(component);
   document.body.replaceChildren();
   vi.mocked(openUrl).mockReset();
-  vi.mocked(showSnackbar).mockReset();
+  vi.mocked(showToast).mockReset();
 });
 
 function render(source: string) {
@@ -56,7 +56,7 @@ describe("MarkdownView", () => {
     click(target.querySelector("a")!);
 
     await vi.waitFor(() =>
-      expect(showSnackbar).toHaveBeenCalledWith("Failed to open URL: Error: denied"),
+      expect(showToast).toHaveBeenCalledWith("Failed to open URL: Error: denied"),
     );
   });
 

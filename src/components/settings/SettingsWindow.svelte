@@ -20,6 +20,7 @@
   } from "../../lib/settings-registry";
   import type { PluginInventory, PluginUiContribution } from "../../lib/types";
   import PluginContributionHost from "../PluginContributionHost.svelte";
+  import ToastHost, { toggleToastFocus } from "../ToastHost.svelte";
   import AdvancedPage from "./AdvancedPage.svelte";
   import AgentsPage from "./AgentsPage.svelte";
   import AppearancePage from "./AppearancePage.svelte";
@@ -94,6 +95,8 @@
       event.preventDefault();
       searchEl?.focus();
       searchEl?.select();
+    } else if (mod && key === "u" && !event.shiftKey) {
+      if (toggleToastFocus()) event.preventDefault();
     }
   }
 
@@ -270,3 +273,5 @@
     </div>
   </main>
 </div>
+
+<ToastHost />

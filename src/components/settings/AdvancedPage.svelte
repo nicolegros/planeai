@@ -3,7 +3,7 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { preferences } from "../../lib/api";
   import { refreshSettings } from "../../lib/settings.svelte";
-  import { showSnackbar } from "../../lib/snackbar.svelte";
+  import { showToast } from "../../lib/toasts.svelte";
   import { Button } from "../ui";
   import SettingRow from "./SettingRow.svelte";
   import SettingsSection from "./SettingsSection.svelte";
@@ -23,9 +23,9 @@
     try {
       await refreshSettings();
       settingsWindow.editorDraft = null;
-      showSnackbar("Config reloaded from disk", "success");
+      showToast("Config reloaded from disk", "success");
     } catch (error) {
-      showSnackbar(`Failed to refresh config: ${error}`, "error");
+      showToast(`Failed to refresh config: ${error}`, "error");
     }
   }
 
@@ -43,7 +43,7 @@
     try {
       await revealItemInDir(await preferences.getLogDir());
     } catch (error) {
-      showSnackbar(`Failed to open the logs folder: ${error}`, "error");
+      showToast(`Failed to open the logs folder: ${error}`, "error");
     }
   }
 </script>

@@ -2,7 +2,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { projects as projectsApi } from "./api";
 import * as projectStore from "./project-store.svelte";
 import { getSettings } from "./settings.svelte";
-import { showSnackbar } from "./snackbar.svelte";
+import { showToast } from "./toasts.svelte";
 import * as taskStore from "./task-store.svelte";
 import type { Project } from "./types";
 
@@ -19,13 +19,13 @@ export async function locateProjectFolder(project: Project): Promise<Project | n
     await projectStore.updateProject(project.id, project.name, picked);
     // Tasks are keyed by project path.
     await taskStore.refresh(projectStore.getProjects().map((candidate) => candidate.path));
-    showSnackbar(
+    showToast(
       "Project relinked. Agent conversations started in the old folder may not resume.",
       "info",
     );
     return projectStore.getProject(project.id) ?? null;
   } catch (error) {
-    showSnackbar(String(error));
+    showToast(String(error));
     return null;
   }
 }

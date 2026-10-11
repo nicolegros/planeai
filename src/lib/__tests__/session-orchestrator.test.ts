@@ -7,7 +7,10 @@ vi.mock("@tauri-apps/api/window", () => ({
     onCloseRequested: vi.fn(() => Promise.resolve(() => {})),
   })),
 }));
-vi.mock("../snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
+vi.mock("../toasts.svelte", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../toasts.svelte")>()),
+  showToast: vi.fn(),
+}));
 vi.mock("../soundPlayer", () => ({ playTaskComplete: vi.fn() }));
 vi.mock("../settings.svelte", () => ({
   getSettings: vi.fn(() => ({
@@ -777,8 +780,8 @@ describe("prompt delivery failures", () => {
     const { listen } = await import("@tauri-apps/api/event");
     const listenMock = vi.mocked(listen);
     listenMock.mockClear();
-    const { showSnackbar } = await import("../snackbar.svelte");
-    vi.mocked(showSnackbar).mockClear();
+    const { showToast } = await import("../toasts.svelte");
+    vi.mocked(showToast).mockClear();
     createSession({
       id: "chat",
       name: "Refactor auth",
@@ -790,7 +793,7 @@ describe("prompt delivery failures", () => {
       (c) => c[0] === "prompt-delivery-failed",
     )![1] as (event: { payload: { session_id: string; error: string } }) => void;
     handler({ payload: { session_id: "chat", error: "plugin claude-chat is not running" } });
-    expect(showSnackbar).toHaveBeenCalledWith(
+    expect(showToast).toHaveBeenCalledWith(
       "A prompt for Refactor auth was not delivered: plugin claude-chat is not running",
     );
     cleanup();

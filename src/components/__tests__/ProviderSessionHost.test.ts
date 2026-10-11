@@ -27,7 +27,7 @@ vi.mock("../../lib/api", () => ({
   projects: { list: vi.fn() },
   tasks: { create: vi.fn() },
 }));
-vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
+vi.mock("../../lib/toasts.svelte", () => ({ showToast: vi.fn() }));
 vi.mock("../../lib/settings.svelte", () => ({ isDark: () => false }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((eventName: string, handler: (event: { payload: unknown }) => void) => {

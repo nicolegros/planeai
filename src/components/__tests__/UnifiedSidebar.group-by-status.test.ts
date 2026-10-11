@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import type { Project, Session, TaskItem } from "../../lib/types";
 
-const { configGet, configUpdate, projectList, sessionList, showSnackbar, taskListAll, taskMove } =
+const { configGet, configUpdate, projectList, sessionList, showToast, taskListAll, taskMove } =
   vi.hoisted(() => ({
-    showSnackbar: vi.fn(),
+    showToast: vi.fn(),
     configGet: vi.fn(),
     configUpdate: vi.fn(),
     projectList: vi.fn(),
@@ -38,7 +38,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar }));
+vi.mock("../../lib/toasts.svelte", () => ({ showToast }));
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: vi.fn(() => ({ onCloseRequested: vi.fn().mockResolvedValue(() => {}) })),
@@ -317,7 +317,7 @@ describe("UnifiedSidebar grouped by status", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
     }
 
-    await vi.waitFor(() => expect(showSnackbar).toHaveBeenCalledWith("Failed to move task."));
+    await vi.waitFor(() => expect(showToast).toHaveBeenCalledWith("Failed to move task."));
     expect(getSelectedIndex()).toBe(index);
   });
 

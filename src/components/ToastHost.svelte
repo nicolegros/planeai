@@ -190,7 +190,7 @@
       onmouseleave={() => releaseToast(toast.id, "hover")}
     >
       <p class="text-sm text-on-toast font-mono break-all">
-        {toast.message}{#if toast.detail}<span class="text-on-toast/70"> · {toast.detail}</span>{/if}{#if toast.count > 1}<span class="ml-2 text-on-toast/70">x {toast.count}</span>{/if}
+        {toast.message}{#if toast.detail}<span class="text-on-toast/70">{` · ${toast.detail}`}</span>{/if}{#if toast.count > 1}<span class="ml-2 text-on-toast/70">x {toast.count}</span>{/if}
       </p>
       {#if toast.actions.length > 0}
         <div class="mt-2 flex gap-2">

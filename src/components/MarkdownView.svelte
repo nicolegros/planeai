@@ -1,7 +1,7 @@
 <script lang="ts">
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { renderMarkdown } from "../lib/markdown";
-  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { showToast } from "../lib/toasts.svelte";
 
   interface Props {
     source: string;
@@ -26,7 +26,7 @@
       return;
     }
     if (!OPENABLE_PROTOCOLS.has(url.protocol)) return;
-    void openUrl(url.toString()).catch((error) => showSnackbar(`Failed to open URL: ${String(error)}`));
+    void openUrl(url.toString()).catch((error) => showToast(`Failed to open URL: ${String(error)}`));
   }
 </script>
 

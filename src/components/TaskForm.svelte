@@ -3,7 +3,7 @@
   import { projects as projectsApi, tasks as tasksApi } from "../lib/api";
   import { Button, Input, Label, Select, PillInput, PillCombobox, Checkbox } from "./ui";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
-  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { showToast } from "../lib/toasts.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { taskSessionDefaults } from "../lib/task-session-defaults";
@@ -240,7 +240,7 @@
 
         if (startSession && !selectedProject.path_missing) {
           if (!providers.key) {
-            showSnackbar("Task created, but no provider configured. Select a provider to start a session.");
+            showToast("Task created, but no provider configured. Select a provider to start a session.");
             onSubmitted();
             return;
           }
@@ -254,10 +254,10 @@
               branch: sessionBranch || null,
               prompt: sessionPrompt || null,
             });
-            if (warning) showSnackbar(warning, "success");
+            if (warning) showToast(warning, "success");
             onSessionCreated?.(session);
           } catch (e: any) {
-            showSnackbar(`Task created but session failed: ${e}`);
+            showToast(`Task created but session failed: ${e}`);
           }
         }
       } else {
@@ -277,7 +277,7 @@
       }
       onSubmitted();
     } catch (e: any) {
-      showSnackbar(e.toString());
+      showToast(e.toString());
     } finally {
       submitting = false;
     }

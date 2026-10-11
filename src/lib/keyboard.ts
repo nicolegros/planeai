@@ -48,7 +48,7 @@ export type KeyboardAction =
   | { type: "toggle_file_explorer" }
   | { type: "toggle_sessions_panel" }
   | { type: "toggle_task_panel" }
-  | { type: "focus_merge_prompt" }
+  | { type: "focus_toast" }
   | { type: "refresh_tasks" }
   | { type: "open_file" }
   | { type: "save_file" }
@@ -175,9 +175,9 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "refresh_tasks" };
   }
 
-  // Mod+U — focus merge prompt
+  // Mod+U - focus the newest toast, or leave the toast stack
   if (mod && !e.shiftKey && key === "u") {
-    return { type: "focus_merge_prompt" };
+    return { type: "focus_toast" };
   }
 
   // Mod+Shift+R — review changes (toggle diff/review tab)

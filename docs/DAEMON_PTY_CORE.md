@@ -244,7 +244,7 @@ When a session transitions from exited to active (via restart):
 3. The session's Terminal view resets its buffer and calls `pty.attach()` with a flow control channel
 4. Replays buffer + resumes live output
 
-A Terminal view never connects while its session is exited, which prevents attaching to a still-exited daemon session (which would immediately EOF and re-emit pty-exited). Restart failures surface via `showSnackbar()`.
+A Terminal view never connects while its session is exited, which prevents attaching to a still-exited daemon session (which would immediately EOF and re-emit pty-exited). Restart failures surface as a toast via `showToast()`.
 
 ## Architecture
 

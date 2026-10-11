@@ -3,7 +3,7 @@
   import { loops as loopsApi, git } from "../lib/api";
   import { Button } from "./ui";
   import { isInDialog } from "../lib/dialog-focus";
-  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { showToast } from "../lib/toasts.svelte";
   import { RefreshCw, Play, Square, ExternalLink, Copy, CheckCircle2, XCircle, Clock, ChevronRight, ChevronDown } from "@lucide/svelte";
   import LoopTimeline from "./LoopTimeline.svelte";
 
@@ -75,7 +75,7 @@
       await loopsApi.tick(loopId);
       refresh();
     } catch (e) {
-      showSnackbar(`Tick failed: ${e}`);
+      showToast(`Tick failed: ${e}`);
     }
   }
 
@@ -84,7 +84,7 @@
       await loopsApi.stop(loopId);
       refresh();
     } catch (e) {
-      showSnackbar(`Stop failed: ${e}`);
+      showToast(`Stop failed: ${e}`);
     }
   }
 
@@ -93,7 +93,7 @@
       await loopsApi.start(loopId);
       refresh();
     } catch (e) {
-      showSnackbar(`Start failed: ${e}`);
+      showToast(`Start failed: ${e}`);
     }
   }
 

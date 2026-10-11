@@ -13,7 +13,7 @@ vi.mock("../../lib/settings.svelte", () => ({
   getSettings: () => mocks.config,
   updateSettings: mocks.updateSettings,
 }));
-vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
+vi.mock("../../lib/toasts.svelte", () => ({ showToast: vi.fn() }));
 
 const { default: ThemePicker } = await import("../settings/ThemePicker.svelte");
 

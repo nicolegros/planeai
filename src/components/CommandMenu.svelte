@@ -5,7 +5,7 @@
   import { sessions as sessionsApi, projects as projectsApi, git } from "../lib/api";
   import type { Session, Project, TaskItem, PluginInventory, PluginUiContribution } from "../lib/types";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { showToast } from "../lib/toasts.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
@@ -114,7 +114,7 @@
       close();
     } catch (error) {
       console.error(`Failed to ${verb} project:`, error);
-      showSnackbar(`Failed to ${verb} project.`);
+      showToast(`Failed to ${verb} project.`);
     }
   }
 
@@ -586,7 +586,7 @@
                   value={getSettings().hide_done_tasks ? "show done tasks" : "hide done tasks"}
                   keywords={["done", "tasks", "hide", "show", "toggle", "completed"]}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
-                  onSelect={() => { updateSettings({ hide_done_tasks: !getSettings().hide_done_tasks }).catch((error) => showSnackbar(`Failed to save settings: ${error}`, "error")); close(); }}
+                  onSelect={() => { updateSettings({ hide_done_tasks: !getSettings().hide_done_tasks }).catch((error) => showToast(`Failed to save settings: ${error}`, "error")); close(); }}
                 >
                   {getSettings().hide_done_tasks ? "Show done tasks" : "Hide done tasks"}
                 </Command.Item>
@@ -594,7 +594,7 @@
                   value={getSettings().hide_empty_projects ? "show empty projects" : "hide empty projects"}
                   keywords={["empty", "projects", "hide", "show", "toggle", "inactive"]}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
-                  onSelect={() => { updateSettings({ hide_empty_projects: !getSettings().hide_empty_projects }).catch((error) => showSnackbar(`Failed to save settings: ${error}`, "error")); close(); }}
+                  onSelect={() => { updateSettings({ hide_empty_projects: !getSettings().hide_empty_projects }).catch((error) => showToast(`Failed to save settings: ${error}`, "error")); close(); }}
                 >
                   {getSettings().hide_empty_projects ? "Show empty projects" : "Hide empty projects"}
                 </Command.Item>

@@ -5,7 +5,7 @@
   import { jiraDepartedInteractionEntrypoint, jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
   import { plugins, projects as projectsApi, tasks as tasksApi } from "../lib/api";
   import { frameFailure } from "../lib/provider-session-error";
-  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { showToast } from "../lib/toasts.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import { getAllTasks } from "../lib/task-store.svelte";
   import { openPluginModal, openProjectForm } from "../lib/plugin-modal-manager";
@@ -575,14 +575,14 @@
           try {
             const url = new URL(message.url);
             if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("only http(s) URLs are supported");
-            void openUrl(url.toString()).catch((error) => showSnackbar(`Failed to open URL: ${String(error)}`));
+            void openUrl(url.toString()).catch((error) => showToast(`Failed to open URL: ${String(error)}`));
           } catch (error) {
-            showSnackbar(`Invalid plugin URL: ${String(error)}`);
+            showToast(`Invalid plugin URL: ${String(error)}`);
           }
         }
       } else if (message.type === "notify" && typeof message.message === "string") {
         const notification = message.message.trim();
-        if (notification) showSnackbar(notification, message.kind ?? "error");
+        if (notification) showToast(notification, message.kind ?? "error");
       } else if (message.type === "sidebar-select" && typeof message.rowId === "string") {
         container?.dispatchEvent(
           new CustomEvent("plugin-sidebar-select", { bubbles: true, detail: { rowId: message.rowId } }),
@@ -684,7 +684,7 @@
       if (version !== generation) return;
       const data: PluginUiHost["data"] = {
         changed: () => plugins.dataChanged(plugin.id),
-        notify: (message, kind = "error") => showSnackbar(message, kind),
+        notify: (message, kind = "error") => showToast(message, kind),
       };
       const host: PluginUiHost = {
         call: <T>(method: string, params: unknown = null) => callPlugin<T>(method, params),
@@ -717,9 +717,9 @@
             try {
               const parsed = new URL(url);
               if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("only http(s) URLs are supported");
-              void openUrl(parsed.toString()).catch((error) => showSnackbar(`Failed to open URL: ${String(error)}`));
+              void openUrl(parsed.toString()).catch((error) => showToast(`Failed to open URL: ${String(error)}`));
             } catch (error) {
-              showSnackbar(`Invalid plugin URL: ${String(error)}`);
+              showToast(`Invalid plugin URL: ${String(error)}`);
             }
           },
         },
@@ -744,7 +744,7 @@
         try {
           await Promise.all([taskStore.refresh([project.path]), plugins.dataChanged(plugin.id)]);
         } catch (error) {
-          showSnackbar(`Child task created, but refresh failed: ${String(error)}`);
+          showToast(`Child task created, but refresh failed: ${String(error)}`);
         }
       };
       data.onChanged = (listener) => subscribe(dataChangeListeners, listener);

@@ -2,7 +2,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { CircleCheck, CircleAlert, Folder, Pencil, Plus, Trash2, X } from "@lucide/svelte";
   import { config as configApi } from "../../lib/api";
-  import { showSnackbar } from "../../lib/snackbar.svelte";
+  import { showToast } from "../../lib/toasts.svelte";
   import { getSettings, type AppConfig } from "../../lib/settings.svelte";
   import { addCustomAgentPatch, agentRows, disableAgentPatch, enableAgentPatch, setDefaultAgentPatch, type AgentRow } from "../../lib/agent-settings";
   import { Button, Select, Switch } from "../ui";
@@ -79,7 +79,7 @@
       if (typeof selected !== "string" || searchPaths.includes(selected)) return;
       await apply({ extra_path_dirs: [...searchPaths, selected] });
     } catch (error) {
-      showSnackbar(`Failed to add a search path: ${error}`, "error");
+      showToast(`Failed to add a search path: ${error}`, "error");
     }
   }
 

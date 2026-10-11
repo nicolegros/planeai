@@ -62,7 +62,7 @@ vi.mock("../../lib/api", () => ({
   git: { listFiles: vi.fn(() => Promise.resolve([])) },
 }));
 
-vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
+vi.mock("../../lib/toasts.svelte", () => ({ showToast: vi.fn() }));
 vi.mock("../../lib/settings.svelte", () => ({
   getSettings: () => ({ hide_done_tasks: false, hide_empty_projects: false }),
   updateSettings: vi.fn(),
