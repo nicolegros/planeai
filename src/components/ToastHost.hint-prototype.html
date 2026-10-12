@@ -1,0 +1,181 @@
+<!doctype html>
+<!-- PROTOTYPE, throwaway. Question: where should the ⌘U hint sit on the toast stack? Five placements via ?variant=A..E. -->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Toast hint prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --toast-error: oklch(57.7% 0.245 27.325);
+    --toast-warning: oklch(66.6% 0.179 58.318);
+    --toast-info: oklch(54.6% 0.245 262.881);
+    --toast-success: oklch(62.7% 0.194 149.214);
+    --on-toast: #fff;
+    --bg: #18181b;
+    --chrome: #1f1f23;
+    --t2: #8b8b94;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; overflow: hidden; background: var(--bg); color: #e4e4e7; font-family: "IBM Plex Sans", system-ui, sans-serif; }
+  .app { display: grid; grid-template-columns: 240px 1fr; height: 100vh; }
+  .sidebar { background: var(--chrome); border-right: 1px solid #ffffff10; padding: 14px; font-size: 13px; color: var(--t2); }
+  .sidebar div { padding: 6px 8px; border-radius: 6px; }
+  .sidebar .on { background: #ffffff10; color: #e4e4e7; }
+  .term { padding: 16px; font: 13px/1.6 "IBM Plex Mono", monospace; color: #a1a1aa; white-space: pre; }
+  .term.focused::after { content: "▌"; color: #e4e4e7; }
+
+  .stack { position: fixed; left: 16px; bottom: 16px; width: 28rem; max-width: calc(100vw - 2rem); display: flex; flex-direction: column; gap: 8px; z-index: 100; }
+  .toast { position: relative; border-radius: 8px; padding: 12px 16px; color: var(--on-toast); box-shadow: 0 10px 15px -3px #0000004d, 0 4px 6px -4px #0000004d; cursor: pointer; outline: none; }
+  .toast.focused { box-shadow: inset 0 0 0 2px #ffffffb3, 0 10px 15px -3px #0000004d; }
+  .k-error { background: var(--toast-error); } .k-warning { background: var(--toast-warning); }
+  .k-info { background: var(--toast-info); } .k-success { background: var(--toast-success); }
+  .msg { margin: 0; font: 14px/20px "IBM Plex Mono", monospace; word-break: break-all; }
+  .muted { color: #ffffffb3; }
+  .actions { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+  .btn { border: 0; border-radius: 4px; padding: 4px 12px; font: 500 12px/16px "IBM Plex Sans", sans-serif; color: var(--on-toast); background: #ffffff33; cursor: pointer; white-space: nowrap; }
+  .btn.quiet { background: #ffffff1a; color: #ffffffcc; }
+  .btn u { text-underline-offset: 2px; }
+  .foot { margin: 4px 0 0; font-size: 12px; line-height: 16px; color: #ffffffb3; }
+  .kbd { display: inline-flex; align-items: center; gap: 2px; font: 500 11px/1 "IBM Plex Sans", sans-serif; color: #ffffffe6; background: #ffffff26; border: 1px solid #ffffff33; border-bottom-width: 2px; border-radius: 4px; padding: 3px 5px; white-space: nowrap; }
+  .row { display: flex; align-items: flex-start; gap: 12px; }
+  .row .msg { flex: 1; }
+  .spacer { flex: 1; }
+
+  /* C: chip above the stack */
+  .stack-chip { align-self: flex-start; display: inline-flex; gap: 8px; align-items: center; font-size: 12px; color: #d4d4d8; background: #27272aee; border: 1px solid #ffffff1a; border-radius: 999px; padding: 4px 10px 4px 6px; box-shadow: 0 4px 10px #0006; }
+  .stack-chip .kbd { background: #ffffff14; }
+
+  /* D: tab hanging off the right edge */
+  .side-tab { position: absolute; left: 100%; top: 50%; transform: translate(6px, -50%); }
+  .side-tab .kbd { background: #27272a; border-color: #ffffff26; box-shadow: 0 4px 10px #0006; padding: 5px 7px; }
+
+  .switcher { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; background: #fafafa; color: #18181b; border-radius: 999px; padding: 4px; box-shadow: 0 8px 24px #000a; font: 500 13px "IBM Plex Sans", sans-serif; z-index: 200; }
+  .switcher button { border: 0; background: transparent; width: 28px; height: 28px; border-radius: 999px; cursor: pointer; font-size: 14px; }
+  .switcher button:hover { background: #e4e4e7; }
+  .switcher .label { min-width: 240px; text-align: center; }
+  .help { position: fixed; right: 16px; top: 56px; font-size: 12px; color: var(--t2); text-align: right; line-height: 1.6; }
+  .help button { font: inherit; color: #e4e4e7; background: #ffffff14; border: 1px solid #ffffff1f; border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="sidebar"><div class="on">feat-cmd-u-toast</div><div>fix-relink-projects</div><div>themes-ghostty</div></nav>
+  <div class="term" id="term">~/planeai on pla-359 $ make ci
+      Tests  1188 passed (1188)
+~/planeai on pla-359 $ </div>
+</div>
+<div class="stack" id="stack"></div>
+<div class="help">⌘U focus · ↑/↓ move · D dismiss · Esc leave · ←/→ variant<br /><button id="reset">Reset toasts</button> <button id="one">Only one toast</button></div>
+<div class="switcher"><button id="prev">←</button><span class="label" id="label"></span><button id="next">→</button></div>
+
+<script>
+const MOD = navigator.platform.includes("Mac") ? "⌘" : "Ctrl+";
+const VARIANTS = {
+  A: "Footer line (current)",
+  B: "Keycap in top-right corner",
+  C: "Chip above the stack",
+  D: "Tab off the right edge",
+  E: "Right end of action row",
+};
+const KEYS = Object.keys(VARIANTS);
+let variant = new URLSearchParams(location.search).get("variant") ?? "A";
+if (!VARIANTS[variant]) variant = "A";
+
+const seed = () => [
+  { id: 1, kind: "error", message: "Failed to open shell: spawn EACCES" },
+  { id: 2, kind: "success", message: "PR merged ✓", detail: "feat-branch", actions: [["a", "Archive"], ["x", "Destroy"]], dismissLabel: "Keep", countdown: "auto-archives in 30s" },
+  { id: 3, kind: "info", message: "Update available: v0.42.0", actions: [["i", "Install & Restart"]], dismissLabel: "Dismiss" },
+];
+let toasts = seed();
+let focusedId = null;
+
+const kbd = (text) => `<span class="kbd">${text}</span>`;
+const hintKey = kbd(`${MOD}U`);
+const legend = (t) => [...(t.actions ?? []).map(([k, l]) => `${k.toUpperCase()} ${l.toLowerCase()}`), `D ${(t.dismissLabel ?? "dismiss").toLowerCase()}`, "C copy", "Esc"].join(" · ");
+const btn = ([k, label], quiet) => `<button class="btn${quiet ? " quiet" : ""}">${label[0].toLowerCase() === k ? `<u>${label[0]}</u>${label.slice(1)}` : label}</button>`;
+const message = (t) => `<p class="msg">${t.message}${t.detail ? `<span class="muted"> · ${t.detail}</span>` : ""}</p>`;
+const buttons = (t) => t.actions ? [...t.actions.map((a) => btn(a)), btn(["d", t.dismissLabel], true)].join("") : "";
+
+function footer(parts) { const text = parts.filter(Boolean).join(" · "); return text ? `<p class="foot">${text}</p>` : ""; }
+
+function body(t, isTarget) {
+  const focused = t.id === focusedId;
+  const showHint = isTarget && focusedId === null;
+  switch (variant) {
+    case "A":
+      return message(t) + (t.actions ? `<div class="actions">${buttons(t)}</div>` : "")
+        + footer([focused ? legend(t) : showHint ? `${MOD}U` : "", t.countdown]);
+    case "B":
+      return `<div class="row">${message(t)}${showHint ? hintKey : focused ? kbd("Esc") : ""}</div>`
+        + (t.actions ? `<div class="actions">${buttons(t)}</div>` : "")
+        + footer([focused ? legend(t) : "", t.countdown]);
+    case "C":
+    case "D":
+      return message(t) + (t.actions ? `<div class="actions">${buttons(t)}</div>` : "")
+        + footer([focused ? legend(t) : "", t.countdown])
+        + (variant === "D" && showHint ? `<span class="side-tab">${hintKey}</span>` : "");
+    case "E": {
+      if (t.actions) return message(t) + `<div class="actions">${buttons(t)}<span class="spacer"></span>${showHint ? hintKey : ""}</div>` + footer([focused ? legend(t) : "", t.countdown]);
+      return `<div class="row">${message(t)}${showHint ? hintKey : ""}</div>` + footer([focused ? legend(t) : "", t.countdown]);
+    }
+  }
+}
+
+function render() {
+  const stack = document.getElementById("stack");
+  const chip = variant === "C" && toasts.length
+    ? `<div class="stack-chip">${focusedId === null ? `${hintKey} focus toasts` : `${kbd("↑")}${kbd("↓")} move ${kbd("Esc")} leave`}</div>` : "";
+  stack.innerHTML = chip + toasts.map((t, i) =>
+    `<div class="toast k-${t.kind}${t.id === focusedId ? " focused" : ""}" data-id="${t.id}">${body(t, i === toasts.length - 1)}</div>`).join("");
+  document.getElementById("label").textContent = `${variant} (${VARIANTS[variant]})`;
+  document.getElementById("term").classList.toggle("focused", focusedId === null);
+}
+
+function setVariant(step) {
+  variant = KEYS[(KEYS.indexOf(variant) + step + KEYS.length) % KEYS.length];
+  history.replaceState(null, "", `?variant=${variant}`);
+  render();
+}
+
+function closeFocused() {
+  toasts = toasts.filter((t) => t.id !== focusedId);
+  focusedId = toasts.at(-1)?.id ?? null;
+}
+
+addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "u") {
+    e.preventDefault();
+    focusedId = focusedId === null ? (toasts.at(-1)?.id ?? null) : null;
+  } else if (focusedId !== null) {
+    const i = toasts.findIndex((t) => t.id === focusedId);
+    const t = toasts[i];
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (key === "Escape") focusedId = null;
+    else if (key === "ArrowUp") focusedId = toasts[Math.max(0, i - 1)].id;
+    else if (key === "ArrowDown") focusedId = toasts[Math.min(toasts.length - 1, i + 1)].id;
+    else if (key === "d" || (t.actions ?? []).some(([k]) => k === key)) closeFocused();
+    else return;
+    e.preventDefault();
+  } else if (e.key === "ArrowLeft") setVariant(-1);
+  else if (e.key === "ArrowRight") setVariant(1);
+  else return;
+  render();
+});
+document.getElementById("stack").addEventListener("click", (e) => {
+  const el = e.target.closest("[data-id]");
+  if (!el) return;
+  toasts = toasts.filter((t) => t.id !== Number(el.dataset.id));
+  if (!toasts.some((t) => t.id === focusedId)) focusedId = null;
+  render();
+});
+document.getElementById("prev").onclick = () => setVariant(-1);
+document.getElementById("next").onclick = () => setVariant(1);
+document.getElementById("reset").onclick = () => { toasts = seed(); focusedId = null; render(); };
+document.getElementById("one").onclick = () => { toasts = [seed()[0]]; focusedId = null; render(); };
+render();
+</script>
+</body>
+</html>
