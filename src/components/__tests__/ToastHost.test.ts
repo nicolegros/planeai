@@ -97,7 +97,7 @@ describe("ToastHost", () => {
     expect(document.activeElement).toBe(second);
   });
 
-  it("dismisses with d and moves focus to the remaining toast, then to the terminal", async () => {
+  it("dismisses with d and moves focus to the remaining toast, then back to where it was", async () => {
     render();
     showToast("first");
     showToast("second");
@@ -112,7 +112,7 @@ describe("ToastHost", () => {
     press("d");
     await tick();
     expect(getToasts()).toHaveLength(0);
-    expect(mocks.refocusTerminal).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(outside);
   });
 
   it("copies the message with c without dismissing", () => {
@@ -167,7 +167,7 @@ describe("ToastHost", () => {
     await tick();
     expect(run).toHaveBeenCalledOnce();
     expect(getToasts()).toHaveLength(0);
-    expect(mocks.refocusTerminal).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(outside);
   });
 
   it("dismisses on body click and runs actions on button click", () => {

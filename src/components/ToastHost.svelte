@@ -56,12 +56,8 @@
   function focusAfterClose(): void {
     flushSync();
     const newest = toastElements().at(-1);
-    if (newest) {
-      newest.focus();
-      return;
-    }
-    previousFocus = null;
-    refocusTerminal();
+    if (newest) newest.focus();
+    else leaveToasts();
   }
 </script>
 
