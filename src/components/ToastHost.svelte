@@ -98,14 +98,17 @@
   function legend(toast: Toast): string {
     const parts = toast.actions.map((action) => `${keyLabel(action.key)} ${action.label.toLowerCase()}`);
     if (toast.dismiss !== "disabled") parts.push(`D ${toast.dismissLabel.toLowerCase()}`);
-    parts.push("C copy", "Esc");
+    parts.push("C copy");
     return parts.join(" · ");
   }
 
-  function hint(toast: Toast, newest: boolean): string {
-    const parts: string[] = [];
-    if (toast.id === focusedId) parts.push(legend(toast));
-    else if (newest && !hasFocusedToast) parts.push(`${MOD_LABEL}U`);
+  function keycap(toast: Toast, newest: boolean): string | null {
+    if (toast.id === focusedId) return "Esc";
+    return newest && !hasFocusedToast ? `${MOD_LABEL}U` : null;
+  }
+
+  function footer(toast: Toast): string {
+    const parts = toast.id === focusedId ? [legend(toast)] : [];
     if (toast.countdownLabel) parts.push(toast.countdownLabel);
     return parts.join(" · ");
   }
@@ -171,7 +174,8 @@
 
 <div data-toast-host class="pointer-events-none fixed bottom-4 left-4 z-[100] flex w-[28rem] max-w-[calc(100vw-2rem)] flex-col gap-2">
   {#each visible as toast, index (toast.id)}
-    {@const footer = hint(toast, index === visible.length - 1)}
+    {@const cap = keycap(toast, index === visible.length - 1)}
+    {@const foot = footer(toast)}
     <!-- Keys are handled on the focused toast; clicking the body is the mouse dismiss and must not steal focus. -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -190,9 +194,14 @@
       onmouseenter={() => holdToast(toast.id, "hover")}
       onmouseleave={() => releaseToast(toast.id, "hover")}
     >
-      <p class="text-sm text-on-toast font-mono break-all">
-        {toast.message}{#if toast.detail}<span class="text-on-toast/70">{` · ${toast.detail}`}</span>{/if}{#if toast.count > 1}<span class="ml-2 text-on-toast/70">x {toast.count}</span>{/if}
-      </p>
+      <div class="flex items-start gap-3">
+        <p class="min-w-0 flex-1 text-sm text-on-toast font-mono wrap-anywhere">
+          {toast.message}{#if toast.detail}<span class="text-on-toast/70">{` · ${toast.detail}`}</span>{/if}{#if toast.count > 1}<span class="ml-2 text-on-toast/70">x {toast.count}</span>{/if}
+        </p>
+        {#if cap}
+          <kbd class="mt-0.5 shrink-0 rounded border border-b-2 border-on-toast/20 bg-on-toast/15 px-1.5 py-0.5 font-sans text-[11px] leading-none font-medium text-on-toast/90">{cap}</kbd>
+        {/if}
+      </div>
       {#if toast.actions.length > 0}
         <div class="mt-2 flex gap-2">
           {#each toast.actions as action (action.key)}
@@ -213,8 +222,8 @@
           {/if}
         </div>
       {/if}
-      {#if footer}
-        <p class="mt-1 text-xs text-on-toast/70">{footer}</p>
+      {#if foot}
+        <p class="mt-1 text-xs text-on-toast/70">{foot}</p>
       {/if}
     </div>
   {/each}

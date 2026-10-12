@@ -87,7 +87,7 @@ describe("ToastHost", () => {
     flushSync();
     const [first, second] = toastEls();
     expect(document.activeElement).toBe(second);
-    expect(second.textContent).toContain("D dismiss · C copy · Esc");
+    expect(second.textContent).toContain("D dismiss · C copy");
 
     press("ArrowUp");
     expect(document.activeElement).toBe(first);
@@ -161,7 +161,7 @@ describe("ToastHost", () => {
     flushSync();
     focusNewestToast();
     flushSync();
-    expect(toastEls()[0].textContent).toContain("I install & restart · D dismiss · C copy · Esc");
+    expect(toastEls()[0].textContent).toContain("I install & restart · D dismiss · C copy");
 
     press("I", { shiftKey: true });
     await tick();
@@ -251,5 +251,19 @@ describe("ToastHost", () => {
     expect(mousedown.defaultPrevented).toBe(true);
     expect(toastEls()).toHaveLength(1);
     expect(document.activeElement).toBe(outside);
+  });
+
+  it("puts the shortcut keycap on the message row, without a footer line", () => {
+    render();
+    showToast("plain");
+    flushSync();
+
+    const [toast] = toastEls();
+    expect(toast.querySelector("kbd")?.textContent).toBe(`${MOD_LABEL}U`);
+    expect(toast.querySelectorAll("p")).toHaveLength(1);
+
+    focusNewestToast();
+    flushSync();
+    expect(toast.querySelector("kbd")?.textContent).toBe("Esc");
   });
 });
