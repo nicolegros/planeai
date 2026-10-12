@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../api", () => ({ providerSessions: {} }));
-vi.mock("../snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
+vi.mock("../toasts.svelte", () => ({ showToast: vi.fn() }));
 
 import { createProviderHandoff } from "../provider-handoff";
 

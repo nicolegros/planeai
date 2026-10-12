@@ -3,7 +3,7 @@
   import type { Project } from "../lib/types";
   import * as projectStore from "../lib/project-store.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { showToast } from "../lib/toasts.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { nameFromPath } from "../lib/name-from-path";
   import { getSettings } from "../lib/settings.svelte";
@@ -119,7 +119,7 @@
       await projectStore.loadProjects();
       await onCreated(savedProject);
     } catch (e) {
-      showSnackbar(String(e));
+      showToast(String(e));
       submitting = false;
     }
   }
@@ -128,7 +128,7 @@
     const dest = destination.trim().replace(/\/$/, "");
     const repoName = remoteName.trim();
     if (!repoName) {
-      showSnackbar("Could not determine repository name from URL.");
+      showToast("Could not determine repository name from URL.");
       submitting = false;
       return;
     }
@@ -137,7 +137,7 @@
     try {
       await git.cloneRepository(cloneUrl.trim(), fullPath);
     } catch (e) {
-      showSnackbar(String(e));
+      showToast(String(e));
       submitting = false;
       return;
     }
@@ -147,7 +147,7 @@
       await projectStore.loadProjects();
       await onCreated(project);
     } catch (e) {
-      showSnackbar(`Clone succeeded but project creation failed: ${String(e)}. The cloned directory remains at ${fullPath}.`);
+      showToast(`Clone succeeded but project creation failed: ${String(e)}. The cloned directory remains at ${fullPath}.`);
       submitting = false;
     }
   }

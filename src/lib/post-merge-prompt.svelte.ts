@@ -1,22 +1,9 @@
 /**
- * Post-merge prompt store — shows Archive/Destroy/Keep prompt when a PR is merged.
- * When the session has a task, shows Done/Dismiss instead.
- * Default timeout action is configurable via settings.post_merge_action.
- * A live countdown (getCountdown()) ticks from 30s to 0; skipped when action is "keep".
+ * Post-merge prompt: a toast offering Archive/Destroy (or Done when the session has a task)
+ * once a PR merges. Unless settings.post_merge_action is "keep", it runs that action after 30s.
  */
-import { showSnackbar } from "./snackbar.svelte";
 import { getSettings } from "./settings.svelte";
-
-export interface MergePrompt {
-  sessionId: string;
-  sessionName: string;
-  taskKey: string | null;
-  /** Host-rendered completion heading; defaults to the existing PR wording. */
-  message: string;
-  onArchive: (id: string) => Promise<void>;
-  onDestroy: (id: string) => Promise<void>;
-  onTaskDone: ((id: string) => Promise<void>) | null;
-}
+import { dismissToast, showToast, type ToastAction } from "./toasts.svelte";
 
 export interface MergePromptOptions {
   sessionId: string;
@@ -29,134 +16,75 @@ export interface MergePromptOptions {
   onTaskDone?: (id: string) => Promise<void>;
 }
 
-let prompt = $state<MergePrompt | null>(null);
-let timer: ReturnType<typeof setTimeout> | null = null;
-let countdown = $state<number>(0);
-let countdownInterval: ReturnType<typeof setInterval> | null = null;
-
 const TIMEOUT_SECONDS = 30;
 
-export function getPrompt(): MergePrompt | null {
-  return prompt;
+function toastId(sessionId: string): string {
+  return `post-merge:${sessionId}`;
 }
 
-export function getCountdown(): number {
-  return countdown;
+function defaultAction() {
+  return getSettings().post_merge_action ?? "archive";
 }
 
 export function showMergePrompt(options: MergePromptOptions): void {
-  clearTimer();
-  prompt = {
-    sessionId: options.sessionId,
-    sessionName: options.sessionName,
-    taskKey: options.taskKey,
-    message: options.message?.trim() || "PR merged",
-    onArchive: options.onArchive,
-    onDestroy: options.onDestroy,
-    onTaskDone: options.onTaskDone ?? null,
-  };
+  const { sessionId, taskKey, onArchive, onDestroy, onTaskDone } = options;
+  const actions: ToastAction[] = taskKey
+    ? [{ key: "Enter", label: "Done", run: () => onTaskDone?.(sessionId) }]
+    : [
+        { key: "a", label: "Archive", run: () => onArchive(sessionId) },
+        { key: "x", label: "Destroy", run: () => onDestroy(sessionId) },
+      ];
 
-  const action = getSettings().post_merge_action ?? "archive";
-  if (action === "keep") return; // no timeout
-  countdown = TIMEOUT_SECONDS;
-  countdownInterval = setInterval(() => {
-    countdown--;
-    if (countdown <= 0) clearCountdownInterval();
-  }, 1_000);
-  timer = setTimeout(() => runDefault(), TIMEOUT_SECONDS * 1_000);
+  showToast({
+    id: toastId(sessionId),
+    kind: "success",
+    message: `${options.message?.trim() || "PR merged"} ✓`,
+    detail: options.sessionName,
+    actions,
+    dismissLabel: "Keep",
+    countdown:
+      defaultAction() === "keep"
+        ? undefined
+        : {
+            seconds: TIMEOUT_SECONDS,
+            label: (remaining) =>
+              `auto-${defaultAction() === "destroy" ? "destroys" : "archives"} in ${remaining}s`,
+            onExpire: () => runDefault(options),
+          },
+  });
 }
 
-export async function handleArchive(): Promise<void> {
-  if (!prompt) return;
-  const { sessionId, onArchive } = prompt;
-  clearTimer();
-  prompt = null;
-  await onArchive(sessionId);
+/** Dismiss the prompt of a session that was removed externally. */
+export function dismissForSession(sessionId: string): void {
+  dismissToast(toastId(sessionId));
 }
 
-export async function handleDestroy(): Promise<void> {
-  if (!prompt) return;
-  const { sessionId, onDestroy } = prompt;
-  clearTimer();
-  prompt = null;
-  await onDestroy(sessionId);
-}
-
-export async function handleTaskDone(): Promise<void> {
-  if (!prompt?.onTaskDone) return;
-  const { sessionId, onTaskDone } = prompt;
-  clearTimer();
-  prompt = null;
-  await onTaskDone(sessionId);
-}
-
-export function handleKeep(): void {
-  clearTimer();
-  prompt = null;
-}
-
-function runDefault(): void {
-  if (!prompt) return;
-  const action = getSettings().post_merge_action ?? "archive";
-  const { sessionId, taskKey, onArchive, onDestroy, onTaskDone } = prompt;
-  const hasTask = !!taskKey;
-  prompt = null;
-  timer = null;
-
-  if (hasTask && onTaskDone) {
-    // Moving a task to done causes the backend to archive the session automatically,
-    // so we must NOT call onArchive/onDestroy afterwards (the session is already gone).
+function runDefault({
+  sessionId,
+  taskKey,
+  onArchive,
+  onDestroy,
+  onTaskDone,
+}: MergePromptOptions): void {
+  const action = defaultAction();
+  if (taskKey && onTaskDone) {
+    // Moving a task to done makes the backend archive the session, so we must NOT
+    // call onArchive/onDestroy afterwards (the session is already gone).
     onTaskDone(sessionId)
       .then(() =>
-        showSnackbar(
+        showToast(
           action === "destroy" ? "Task done, session destroyed" : "Task done, session archived",
           "success",
         ),
       )
-      .catch((e) => showSnackbar(String(e), "error"));
+      .catch((e) => showToast(String(e), "error"));
   } else if (action === "archive") {
     onArchive(sessionId)
-      .then(() => showSnackbar("Session auto-archived", "success"))
-      .catch((e) => showSnackbar(String(e), "error"));
+      .then(() => showToast("Session auto-archived", "success"))
+      .catch((e) => showToast(String(e), "error"));
   } else if (action === "destroy") {
     onDestroy(sessionId)
-      .then(() => showSnackbar("Session auto-destroyed", "success"))
-      .catch((e) => showSnackbar(String(e), "error"));
+      .then(() => showToast("Session auto-destroyed", "success"))
+      .catch((e) => showToast(String(e), "error"));
   }
-}
-
-function clearTimer(): void {
-  if (timer) {
-    clearTimeout(timer);
-    timer = null;
-  }
-  clearCountdownInterval();
-}
-
-function clearCountdownInterval(): void {
-  if (countdownInterval) {
-    clearInterval(countdownInterval);
-    countdownInterval = null;
-  }
-  countdown = 0;
-}
-
-/** Dismiss prompt for a session that was removed externally. */
-export function dismissForSession(sessionId: string): void {
-  if (prompt?.sessionId === sessionId) {
-    clearTimer();
-    prompt = null;
-  }
-}
-
-/** Focus coordination — component registers its focus function */
-let focusFn: (() => void) | null = null;
-export function registerFocus(fn: () => void) {
-  focusFn = fn;
-}
-export function unregisterFocus() {
-  focusFn = null;
-}
-export function focusMergePrompt() {
-  focusFn?.();
 }

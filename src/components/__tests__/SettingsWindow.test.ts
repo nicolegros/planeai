@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   updateSettings: vi.fn(),
   refreshSettings: vi.fn(),
   loadSettings: vi.fn(),
-  showSnackbar: vi.fn(),
+  showToast: vi.fn(),
   defaults: vi.fn(),
   detectProviders: vi.fn(),
   checkRmuxAvailable: vi.fn(),
@@ -71,7 +71,10 @@ vi.mock("../../lib/settings.svelte", () => ({
   refreshSettings: mocks.refreshSettings,
 }));
 vi.mock("../../lib/theme-loader", () => ({ applyThemeMode: vi.fn(), loadTheme: vi.fn() }));
-vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: mocks.showSnackbar }));
+vi.mock("../../lib/toasts.svelte", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/toasts.svelte")>()),
+  showToast: mocks.showToast,
+}));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ close: mocks.closeWindow }),
 }));
@@ -413,7 +416,7 @@ describe("agents", () => {
     mocks.updateSettings.mockRejectedValueOnce("invalid config");
     toggle("Enable Codex").click();
     await flush();
-    expect(mocks.showSnackbar).toHaveBeenCalledWith(
+    expect(mocks.showToast).toHaveBeenCalledWith(
       "Failed to save settings: invalid config",
       "error",
     );
@@ -665,5 +668,27 @@ describe("app updates", () => {
       expect(document.body.textContent).toContain("Update available: v1.81.0"),
     );
     expect(button("Install & Restart")).toBeTruthy();
+  });
+});
+
+describe("toasts", () => {
+  it("renders toasts raised by settings pages", async () => {
+    const toasts =
+      await vi.importActual<typeof import("../../lib/toasts.svelte")>("../../lib/toasts.svelte");
+    await render();
+    toasts.showToast("Failed to refresh config: denied");
+    await flush();
+
+    expect(document.querySelector("[role='alertdialog']")?.textContent).toContain(
+      "Failed to refresh config: denied",
+    );
+    toasts._resetForTests();
+  });
+
+  it("leaves the launch update toast to the main window", async () => {
+    mocks.getPending.mockResolvedValue({ version: "1.81.0", body: null });
+    await render();
+
+    expect(document.querySelector("[role='alertdialog']")).toBeNull();
   });
 });

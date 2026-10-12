@@ -10,7 +10,7 @@
   import { addComment, clearComments, editComment, getComments, getFileCommentCount, getTotalCommentCount, reanchorComments, removeComment, type ReviewComment } from "../lib/review-comments.svelte";
   import { ChevronDown, ChevronRight, MessageSquare, Send, Check, AlertTriangle, LoaderCircle } from "@lucide/svelte";
   import { errorMessage } from "../lib/errors";
-  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { showToast } from "../lib/toasts.svelte";
   import { MOD_ENTER_HINT } from "../lib/keyboard";
   import { serializeComments } from "../lib/review-serializer";
   import { getActiveSession, recordUserInput } from "../lib/session-orchestrator.svelte";
@@ -182,7 +182,7 @@
       if (generation === refreshGeneration) {
         files = [];
         activeDiff = null;
-        showSnackbar(`Could not load review files: ${String(error)}`, "error");
+        showToast(`Could not load review files: ${String(error)}`, "error");
       }
     } finally {
       if (generation === refreshGeneration) loading = false;
@@ -235,7 +235,7 @@
       void preloadAdjacentFiles(generation, cacheAtRequestStart, inFlightAtRequestStart);
     } catch (error) {
       if (generation === refreshGeneration && requestId === selectedLoadRequest) {
-        showSnackbar(`Could not load ${file.path}: ${String(error)}`, "error");
+        showToast(`Could not load ${file.path}: ${String(error)}`, "error");
       }
     } finally {
       if (generation === refreshGeneration && requestId === selectedLoadRequest) fileLoading = false;
@@ -386,9 +386,9 @@
       recordUserInput(sessionId);
       const count = comments.length;
       clearComments(sessionId);
-      showSnackbar(`Feedback sent (${count} comment${count === 1 ? "" : "s"})`, "success");
+      showToast(`Feedback sent (${count} comment${count === 1 ? "" : "s"})`, "success");
     } catch (error) {
-      showSnackbar(errorMessage(error), "error");
+      showToast(errorMessage(error), "error");
     } finally {
       sendingFeedback = false;
     }

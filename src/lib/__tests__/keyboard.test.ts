@@ -42,6 +42,10 @@ describe("isPlatformMod", () => {
 });
 
 describe("matchChord", () => {
+  it("returns focus_toast on Mod+U", () => {
+    expect(matchChord(key({ key: "u", [modKey]: true }))).toEqual({ type: "focus_toast" });
+  });
+
   it("returns focus_terminal on Escape", () => {
     expect(matchChord(key({ key: "Escape" }))).toEqual({
       type: "focus_terminal",

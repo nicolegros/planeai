@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { showToast } from "../lib/toasts.svelte";
   import { getTerminalSettings, isDark } from "../lib/settings.svelte";
   import { extractCommandName } from "../lib/shell-title";
   import { taskWorkspaceLayout } from "../lib/task-workspace-layout.svelte";
@@ -59,7 +59,7 @@
       attached: () => onAttached?.(),
       attachError: (error) => {
         if (onAttachError) onAttachError(error);
-        else showSnackbar(String(error));
+        else showToast(String(error));
       },
       userInput: () => onUserInput?.(),
     });

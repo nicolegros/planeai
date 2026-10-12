@@ -7,7 +7,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/api")>();
   return { ...actual, loops: { ...actual.loops, detail: mocks.detail, stop: mocks.stop } };
 });
-vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
+vi.mock("../../lib/toasts.svelte", () => ({ showToast: vi.fn() }));
 
 import LoopDashboard from "../LoopDashboard.svelte";
 

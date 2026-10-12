@@ -4,7 +4,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { updater } from "../../lib/api";
   import { getSettings, type AppConfig } from "../../lib/settings.svelte";
-  import { showSnackbar } from "../../lib/snackbar.svelte";
+  import { showToast } from "../../lib/toasts.svelte";
   import { checkForUpdates, getSettingsUpdateState, setInstalling } from "../../lib/updater.svelte";
   import { Button, SegmentedControl, Switch } from "../ui";
   import TextField from "./TextField.svelte";
@@ -30,7 +30,7 @@
       const selected = await open({ directory: true, multiple: false, defaultPath: config.projects_base_path ?? undefined });
       if (selected) await saveSettings({ projects_base_path: selected as string });
     } catch (error) {
-      showSnackbar(`Failed to set the projects folder: ${error}`, "error");
+      showToast(`Failed to set the projects folder: ${error}`, "error");
     }
   }
 

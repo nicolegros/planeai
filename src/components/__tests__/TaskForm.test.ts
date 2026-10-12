@@ -71,8 +71,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 const mockLocateProjectFolder = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/locate-project", () => ({ locateProjectFolder: mockLocateProjectFolder }));
 
-vi.mock("../../lib/snackbar.svelte", () => ({
-  showSnackbar: vi.fn(),
+vi.mock("../../lib/toasts.svelte", () => ({
+  showToast: vi.fn(),
 }));
 
 vi.mock("../../lib/keyboard", () => ({
@@ -313,7 +313,7 @@ describe("TaskForm - Start session toggle", () => {
   });
 
   it("keeps task and shows error if session launch fails", async () => {
-    const { showSnackbar } = await import("../../lib/snackbar.svelte");
+    const { showToast } = await import("../../lib/toasts.svelte");
     mockStartSession.mockRejectedValueOnce(new Error("Agent not found"));
     const onSessionCreated = vi.fn();
     const onSubmitted = vi.fn();
@@ -339,8 +339,8 @@ describe("TaskForm - Start session toggle", () => {
     expect(mockStartSession).toHaveBeenCalled();
     // But session created callback not called
     expect(onSessionCreated).not.toHaveBeenCalled();
-    // Snackbar shown with error
-    expect(showSnackbar).toHaveBeenCalledWith(expect.stringContaining("session failed"));
+    // Toast shown with error
+    expect(showToast).toHaveBeenCalledWith(expect.stringContaining("session failed"));
     // onSubmitted still called (task was created)
     expect(onSubmitted).toHaveBeenCalled();
   });

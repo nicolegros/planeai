@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "../types";
 
-const { list, update, existingParentDir, focusHandlers, open, showSnackbar, refreshTasks } =
+const { list, update, existingParentDir, focusHandlers, open, showToast, refreshTasks } =
   vi.hoisted(() => ({
     list: vi.fn(),
     update: vi.fn(),
     existingParentDir: vi.fn(),
     focusHandlers: [] as Array<() => void>,
     open: vi.fn(),
-    showSnackbar: vi.fn(),
+    showToast: vi.fn(),
     refreshTasks: vi.fn(),
   }));
 
@@ -24,7 +24,7 @@ vi.mock("../api", () => ({
 vi.mock("../session-orchestrator.svelte", () => ({ removeProjectSessions: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open }));
 vi.mock("../settings.svelte", () => ({ getSettings: () => ({ projects_base_path: "/base" }) }));
-vi.mock("../snackbar.svelte", () => ({ showSnackbar }));
+vi.mock("../toasts.svelte", () => ({ showToast }));
 vi.mock("../task-store.svelte", () => ({ refresh: refreshTasks }));
 
 import * as projectStore from "../project-store.svelte";
@@ -67,7 +67,7 @@ describe("locating a moved project folder", () => {
     list.mockReset();
     update.mockReset();
     open.mockReset();
-    showSnackbar.mockReset();
+    showToast.mockReset();
     existingParentDir.mockReset();
   });
 
@@ -84,7 +84,7 @@ describe("locating a moved project folder", () => {
     expect(update).toHaveBeenCalledWith("p1", "app", "/new/app");
     expect(projectStore.getProject("p1")?.path).toBe("/new/app");
     expect(refreshTasks).toHaveBeenCalledWith(["/new/app"]);
-    expect(showSnackbar).toHaveBeenCalledWith(
+    expect(showToast).toHaveBeenCalledWith(
       "Project relinked. Agent conversations started in the old folder may not resume.",
       "info",
     );
@@ -99,7 +99,7 @@ describe("locating a moved project folder", () => {
 
     expect(located).toBeNull();
     expect(open).toHaveBeenCalledWith({ directory: true, multiple: false, defaultPath: "/base" });
-    expect(showSnackbar).toHaveBeenCalledWith(
+    expect(showToast).toHaveBeenCalledWith(
       "Could not reattach worktree sessions to this folder: fix login.",
     );
   });

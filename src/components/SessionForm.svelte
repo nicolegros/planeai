@@ -5,7 +5,7 @@
   import MissingProjectNotice from "./MissingProjectNotice.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
-  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { showToast } from "../lib/toasts.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { taskSessionDefaults } from "../lib/task-session-defaults";
   import { LoaderCircle } from "@lucide/svelte";
@@ -134,7 +134,7 @@
             if (task) linkTask(task, project.id, { keepTypedName: true });
           }
         },
-        (e) => { if (selectedProject?.id === project.id) taskItems = []; showSnackbar(String(e)); },
+        (e) => { if (selectedProject?.id === project.id) taskItems = []; showToast(String(e)); },
       );
     }
   });
@@ -242,7 +242,7 @@
           provider: providers.key,
           taskKey: taskKeyParam, taskProjectId: taskProjectIdParam, taskPrompt: taskPromptParam,
         });
-        if (warning) showSnackbar(warning, "success");
+        if (warning) showToast(warning, "success");
         onCreated(session);
       } catch (e) { error = String(e); submitting = false; }
     } else {
@@ -255,7 +255,7 @@
           provider: providers.key,
           taskKey: taskKeyParam, taskProjectId: taskProjectIdParam, taskPrompt: taskPromptParam,
         });
-        if (warning) showSnackbar(warning, "success");
+        if (warning) showToast(warning, "success");
         onCreated(session);
       } catch (e) { error = String(e); submitting = false; }
     }

@@ -13,7 +13,7 @@ vi.mock("../../lib/settings.svelte", () => ({
   }),
 }));
 vi.mock("../../lib/session-orchestrator.svelte", () => ({ recordUserInput: vi.fn() }));
-vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
+vi.mock("../../lib/toasts.svelte", () => ({ showToast: vi.fn() }));
 const workspace = vi.hoisted(() => ({ layout: null as Layout | null }));
 vi.mock("../../lib/task-workspace-layout.svelte", async () => {
   const { focusedTabOf } = await import("../../lib/layout-tree");

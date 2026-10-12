@@ -10,7 +10,7 @@ import { disposeSessionTerminalViews } from "./terminal-views";
 import { clearComments } from "./review-comments.svelte";
 import { clearEditorFeedback } from "./editor-feedback.svelte";
 import { destroySession as destroyViewedState } from "./diff-viewed.svelte";
-import { showSnackbar } from "./snackbar.svelte";
+import { showToast } from "./toasts.svelte";
 import { dismissForSession } from "./post-merge-prompt.svelte";
 import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
@@ -140,7 +140,7 @@ export function selectSession(id: string, opts: { explicit?: boolean } = {}): vo
         if (activeSessionId === id) touchMru(id);
       })
       .catch((e) => {
-        showSnackbar(`Restart failed: ${e}`);
+        showToast(`Restart failed: ${e}`);
         if (activeSessionId === id) touchMru(id);
       });
   } else {
@@ -292,7 +292,7 @@ export function startEventListeners(): () => void {
   unlisteners.push(
     listen<{ session_id: string; error: string }>("prompt-delivery-failed", (event) => {
       const session = sessions.find((s) => s.id === event.payload.session_id);
-      showSnackbar(
+      showToast(
         `A prompt for ${session?.name ?? "a session"} was not delivered: ${event.payload.error}`,
       );
     }),

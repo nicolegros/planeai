@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getSettings, type AutoDispatchConfig, type TaskManager } from "../../lib/settings.svelte";
-  import { showSnackbar } from "../../lib/snackbar.svelte";
+  import { showToast } from "../../lib/toasts.svelte";
   import { loadDefaults } from "./settings-window.svelte";
   import { saveSettings } from "../../lib/save-settings";
   import { Switch } from "../ui";
@@ -27,7 +27,7 @@
   async function enable() {
     const recommended = (await loadDefaults())?.task_management;
     if (recommended) await saveSettings({ task_management: recommended });
-    else showSnackbar("Could not load the recommended task setup. Try again.", "error");
+    else showToast("Could not load the recommended task setup. Try again.", "error");
   }
 
   function patch(next: Partial<TaskManager>) {

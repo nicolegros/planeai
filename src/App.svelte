@@ -27,7 +27,7 @@
   import { openFileWithConfiguredEditor } from "./lib/file-editor";
   import { loadTheme } from "./lib/theme-loader";
   import { errorMessage } from "./lib/errors";
-  import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
+  import { showToast } from "./lib/toasts.svelte";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
   import KeyboardHelperBar from "./components/KeyboardHelperBar.svelte";
@@ -46,7 +46,7 @@
   import FormDialog from "./components/ui/FormDialog.svelte";
   import PluginDialog from "./components/PluginDialog.svelte";
   import LogViewer from "./components/LogViewer.svelte";
-  import PostMergePrompt from "./components/PostMergePrompt.svelte";
+  import ToastHost, { toggleToastFocus } from "./components/ToastHost.svelte";
   import LoopForm from "./components/LoopForm.svelte";
   import LoopDashboard from "./components/LoopDashboard.svelte";
   import EmptyTaskWorkspace from "./components/EmptyTaskWorkspace.svelte";
@@ -57,7 +57,7 @@
   import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution, TabEnded } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
-  import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
+  import { showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { providerHandoff, taskWorkspaceLayout as workspaceLayout, toPaneTabs, workspaceOf, type PaneTab, type WorkspaceAgent, type WorkspaceIdentity } from "./lib/task-workspace-layout.svelte";
   import { activeTabOf, findLeaf, tabsOf, type LeafNode, type NavDirection, type SplitDirection, type TabEntry } from "./lib/layout-tree";
   import { pressTab as pressTabForDrag, tabDrag, type TabDropTarget } from "./lib/tab-drag.svelte";
@@ -67,8 +67,7 @@
   import { saveActiveEditorResource } from "./lib/editor-resources";
   import { getMruList } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
-  import UpdateToast from "./components/UpdateToast.svelte";
-  import { initUpdateListener, focusUpdateToast, getUpdateState, setLaunchUpdateAvailable } from "./lib/updater.svelte";
+  import { enableUpdateToast, initUpdateListener, setLaunchUpdateAvailable } from "./lib/updater.svelte";
   import SplitContainer from "./components/SplitContainer.svelte";
   import TabStrip from "./components/TabStrip.svelte";
 
@@ -348,12 +347,12 @@
     if (!tab || !isTerminalTab(tab)) return;
     const session = sessions.find((candidate) => candidate.id === ptyKeySessionId(tab.ptyKey));
     if (tab.type === "agent" && session && isPluginSession(session)) {
-      showSnackbar("Chats do not take dropped files yet. Drop them on a terminal tab instead.", "error");
+      showToast("Chats do not take dropped files yet. Drop them on a terminal tab instead.", "error");
       return;
     }
     const { text, skipped } = droppedPathsText(paths, { windows: IS_WINDOWS });
     if (skipped.length > 0) {
-      showSnackbar(
+      showToast(
         skipped.length === 1
           ? "Skipped a dropped file whose name cannot be typed safely"
           : `Skipped ${skipped.length} dropped files whose names cannot be typed safely`,
@@ -369,7 +368,7 @@
       }
       orchestrator.recordUserInput(ptyKeySessionId(tab.ptyKey));
     } catch (error) {
-      showSnackbar(`Failed to type dropped path: ${errorMessage(error)}`, "error");
+      showToast(`Failed to type dropped path: ${errorMessage(error)}`, "error");
     }
   }
 
@@ -429,7 +428,7 @@
     try {
       return await workspaceLayout.openShell(sessionId, where);
     } catch (error) {
-      showSnackbar(`Failed to open shell: ${errorMessage(error)}`, "error");
+      showToast(`Failed to open shell: ${errorMessage(error)}`, "error");
       return null;
     }
   }
@@ -443,7 +442,7 @@
     try {
       outcome = await workspaceLayout.closeTab(ptyKey);
     } catch (error) {
-      showSnackbar(`Failed to close shell tab: ${errorMessage(error)}`, "error");
+      showToast(`Failed to close shell tab: ${errorMessage(error)}`, "error");
       return;
     }
     if (outcome === "agent") {
@@ -452,7 +451,7 @@
       try {
         await orchestrator.parkSession(session);
       } catch (error) {
-        showSnackbar(`Failed to close session: ${errorMessage(error)}`, "error");
+        showToast(`Failed to close session: ${errorMessage(error)}`, "error");
       }
     } else if (outcome === "closed") {
       await tick();
@@ -495,7 +494,7 @@
         tick().then(() => requestAnimationFrame(() => refocusTerminal()));
       }
     } catch (error) {
-      showSnackbar(`Failed to open terminal editor: ${error}`, "error");
+      showToast(`Failed to open terminal editor: ${error}`, "error");
     }
   }
 
@@ -509,11 +508,11 @@
         try {
           await editorApi.openExternal(sessionId, filePath);
         } catch (error) {
-          showSnackbar(`Failed to open external editor: ${error}`, "error");
+          showToast(`Failed to open external editor: ${error}`, "error");
         }
       },
     });
-    if (result === "invalid") showSnackbar("Editor configuration has an unknown mode", "error");
+    if (result === "invalid") showToast("Editor configuration has an unknown mode", "error");
   }
 
   // Sync terminal selections—not editor/diff tabs—to the focused agent session.
@@ -574,7 +573,7 @@
       await sessionsApi.rename(id, name);
       orchestrator.updateSessionName(id, name);
     } catch (error) {
-      showSnackbar(`Failed to rename session: ${error}`);
+      showToast(`Failed to rename session: ${error}`);
     }
     focusTerminal();
   }
@@ -671,7 +670,7 @@
   function openPlugin(pluginId: string, contributionId: string, origin: PluginOpenOrigin): void {
     const target = resolvePluginOpen(pluginInventory, pluginId, contributionId, origin, !!activeSession);
     if (target.surface === "unavailable") {
-      showSnackbar("Plugin contribution is unavailable");
+      showToast("Plugin contribution is unavailable");
       return;
     }
     if (target.surface === "dialog") {
@@ -709,7 +708,7 @@
         session_id: session.id,
       });
     } catch (error) {
-      showSnackbar(`Integration action failed: ${String(error)}`);
+      showToast(`Integration action failed: ${String(error)}`);
     }
   }
 
@@ -902,7 +901,7 @@
     const cleanupTaskListener = taskStore.startTaskEventListener(() => projectStore.getProjects().map((p) => p.path));
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     // Backend failures the user should see, from work no window is awaiting.
-    const unlistenAppError = listen<string>("app-error", (event) => { showSnackbar(event.payload); });
+    const unlistenAppError = listen<string>("app-error", (event) => { showToast(event.payload); });
     const unlistenTabEnded = listen<TabEnded>("tab-ended", (event) => {
       const { pty_key, reason, error } = event.payload;
       void workspaceLayout.tabEnded(pty_key, reason, error);
@@ -927,7 +926,7 @@
       const { plugin_id: pluginId, advisory } = event.payload;
       if (!sessions.some((session) => session.id === advisory.session_id)) return;
       const pluginName = pluginInventory.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
-      showSnackbar(`${pluginName}: ${advisory.message}`, advisory.severity);
+      showToast(`${pluginName}: ${advisory.message}`, advisory.severity);
     });
     const unlistenPluginCompletion = listen<{ plugin_id: string; completion: PluginSessionCompletion }>("plugin-session-completed", (event) => {
       const session = sessions.find((candidate) => candidate.id === event.payload.completion.session_id);
@@ -936,6 +935,7 @@
       showIntegrationCompletionPrompt(session, event.payload.completion.message ?? `${pluginName} completed`);
     });
 
+    enableUpdateToast();
     void initUpdateListener().then(async () => {
       try {
         const update = await updater.getPending();
@@ -1041,14 +1041,7 @@
         else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskStore.refresh(projects.map((p) => p.path)); }
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { saveActiveEditorResource(); }
-        else if (action.type === "focus_merge_prompt") {
-          if (getPrompt()) focusMergePrompt();
-          else {
-            const u = getUpdateState();
-            if (u.updateAvailable && !u.dismissed) focusUpdateToast();
-            else focusPluginInteraction();
-          }
-        }
+        else if (action.type === "focus_toast") { if (!toggleToastFocus()) focusPluginInteraction(); }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !pluginDialog && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
@@ -1180,7 +1173,7 @@
         onTickLoop={(id) => { loopsApi.tick(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onStopLoop={(id) => { loopsApi.stop(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onDeleteLoop={(id) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === id); if (!loop) return; const hasSessions = (loopStore.getSessionsForLoop(id) ?? []).length > 0; if (hasSessions) { loopToDelete = loop; } else { deleteLoopOnly(id); } }}
-        onDeleteLoopSession={(session, loopId) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === loopId); if (loop && isLoopActive(loop.status)) { showSnackbar("Stop the loop before deleting its sessions"); } else { orchestrator.deleteSession(session); } }}
+        onDeleteLoopSession={(session, loopId) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === loopId); if (loop && isLoopActive(loop.status)) { showToast("Stop the loop before deleting its sessions"); } else { orchestrator.deleteSession(session); } }}
         selectedTaskWorkspace={activeTaskWorkspace ? { projectId: activeTaskWorkspace.project.id, taskKey: activeTaskWorkspace.task.key } : null}
         selectedLoopId={activeLoopId}
         onToggleDiff={toggleDiff}
@@ -1384,8 +1377,8 @@
                   onAttachError={(error) => {
                     // A tab that ended reports it through its end; one that stays failed to start or reconnect.
                     if (error instanceof TabEndedError) workspaceLayout.dropEnded(error.ptyKey);
-                    else if (tabEntry.type === "shell") showSnackbar(`Failed to open terminal: ${error}`, "error");
-                    else showSnackbar(String(error));
+                    else if (tabEntry.type === "shell") showToast(`Failed to open terminal: ${error}`, "error");
+                    else showToast(String(error));
                   }}
                   onFocused={(event) => {
                     if (event.type !== "focusin" || isActiveInLeaf) claimAgentPane(leaf.id, tabEntry.ptyKey);
@@ -1688,15 +1681,6 @@
   />
 {/if}
 
-{#if getSnackbarMessage()}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="fixed bottom-4 left-4 z-[100] max-w-lg cursor-pointer rounded-lg {getSnackbarType() === 'error' ? 'bg-red-600' : getSnackbarType() === 'warning' ? 'bg-amber-600' : getSnackbarType() === 'info' ? 'bg-blue-600' : 'bg-green-600'} px-4 py-3 shadow-lg" onclick={() => { navigator.clipboard.writeText(getSnackbarMessage()!); dismissSnackbar(); }} title="Click to copy and dismiss">
-    <p class="text-sm text-white font-mono break-all">{getSnackbarMessage()}</p>
-    <p class="text-xs {getSnackbarType() === 'error' ? 'text-red-200' : getSnackbarType() === 'warning' ? 'text-amber-100' : getSnackbarType() === 'info' ? 'text-blue-100' : 'text-green-200'} mt-1">Click to dismiss</p>
-  </div>
-{/if}
-
 <!-- Workspace prompts would sit on top of setup and act on the hidden workspace; they return after it. -->
 {#if showOnboarding}
   <Onboarding />
@@ -1706,7 +1690,6 @@
       <PluginContributionHost {plugin} {contribution} onNavigate={navigatePlugin} onClose={leavePluginWorkspace} onOpenPreferences={() => openPreferences(pluginPreferencesLocation(plugin))} />
     </div>
   {/each}
-  <UpdateToast />
 {/if}
-<!-- Stays visible during setup: its countdown keeps running and acts when it ends. -->
-<PostMergePrompt />
+<!-- Merge prompts stay visible during setup: their countdown keeps running and acts when it ends. -->
+<ToastHost onboarding={showOnboarding} />

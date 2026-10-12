@@ -6,7 +6,7 @@
  * (ADR-0015): it hands out their indices and reports their end once, and the layout
  * only places them and drops them.
  *
- * Callers own the UI follow-up (focus, snackbars, session selection); every
+ * Callers own the UI follow-up (focus, toasts, session selection); every
  * operation reports what happened so they can react.
  */
 import * as tree from "./layout-tree";
@@ -24,7 +24,7 @@ import { toTaskWorkspaceId } from "./sidebar-session-order";
 import { sessionTaskProjectId, type Session, type TabEndReason, type TabSpec } from "./types";
 import { disposeTerminalView } from "./terminal-views";
 import { createProviderHandoff } from "./provider-handoff";
-import { showSnackbar } from "./snackbar.svelte";
+import { showToast } from "./toasts.svelte";
 
 export type WorkspaceIdentity =
   | { kind: "task"; key: string; projectId: string; taskKey: string }
@@ -637,7 +637,7 @@ export const taskWorkspaceLayout = createTaskWorkspaceLayout({
   tabEnded: async (ptyKey, reason, error) => {
     const explained = await providerHandoff.tabEnded(ptyKey, reason, error);
     if (reason === "failed_to_start" && !explained) {
-      showSnackbar(`Failed to start terminal${error ? `: ${error}` : ""}`, "error");
+      showToast(`Failed to start terminal${error ? `: ${error}` : ""}`, "error");
     }
   },
   handoffRestored: (ptyKey) => {
@@ -663,5 +663,5 @@ export const providerHandoff = createProviderHandoff({
     if (parts?.kind === "shell") await closeTerminalPty(parts.sessionId, parts.index);
   },
   isProgramRunning: (ptyKey) => pty.isProgramRunning(ptyKey),
-  notify: (message) => showSnackbar(message),
+  notify: (message) => showToast(message),
 });

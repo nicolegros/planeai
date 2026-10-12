@@ -18,7 +18,7 @@
   import { getCollapsedSections, getLayoutWidth, setCollapsedSections, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
-  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { showToast } from "../lib/toasts.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
@@ -192,7 +192,7 @@
       await projectStore.hideProject(id);
     } catch (error) {
       console.error("Failed to hide project:", error);
-      showSnackbar("Failed to hide project.");
+      showToast("Failed to hide project.");
     }
   }
 
@@ -250,7 +250,7 @@
       await taskStore.moveTask(task.key, status, project.path);
     } catch (error) {
       console.error("Failed to move task:", error);
-      showSnackbar("Failed to move task.");
+      showToast("Failed to move task.");
       return;
     }
     onSessionsChanged?.();
@@ -1013,6 +1013,6 @@
     x={viewMenu.x}
     y={viewMenu.y}
     onClose={() => (viewMenu = null)}
-    items={sidebarViewMenuItems(getSettings(), (patch) => updateSettings(patch).catch((error) => showSnackbar(`Failed to save settings: ${error}`, "error")))}
+    items={sidebarViewMenuItems(getSettings(), (patch) => updateSettings(patch).catch((error) => showToast(`Failed to save settings: ${error}`, "error")))}
   />
 {/if}

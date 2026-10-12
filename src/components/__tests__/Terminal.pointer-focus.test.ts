@@ -31,7 +31,7 @@ vi.mock("../../lib/terminal-pty", () => ({
 vi.mock("../../lib/task-workspace-layout.svelte", () => ({
   taskWorkspaceLayout: { setTabTitle: vi.fn() },
 }));
-vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
+vi.mock("../../lib/toasts.svelte", () => ({ showToast: vi.fn() }));
 
 import Terminal from "../Terminal.svelte";
 import { disposeAllTerminalViews } from "../../lib/terminal-views";

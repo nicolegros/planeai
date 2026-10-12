@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 
-const { mockGit, mockSend, mockRecordUserInput, mockShowSnackbar } = vi.hoisted(() => ({
+const { mockGit, mockSend, mockRecordUserInput, mockShowToast } = vi.hoisted(() => ({
   mockGit: { readFile: vi.fn() },
   mockSend: vi.fn(async (_text: string) => {}),
   mockRecordUserInput: vi.fn(),
-  mockShowSnackbar: vi.fn(),
+  mockShowToast: vi.fn(),
 }));
 
 vi.mock("../../lib/api", () => ({
@@ -20,7 +20,7 @@ vi.mock("../../lib/settings.svelte", () => ({
 vi.mock("../../lib/session-orchestrator.svelte", () => ({
   recordUserInput: mockRecordUserInput,
 }));
-vi.mock("../../lib/snackbar.svelte", () => ({ showSnackbar: mockShowSnackbar }));
+vi.mock("../../lib/toasts.svelte", () => ({ showToast: mockShowToast }));
 vi.mock("../../lib/vim-registry", () => ({
   registerEditor: vi.fn(),
   unregisterEditor: vi.fn(),
@@ -254,9 +254,9 @@ describe("EditorTab feedback send shortcut", () => {
     );
     await vi.waitFor(() => expect(mockSend).toHaveBeenCalledOnce());
 
-    await vi.waitFor(() => expect(mockShowSnackbar).toHaveBeenCalled());
+    await vi.waitFor(() => expect(mockShowToast).toHaveBeenCalled());
     expect(getEditorFeedbackCount("session-1")).toBe(1);
-    expect(mockShowSnackbar).toHaveBeenCalledWith("The agent's terminal is not attached.", "error");
+    expect(mockShowToast).toHaveBeenCalledWith("The agent's terminal is not attached.", "error");
   });
 
   it("preserves a modified editor-feedback draft when switching notes is cancelled", async () => {

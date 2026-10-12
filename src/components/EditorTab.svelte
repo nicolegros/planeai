@@ -31,7 +31,7 @@
   import { getSettings } from "../lib/settings.svelte";
   import { isPlatformMod, MOD_ENTER_HINT, MOD_LABEL } from "../lib/keyboard";
   import { errorMessage } from "../lib/errors";
-  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { showToast } from "../lib/toasts.svelte";
   import { recordUserInput } from "../lib/session-orchestrator.svelte";
   import {
     addEditorFeedback,
@@ -330,7 +330,7 @@
       isUnsaved: activeBuffer.modified,
     });
     if ("error" in result) {
-      showSnackbar(
+      showToast(
         result.error === "empty"
           ? "Select text before adding editor feedback."
           : "Select at most 200 lines or 12 KiB of text for editor feedback.",
@@ -399,9 +399,9 @@
       recordUserInput(sessionId);
       const count = pendingFeedback.length;
       clearEditorFeedback(sessionId);
-      showSnackbar(`Editor feedback sent (${count} note${count === 1 ? "" : "s"})`, "success");
+      showToast(`Editor feedback sent (${count} note${count === 1 ? "" : "s"})`, "success");
     } catch (error) {
-      showSnackbar(errorMessage(error), "error");
+      showToast(errorMessage(error), "error");
     } finally {
       endEditorFeedbackSend(sessionId);
     }

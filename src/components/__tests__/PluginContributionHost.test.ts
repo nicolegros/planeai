@@ -8,7 +8,7 @@ const {
   dataChanged,
   hostCall,
   eventListeners,
-  showSnackbar,
+  showToast,
   appearance,
 } = vi.hoisted(() => ({
   pluginCall: vi.fn(() =>
@@ -27,7 +27,7 @@ const {
   dataChanged: vi.fn(() => Promise.resolve()),
   hostCall: vi.fn(() => Promise.resolve({ projects: [] })),
   eventListeners: new Map<string, (event: { payload: string }) => void>(),
-  showSnackbar: vi.fn(),
+  showToast: vi.fn(),
   appearance: { dark: false },
 }));
 
@@ -42,8 +42,8 @@ vi.mock("../../lib/api", () => ({
   },
 }));
 
-vi.mock("../../lib/snackbar.svelte", () => ({
-  showSnackbar,
+vi.mock("../../lib/toasts.svelte", () => ({
+  showToast,
 }));
 
 vi.mock("../../lib/settings.svelte", () => ({
@@ -712,7 +712,7 @@ describe("PluginContributionHost", () => {
       }),
     );
 
-    expect(showSnackbar).not.toHaveBeenCalled();
+    expect(showToast).not.toHaveBeenCalled();
   });
 
   it("disposes the old UI before remounting and on host destruction", async () => {

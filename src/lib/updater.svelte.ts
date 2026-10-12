@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { updater, type AppUpdateInfo } from "./api";
+import { dismissToast, showToast } from "./toasts.svelte";
 
 export type UpdateInfo = AppUpdateInfo;
 
@@ -14,6 +15,9 @@ let installing = $state(false);
 let dismissed = $state(false);
 let initialized = false;
 let listenerRegistration: Promise<void> | null = null;
+let toastEnabled = false;
+
+const UPDATE_TOAST_ID = "app-update";
 
 export function getUpdateState() {
   return { updateAvailable: launchUpdateAvailable, installing, dismissed };
@@ -33,6 +37,13 @@ export function getSettingsUpdateState() {
 
 export function setLaunchUpdateAvailable(update: UpdateInfo | null) {
   launchUpdateAvailable = update;
+  syncUpdateToast();
+}
+
+/** Show the launch update as a toast in this webview (the main window only). */
+export function enableUpdateToast() {
+  toastEnabled = true;
+  syncUpdateToast();
 }
 
 export async function checkForUpdates(): Promise<void> {
@@ -68,10 +79,43 @@ export function resetManualUpdateState() {
 
 export function dismissUpdate() {
   dismissed = true;
+  syncUpdateToast();
 }
 
 export function setInstalling(value: boolean) {
   installing = value;
+  syncUpdateToast();
+}
+
+async function installLaunchUpdate(): Promise<void> {
+  if (installing) return;
+  setInstalling(true);
+  try {
+    await updater.install();
+  } catch (error) {
+    console.error("Failed to install update:", error);
+    setInstalling(false);
+  }
+}
+
+function syncUpdateToast() {
+  if (!toastEnabled) return;
+  const update = launchUpdateAvailable;
+  if (!update || dismissed) {
+    dismissToast(UPDATE_TOAST_ID);
+    return;
+  }
+  const base = { id: UPDATE_TOAST_ID, kind: "info" as const, hiddenDuringOnboarding: true };
+  if (installing) {
+    showToast({ ...base, message: `Installing v${update.version}…`, dismiss: "disabled" });
+  } else {
+    showToast({
+      ...base,
+      message: `Update available: v${update.version}`,
+      actions: [{ key: "i", label: "Install & Restart", run: installLaunchUpdate }],
+      dismiss: dismissUpdate,
+    });
+  }
 }
 
 // Initialize the listener (call once per webview)
@@ -94,18 +138,6 @@ export function initUpdateListener(): Promise<void> {
   return listenerRegistration;
 }
 
-/** Focus coordination — component registers its focus function */
-let focusFn: (() => void) | null = null;
-export function registerUpdateFocus(fn: () => void) {
-  focusFn = fn;
-}
-export function unregisterUpdateFocus() {
-  focusFn = null;
-}
-export function focusUpdateToast() {
-  focusFn?.();
-}
-
 /** Test-only reset for module-level reactive state. */
 export function _resetForTests() {
   launchUpdateAvailable = null;
@@ -117,5 +149,5 @@ export function _resetForTests() {
   dismissed = false;
   initialized = false;
   listenerRegistration = null;
-  focusFn = null;
+  toastEnabled = false;
 }

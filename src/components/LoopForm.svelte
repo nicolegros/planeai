@@ -4,7 +4,7 @@
   import { Button, Label, Select } from "./ui";
   import BranchSelect from "./BranchSelect.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
-  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { showToast } from "../lib/toasts.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { untrack } from "svelte";
   import { LoaderCircle } from "@lucide/svelte";
@@ -165,7 +165,7 @@
       });
       onCreated(result);
     } catch (err) {
-      showSnackbar(`Failed to create loop: ${err}`);
+      showToast(`Failed to create loop: ${err}`);
       submitting = false;
     }
   }
