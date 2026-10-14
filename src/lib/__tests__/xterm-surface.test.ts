@@ -194,3 +194,42 @@ describe("color scheme reports (DEC mode 2031)", () => {
     expect(replies).toEqual(["\x1b[?997;1n"]);
   });
 });
+
+describe("Ctrl+Shift+V paste", () => {
+  const encoder = new TextEncoder();
+
+  async function pasteWithShortcut(appOutput: string, clipboard: string) {
+    const typed: string[] = [];
+    const surface = createXtermSurface({
+      onData: (data) => typed.push(data),
+      onUserBytes: (bytes) => typed.push(String.fromCharCode(...bytes)),
+      onReply: () => true,
+      onTitle: () => {},
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    surface.open(host);
+    await new Promise<void>((resolve) => surface.write(encoder.encode(appOutput), resolve));
+    Object.defineProperty(navigator, "clipboard", {
+      value: { readText: async () => clipboard },
+      configurable: true,
+    });
+    host.querySelector("textarea")!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "V", ctrlKey: true, shiftKey: true, bubbles: true }),
+    );
+    await vi.waitFor(() => expect(typed).not.toEqual([]));
+    surface.dispose();
+    host.remove();
+    return typed.join("");
+  }
+
+  it("brackets the text for an app that enabled bracketed paste", async () => {
+    expect(await pasteWithShortcut("\x1b[?2004h", "first\nsecond")).toBe(
+      "\x1b[200~first\rsecond\x1b[201~",
+    );
+  });
+
+  it("types the text as is for an app that did not", async () => {
+    expect(await pasteWithShortcut("", "first\nsecond")).toBe("first\rsecond");
+  });
+});
