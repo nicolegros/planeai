@@ -150,7 +150,7 @@ export function createXtermSurface(handlers: TerminalSurfaceHandlers): TerminalS
         navigator.clipboard
           .readText()
           .then((text) => {
-            if (text) handlers.onUserBytes(Array.from(encoder.encode(text)));
+            if (text) term.paste(text);
           })
           .catch(() => {});
         return false;
@@ -184,7 +184,7 @@ export function createXtermSurface(handlers: TerminalSurfaceHandlers): TerminalS
   // Native paste event avoids the clipboard permission prompt.
   const onPaste = (event: ClipboardEvent) => {
     const text = event.clipboardData?.getData("text");
-    if (text) handlers.onUserBytes(Array.from(encoder.encode(text)));
+    if (text) term.paste(text);
   };
 
   function disposeWebgl(): void {
