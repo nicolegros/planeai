@@ -15,6 +15,8 @@ vi.mock("../task-workspace-layout.svelte", () => ({ providerHandoff: { tabFor } 
 
 import { sendToAgent } from "../agent-input";
 
+const pasted = (text: string) => Array.from(new TextEncoder().encode(`\x1b[200~${text}\x1b[201~`));
+
 describe("sendToAgent", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -24,12 +26,17 @@ describe("sendToAgent", () => {
     expect(pty.write).not.toHaveBeenCalled();
   });
 
-  it("types a terminal session's message, then presses Enter", async () => {
-    await sendToAgent({ id: "s1", backend: "local" }, "hi");
+  it("pastes a terminal session's message as one bracketed paste, then presses Enter", async () => {
+    await sendToAgent({ id: "s1", backend: "local" }, "first comment\nsecond comment");
     expect(pty.write.mock.calls).toEqual([
-      ["s1", [0x68, 0x69]],
+      ["s1", pasted("first comment\nsecond comment")],
       ["s1", [0x0d]],
     ]);
+  });
+
+  it("keeps a paste end marker in the message from ending the paste early", async () => {
+    await sendToAgent({ id: "s1", backend: "local" }, "code\x1b[201~\nrest");
+    expect(pty.write.mock.calls[0]).toEqual(["s1", pasted("code\nrest")]);
   });
 
   it("fails when the terminal is not attached, so nothing is reported as sent", async () => {
@@ -43,7 +50,7 @@ describe("sendToAgent", () => {
     await sendToAgent({ id: "s1", backend: "plugin" }, "hi");
     expect(providerSessions.send).not.toHaveBeenCalled();
     expect(pty.write.mock.calls).toEqual([
-      ["s1:3", [0x68, 0x69]],
+      ["s1:3", pasted("hi")],
       ["s1:3", [0x0d]],
     ]);
   });
