@@ -18,7 +18,7 @@ export interface TerminalGeometry {
 export interface TerminalSurfaceHandlers {
   /** Keyboard input decoded by the emulator; may contain focus reports. */
   onData: (data: string) => void;
-  /** Bytes produced by paste or terminal shortcuts. */
+  /** Bytes produced by terminal shortcuts. */
   onUserBytes: (bytes: number[]) => void;
   /** Protocol replies and reports (e.g. DECRQM, color scheme changes) that are not user input; returns whether they reached the PTY. */
   onReply: (bytes: number[]) => boolean;
