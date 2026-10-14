@@ -214,7 +214,8 @@ describe("Ctrl+Shift+V paste", () => {
       value: { readText: async () => clipboard },
       configurable: true,
     });
-    host.querySelector("textarea")!.dispatchEvent(
+    const textarea = host.querySelector("textarea")!;
+    textarea.dispatchEvent(
       new KeyboardEvent("keydown", { key: "V", ctrlKey: true, shiftKey: true, bubbles: true }),
     );
     await vi.waitFor(() => expect(typed).not.toEqual([]));
