@@ -57,7 +57,7 @@ implementation does not re-derive them:
 - That holds only while nothing uses the SDK's `Rmux::cmd()` escape hatch. Daemon
   startup and `cmd()` read the same `RMUX_SDK_DAEMON_BINARY` override, and
   `rmux-daemon` refuses CLI invocation with `rmux-daemon is internal; launch it
-through 'rmux', not directly` — reporting success while doing nothing. A caller
+  through 'rmux', not directly` — reporting success while doing nothing. A caller
   that needs `cmd()` would have to bundle the 15 MB helper as `rmux`, not the
   dispatcher, which cannot find its own helper from a flat sidecar directory.
 - Tauri places `externalBin` beside the executable — `Contents/MacOS/` in a macOS
