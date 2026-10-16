@@ -20,6 +20,8 @@ jobs:
     runs-on: macos-latest
     env:
       CASK: planeai-ci/local/planeai
+      # Unauthenticated API calls share a 60/hour limit per runner IP.
+      HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 
