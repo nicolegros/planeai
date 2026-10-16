@@ -249,6 +249,13 @@ jobs:
         with:
           ref: ${{ needs.release.outputs.tag }}
 
+      - uses: actions/checkout@v7
+        with:
+          repository: nicolegros/homebrew-tap
+          ref: main
+          path: tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+
       - name: Download macOS DMGs
         run: gh release download "$TAG" -p '*.dmg' -D dmgs
         env:
@@ -258,12 +265,21 @@ jobs:
       - name: Render cask
         run: |
           VERSION="${TAG#v}"
+          mkdir -p tap/Casks
           packaging/homebrew/render-cask.sh "$VERSION" \
             "dmgs/planeai_${VERSION}_aarch64.dmg" \
-            "dmgs/planeai_${VERSION}_x64.dmg" > planeai.rb
-          cat planeai.rb
+            "dmgs/planeai_${VERSION}_x64.dmg" > tap/Casks/planeai.rb
+          cat tap/Casks/planeai.rb
 
-      - name: Publish to nicolegros/homebrew-tap
-        run: packaging/homebrew/publish-tap.sh planeai.rb
-        env:
-          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+      - name: Push to nicolegros/homebrew-tap
+        working-directory: tap
+        run: |
+          git add Casks/planeai.rb
+          if git diff --cached --quiet; then
+            echo "Casks/planeai.rb already at ${TAG#v}, nothing to push"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "planeai ${TAG#v}"
+          git push origin HEAD:main
