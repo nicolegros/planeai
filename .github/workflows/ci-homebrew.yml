@@ -6,11 +6,6 @@ on:
     paths:
       - "packaging/homebrew/**"
       - ".github/workflows/ci-homebrew.yml"
-  push:
-    branches: [main]
-    paths:
-      - "packaging/homebrew/**"
-      - ".github/workflows/ci-homebrew.yml"
 
 permissions:
   contents: read
