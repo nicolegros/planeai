@@ -235,3 +235,35 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+
+  homebrew:
+    needs: [release, publish]
+    runs-on: ubuntu-latest
+    environment: homebrew-tap
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Download macOS DMGs
+        run: gh release download "$TAG" -p '*.dmg' -D dmgs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: Render cask
+        run: |
+          VERSION="${TAG#v}"
+          packaging/homebrew/render-cask.sh "$VERSION" \
+            "dmgs/planeai_${VERSION}_aarch64.dmg" \
+            "dmgs/planeai_${VERSION}_x64.dmg" > planeai.rb
+          cat planeai.rb
+
+      - name: Publish to nicolegros/homebrew-tap
+        run: packaging/homebrew/publish-tap.sh planeai.rb
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}

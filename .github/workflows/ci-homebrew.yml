@@ -1,0 +1,51 @@
+name: CI Homebrew
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "packaging/homebrew/**"
+      - ".github/workflows/ci-homebrew.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packaging/homebrew/**"
+      - ".github/workflows/ci-homebrew.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  cask:
+    runs-on: macos-latest
+    env:
+      CASK: planeai-ci/local/planeai
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download latest release DMGs
+        run: |
+          TAG="$(gh release view --json tagName --jq .tagName)"
+          gh release download "$TAG" -p '*.dmg' -D dmgs
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: Render cask into a local tap
+        run: |
+          brew update
+          brew tap-new --no-git "${CASK%/*}"
+          TAP_DIR="$(brew --repository "${CASK%/*}")"
+          mkdir -p "$TAP_DIR/Casks"
+          packaging/homebrew/render-cask.sh "$VERSION" \
+            "dmgs/planeai_${VERSION}_aarch64.dmg" \
+            "dmgs/planeai_${VERSION}_x64.dmg" > "$TAP_DIR/Casks/planeai.rb"
+          cat "$TAP_DIR/Casks/planeai.rb"
+
+      - run: brew style "$CASK"
+
+      - run: brew audit --cask --strict --online --arch=all "$CASK"
+
+      - name: Install, check and zap end to end
+        run: packaging/homebrew/e2e.sh "$CASK"
