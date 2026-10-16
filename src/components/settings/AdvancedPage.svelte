@@ -58,7 +58,11 @@
   <SettingRow id="cli">
     {#snippet note()}
       <p class="mt-0.5 text-[12px] leading-snug text-t3">
-        {cliInstalled ? "Installed at" : "Creates a symlink at"} <code class="font-mono">/usr/local/bin/planeai-cli</code>
+        {#if cliInstalled}
+          <code class="font-mono">planeai-cli</code> is on your PATH
+        {:else}
+          Creates a symlink at <code class="font-mono">/usr/local/bin/planeai-cli</code>
+        {/if}
       </p>
       {#if cliError}<p class="mt-1 break-words text-[12px] text-status-exited" role="alert">{cliError}</p>{/if}
     {/snippet}

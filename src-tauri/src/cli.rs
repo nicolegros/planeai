@@ -224,7 +224,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
 
     if plan.backend == "daemon" {
         let socket_path = planeai_ipc::daemon_socket_path();
-        let daemon_bin = resolve_daemon_binary();
+        let daemon_bin = crate::paths::resolve_daemon_binary_fallback();
         let scrollback = 1_048_576;
         crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
@@ -435,25 +435,6 @@ pub fn create_workspace_sibling(
             parent_session_id: Some(parent.id),
         },
     )
-}
-
-/// Resolve the daemon binary path. Checks /usr/local/bin first, then falls back
-/// to the current executable's directory.
-fn resolve_daemon_binary() -> std::path::PathBuf {
-    let symlinked = std::path::Path::new("/usr/local/bin/planeai-daemon");
-    if symlinked.exists() {
-        return symlinked.to_path_buf();
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sibling = dir.join("planeai-daemon");
-            if sibling.exists() {
-                return sibling;
-            }
-        }
-    }
-    // Last resort: hope it's on PATH
-    std::path::PathBuf::from("planeai-daemon")
 }
 
 #[cfg(not(windows))]

@@ -92,6 +92,14 @@ Rollback is best-effort: errors are logged as warnings but do not propagate. If 
 - Project names must be unique
 - A worktree session that lands in the main checkout stores no `worktree_path`; it is a checkout session.
 
+## CLI install and sidecar resolution
+
+`planeai-cli` and `planeai-daemon` ship inside the app bundle (`planeai.app/Contents/MacOS/`) as Tauri `externalBin` sidecars.
+The only binary users put on PATH is `planeai-cli`: the Homebrew cask links it into `$(brew --prefix)/bin`, and Preferences → Advanced → Command line symlinks it at `/usr/local/bin/planeai-cli`.
+`paths::sibling_binary` finds a sidecar beside the canonicalized `current_exe()` (or in the bundle's `Contents/Resources`).
+Canonicalizing matters because `current_exe()` on macOS returns the symlink path, so `/opt/homebrew/bin/planeai-cli` must resolve to the bundle before looking for `planeai-daemon` next to it.
+`check_cli_installed` reports installed when the first `planeai-cli` on the augmented PATH canonicalizes to the running bundle's own `planeai-cli`, so both the Homebrew link and the Settings symlink count.
+
 ## Cross-platform strategy
 
 | Concern               | macOS                                             | Windows                                                |
