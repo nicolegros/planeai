@@ -7,7 +7,9 @@ description: Command reference for planeai-cli — manage sessions, projects, ta
 
 ## Install
 
-The CLI is installed from within the app via **Preferences → Advanced → Command line** or with the system installer bundled with each release.
+On macOS, `brew install --cask nicolegros/tap/planeai` installs the app and links `planeai-cli` into `$(brew --prefix)/bin`.
+
+Otherwise, install the CLI from within the app via **Preferences → Advanced → Command line** or with the system installer bundled with each release.
 
 Once installed, it's available as `planeai-cli` on your PATH.
 

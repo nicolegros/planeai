@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   defaults: vi.fn(),
   detectProviders: vi.fn(),
   checkRmuxAvailable: vi.fn(),
+  checkCliInstalled: vi.fn(),
   getVersion: vi.fn(),
   getPending: vi.fn(),
   check: vi.fn(),
@@ -50,7 +51,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
       listTerminalSchemes: vi.fn(() => Promise.resolve([])),
       checkTmuxAvailable: vi.fn(() => Promise.resolve(true)),
       checkRmuxAvailable: mocks.checkRmuxAvailable,
-      checkCliInstalled: vi.fn(() => Promise.resolve(true)),
+      checkCliInstalled: mocks.checkCliInstalled,
       listStaleWorktrees: vi.fn(() => Promise.resolve([])),
       runStaleWorktreeCleanup: vi.fn(() => Promise.resolve([])),
       installCli: vi.fn(),
@@ -161,6 +162,7 @@ beforeEach(() => {
   mocks.defaults.mockResolvedValue(baseConfig());
   mocks.detectProviders.mockResolvedValue({});
   mocks.checkRmuxAvailable.mockResolvedValue(true);
+  mocks.checkCliInstalled.mockResolvedValue(true);
   mocks.getVersion.mockResolvedValue("1.80.0");
   mocks.getPending.mockResolvedValue(null);
   mocks.listen.mockResolvedValue(() => {});
@@ -494,6 +496,25 @@ describe("sessions", () => {
     await render("/?page=preferences&section=sessions");
     expect(document.body.textContent).not.toContain("rmux not found on PATH");
     expect(document.body.textContent).toContain("requires rmux");
+  });
+});
+
+describe("command line", () => {
+  function cliNote() {
+    return document.querySelector('[data-setting-id="cli"]')?.textContent?.replace(/\s+/g, " ");
+  }
+
+  it("names no install path once planeai-cli is on PATH, which Homebrew may own", async () => {
+    await render("/?page=preferences&section=advanced");
+    expect(cliNote()).toContain("planeai-cli is on your PATH");
+    expect(button("Reinstall")).toBeDefined();
+  });
+
+  it("offers the /usr/local/bin symlink when planeai-cli is not on PATH", async () => {
+    mocks.checkCliInstalled.mockResolvedValue(false);
+    await render("/?page=preferences&section=advanced");
+    expect(cliNote()).toContain("Creates a symlink at /usr/local/bin/planeai-cli");
+    expect(button("Install")).toBeDefined();
   });
 });
 
