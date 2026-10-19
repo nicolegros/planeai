@@ -2157,7 +2157,11 @@ fn render_prompt_inner(
     loop_id: &str,
     candidates_context: Option<&str>,
 ) -> String {
-    use minijinja::{context, escape_formatter, value::ValueKind, Environment};
+    use minijinja::{
+        context, escape_formatter,
+        value::{Serde, ValueKind},
+        Environment,
+    };
 
     let mut env = Environment::new();
     // Disable auto-escaping (templates produce plain text, not HTML)
@@ -2201,7 +2205,7 @@ fn render_prompt_inner(
     // Build the context — candidates is included as empty string when absent so
     // templates referencing {{ candidates }} don't fail.
     let ctx = context! {
-        inputs => &snapshot.inputs,
+        inputs => Serde(&snapshot.inputs),
         loop_run => context! {
             id => loop_id,
         },
