@@ -71,7 +71,7 @@ regex = { workspace = true }
 rusqlite = { version = "0.40", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-minijinja = { version = "2", features = ["builtins"] }
+minijinja = { version = "3", features = ["builtins", "serde"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2.5.4"
