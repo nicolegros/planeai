@@ -59,7 +59,10 @@ vi.mock("../../lib/api", () => ({
     setAutoMode: vi.fn(),
     listArchived: vi.fn(() => Promise.resolve([])),
   },
-  git: { listFiles: vi.fn(() => Promise.resolve([])) },
+  git: {
+    indexFiles: vi.fn(() => Promise.resolve()),
+    searchFiles: vi.fn(() => Promise.resolve([])),
+  },
 }));
 
 vi.mock("../../lib/toasts.svelte", () => ({ showToast: vi.fn() }));
@@ -83,6 +86,7 @@ vi.mock("../../lib/loop-store.svelte", () => ({
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
 import CommandMenu from "../CommandMenu.svelte";
+import { git } from "../../lib/api";
 
 const ROOT_INPUT = "input[placeholder='Go to a task, session, or action…']";
 
@@ -160,7 +164,7 @@ describe("CommandMenu", () => {
     loopSessionIds = new Set();
   });
 
-  function render(props = menuProps()) {
+  function render<P extends ReturnType<typeof menuProps>>(props: P = menuProps() as P) {
     target = document.createElement("div");
     document.body.append(target);
     component = mount(CommandMenu, { target, props });
@@ -354,5 +358,59 @@ describe("CommandMenu", () => {
     await tick();
 
     expect(document.body.textContent).toContain("Maker round 1");
+  });
+
+  describe("file picker", () => {
+    async function findFileInput(): Promise<HTMLInputElement> {
+      return await vi.waitFor(() => {
+        const next = document.querySelector<HTMLInputElement>("input[placeholder='Open file...']");
+        expect(next).toBeTruthy();
+        return next!;
+      });
+    }
+
+    it("opens the best match for the typed query", async () => {
+      vi.mocked(git.searchFiles).mockImplementation(async (_repo, query) =>
+        query === "menu" ? ["src/components/CommandMenu.svelte", "src/lib/menu.ts"] : ["README.md"],
+      );
+      const props = { ...menuProps(), openFileMode: true, onOpenFile: vi.fn() };
+      render(props);
+      const input = await findFileInput();
+      await vi.waitFor(() => expect(visibleItemLabels()).toEqual(["README.md"]));
+
+      await typeQuery(input, "menu");
+      await vi.waitFor(() =>
+        expect(visibleItemLabels()).toEqual([
+          "src/components/CommandMenu.svelte",
+          "src/lib/menu.ts",
+        ]),
+      );
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await tick();
+
+      expect(props.onOpenFile).toHaveBeenCalledWith("src/components/CommandMenu.svelte");
+    });
+
+    it("keeps the results of the latest query when an earlier search answers last", async () => {
+      let answerFirstKeystroke: (files: string[]) => void = () => {};
+      vi.mocked(git.searchFiles).mockImplementation((_repo, query) => {
+        if (query === "m")
+          return new Promise((resolve) => {
+            answerFirstKeystroke = resolve;
+          });
+        return Promise.resolve(query === "menu" ? ["src/lib/menu.ts"] : []);
+      });
+      render({ ...menuProps(), openFileMode: true });
+      const input = await findFileInput();
+
+      await typeQuery(input, "m");
+      await typeQuery(input, "menu");
+      await vi.waitFor(() => expect(visibleItemLabels()).toEqual(["src/lib/menu.ts"]));
+      answerFirstKeystroke(["src/main.ts"]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await tick();
+
+      expect(visibleItemLabels()).toEqual(["src/lib/menu.ts"]);
+    });
   });
 });
