@@ -238,6 +238,7 @@ fn main() {
             // Daemon state (lazily connects to daemon)
             app.manage(DaemonState(tokio::sync::Mutex::new(None)));
             app.manage(LspState::default());
+            app.manage(FileSearchState::default());
 
             // Scaffold themes dir with bundled themes if missing
             let themes_dir = config_dir.join("themes");
@@ -384,7 +385,8 @@ fn main() {
             detect_default_branch,
             clone_repository,
             list_commits,
-            list_files,
+            index_files,
+            search_files,
             read_file,
             write_file,
             get_terminal_editor_command,

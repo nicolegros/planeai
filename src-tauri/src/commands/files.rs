@@ -1,24 +1,3 @@
-#[tauri::command]
-pub async fn list_files(repo_path: String) -> Result<Vec<String>, String> {
-    super::blocking(move || {
-        let mut cmd = std::process::Command::new(crate::command::resolve("git"));
-        cmd.args(["ls-files"]).current_dir(&repo_path);
-        cmd.env("PATH", planeai_core::command::augmented_path(&[]));
-        planeai_core::command::no_window(&mut cmd);
-        let output = cmd
-            .output()
-            .map_err(|e| format!("failed to run git ls-files: {e}"))?;
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).to_string());
-        }
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(|l| l.to_string())
-            .collect())
-    })
-    .await
-}
-
 /// Validate that `file_path` is confined within `repo_path` after canonicalization.
 /// Returns the validated canonical path or an error.
 fn validate_file_path(file_path: &str, repo_path: &str) -> Result<std::path::PathBuf, String> {

@@ -87,6 +87,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 include_dir = "0.7"
+nucleo-matcher = "0.3.1"
 
 [dev-dependencies]
 tempfile = { workspace = true }

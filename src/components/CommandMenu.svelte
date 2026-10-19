@@ -79,7 +79,9 @@
   let archivedSessions = $state<Session[]>([]);
   let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "hideProject" | "unhideProject" | "deleteProject" | "restoreProject" | "openFile" | "autoDispatch" | "renameSession">("none");
   let archivedProjects = $state<Project[]>([]);
-  let fileList = $state<string[]>([]);
+  /** Best matches for `fileQuery`; null until the first search answers. */
+  let fileResults = $state<string[] | null>(null);
+  let fileQuery = $state("");
   let projectAutoModes = $state<Record<string, boolean>>({});
 
   async function openArchived() {
@@ -118,15 +120,25 @@
     }
   }
 
+  const FILE_RESULT_LIMIT = 50;
+  let fileSearchSeq = 0;
+
   export async function openFilePicker() {
-    subMenu = "openFile";
     const repoPath = getActiveRootPath();
     if (!repoPath) { close(); return; }
-    try {
-      fileList = await git.listFiles(repoPath);
-    } catch {
-      fileList = [];
-    }
+    fileQuery = "";
+    fileResults = null;
+    subMenu = "openFile";
+    await git.indexFiles(repoPath).catch(() => {});
+    await searchFiles();
+  }
+
+  async function searchFiles() {
+    const repoPath = getActiveRootPath();
+    if (!repoPath) return;
+    const seq = ++fileSearchSeq;
+    const results = await git.searchFiles(repoPath, fileQuery, FILE_RESULT_LIMIT).catch(() => []);
+    if (seq === fileSearchSeq) fileResults = results;
   }
 
   let renameTargetId = $state<string | null>(null);
@@ -401,17 +413,21 @@
           </Command.List>
         </Command.Root>
       {:else if subMenu === "openFile"}
-        <Command.Root class="flex flex-col" loop disablePointerSelection>
+        <Command.Root class="flex flex-col" loop disablePointerSelection shouldFilter={false}>
           <Command.Input
+            bind:value={fileQuery}
+            oninput={searchFiles}
             class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
             placeholder="Open file..."
           />
           <Command.List class="max-h-72 overflow-y-auto p-2">
             <Command.Viewport>
-              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No files found.</Command.Empty>
+              {#if fileResults}
+                <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No files found.</Command.Empty>
+              {/if}
               <Command.Group>
                 <Command.GroupItems>
-                  {#each fileList as file (file)}
+                  {#each fileResults ?? [] as file (file)}
                     <Command.Item
                       value={file}
                       class="flex h-9 cursor-pointer items-center rounded-lg px-3 text-[12.5px] font-mono text-t1 data-selected:bg-accent-bg"

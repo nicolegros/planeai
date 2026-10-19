@@ -262,7 +262,9 @@ export const git = {
     }),
   listCommits: (repoPath: string, limit: number) =>
     invoke<CommitEntry[]>("list_commits", { repoPath, limit }),
-  listFiles: (repoPath: string) => invoke<string[]>("list_files", { repoPath }),
+  indexFiles: (repoPath: string) => invoke<void>("index_files", { repoPath }),
+  searchFiles: (repoPath: string, query: string, limit: number) =>
+    invoke<string[]>("search_files", { repoPath, query, limit }),
   readFile: (filePath: string, repoPath: string) =>
     invoke<string>("read_file", { filePath, repoPath }),
   writeFile: (filePath: string, content: string, repoPath: string) =>
