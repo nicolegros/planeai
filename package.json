@@ -31,7 +31,7 @@
     "@lucide/svelte": "^1.52.0",
     "@pierre/trees": "1.0.0-beta.6",
     "@replit/codemirror-vim": "^6.4.0",
-    "@tauri-apps/api": "2.12.1",
+    "@tauri-apps/api": "2.12.3",
     "@tauri-apps/plugin-dialog": "2.8.1",
     "@tauri-apps/plugin-opener": "^2.6.0",
     "@xterm/addon-fit": "0.11.0",
