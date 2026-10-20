@@ -336,8 +336,9 @@ pub fn import(
 
     // The backup remains durable. Removing legacy config only happens after the
     // plugin namespace has been written and validated successfully.
+    let before = config.clone();
     config.integrations = None;
-    if let Err(error) = config::save(config_dir, config) {
+    if let Err(error) = config::save(config_dir, &before, config) {
         record_failure(conn, app_data_dir, &snapshot, &error)?;
         return Err(error);
     }

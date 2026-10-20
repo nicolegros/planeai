@@ -1,5 +1,7 @@
+use jsonc_parser::cst::{CstInputValue, CstObject, CstRootNode};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde_json::{Map, Value};
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -582,9 +584,7 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
     let config_path = config_dir.join("config.json");
     if config_path.exists() {
         let content = std::fs::read_to_string(&config_path).unwrap();
-        // Strip JSONC comments then parse
-        let stripped = json_comments::StripComments::new(content.as_bytes());
-        let mut user_val: serde_json::Value = match serde_json::from_reader(stripped) {
+        let mut user_val: serde_json::Value = match planeai_core::jsonc::parse(&content) {
             Ok(v) => v,
             Err(e) => {
                 let config = invalid_config_fallback();
@@ -608,6 +608,7 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         };
         backfill_provider_defaults(&mut config);
         config.onboarding_completed.get_or_insert(true);
+        let unmigrated = config.clone();
         let migrated = migrate_autonomous_prompt_template(&mut config);
         if let Some(Err(error)) = config.editor.as_ref().map(validate_editor_config) {
             config.editor = Some(invalid_editor_config());
@@ -615,7 +616,7 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         }
         if migrated {
             // Persist the migration so the file reflects the new structure
-            save(config_dir, &config).ok();
+            save(config_dir, &unmigrated, &config).ok();
         }
         return (config, vec![]);
     }
@@ -623,16 +624,101 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         onboarding_completed: Some(false),
         ..Config::default()
     };
-    std::fs::create_dir_all(config_dir).ok();
-    let json = serde_json::to_string_pretty(&config).unwrap();
-    std::fs::write(&config_path, &json).ok();
+    write_whole(config_dir, &config).ok();
     (config, vec![])
 }
 
-pub fn save(config_dir: &Path, config: &Config) -> Result<(), String> {
+/// Writes only what differs between `before` and `after` into config.json, so comments,
+/// formatting, key order and keys the app never set survive.
+pub fn save(config_dir: &Path, before: &Config, after: &Config) -> Result<(), String> {
+    let path = config_dir.join("config.json");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return write_whole(config_dir, after)
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    let root = CstRootNode::parse(&text, &planeai_core::jsonc::options()).map_err(|error| {
+        format!("config.json has a syntax error: {error}. Fix it, then save again.")
+    })?;
+    let before = serde_json::to_value(before).map_err(|e| e.to_string())?;
+    let after = serde_json::to_value(after).map_err(|e| e.to_string())?;
+    if let (Value::Object(before), Value::Object(after)) = (&before, &after) {
+        write_changes(&root.object_value_or_set(), before, after, true);
+    }
+    std::fs::write(&path, root.to_string()).map_err(|e| e.to_string())
+}
+
+fn write_whole(config_dir: &Path, config: &Config) -> Result<(), String> {
     std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    std::fs::write(config_dir.join("config.json"), json).map_err(|e| e.to_string())
+    std::fs::write(config_dir.join("config.json"), json + "\n").map_err(|e| e.to_string())
+}
+
+fn write_changes(
+    file: &CstObject,
+    before: &Map<String, Value>,
+    after: &Map<String, Value>,
+    at_root: bool,
+) {
+    let keys: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
+    for key in keys {
+        let old = before.get(key);
+        let Some(new) = after.get(key) else {
+            if let Some(prop) = file.get(key) {
+                prop.remove();
+            }
+            continue;
+        };
+        if old == Some(new) {
+            continue;
+        }
+        if let (Some(Value::Object(old)), Value::Object(new)) = (old, new) {
+            // `load` fills a missing sub-key from defaults only under MERGED_KEYS, so a partial
+            // object anywhere else would drop every default it does not list.
+            let child = match file.object_value(key) {
+                Some(child) => Some(child),
+                None if at_root && MERGED_KEYS.contains(&key.as_str()) => {
+                    Some(file.object_value_or_set(key))
+                }
+                None => None,
+            };
+            if let Some(child) = child {
+                write_changes(&child, old, new, false);
+                continue;
+            }
+        }
+        match file.get(key) {
+            Some(prop) => prop.set_value(cst_value(new)),
+            None => {
+                // Appending makes `file` multiline, which reads as broken inside an inline parent.
+                let parents: Vec<CstObject> = file
+                    .ancestors()
+                    .filter_map(|node| node.as_object())
+                    .collect();
+                for parent in parents.iter().rev() {
+                    parent.ensure_multiline();
+                }
+                file.append(key, cst_value(new));
+            }
+        }
+    }
+}
+
+fn cst_value(value: &Value) -> CstInputValue {
+    match value {
+        Value::Null => CstInputValue::Null,
+        Value::Bool(value) => CstInputValue::Bool(*value),
+        Value::Number(value) => CstInputValue::Number(value.to_string()),
+        Value::String(value) => CstInputValue::String(value.clone()),
+        Value::Array(items) => CstInputValue::Array(items.iter().map(cst_value).collect()),
+        Value::Object(map) => CstInputValue::Object(
+            map.iter()
+                .map(|(key, value)| (key.clone(), cst_value(value)))
+                .collect(),
+        ),
+    }
 }
 
 /// Migrate legacy SQLite settings into a config file. No-op if config already exists.
@@ -651,7 +737,7 @@ pub fn migrate_from_db(config_dir: &Path, settings: &crate::db::Settings) -> Res
     config.appearance.terminal_theme_light = settings.terminal_theme_light.clone();
     config.terminal.font_size = settings.font_size;
     config.terminal.font_family = settings.font_family.clone();
-    save(config_dir, &config)
+    write_whole(config_dir, &config)
 }
 
 /// Normalize a base path: expand leading `~` to the user's home directory and strip trailing slash.
@@ -793,14 +879,16 @@ pub fn refresh(config_dir: &Path) -> Result<Config, String> {
     Ok(config)
 }
 
-/// Merge user config over defaults. Struct-like top-level keys (appearance, terminal)
-/// get their sub-keys merged with defaults. Everything else is replaced by the overlay.
+/// Top-level objects whose sub-keys `load` merges over the defaults.
+const MERGED_KEYS: &[&str] = &["appearance", "terminal"];
+
+/// Merge user config over defaults. Top-level keys in [`MERGED_KEYS`] get their sub-keys merged
+/// with defaults. Everything else is replaced by the overlay.
 fn merge_top_level(base: serde_json::Value, overlay: serde_json::Value) -> serde_json::Value {
-    const MERGE_KEYS: &[&str] = &["appearance", "terminal"];
     match (base, overlay) {
         (serde_json::Value::Object(mut base_map), serde_json::Value::Object(overlay_map)) => {
             for (k, v) in overlay_map {
-                if MERGE_KEYS.contains(&k.as_str()) {
+                if MERGED_KEYS.contains(&k.as_str()) {
                     if let (
                         Some(serde_json::Value::Object(base_inner)),
                         serde_json::Value::Object(over_inner),
@@ -839,6 +927,10 @@ pub fn validate_editor_config(editor: &EditorConfig) -> Result<(), String> {
             }
             Ok(())
         }
+        INVALID_EDITOR_MODE => Err(
+            "config.json has errors. Fix it, then reload it from Preferences → Advanced."
+                .to_string(),
+        ),
         _ => Err(format!("Unknown editor mode: {}", editor.mode)),
     }
 }

@@ -5,6 +5,7 @@ pub mod command;
 pub mod dispatch;
 pub mod git;
 pub mod handoff;
+pub mod jsonc;
 pub mod loop_recipe;
 pub mod loop_recipe_service;
 pub mod loop_run;
