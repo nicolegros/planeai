@@ -18,7 +18,8 @@ Use `$XDG_CONFIG_HOME/planeai/config.json` (default `~/.config/planeai/config.js
 
 Key details:
 
-- **JSONC for reading** (comments allowed), pretty JSON for writing.
+- **JSONC for reading and writing** (comments and trailing commas allowed, otherwise strict JSON), parsed by `planeai_core::jsonc`.
+- **Surgical writes.** A settings change edits only the keys that differ from the config the app last loaded or saved, through a concrete syntax tree, so comments, formatting, key order and unknown keys survive. A file with a syntax error is never overwritten. The whole file is written only when none exists.
 - **`config.schema.json`** written alongside the config for editor autocomplete.
 - **Read on launch only** — no file watcher (deferred).
 - **Lenient validation** — malformed config merges with defaults; UI shows a toast on issues.

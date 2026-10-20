@@ -151,12 +151,12 @@ fn load_parses_jsonc_with_comments() {
 }
 
 #[test]
-fn save_writes_config_as_pretty_json() {
+fn write_whole_writes_config_as_pretty_json() {
     let dir = tempfile::tempdir().unwrap();
     let config_dir = dir.path();
 
     let config = Config::default();
-    save(config_dir, &config).unwrap();
+    write_whole(config_dir, &config).unwrap();
 
     let content = fs::read_to_string(config_dir.join("config.json")).unwrap();
     // Should be valid JSON
@@ -167,7 +167,7 @@ fn save_writes_config_as_pretty_json() {
 }
 
 #[test]
-fn round_trip_save_then_load() {
+fn round_trip_write_whole_then_load() {
     let dir = tempfile::tempdir().unwrap();
     let config_dir = dir.path();
 
@@ -185,7 +185,7 @@ fn round_trip_save_then_load() {
     config.default_provider = "aider".to_string();
     config.onboarding_completed = Some(true);
 
-    save(config_dir, &config).unwrap();
+    write_whole(config_dir, &config).unwrap();
     let (loaded, warnings) = load(config_dir);
 
     assert_eq!(loaded, config);
@@ -228,7 +228,7 @@ fn migrate_from_db_does_nothing_when_config_exists() {
         onboarding_completed: Some(true),
         ..Config::default()
     };
-    save(config_dir, &existing).unwrap();
+    write_whole(config_dir, &existing).unwrap();
 
     // Try to migrate with different settings
     let settings = crate::db::Settings {
@@ -411,13 +411,16 @@ fn session_backend_round_trips_through_config_file() {
         session_backend: Some("daemon".to_string()),
         ..Default::default()
     };
-    save(config_dir, &config).unwrap();
+    write_whole(config_dir, &config).unwrap();
     let (loaded, _) = load(config_dir);
     assert_eq!(loaded.session_backend, Some("daemon".to_string()));
 
     // Save with session_backend = None (should be absent from JSON)
-    let config = Config::default();
-    save(config_dir, &config).unwrap();
+    let cleared = Config {
+        session_backend: None,
+        ..loaded.clone()
+    };
+    save(config_dir, &loaded, &cleared).unwrap();
     let content = fs::read_to_string(config_dir.join("config.json")).unwrap();
     assert!(!content.contains("session_backend"));
     let (loaded, _) = load(config_dir);
@@ -706,11 +709,11 @@ fn refresh_returns_updated_config_from_disk() {
     // Write initial config
     let mut config = Config::default();
     config.appearance.mode = "light".to_string();
-    save(config_dir, &config).unwrap();
+    write_whole(config_dir, &config).unwrap();
 
     // Modify file on disk externally
     config.appearance.mode = "dark".to_string();
-    save(config_dir, &config).unwrap();
+    write_whole(config_dir, &config).unwrap();
 
     let refreshed = refresh(config_dir).unwrap();
     assert_eq!(refreshed.appearance.mode, "dark");
@@ -795,7 +798,7 @@ fn editor_settings_round_trip_through_config_file() {
         ..Config::default()
     };
 
-    save(config_dir, &config).unwrap();
+    write_whole(config_dir, &config).unwrap();
     let (loaded, warnings) = load(config_dir);
     assert!(warnings.is_empty());
     assert_eq!(loaded.editor, config.editor);
@@ -877,7 +880,7 @@ fn sidebar_view_options_round_trip_through_config_file() {
         hide_project_labels: Some(false),
         ..Config::default()
     };
-    save(dir.path(), &config).unwrap();
+    write_whole(dir.path(), &config).unwrap();
 
     let content = fs::read_to_string(dir.path().join("config.json")).unwrap();
     assert!(content.contains(r#""sidebar_group_by": "status""#));
@@ -952,7 +955,7 @@ fn completed_onboarding_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let (mut config, _) = load(dir.path());
     config.onboarding_completed = Some(true);
-    save(dir.path(), &config).unwrap();
+    write_whole(dir.path(), &config).unwrap();
 
     let (reloaded, _) = load(dir.path());
 
@@ -1092,7 +1095,7 @@ fn post_merge_action_survives_a_settings_update_round_trip() {
     payload["post_merge_action"] = serde_json::json!("destroy");
     let config: Config = serde_json::from_value(payload).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    save(dir.path(), &config).unwrap();
+    write_whole(dir.path(), &config).unwrap();
 
     let (reloaded, warnings) = load(dir.path());
 
@@ -1144,7 +1147,7 @@ fn turning_task_management_off_persists() {
     let dir = tempfile::tempdir().unwrap();
     let (mut config, _) = load(dir.path());
     config.task_management = None;
-    save(dir.path(), &config).unwrap();
+    write_whole(dir.path(), &config).unwrap();
 
     let (reloaded, _) = load(dir.path());
 
@@ -1266,4 +1269,220 @@ fn appearance_theme_accepts_a_source_per_mode() {
 fn appearance_theme_defaults_to_the_default_css_theme() {
     let appearance: Appearance = serde_json::from_str(r#"{"mode": "system"}"#).unwrap();
     assert_eq!(appearance.theme, ThemeChoice::Css("default".to_string()));
+}
+
+fn save_edit(file: &str, edit: impl FnOnce(&mut Config)) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    fs::write(&path, file).unwrap();
+    let (before, warnings) = load(dir.path());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let mut after = before.clone();
+    edit(&mut after);
+    save(dir.path(), &before, &after).unwrap();
+    let (reloaded, warnings) = load(dir.path());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        reloaded, after,
+        "the saved file loads back as the edited config"
+    );
+    fs::read_to_string(&path).unwrap()
+}
+
+#[test]
+fn save_changes_only_the_edited_setting() {
+    let file = r#"{
+  // Hand-written PlaneAI config.
+  "terminal": {
+    "font_family": "Menlo",
+    "font_size": 13, // small screen
+  },
+  "my_note": "unknown key, keep me",
+  /* links stay clickable */
+  "web_links": true
+}
+"#;
+    let saved = save_edit(file, |config| config.web_links = Some(false));
+    assert_eq!(
+        saved,
+        file.replace("\"web_links\": true", "\"web_links\": false")
+    );
+}
+
+#[test]
+fn save_edits_a_nested_value_in_place() {
+    let file = r#"{
+  "terminal": {
+    "font_family": "Menlo",
+    "font_size": 13, // small screen
+  }
+}
+"#;
+    let saved = save_edit(file, |config| config.terminal.font_size = 16);
+    assert_eq!(saved, file.replace("13", "16"));
+}
+
+#[test]
+fn save_appends_a_setting_the_file_never_had() {
+    let saved = save_edit("{\n  \"vim_mode\": false\n}\n", |config| {
+        config.sound_enabled = Some(false)
+    });
+    assert_eq!(
+        saved,
+        "{\n  \"vim_mode\": false,\n  \"sound_enabled\": false\n}\n"
+    );
+}
+
+#[test]
+fn save_writes_only_the_edited_key_of_a_merged_section() {
+    let saved = save_edit("{\n  \"vim_mode\": false\n}\n", |config| {
+        config.appearance.mode = "dark".to_string()
+    });
+    assert_eq!(
+        saved,
+        "{\n  \"vim_mode\": false,\n  \"appearance\": {\n    \"mode\": \"dark\"\n  }\n}\n"
+    );
+}
+
+#[test]
+fn save_writes_a_whole_unmerged_section_the_file_never_had() {
+    let saved = save_edit("{\n  \"vim_mode\": false\n}\n", |config| {
+        config.providers.get_mut("claude").unwrap().command = "claude-dev".to_string()
+    });
+    let providers: serde_json::Value =
+        planeai_core::jsonc::parse::<serde_json::Value>(&saved).unwrap()["providers"].clone();
+    assert_eq!(
+        providers["claude"]["command"],
+        serde_json::json!("claude-dev")
+    );
+    assert_eq!(
+        providers["kiro"]["command"],
+        serde_json::json!("kiro-cli chat")
+    );
+}
+
+#[test]
+fn save_edits_inside_an_unmerged_section_the_file_has() {
+    let file = r#"{
+  "providers": {
+    // mine
+    "claude": { "command": "claude" }
+  },
+  "default_provider": "claude"
+}
+"#;
+    let saved = save_edit(file, |config| {
+        config.providers.get_mut("claude").unwrap().yolo_flag = Some("--yolo".to_string())
+    });
+    assert_eq!(
+        saved,
+        r#"{
+  "providers": {
+    // mine
+    "claude": {
+      "command": "claude",
+      "yolo_flag": "--yolo"
+    }
+  },
+  "default_provider": "claude"
+}
+"#
+    );
+}
+
+#[test]
+fn save_removes_a_setting_cleared_to_none() {
+    let file = "{\n  \"session_backend\": \"tmux\", // try tmux\n  \"vim_mode\": false\n}\n";
+    let saved = save_edit(file, |config| config.session_backend = None);
+    assert_eq!(saved, "{\n  \"vim_mode\": false\n}\n");
+}
+
+#[test]
+fn save_refuses_to_overwrite_a_file_with_a_syntax_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    let broken = "{\n  \"vim_mode\": \n}\n";
+    fs::write(&path, broken).unwrap();
+    let (before, _) = load(dir.path());
+    let after = Config {
+        vim_mode: Some(false),
+        ..before.clone()
+    };
+
+    let error = save(dir.path(), &before, &after).unwrap_err();
+
+    assert_eq!(
+        error,
+        "config.json has a syntax error: Unexpected close brace on line 3 column 1. Fix it, then save again."
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), broken);
+}
+
+#[test]
+fn save_writes_the_whole_config_when_the_file_is_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let after = Config {
+        vim_mode: Some(false),
+        onboarding_completed: Some(true),
+        ..Config::default()
+    };
+
+    save(dir.path(), &Config::default(), &after).unwrap();
+
+    assert_eq!(load(dir.path()), (after, vec![]));
+}
+
+#[test]
+fn load_migrates_the_legacy_prompt_template_without_rewriting_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    fs::write(
+        &path,
+        r#"{
+  // keep me
+  "providers": {
+    "claude": { "command": "claude", "autonomous_prompt_template": "Go.\n{prompt}" }
+  },
+  "task_management": { "auto_dispatch": { "poll_interval_ms": 1000, "max_concurrent": 1 } },
+  "default_provider": "claude"
+}
+"#,
+    )
+    .unwrap();
+
+    load(dir.path());
+
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        r#"{
+  // keep me
+  "providers": {
+    "claude": { "command": "claude" }
+  },
+  "task_management": {
+    "auto_dispatch": {
+      "poll_interval_ms": 1000,
+      "max_concurrent": 1,
+      "autonomous_prompt_template": "Go.\n{prompt}"
+    }
+  },
+  "default_provider": "claude"
+}
+"#
+    );
+}
+
+#[test]
+fn validate_explains_that_an_unreadable_config_blocks_saving() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("config.json"), "{ \"vim_mode\": }").unwrap();
+    let (config, _) = load(dir.path());
+
+    assert_eq!(
+        validate(&config),
+        Err(
+            "config.json has errors. Fix it, then reload it from Preferences → Advanced."
+                .to_string()
+        )
+    );
 }

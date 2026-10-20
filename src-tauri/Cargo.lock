@@ -2417,10 +2417,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "json_comments"
-version = "0.2.2"
+name = "jsonc-parser"
+version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9dbbfed4e59ba9750e15ba154fdfd9329cee16ff3df539c2666b70f58cc32105"
+checksum = "0ecded084f9b9a718d39668a42657c32253663d1f6afb3fbb9134f0305f73f48"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "jsonptr"
@@ -3286,7 +3289,7 @@ dependencies = [
  "clap",
  "font-kit",
  "include_dir",
- "json_comments",
+ "jsonc-parser",
  "minijinja",
  "notify",
  "nucleo-matcher",
@@ -3348,7 +3351,7 @@ name = "planeai-core"
 version = "0.0.0"
 dependencies = [
  "chrono",
- "json_comments",
+ "jsonc-parser",
  "planeai-tasks",
  "regex",
  "rusqlite",

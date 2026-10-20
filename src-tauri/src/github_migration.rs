@@ -337,12 +337,10 @@ fn legacy_task_transitions(config_path: &Path) -> LegacyTaskTransitions {
         task_management: Option<LegacyTaskManagement>,
     }
 
-    let Ok(content) = std::fs::read(config_path) else {
+    let Ok(content) = std::fs::read_to_string(config_path) else {
         return LegacyTaskTransitions::default();
     };
-    let parsed: LegacyConfig = match serde_json::from_reader(json_comments::StripComments::new(
-        &content[..],
-    )) {
+    let parsed: LegacyConfig = match planeai_core::jsonc::parse(&content) {
         Ok(config) => config,
         Err(error) => {
             tracing::warn!(%error, path = %config_path.display(), "could not read legacy GitHub task transitions");

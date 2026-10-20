@@ -44,8 +44,8 @@ pub async fn detect_providers(
 }
 
 #[tauri::command]
-pub fn update_config(
-    state: State<ConfigState>,
+pub async fn update_config(
+    state: State<'_, ConfigState>,
     mut new_config: config::Config,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
@@ -59,8 +59,10 @@ pub fn update_config(
     }
     config::validate(&new_config)?;
     let config_dir = config::config_dir(&app.package_info().name);
-    config::save(&config_dir, &new_config)?;
+    // Held across the write so concurrent updates each diff against the config the file holds.
     let mut cfg = state.0.lock().map_err(|e| e.to_string())?;
+    config::save(&config_dir, &cfg, &new_config)
+        .inspect_err(|e| tracing::warn!("config save failed: {e}"))?;
     *cfg = new_config;
     Ok(())
 }

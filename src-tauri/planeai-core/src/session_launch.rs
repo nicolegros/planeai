@@ -133,9 +133,7 @@ pub fn expand_tilde(path: &str) -> String {
 pub fn load_launch_config(path: &std::path::Path) -> Result<LaunchConfig, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read config {}: {e}", path.display()))?;
-    // Strip JSONC comments
-    let stripped = json_comments::StripComments::new(content.as_bytes());
-    let user_val: serde_json::Value = serde_json::from_reader(stripped)
+    let user_val: serde_json::Value = crate::jsonc::parse(&content)
         .map_err(|e| format!("cannot parse config {}: {e}", path.display()))?;
     // Merge user values over defaults
     let default_val = serde_json::to_value(LaunchConfig::default()).unwrap();
