@@ -1,6 +1,6 @@
 # ADR-0010: Loop status derivation from step pointer
 
-**Status:** Accepted  
+**Status:** Superseded. The loops feature was removed.  
 **Date:** 2026-07-14  
 **Context:** PLA-232 — eliminate loop status desync between recipe step pointer and status column
 

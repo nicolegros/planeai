@@ -1,18 +1,18 @@
 <script lang="ts">
   import { projects as projectsApi } from "../lib/api";
-  import { sessionTaskProjectId, type TaskItem, type Session, type Project, type PluginInventory, type PluginSessionAction, type PluginUiContribution, type LoopRunSummary } from "../lib/types";
+  import { sessionTaskProjectId, type TaskItem, type Session, type Project, type PluginInventory, type PluginSessionAction, type PluginUiContribution } from "../lib/types";
   import type { PluginSessionContext } from "../lib/plugin-sdk";
   import { pluginSessionActionsForProvider } from "../lib/plugin-session-actions";
   import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
-  import { isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId, toLoopId } from "../lib/sidebar-session-order";
-  import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, resolveSidebarGroupBy, sidebarNavItemKey, sidebarNavItems, type SidebarLoopRow, type SidebarNavItem, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
+  import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
+  import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, resolveSidebarGroupBy, sidebarNavItemKey, sidebarNavItems, type SidebarNavItem, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
   import { getSidebarModel } from "../lib/sidebar-model-store.svelte";
   import { sidebarViewMenuItems } from "../lib/sidebar-view-menu";
   import { projectContextMenuItems } from "../lib/project-context-menu";
   import { locateProjectFolder } from "../lib/locate-project";
-  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare, Play, Square, TriangleAlert } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, Lightbulb, Settings, TriangleAlert } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getCollapsedSections, getLayoutWidth, setCollapsedSections, setLayoutWidth } from "../lib/layout-state";
@@ -42,15 +42,8 @@
     onSelectTask?: (task: TaskItem, repoPath: string) => void;
     onCreateSession?: () => void;
     onSessionsChanged?: () => void;
-    onSelectLoop?: (loopId: string) => void;
-    onStartLoop?: (loopId: string) => void;
-    onTickLoop?: (loopId: string) => void;
-    onStopLoop?: (loopId: string) => void;
-    onDeleteLoop?: (loopId: string) => void;
-    onDeleteLoopSession?: (session: Session, loopId: string) => void;
     onToggleDiff?: () => void;
     selectedTaskWorkspace?: { projectId: string; taskKey: string } | null;
-    selectedLoopId?: string | null;
     pluginContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
     sessionIndicatorContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
     pluginSessionActions?: PluginSessionAction[];
@@ -59,7 +52,7 @@
     onPluginClose?: () => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedTaskWorkspace = null, selectedLoopId = null, pluginContributions = [], sessionIndicatorContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onToggleDiff, selectedTaskWorkspace = null, pluginContributions = [], sessionIndicatorContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
   function pluginContributionKey(item: { plugin: PluginInventory; contribution: PluginUiContribution }): string {
@@ -102,9 +95,9 @@
 
   let navRef = $state<HTMLElement | undefined>(undefined);
   let sidebarWidth = $state(getLayoutWidth("sidebar", 266));
-  // Only sections the user set away from their default are stored. Loop ids are short-lived, so loops stay in memory only.
+  // Only sections the user set away from their default are stored.
   let collapsedSections = $state<Record<string, boolean>>(getCollapsedSections());
-  $effect(() => setCollapsedSections(Object.fromEntries(Object.entries(collapsedSections).filter(([key]) => !isLoopId(key)))));
+  $effect(() => setCollapsedSections($state.snapshot(collapsedSections)));
   let renameValue = $state("");
   let fadingSessionIds = $state<Set<string>>(new Set());
 
@@ -164,29 +157,7 @@
   let contextMenu = $state<{ x: number; y: number; session: Session } | null>(null);
   let projectContextMenu = $state<{ x: number; y: number; project: Project } | null>(null);
   let taskContextMenu = $state<{ x: number; y: number; row: SidebarTaskRow } | null>(null);
-  let loopContextMenu = $state<{ x: number; y: number; loop: LoopRunSummary } | null>(null);
   let viewMenu = $state<{ x: number; y: number } | null>(null);
-  let loopSessionContextMenu = $state<{ x: number; y: number; session: Session; loopId: string } | null>(null);
-
-  // Loop helpers
-  const loopStatusColors: Record<string, string> = {
-    draft: "bg-t3", running: "bg-status-running", observing: "bg-status-running",
-    verifying: "bg-status-running", completed_unreviewed: "bg-status-review",
-    blocked: "bg-status-exited", needs_human: "bg-status-review", stale: "bg-status-exited",
-    failed: "bg-status-exited", cancelled: "bg-status-exited", approved: "bg-status-running",
-    merged: "bg-status-idle", cleaned: "bg-status-idle",
-  };
-  function loopStatusColor(status: string): string { return loopStatusColors[status] ?? "bg-t3"; }
-  function isLoopActive(status: string): boolean { return ["running", "observing", "verifying"].includes(status); }
-  function isLoopTerminalSuccess(status: string): boolean { return ["completed_unreviewed", "approved", "merged", "cleaned"].includes(status); }
-  function isLoopTerminalFailure(status: string): boolean { return ["failed", "cancelled"].includes(status); }
-  const loopStatusTextColors: Record<string, string> = {
-    completed_unreviewed: "text-status-review", approved: "text-status-running",
-    merged: "text-status-idle", cleaned: "text-status-idle",
-    failed: "text-status-exited", cancelled: "text-status-exited",
-  };
-  function shortId(id: string): string { return id.slice(0, 8); }
-
   async function hideProject(id: string) {
     try {
       await projectStore.hideProject(id);
@@ -214,10 +185,8 @@
   const previewTaskWorkspace = $derived(
     previewId && isTaskWorkspaceId(previewId) ? parseTaskWorkspaceId(previewId) : null,
   );
-  /** If previewing a loop dashboard, this is the loop ID; otherwise null */
-  const previewLoopId = $derived(previewId && isLoopId(previewId) ? parseLoopId(previewId) : null);
-  /** If previewing a session (not a loop), this is the session ID; otherwise null */
-  const previewSessionId = $derived(previewId && !isLoopId(previewId) ? previewId : null);
+  /** If previewing a session, this is the session ID; otherwise null */
+  const previewSessionId = $derived(previewId && !isTaskWorkspaceId(previewId) ? previewId : null);
 
   function toggleSection(key: string, fallback: boolean) {
     setCollapsed(key, !isCollapsed(key, fallback), fallback);
@@ -342,7 +311,7 @@
     if (current?.type === "plugin") current.row.onFocus?.(true);
   });
 
-  // Auto-focus active session/loop when sessions panel is toggled or its target changes.
+  // Auto-focus active session when sessions panel is toggled or its target changes.
   // A pointerdown precedes a row click. Do not scroll the active row between
   // those events or the release can target a different row.
   let autoFocusedSidebarTarget = "";
@@ -364,12 +333,8 @@
     }
 
     let target: string | undefined;
-    if (selectedLoopId) {
-      target = navKey.loop(selectedLoopId);
-    } else if (activeSessionId) {
-      target = flatNavIndex.has(navKey.loopSession(activeSessionId))
-        ? navKey.loopSession(activeSessionId)
-        : flatNavIndex.has(navKey.orphan(activeSessionId))
+    if (activeSessionId) {
+      target = flatNavIndex.has(navKey.orphan(activeSessionId))
           ? navKey.orphan(activeSessionId)
           : (() => {
               const active = sessions.find((session) => session.id === activeSessionId);
@@ -400,12 +365,6 @@
     if (action.type === "collapse") {
       if (current.type === "project_header") {
         setCollapsed(current.section.key, true, current.section.defaultCollapsed);
-      } else if (current.type === "loop") {
-        setCollapsed(toLoopId(current.loop.id), true, false);
-      } else if (current.type === "loop_session") {
-        // Jump to parent loop
-        const loopIdx = flatNavIndex.get(navKey.loop(current.loopId));
-        if (loopIdx !== undefined) setSelectedIndex(loopIdx);
       } else if (current.type === "group_header") {
         if (!isCollapsed(current.key, current.defaultCollapsed)) {
           setCollapsed(current.key, true, current.defaultCollapsed);
@@ -431,8 +390,6 @@
     if (action.type === "expand") {
       if (current.type === "project_header") {
         setCollapsed(current.section.key, false, current.section.defaultCollapsed);
-      } else if (current.type === "loop") {
-        setCollapsed(toLoopId(current.loop.id), false, false);
       } else if (current.type === "group_header") {
         setCollapsed(current.key, false, current.defaultCollapsed);
       } else if (current.type === "plugin") {
@@ -452,18 +409,6 @@
 
     if (current.type === "group_header") {
       if (action.type === "select") toggleSection(current.key, current.defaultCollapsed);
-      return;
-    }
-
-    if (current.type === "loop") {
-      if (action.type === "select") { onSelectLoop?.(current.loop.id); }
-      else if (action.type === "delete") { onDeleteLoop?.(current.loop.id); }
-      return;
-    }
-
-    if (current.type === "loop_session") {
-      if (action.type === "select") { onSelectSession(current.session.id); focusTerminal(); }
-      else if (action.type === "delete") { onDeleteLoopSession?.(current.session, current.loopId); }
       return;
     }
 
@@ -545,121 +490,12 @@
   {/if}
 {/snippet}
 
-{#snippet loopList(loops: SidebarLoopRow[])}
-  {#if loops.length > 0}
-    <ul class="space-y-0.5 mb-1">
-      {#each loops as { loop, project, children: childSessions } (loop.id)}
-        {@const loopNavIdx = flatNavIndex.get(navKey.loop(loop.id)) ?? -1}
-        {@const isLoopSelected = zone === 'sidebar' && loopNavIdx === getSelectedIndex()}
-        {@const isLoopDashboardActive = loop.id === selectedLoopId}
-        {@const isLoopPreviewing = loop.id === previewLoopId}
-        {@const loopCollapsed = isCollapsed(toLoopId(loop.id), false)}
-        <li>
-          <!-- Loop item (aligned with status section headers) -->
-          <div class="flex items-center gap-1.5">
-            <span class="w-[2px] self-stretch rounded-full transition-opacity {isLoopDashboardActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
-            <!-- Row background and the hover group live on this wrapper so the quick-action
-                 buttons sit beside the navigation button rather than nested inside it -
-                 a button may not contain another button. -->
-            <div
-              class="group flex-1 min-w-0 flex items-center gap-1.5 transition-colors rounded-lg pr-2
-                {isLoopDashboardActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
-                {isLoopPreviewing ? 'ring-2 ring-accent' : isLoopSelected ? 'ring-2 ring-accent' : ''}"
-            >
-              <button
-                data-nav-index={loopNavIdx}
-                class="flex-1 min-w-0 text-left py-[6px] text-[13px] flex items-center gap-1.5 pl-4 cursor-pointer"
-                onclick={() => onSelectLoop?.(loop.id)}
-                oncontextmenu={(e) => { e.preventDefault(); loopContextMenu = { x: e.clientX, y: e.clientY, loop }; }}
-                title={loop.goal}
-              >
-              <!-- Status indicator -->
-              {#if isLoopTerminalSuccess(loop.status)}
-                <CheckCircle2 class="size-3 shrink-0 {loopStatusTextColors[loop.status] ?? 'text-t3'}" />
-              {:else if isLoopTerminalFailure(loop.status)}
-                <XCircle class="size-3 shrink-0 {loopStatusTextColors[loop.status] ?? 'text-t3'}" />
-              {:else}
-                <span class="size-1.5 rounded-full shrink-0 {loopStatusColor(loop.status)}"></span>
-              {/if}
-              {@render projectLabel(project)}
-              <!-- Label -->
-              {#if loop.task_key}
-                <span class="font-medium text-[12.5px] text-t1 truncate">{loop.task_key}</span>
-              {:else}
-                <span class="text-t3 font-mono text-xs truncate">{shortId(loop.id)}</span>
-              {/if}
-              <span class="text-t3 text-xs">{loop.strategy}</span>
-              <!-- Round limit -->
-              <span class="text-t3 text-xs shrink-0">max {loop.max_rounds} rounds</span>
-              </button>
-              <!-- Quick actions (show on hover) -->
-              <span class="hidden group-hover:flex items-center gap-0.5 shrink-0">
-                {#if loop.status === "draft"}
-                  <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1" onclick={(e) => { e.stopPropagation(); onStartLoop?.(loop.id); }} title="Start" aria-label="Start loop"><Play class="size-3" /></button>
-                {:else if isLoopActive(loop.status)}
-                  <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1" onclick={(e) => { e.stopPropagation(); onTickLoop?.(loop.id); }} title="Tick" aria-label="Tick loop"><Play class="size-3" /></button>
-                  <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-status-exited" onclick={(e) => { e.stopPropagation(); onStopLoop?.(loop.id); }} title="Stop" aria-label="Stop loop"><Square class="size-3" /></button>
-                {/if}
-              </span>
-              <!-- Chevron on right -->
-              {#if childSessions.length > 0}
-                {#if loopCollapsed}<ChevronRight class="size-3 text-t3 shrink-0" />{:else}<ChevronDown class="size-3 text-t3 shrink-0" />{/if}
-              {/if}
-            </div>
-          </div>
-          <!-- Indented child sessions -->
-          {#if !loopCollapsed && childSessions.length > 0}
-            <ul class="space-y-0.5 mt-0.5">
-              {#each childSessions as { item, session: childSession } (item.session_id)}
-                {@const childNavIdx = flatNavIndex.get(navKey.loopSession(childSession.id)) ?? -1}
-                {@const isChildActive = childSession.id === activeSessionId && !selectedLoopId}
-                {@const isChildSelected = zone === 'sidebar' && childNavIdx === getSelectedIndex()}
-                {@const isChildPreviewing = childSession.id === previewSessionId}
-                <li>
-                  <div class="session-row relative flex items-center gap-1.5">
-                    <span class="w-[2px] self-stretch rounded-full transition-opacity {isChildActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
-                    <button
-                      data-nav-index={childNavIdx}
-                      class="flex-1 min-w-0 text-left py-[6px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg pl-4 pr-2
-                        {isChildActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
-                        {isChildPreviewing ? 'ring-2 ring-accent' : isChildSelected ? 'ring-2 ring-accent' : ''}"
-                      onclick={() => { onSelectSession(childSession.id); focusTerminal(); }}
-                      oncontextmenu={(e) => { e.preventDefault(); loopSessionContextMenu = { x: e.clientX, y: e.clientY, session: childSession, loopId: loop.id }; }}
-                    >
-                      <span class="shrink-0 font-mono text-[10px] text-t3">{item.role}</span>
-                      <span class="truncate font-medium text-t1">{childSession.name || childSession.branch}</span>
-                      <span class="ml-auto shrink-0 flex items-center gap-1.5">
-                        {#if orchestrator.getReviewReady()[childSession.id]}
-                          <Lightbulb class="size-3.5 text-status-review animate-pulse" />
-                        {:else if childSession.status === 'exited'}
-                          <span class="font-mono text-[9px] text-t3 bg-panel-hi rounded px-[5px] py-[1px]">exited</span>
-                        {:else if agentStates[childSession.id] === 'Busy'}
-                          <LoaderCircle class="size-3 animate-spin text-t2" />
-                        {/if}
-                      </span>
-                    </button>
-                    {#each sessionIndicatorContributions as item (`${childSession.id}:${item.plugin.id}:${item.contribution.id}`)}
-                      <div class="absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 pointer-events-none" data-plugin-session-indicator={childSession.id}>
-                        <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={pluginSessionContext(childSession)} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} />
-                      </div>
-                    {/each}
-                  </div>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-        </li>
-      {/each}
-    </ul>
-  {/if}
-{/snippet}
-
 {#snippet orphanList(orphans: SidebarSessionRow[])}
   {#if orphans.length > 0}
     <ul class="space-y-0.5 mb-1">
       {#each orphans as { session, project } (session.id)}
         {@const globalIndex = flatNavIndex.get(navKey.orphan(session.id)) ?? -1}
-        {@const isActive = session.id === activeSessionId && !selectedLoopId}
+        {@const isActive = session.id === activeSessionId}
         {@const isSelected = zone === 'sidebar' && globalIndex === getSelectedIndex()}
         {@const isPreviewing = session.id === previewSessionId}
         <li class="transition-opacity duration-200 {fadingSessionIds.has(session.id) ? 'opacity-0' : 'opacity-100'}">
@@ -711,7 +547,7 @@
   <ul class="space-y-0.5">
     {#each rows as row (`${row.project.id}:${row.task.key}`)}
       {@const { task, project, linkedSession: linked } = row}
-      {@const isActive = (selectedTaskWorkspace?.projectId === project.id && selectedTaskWorkspace.taskKey === task.key) || (linked?.id === activeSessionId && !selectedLoopId)}
+      {@const isActive = (selectedTaskWorkspace?.projectId === project.id && selectedTaskWorkspace.taskKey === task.key) || linked?.id === activeSessionId}
       {@const taskNavIdx = flatNavIndex.get(navKey.task(project.id, task.key)) ?? -1}
       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
       {@const isPreviewing = (linked?.id === previewSessionId) || (previewTaskWorkspace?.projectId === project.id && previewTaskWorkspace.taskKey === task.key)}
@@ -829,7 +665,6 @@
             {/if}
 
             {#if !projectCollapsed}
-              {@render loopList(section.loops)}
               {@render orphanList(section.orphans)}
               {#each section.groups as group (group.key)}
                 <div>
@@ -844,9 +679,8 @@
           </div>
         {:else if section.kind === "sessions"}
           <div>
-            {@render groupHeader(section.key, section.defaultCollapsed, "Sessions", section.loops.length + section.orphans.length, null, "top")}
+            {@render groupHeader(section.key, section.defaultCollapsed, "Sessions", section.orphans.length, null, "top")}
             {#if !isCollapsed(section.key, section.defaultCollapsed)}
-              {@render loopList(section.loops)}
               {@render orphanList(section.orphans)}
             {/if}
           </div>
@@ -976,33 +810,6 @@
             { label: "Delete session", danger: true, onSelect: () => onDeleteSession(linkedSession) },
           ]
         : []),
-    ]}
-  />
-{/if}
-
-<!-- Loop context menu -->
-{#if loopContextMenu}
-  <ContextMenu
-    x={loopContextMenu.x}
-    y={loopContextMenu.y}
-    onClose={() => (loopContextMenu = null)}
-    items={[
-      ...(loopContextMenu.loop.status === "draft" ? [{ label: "Start loop", onSelect: () => onStartLoop?.(loopContextMenu!.loop.id) }] : []),
-      ...(isLoopActive(loopContextMenu.loop.status) ? [{ label: "Stop loop", onSelect: () => onStopLoop?.(loopContextMenu!.loop.id) }] : []),
-      { label: "Delete loop", danger: true, onSelect: () => onDeleteLoop?.(loopContextMenu!.loop.id) },
-    ]}
-  />
-{/if}
-
-<!-- Loop session context menu -->
-{#if loopSessionContextMenu}
-  <ContextMenu
-    x={loopSessionContextMenu.x}
-    y={loopSessionContextMenu.y}
-    onClose={() => (loopSessionContextMenu = null)}
-    items={[
-      { label: "Review", onSelect: () => { onSelectSession(loopSessionContextMenu!.session.id); onToggleDiff?.(); } },
-      { label: "Delete", danger: true, onSelect: () => { onDeleteLoopSession?.(loopSessionContextMenu!.session, loopSessionContextMenu!.loopId); loopSessionContextMenu = null; } },
     ]}
   />
 {/if}

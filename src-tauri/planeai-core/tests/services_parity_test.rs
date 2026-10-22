@@ -36,6 +36,31 @@ fn shared_migration_is_idempotent() {
 }
 
 #[test]
+fn migration_drops_tables_left_by_removed_loops() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE loop_runs (id TEXT PRIMARY KEY);
+         CREATE TABLE loop_sessions (loop_id TEXT, session_id TEXT);
+         CREATE TABLE loop_events (id INTEGER PRIMARY KEY);
+         CREATE TABLE loop_artifacts (id TEXT PRIMARY KEY);
+         CREATE TABLE verifier_runs (id TEXT PRIMARY KEY);
+         CREATE TABLE loop_runs_new (id TEXT PRIMARY KEY);",
+    )
+    .unwrap();
+
+    migrate(&conn).unwrap();
+
+    let leftover: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND (name LIKE 'loop_%' OR name = 'verifier_runs')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(leftover, 0);
+}
+
+#[test]
 fn task_workspace_layouts_are_migrated_with_project_scope() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();

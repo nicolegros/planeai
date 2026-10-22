@@ -4,12 +4,7 @@ pub mod cleanup;
 pub mod command;
 pub mod dispatch;
 pub mod git;
-pub mod handoff;
 pub mod jsonc;
-pub mod loop_recipe;
-pub mod loop_recipe_service;
-pub mod loop_run;
-pub mod loop_service;
 pub mod notify;
 pub mod orchestrator;
 pub mod prompt_lock;
@@ -20,10 +15,6 @@ pub mod task;
 pub mod task_lifecycle;
 pub mod template;
 pub mod text;
-pub mod verifier;
-
-#[cfg(any(test, feature = "test-support"))]
-pub mod test_fixtures;
 
 use std::path::PathBuf;
 

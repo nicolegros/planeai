@@ -185,7 +185,7 @@ Results are JSON objects, and PlaneAI ignores fields it does not know.
 | ----------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `provider.session.start`      | `session_id`, `provider_id`, `cwd`, `env`, `auto_approve`, optional `initial_prompt` | A new session was created. Run the agent in `cwd` with `env`.                                                                           |
 | `provider.session.resume`     | `session_id`, `provider_id`, `cwd`, `env`, `auto_approve`, `handed_off`              | The current sidecar does not drive this existing session yet, after an app restart or plugin reload. Restore it; do not replay prompts. |
-| `provider.session.send`       | `session_id`, `text`                                                                 | Input from the chat UI, the CLI, recipes and loops, or another plugin's `sessions.prompt`.                                              |
+| `provider.session.send`       | `session_id`, `text`                                                                 | Input from the chat UI, the CLI, or another plugin's `sessions.prompt`.                                                                 |
 | `provider.session.interrupt`  | `session_id`                                                                         | Stop the current turn.                                                                                                                  |
 | `provider.session.stop`       | `session_id`, `reason` (`archive`, `destroy` or `exit`)                              | The session ended. Release its process; on `destroy`, delete its data.                                                                  |
 | `provider.session.handoff`    | `session_id`                                                                         | With `handoff` only. Stop driving the session and return `{ "argv": [...] }`, the command that continues it in a terminal.              |
@@ -200,7 +200,7 @@ Start, resume, handoff and handback have a 30-second deadline, since they may la
 On expiry PlaneAI cancels the request as described above.
 
 PlaneAI rejects a `send` text or `initial_prompt` over 48 KiB, measured as JSON-escaped text, so every request fits one 64 KiB frame.
-Prompts from the CLI, loops and recipes are checked against the same limit before they are queued, and a prompt PlaneAI cannot deliver to the plugin is reported in the app.
+Prompts from the CLI are checked against the same limit before they are queued, and a prompt PlaneAI cannot deliver to the plugin is reported in the app.
 Provider UIs should apply the same limit before calling `send`.
 A handoff `argv` must have 1 to 64 nonempty arguments without NUL; PlaneAI runs it as is, without a shell, and the tab closes when it exits.
 

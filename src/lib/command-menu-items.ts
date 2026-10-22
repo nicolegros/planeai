@@ -85,18 +85,15 @@ export function matchableValue(value: string): string {
 /**
  * Sessions that need their own command menu entry because no visible task row reaches them.
  *
- * That means: sessions with no task, sessions whose task is missing from the visible rows
- * (deleted, failed to load, or hidden by `hide_done_tasks`), and loop sessions — whose role
- * and round identity a task entry cannot express.
+ * That means: sessions with no task, and sessions whose task is missing from the visible rows
+ * (deleted, failed to load, or hidden by `hide_done_tasks`).
  */
 export function computeCommandMenuSessions(
   sessions: Session[],
   taskRows: CommandMenuTaskRow[],
-  isLoopSession: (sessionId: string) => boolean,
 ): Session[] {
   const routable = new Set(taskRows.map((row) => `${row.projectId}\u0000${row.task.key}`));
   return sessions.filter((session) => {
-    if (isLoopSession(session.id)) return true;
     if (!session.task_key) return true;
     return !routable.has(`${sessionTaskProjectId(session)}\u0000${session.task_key}`);
   });

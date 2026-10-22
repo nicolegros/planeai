@@ -284,10 +284,9 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
         let _ = tmux_name;
     }
 
-    // Store worktree_path so gates and agents know where to run.
+    // Store worktree_path so agents know where to run.
     // For redirected sessions (branch already in another worktree), store that path.
     // For worktree-created sessions, store the new worktree path.
-    // Cleanup guards against deleting non-loop-managed worktrees via branch name check.
     let worktree_path = match &plan.branch_strategy {
         BranchStrategy::Checkout { repo, .. } | BranchStrategy::Worktree { repo, .. }
             if was_redirected =>

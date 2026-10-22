@@ -50,7 +50,6 @@ function makeTask(overrides: Record<string, unknown> = {}) {
 let sessions: ReturnType<typeof makeSession>[] = [makeSession()];
 let tasksByProject: Record<string, ReturnType<typeof makeTask>[]> = {};
 let activeSessionId: string | null = "session-1";
-let loopSessionIds = new Set<string>();
 
 vi.mock("../../lib/api", () => ({
   sessions: { listArchived: vi.fn(() => Promise.resolve([])), restore: vi.fn(), destroy: vi.fn() },
@@ -79,9 +78,6 @@ vi.mock("../../lib/project-store.svelte", () => ({
 }));
 vi.mock("../../lib/task-store.svelte", () => ({
   getTasksByProject: () => tasksByProject,
-}));
-vi.mock("../../lib/loop-store.svelte", () => ({
-  getLoopIdForSession: (id: string) => (loopSessionIds.has(id) ? "loop-1" : null),
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
@@ -161,7 +157,6 @@ describe("CommandMenu", () => {
     sessions = [makeSession()];
     tasksByProject = {};
     activeSessionId = "session-1";
-    loopSessionIds = new Set();
   });
 
   function render<P extends ReturnType<typeof menuProps>>(props: P = menuProps() as P) {
@@ -347,17 +342,6 @@ describe("CommandMenu", () => {
 
     expect(props.onRenameSession).not.toHaveBeenCalled();
     expect(props.onOpenChange).toHaveBeenCalledWith(false);
-  });
-
-  it("keeps listing a loop session even when a task could navigate to it", async () => {
-    tasksByProject = { "/tmp/project": [makeTask({ key: "PLA-1", title: "Task one" })] };
-    sessions = [makeSession({ id: "loop-session", name: "Maker round 1", task_key: "PLA-1" })];
-    loopSessionIds = new Set(["loop-session"]);
-    render();
-    await findRootInput();
-    await tick();
-
-    expect(document.body.textContent).toContain("Maker round 1");
   });
 
   describe("file picker", () => {

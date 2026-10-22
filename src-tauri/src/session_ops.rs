@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-use crate::cleanup::{CleanupContext, CleanupOps, KillOps};
+use crate::cleanup::KillOps;
 use crate::config::Config;
 use crate::db::{self, Session};
 
@@ -30,7 +30,7 @@ impl std::fmt::Display for ResolveError {
 
 pub struct DestroyResult {
     pub session: Session,
-    pub cleanup_errors: Vec<String>,
+    pub kill_errors: Vec<String>,
 }
 
 pub fn archive(
@@ -64,7 +64,7 @@ pub fn archive(
     let kill_errors = crate::cleanup::kill_backend(
         &session.backend,
         session.tmux_name.as_deref(),
-        Some(session.id.as_str()),
+        &session.id,
         kill_ops,
     );
     if !kill_errors.is_empty() {
@@ -187,7 +187,7 @@ pub fn destroy(
     conn: &Connection,
     id: &str,
     config: &Option<Config>,
-    cleanup_ops: &CleanupOps,
+    kill_ops: &KillOps,
 ) -> Result<DestroyResult, String> {
     let session = db::get_session(conn, id)
         .map_err(|e| e.to_string())?
@@ -201,31 +201,16 @@ pub fn destroy(
     // Soft-delete
     db::destroy_session(conn, id).map_err(|e| e.to_string())?;
 
-    // Run cleanup
-    let project_path = db::get_project(conn, &session.project_id)
-        .ok()
-        .flatten()
-        .map(|p| p.path);
-
-    let worktree_owned = db::session_owns_worktree(conn, &session.id).unwrap_or(false);
-    let ctx = CleanupContext {
-        backend: session.backend.clone(),
-        tmux_name: session.tmux_name.clone(),
-        worktree_path: session.worktree_path.clone(),
-        worktree_owned,
-        project_path: project_path.clone(),
-        branch: if session.worktree_path.is_some() {
-            Some(session.branch.clone())
-        } else {
-            None
-        },
-        session_id: Some(session.id.clone()),
-    };
-    let cleanup_errors = crate::cleanup::run_cleanup(&ctx, cleanup_ops);
+    let kill_errors = crate::cleanup::kill_backend(
+        &session.backend,
+        session.tmux_name.as_deref(),
+        &session.id,
+        kill_ops,
+    );
 
     Ok(DestroyResult {
         session,
-        cleanup_errors,
+        kill_errors,
     })
 }
 
@@ -882,7 +867,6 @@ mod tests {
     }
 
     use super::*;
-    use crate::cleanup::CleanupOps;
     use crate::config::Config;
     use crate::db;
     use std::cell::RefCell;
@@ -956,15 +940,6 @@ mod tests {
         .unwrap();
     }
 
-    fn test_cleanup_ops() -> CleanupOps {
-        CleanupOps {
-            kill: test_kill_ops(),
-            remove_worktree: Box::new(|_, _| Ok(())),
-            remove_dir: Box::new(|_| Ok(())),
-            delete_branch: Box::new(|_, _| Ok(())),
-        }
-    }
-
     fn test_kill_ops() -> KillOps {
         KillOps {
             kill_tmux: Box::new(|_| Ok(())),
@@ -974,17 +949,12 @@ mod tests {
         }
     }
 
-    fn failing_cleanup_ops() -> CleanupOps {
-        CleanupOps {
-            kill: KillOps {
-                kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
-                list_daemon_sessions: Box::new(|| Ok(Vec::new())),
-                kill_daemon_session: Box::new(|_| Err("daemon error".to_string())),
-                kill_rmux_session: Box::new(|_| Ok(())),
-            },
-            remove_worktree: Box::new(|_, _| Err("locked".to_string())),
-            remove_dir: Box::new(|_| Err("permission denied".to_string())),
-            delete_branch: Box::new(|_, _| Err("branch in use".to_string())),
+    fn failing_kill_ops() -> KillOps {
+        KillOps {
+            kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
+            list_daemon_sessions: Box::new(|| Ok(Vec::new())),
+            kill_daemon_session: Box::new(|_| Err("daemon error".to_string())),
+            kill_rmux_session: Box::new(|_| Ok(())),
         }
     }
 
@@ -1082,7 +1052,7 @@ mod tests {
         )
         .unwrap();
 
-        let ops = test_cleanup_ops();
+        let ops = test_kill_ops();
         let result = destroy(&conn, id, &None, &ops).unwrap();
 
         // Returns pre-mutation session (status was 'active')
@@ -1094,7 +1064,7 @@ mod tests {
         assert_eq!(s.status, "destroyed");
 
         // Cleanup was called
-        assert!(result.cleanup_errors.is_empty());
+        assert!(result.kill_errors.is_empty());
     }
 
     #[test]
@@ -1123,7 +1093,7 @@ mod tests {
         .unwrap();
 
         let cfg = test_config_with_task_manager();
-        let ops = test_cleanup_ops();
+        let ops = test_kill_ops();
         let result = destroy(&conn, id, &cfg, &ops).unwrap();
 
         assert_eq!(result.session.task_key, Some("PROJ-123".to_string()));
@@ -1132,7 +1102,7 @@ mod tests {
     }
 
     #[test]
-    fn destroy_returns_cleanup_errors() {
+    fn destroy_returns_kill_errors() {
         let conn = setup_db();
         db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         let projects = db::list_projects(&conn).unwrap();
@@ -1156,10 +1126,10 @@ mod tests {
         )
         .unwrap();
 
-        let ops = failing_cleanup_ops();
+        let ops = failing_kill_ops();
         let result = destroy(&conn, id, &None, &ops).unwrap();
 
-        assert!(!result.cleanup_errors.is_empty());
+        assert!(!result.kill_errors.is_empty());
         // Session is still soft-deleted even when cleanup fails
         let s = db::get_session(&conn, id).unwrap().unwrap();
         assert_eq!(s.status, "destroyed");

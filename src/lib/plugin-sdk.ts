@@ -82,8 +82,8 @@ export interface PluginUiHost {
     openProjectForm(): Promise<Project | null>;
   };
   /**
-   * Present only for a provider's session UI. Input goes through the host so CLI,
-   * recipes and the UI share one delivery path; events are the sidecar's own
+   * Present only for a provider's session UI. Input goes through the host so the CLI
+   * and the UI share one delivery path; events are the sidecar's own
    * `host.providerSession.event` payloads, in `seq` order, for this session only.
    * Failed requests reject with an `Error` whose `code` is a {@link PluginSessionErrorCode}.
    */

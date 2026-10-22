@@ -228,7 +228,7 @@ describe("computeCommandMenuSessions", () => {
   it("excludes sessions a visible task can route to", () => {
     const sessions = [makeSession({ id: "linked", task_key: "PLA-1" })];
 
-    expect(computeCommandMenuSessions(sessions, rows, () => false)).toEqual([]);
+    expect(computeCommandMenuSessions(sessions, rows)).toEqual([]);
   });
 
   it("routes a session running in another repo through its task's project", () => {
@@ -241,39 +241,25 @@ describe("computeCommandMenuSessions", () => {
       }),
     ];
 
-    expect(computeCommandMenuSessions(sessions, rows, () => false)).toEqual([]);
+    expect(computeCommandMenuSessions(sessions, rows)).toEqual([]);
   });
 
   it("includes sessions with no task key", () => {
     const sessions = [makeSession({ id: "orphan", task_key: null })];
 
-    expect(computeCommandMenuSessions(sessions, rows, () => false).map((s) => s.id)).toEqual([
-      "orphan",
-    ]);
+    expect(computeCommandMenuSessions(sessions, rows).map((s) => s.id)).toEqual(["orphan"]);
   });
 
   it("includes sessions whose task key is not among the visible rows", () => {
     const sessions = [makeSession({ id: "stale", task_key: "PLA-404" })];
 
-    expect(computeCommandMenuSessions(sessions, rows, () => false).map((s) => s.id)).toEqual([
-      "stale",
-    ]);
+    expect(computeCommandMenuSessions(sessions, rows).map((s) => s.id)).toEqual(["stale"]);
   });
 
   it("includes sessions whose task belongs to a different project", () => {
     const sessions = [makeSession({ id: "other", project_id: "project-2", task_key: "PLA-1" })];
 
-    expect(computeCommandMenuSessions(sessions, rows, () => false).map((s) => s.id)).toEqual([
-      "other",
-    ]);
-  });
-
-  it("includes loop sessions even when a task could route to them", () => {
-    const sessions = [makeSession({ id: "loop-session", task_key: "PLA-1" })];
-
-    expect(
-      computeCommandMenuSessions(sessions, rows, (id) => id === "loop-session").map((s) => s.id),
-    ).toEqual(["loop-session"]);
+    expect(computeCommandMenuSessions(sessions, rows).map((s) => s.id)).toEqual(["other"]);
   });
 
   it("includes sessions linked to a done task that hideDone removed from the rows", () => {
@@ -285,8 +271,8 @@ describe("computeCommandMenuSessions", () => {
     );
     const sessions = [makeSession({ id: "done-linked", task_key: "PLA-1" })];
 
-    expect(
-      computeCommandMenuSessions(sessions, hiddenDoneRows, () => false).map((s) => s.id),
-    ).toEqual(["done-linked"]);
+    expect(computeCommandMenuSessions(sessions, hiddenDoneRows).map((s) => s.id)).toEqual([
+      "done-linked",
+    ]);
   });
 });

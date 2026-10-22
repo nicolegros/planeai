@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { LoaderCircle, Lightbulb } from "@lucide/svelte";
+  import { Lightbulb } from "@lucide/svelte";
   import type { Session, Project } from "../lib/types";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
-  import * as loopStore from "../lib/loop-store.svelte";
-  import { isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
+  import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
 
   interface Props {
     mruSessionIds: string[];
@@ -26,15 +25,6 @@
     done: "bg-status-running",
   };
 
-  const loopStatusColors: Record<string, string> = {
-    draft: "bg-t3", running: "bg-status-running", observing: "bg-status-running",
-    verifying: "bg-status-running", completed_unreviewed: "bg-status-review",
-    blocked: "bg-status-exited", needs_human: "bg-status-review",
-    failed: "bg-status-exited", cancelled: "bg-status-exited",
-    approved: "bg-status-running", merged: "bg-status-idle", cleaned: "bg-status-idle",
-    stale: "bg-status-exited",
-  };
-
   function getSession(id: string) {
     return sessions.find((s) => s.id === id);
   }
@@ -43,24 +33,11 @@
     return projects.find((p) => p.id === projectId)?.name ?? "";
   }
 
-  function getLoop(id: string) {
-    const loopId = parseLoopId(id);
-    for (const p of projects) {
-      const loop = loopStore.getLoopsForProject(p.id).find((l) => l.id === loopId);
-      if (loop) return loop;
-    }
-    return null;
-  }
-
   function getTaskWorkspace(id: string): { task: import("../lib/types").TaskItem; project: Project } | null {
     const parsed = parseTaskWorkspaceId(id);
     const project = parsed ? projects.find((candidate) => candidate.id === parsed.projectId) : undefined;
     const task = project && parsed ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === parsed.taskKey) : undefined;
     return project && task ? { project, task } : null;
-  }
-
-  function shortId(id: string): string {
-    return id.slice(0, 8);
   }
 </script>
 
@@ -75,20 +52,6 @@
             <span class="shrink-0 font-mono text-[10px] font-medium {i === selectedIndex ? 'text-on-accent opacity-65' : 'text-t3'}">{workspace.task.key}</span>
             <span class="text-[13px] font-medium truncate {i === selectedIndex ? 'text-on-accent' : 'text-t1'}">{workspace.task.title}</span>
             <span class="ml-auto shrink-0 text-[11.5px] {i === selectedIndex ? 'text-on-accent opacity-65' : 'text-t3'}">{workspace.project.name}</span>
-          </div>
-        {/if}
-      {:else if isLoopId(id)}
-        {@const loop = getLoop(id)}
-        {#if loop}
-          <div class="flex items-center gap-[10px] h-[38px] px-3 rounded-lg {i === selectedIndex ? 'bg-accent' : ''}">
-            <span class="shrink-0 size-[6px] rounded-full {loopStatusColors[loop.status] ?? 'bg-t3'}"></span>
-            <span class="text-[13px] font-medium truncate {i === selectedIndex ? 'text-on-accent' : 'text-t1'}">
-              {loop.task_key ?? shortId(loop.id)}
-            </span>
-            <span class="text-[11px] {i === selectedIndex ? 'text-on-accent opacity-65' : 'text-t3'}">
-              {loop.strategy} · max {loop.max_rounds} rounds
-            </span>
-            <span class="ml-auto shrink-0 text-[11.5px] {i === selectedIndex ? 'text-on-accent opacity-65' : 'text-t3'}">{getProjectName(loop.project_id)}</span>
           </div>
         {/if}
       {:else}

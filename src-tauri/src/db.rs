@@ -116,7 +116,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         [],
     )?;
     planeai_core::prompt_lock::migrate(conn)?;
-    planeai_core::loop_service::LoopService::migrate(conn)?;
+    planeai_core::services::drop_loop_tables(conn)?;
     crate::rmux_resources::migrate(conn)?;
     crate::terminal_tabs::migrate(conn)?;
 
@@ -434,6 +434,27 @@ mod tests {
         migrate(&conn).unwrap();
         planeai_tasks::sqlite::migrate(&conn).unwrap();
         conn
+    }
+
+    #[test]
+    fn migrate_drops_tables_left_by_removed_loops() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE loop_runs (id TEXT PRIMARY KEY);
+             CREATE TABLE verifier_runs (id TEXT PRIMARY KEY);",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let leftover: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('loop_runs', 'verifier_runs')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(leftover, 0);
     }
 
     #[test]

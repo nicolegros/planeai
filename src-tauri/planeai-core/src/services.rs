@@ -35,8 +35,20 @@ pub fn migrate(conn: &Connection) -> SqlResult<()> {
     migrate_project_session_schema(conn)?;
     crate::prompt_lock::migrate(conn)?;
     LayoutService::migrate(conn)?;
-    crate::loop_service::LoopService::migrate(conn)?;
+    drop_loop_tables(conn)?;
     Ok(())
+}
+
+/// Loops were removed; drop their tables from databases created before that.
+pub fn drop_loop_tables(conn: &Connection) -> SqlResult<()> {
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS verifier_runs;
+         DROP TABLE IF EXISTS loop_artifacts;
+         DROP TABLE IF EXISTS loop_events;
+         DROP TABLE IF EXISTS loop_sessions;
+         DROP TABLE IF EXISTS loop_runs;
+         DROP TABLE IF EXISTS loop_runs_new;",
+    )
 }
 
 /// Idempotent project/session schema migration — the single source of truth.
