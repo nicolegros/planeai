@@ -66,7 +66,7 @@ planeai-cli session ls [--archived] [--pretty]
 
 ### `session delete`
 
-Permanently destroy a session and clean up its resources (worktree, tmux/daemon process).
+Permanently destroy a session and stop its tmux/daemon process. Its worktree is removed later by stale worktree cleanup.
 
 ```bash
 planeai-cli session delete <id>
@@ -342,7 +342,7 @@ sessions[3]{id,parent_session_id,name,status,provider,task_key,backend}:
   ghi78901,abc12345,Reviewer,exited,kiro,PLA-201,daemon
 ```
 
-Child sessions are linked for observability only. Killing a parent does not automatically kill children — cleanup remains explicit. Future loop runs may own cleanup policy.
+Child sessions are linked for observability only. Killing a parent does not automatically kill children — cleanup remains explicit.
 
 ### `axi session read`
 
@@ -390,185 +390,6 @@ List registered projects.
 ```bash
 planeai-cli axi project ls
 ```
-
-### `axi loop create`
-
-Create a new durable loop run. The loop starts in `draft` status by default. Use `--start` to immediately transition to `running`.
-
-```bash
-planeai-cli axi loop create --goal "<goal>" [options]
-```
-
-| Flag           | Description                                                                    |
-| -------------- | ------------------------------------------------------------------------------ |
-| `--goal`       | Goal description for the loop (required)                                       |
-| `--recipe`     | Recipe ID or path (takes precedence over `--strategy`)                         |
-| `--strategy`   | Strategy identifier (default: `maker-verifier`). Alias for `--recipe`.         |
-| `--max-rounds` | Maximum rounds before the loop stops (default: 3; overridden by recipe policy) |
-| `--task`       | Task key to associate with this loop (validated)                               |
-| `--project`    | Project name (otherwise resolved from CWD)                                     |
-| `--start`      | Start immediately (status = `running` instead of `draft`)                      |
-
-If a recipe is resolved (via `--recipe` or `--strategy`), the loop stores a recipe snapshot in `policy_json` and uses the recipe's policy values (max_rounds, max_ticks, etc.) instead of CLI defaults. A `recipe_loaded` event is appended to the loop's event log.
-
-If `$PLANEAI_SESSION_ID` is set, the creating session is recorded as `created_by_session_id`.
-
-> **Note:** There is no background scheduler. Loops advance via explicit `tick` commands or automatically when a handoff is recorded (auto-advance through immediately-executable steps).
-
-### `axi loop observe`
-
-Observe loop state: summary, loop-owned sessions, recent events. Use `loop tree` for recursive session expansion including children.
-
-```bash
-planeai-cli axi loop observe <id> [--limit <n>]
-```
-
-| Flag      | Description                                   |
-| --------- | --------------------------------------------- |
-| `--limit` | Maximum number of recent events (default: 20) |
-
-The `id` can be a prefix — it will match if unambiguous.
-
-### `axi loop tick`
-
-Advance the loop by one tick. If the loop is in `draft` status, tick first transitions it to `running` and appends a `loop_started` event.
-
-```bash
-planeai-cli axi loop tick <id>
-```
-
-If the loop has a recipe snapshot in `policy_json`, the tick executes the current recipe step (e.g., `session.create`, `session.prompt`, `handoff.wait`, `human.wait`, `loop.status`, `loop.event`, `round.next`, `gates.run`). The runner advances one step per tick, persists the updated snapshot, and emits appropriate events.
-
-If the loop has no recipe (legacy mode), the tick appends a generic `tick` event for observability.
-
-### `axi loop stop`
-
-Stop a loop (mark as cancelled). Idempotent — calling stop on an already-terminal loop (cancelled, failed, completed_unreviewed, approved, merged, cleaned) is a no-op. Loops in paused/intervention states (blocked, needs_human, stale) can still be cancelled.
-
-```bash
-planeai-cli axi loop stop <id>
-```
-
-Does not kill sessions. Running sessions must be cleaned up manually.
-
-### `axi loop tree`
-
-Show loop-owned sessions with recursive parent/child relationships.
-
-```bash
-planeai-cli axi loop tree <id>
-```
-
-Returns all sessions registered to the loop plus their recursive children (via `parent_session_id`). If the loop has no sessions, returns a message indicating zero sessions.
-
-### `axi loop verify`
-
-Run a verifier gate command and persist the result to a loop. The command runs synchronously — the CLI blocks until the process completes, then emits the result as TOON.
-
-```bash
-planeai-cli axi loop verify --loop-id <id> --session <id> --name <name> --command <cmd>
-```
-
-| Flag                 | Description                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------ |
-| `--loop-id`          | Loop ID (prefix match supported)                                                     |
-| `--session`          | Session ID (must belong to the loop, prefix supported)                               |
-| `--name`             | Human-readable verifier name (e.g., "rust-tests")                                    |
-| `--command`          | Shell command to execute (passed to `sh -c` / `cmd /C`)                              |
-| `--timeout-ms`       | Timeout in ms (default: 600000 = 10 min). Use 0 for no timeout.                      |
-| `--max-output-bytes` | Max output bytes to capture (default: 10485760 = 10 MB). Larger output is truncated. |
-
-> **Security:** `--command` is a trusted human/recipe-authored command. Do not pass agent-generated command strings to this option. A future `--gate <name>` flag will resolve commands from configured recipe gates.
-
-**Behavior:**
-
-1. Resolves the loop and session (both support prefix matching).
-2. Resolves the working directory: session `worktree_path` → project `path`. If neither exists, returns an error — there is no fallback to the caller's CWD.
-3. Creates a `pending` verifier run in the database.
-4. Runs the command via `sh -c` (macOS/Linux) or `cmd /C` (Windows) with the configured timeout.
-5. Captures combined stdout/stderr (up to `--max-output-bytes`) to a durable log under the project artifact root: `<project_path>/.planeai/loops/<loop_id>/verifiers/<run_id>.log`
-6. Atomically updates the verifier run and appends a `verifier_completed` loop event.
-7. Returns TOON summary with exit code 0 on pass, 1 on fail/error.
-
-**Example output (pass):**
-
-```
-verifier:
-  id: <uuid>
-  loop_id: <uuid>
-  session_id: <uuid>
-  name: rust-tests
-  status: pass
-  exit_code: 0
-  output_path: /path/to/.planeai/loops/<id>/verifiers/<id>.log
-next_actions[2]:
-  - run `planeai-cli axi loop observe <id>` to check overall loop state
-  - run `planeai-cli axi loop tick <id>` to advance the loop
-```
-
-**Example output (fail):**
-
-```
-verifier:
-  id: <uuid>
-  loop_id: <uuid>
-  session_id: <uuid>
-  name: eslint
-  status: fail
-  exit_code: 1
-  output_path: /path/to/.planeai/loops/<id>/verifiers/<id>.log
-next_actions[2]:
-  - inspect output at: /path/to/.planeai/loops/<id>/verifiers/<id>.log
-  - fix the issue and re-run `planeai-cli axi loop verify ...`
-```
-
-> **Note:** Verifier gates are local proof artifacts — they prove a command passed on a specific machine at a specific time. They are not production-level proof. The output log is stored under the project root (not the session worktree), so it survives worktree cleanup.
-
-### `axi loop handoff path`
-
-Print the expected handoff file path for a session within a loop.
-
-```bash
-planeai-cli axi loop handoff path --loop-id <id> --session <id>
-```
-
-### `axi loop handoff record`
-
-Record a structured handoff from a JSON file. Validates schema, IDs, and path security.
-
-```bash
-planeai-cli axi loop handoff record --loop-id <id> --session <id> --path <file>
-```
-
-### `axi loop recipe ls`
-
-List all discovered recipes from all sources (project, user, builtin).
-
-```bash
-planeai-cli axi loop recipe ls
-```
-
-Shows a table with recipe ID, name, source, and path.
-
-### `axi loop recipe show`
-
-Show full details of a recipe by ID or file path.
-
-```bash
-planeai-cli axi loop recipe show <id-or-path>
-```
-
-Displays roles, steps, policy, knowledge, and tools. Also runs validation and reports the result.
-
-### `axi loop recipe validate`
-
-Validate a recipe for schema conformance, role/step consistency, and policy constraints.
-
-```bash
-planeai-cli axi loop recipe validate <id-or-path>
-```
-
-Exits non-zero on validation errors. Warnings (e.g., unreferenced roles, future step kinds) are reported but do not cause failure.
 
 ---
 

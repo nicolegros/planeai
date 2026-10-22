@@ -148,10 +148,10 @@ it("keeps keyboard focus on the clicked terminal tab, not its session's agent", 
 });
 
 it("ignores split shortcuts while the layout is hidden or empty", () => {
-  // A loop dashboard, plugin page or empty TaskWorkspace covers the layout;
+  // A plugin page or empty TaskWorkspace covers the layout;
   // splitting it there would act on panes the user cannot see.
   expect(appSource).toMatch(
-    /const canSplit = \$derived\([\s\S]*?!isEmptyTaskWorkspace && !activeLoopId && !activePluginId/,
+    /const canSplit = \$derived\([\s\S]*?!isEmptyTaskWorkspace && !activePluginId/,
   );
   expect(appSource).toMatch(
     /function handleSplitAction\(actionType: string\): void \{\s*if \(!canSplit\) return;/,

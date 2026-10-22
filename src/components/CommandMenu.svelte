@@ -10,7 +10,6 @@
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
-  import * as loopStore from "../lib/loop-store.svelte";
   import { computeCommandMenuSessions, computeCommandMenuTaskRows, matchableValue, taskRowValue } from "../lib/command-menu-items";
 
   interface Props {
@@ -69,9 +68,7 @@
   );
 
   /** Only sessions no visible task row can navigate to. */
-  const menuSessions = $derived(
-    computeCommandMenuSessions(sessions, taskRows, (id) => loopStore.getLoopIdForSession(id) !== null),
-  );
+  const menuSessions = $derived(computeCommandMenuSessions(sessions, taskRows));
 
   /** Root search query. Tasks only render once there is something to match. */
   let query = $state("");

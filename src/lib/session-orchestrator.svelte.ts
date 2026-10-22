@@ -288,7 +288,7 @@ export function startEventListeners(): () => void {
     }),
   );
 
-  // Its sender, a CLI command, loop or recipe, was already told the prompt was sent.
+  // The CLI command that sent the prompt was already told it was sent.
   unlisteners.push(
     listen<{ session_id: string; error: string }>("prompt-delivery-failed", (event) => {
       const session = sessions.find((s) => s.id === event.payload.session_id);

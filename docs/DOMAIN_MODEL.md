@@ -19,8 +19,6 @@ PlaneAI manages AI coding agent sessions. The domain model is shared across fron
 │  SessionService                  │
 │  WorktreeService                 │
 │  TaskService                     │
-│  LoopService                     │
-│  RecipeService                   │
 └──────────────┬───────────────────┘
                │
                ▼
@@ -79,12 +77,12 @@ archived → active (restore)
 
 ## Worktrees
 
-| Concept | Convention                                       |
-| ------- | ------------------------------------------------ |
-| Root    | `~/.planeai/worktrees/{project_name}/`           |
-| Path    | `~/.planeai/worktrees/{project_name}/{short_id}` |
-| Branch  | `{task-key}/{short_id}`                          |
-| Cleanup | Remove worktree + delete branch on destroy       |
+| Concept | Convention                                                               |
+| ------- | ------------------------------------------------------------------------ |
+| Root    | `~/.planeai/worktrees/{project_name}/`                                   |
+| Path    | `~/.planeai/worktrees/{project_name}/{short_id}`                         |
+| Branch  | `{task-key}/{short_id}`                                                  |
+| Cleanup | Stale worktree cleanup removes owned worktrees 48h after archive/destroy |
 
 **Status:** Iced does not create worktrees yet (no task/branch picker). The shared `WorktreeService` defines the path convention for future use.
 
@@ -118,21 +116,19 @@ archived → active (restore)
 
 ## What Iced Reuses
 
-| Concern                                  | Source                                             |
-| ---------------------------------------- | -------------------------------------------------- |
-| Config/provider resolution               | `planeai_core::session_launch`                     |
-| Session preparation (command, env, PATH) | `planeai_core::session_launch::prepare_session()`  |
-| Project persistence                      | `planeai_core::services::ProjectService`           |
-| Session persistence                      | `planeai_core::services::SessionService`           |
-| Worktree logic                           | `planeai_core::services::WorktreeService`          |
-| Task listing/prompt/lifecycle            | `planeai_core::services::TaskService`              |
-| Prompt locking (cross-process)           | `planeai_core::prompt_lock`                        |
-| Loop run persistence                     | `planeai_core::loop_service::LoopService`          |
-| Loop recipe discovery and validation     | `planeai_core::loop_recipe_service::RecipeService` |
-| Task-driven launch resolution            | `TaskService::resolve_task_launch()`               |
-| Daemon protocol                          | `planeai_daemon::protocol`                         |
-| IPC transport                            | `planeai_ipc`                                      |
-| Durable logging                          | Daemon-side (transparent)                          |
+| Concern                                  | Source                                            |
+| ---------------------------------------- | ------------------------------------------------- |
+| Config/provider resolution               | `planeai_core::session_launch`                    |
+| Session preparation (command, env, PATH) | `planeai_core::session_launch::prepare_session()` |
+| Project persistence                      | `planeai_core::services::ProjectService`          |
+| Session persistence                      | `planeai_core::services::SessionService`          |
+| Worktree logic                           | `planeai_core::services::WorktreeService`         |
+| Task listing/prompt/lifecycle            | `planeai_core::services::TaskService`             |
+| Prompt locking (cross-process)           | `planeai_core::prompt_lock`                       |
+| Task-driven launch resolution            | `TaskService::resolve_task_launch()`              |
+| Daemon protocol                          | `planeai_daemon::protocol`                        |
+| IPC transport                            | `planeai_ipc`                                     |
+| Durable logging                          | Daemon-side (transparent)                         |
 
 ## How Tauri Uses Shared Services
 
@@ -178,179 +174,6 @@ OAuth 2.0 authorization uses PKCE. Configure the Jira Cloud site and connect fro
 A profile with legacy `integrations.jira` state is migrated only after the user selects **Migrate and enable Jira plugin** in Plugins. The host records a durable migration ledger and private snapshot, fences legacy ownership, imports public settings, refresh token/cloud identity, issue/source/sync state, task links, and departed prompts into the plugin namespace, validates equivalence, and enables the plugin as the final step.
 
 An incomplete or failed migration remains fail-closed: neither legacy nor plugin Jira sync/writeback runs until the user retries. Retry reuses the frozen snapshot and converges idempotently. After completion, the bundled plugin is the sole owner of sync, writeback, sidebar, preferences, and departed-issue prompts; the host retains only the legacy reader needed to identify or retry unmigrated state.
-
-## Loop Runs
-
-A durable loop is an orchestration layer above sessions. It tracks rounds of agent work, verification, and human review — enabling strategies like maker-verifier or multi-agent loops without coupling session lifecycle to loop lifecycle.
-
-### Loop Run
-
-| Field                 | Type    | Description                                                                         |
-| --------------------- | ------- | ----------------------------------------------------------------------------------- |
-| id                    | UUID    | Unique identifier                                                                   |
-| project_id            | String  | FK to projects                                                                      |
-| task_key              | String? | Optional link to a tracked task                                                     |
-| created_by_session_id | String? | Session that created this loop (nullable — loops can be CLI/UI/scheduler-initiated) |
-| strategy              | String  | Freeform strategy identifier (e.g., "maker-verifier")                               |
-| goal                  | String  | What the loop is trying to accomplish                                               |
-| status                | Enum    | See loop statuses below                                                             |
-| current_round         | Integer | Current iteration (0-based)                                                         |
-| max_rounds            | Integer | Maximum rounds before auto-failure                                                  |
-| created_at            | String  | RFC 3339 timestamp                                                                  |
-| updated_at            | String  | RFC 3339, advances on any write                                                     |
-| executor_finished_at  | String? | Set when executor is done (completed_unreviewed/failed/cancelled)                   |
-| policy_json           | JSON?   | Retry/timeout/escalation rules (opaque)                                             |
-| budget_json           | JSON?   | Token/cost/time limits (opaque)                                                     |
-
-**Loop statuses:** `draft` → `running` → `observing` → `verifying` → `completed_unreviewed` → `approved` → `merged` → `cleaned`. Also: `blocked`, `needs_human`, `stale`, `failed`, `cancelled`.
-
-**Ownership:** `created_by_session_id` tracks who spawned the loop but does not imply lifecycle coupling. Future fields (`owner_session_id`, `cleanup_policy`) will handle parent-death cleanup independently.
-
-**executor_finished_at semantics:** Set only when the executor finishes producing a reviewable result — specifically when status transitions to `completed_unreviewed`, `failed`, or `cancelled`. Post-executor lifecycle states (`approved`, `merged`, `cleaned`) do NOT set this field because they represent human/CI actions after the executor is done.
-
-**Status categories:**
-
-- **Executor-terminal** — `completed_unreviewed`, `failed`, `cancelled`. The executor has finished; no further automated work occurs.
-- **Lifecycle-terminal** — `approved`, `merged`, `cleaned`. Past executor-terminal; human/CI actions only.
-- **Intervention-required** — `blocked`, `needs_human`, `stale`. A human must unblock before ticking resumes.
-- **Tickable** — `running`, `observing`, `verifying`. The loop runner may execute recipe steps.
-
-### Transition Table
-
-Loop status changes are governed by a **declared state machine** (`planeai_core::loop_run::apply`). Callers do not set status directly — they declare what happened via a `LoopTrigger`, and the transition function decides the resulting state.
-
-**API:** `LoopService::transition_loop(conn, id, trigger)` validates the transition, persists the new status, and logs an audit event (`status_transition`) atomically. On no-op transitions (from == to), the DB write is skipped.
-
-**Triggers and their valid transitions:**
-
-| Trigger               | Valid From             | Target Status       |
-| --------------------- | ---------------------- | ------------------- |
-| `Start`               | `draft`                | `running`           |
-| `Cancel`              | any non-terminal       | `cancelled`         |
-| `HandoffWaiting`      | `running`              | `observing`         |
-| `HandoffConsumed`     | `observing`            | `running`           |
-| `HandoffReceived(s)`  | any active¹            | depends on `s`²     |
-| `GatesStarted`        | `running`              | `verifying`         |
-| `GatesCompleted`      | `verifying`            | `running`           |
-| `RoundBlocked`        | `running`              | `blocked`           |
-| `SessionLimitReached` | `running`              | `needs_human`       |
-| `MaxTicksExceeded`    | `running`              | `failed`            |
-| `HumanWaitReached`    | `running`              | `needs_human`       |
-| `RecipeSetStatus(t)`  | `running`              | `t` (allow-listed³) |
-| `Approve`             | `completed_unreviewed` | `approved`          |
-| `MarkMerged`          | `approved`             | `merged`            |
-| `MarkCleaned`         | `merged`               | `cleaned`           |
-
-¹ Active = `running`, `observing`, `verifying`, `needs_human`, `blocked`, `stale`.
-² `Completed` → `observing`, `Blocked` → `blocked`, `NeedsHuman` → `needs_human`, `Failed` → `failed`.
-³ Allow-listed targets: `observing`, `verifying`, `completed_unreviewed`, `approved`, `blocked`, `needs_human`, `failed`, `cancelled`.
-
-**Design rules:**
-
-- Invalid transitions return an error (`InvalidTransition`) — the caller is notified but state is not corrupted.
-- Idempotent triggers (from == to) return `Unchanged` without a DB write.
-- Every successful state change logs an audit event with `from`, `to`, and `trigger` fields.
-- `record_handoff` uses `transition_in_tx` to bundle the artifact write and status change in one transaction. Rejected transitions during handoff recording are logged but tolerated (race between handoff and cancel).
-
-### Loop Session
-
-| Field      | Type    | Description                                        |
-| ---------- | ------- | -------------------------------------------------- |
-| loop_id    | String  | FK to loop_runs                                    |
-| session_id | String  | FK to sessions                                     |
-| role       | String  | Strategy-specific role (e.g., "maker", "verifier") |
-| round      | Integer | Which round this session belongs to                |
-| provider   | String? | Agent provider used for this session               |
-| status     | String  | Session-within-loop status                         |
-| created_at | String  | RFC 3339 timestamp                                 |
-
-**Primary key:** `(loop_id, session_id)` — a session can only belong to one loop.
-
-### Loop Event
-
-| Field        | Type    | Description                        |
-| ------------ | ------- | ---------------------------------- |
-| id           | Integer | Auto-incrementing, ordered         |
-| loop_id      | String  | FK to loop_runs                    |
-| ts           | String  | RFC 3339 timestamp                 |
-| kind         | String  | Event type (e.g., "round_started") |
-| payload_json | JSON    | Event-specific payload             |
-
-### Loop Artifact
-
-| Field        | Type    | Description                           |
-| ------------ | ------- | ------------------------------------- |
-| id           | UUID    | Unique identifier                     |
-| loop_id      | String  | FK to loop_runs                       |
-| session_id   | String? | Which session produced this artifact  |
-| kind         | String  | Artifact type (e.g., "diff", "patch") |
-| path         | String? | File path if applicable               |
-| content_json | JSON?   | Structured content if applicable      |
-| created_at   | String  | RFC 3339 timestamp                    |
-
-### Verifier Run
-
-| Field         | Type     | Description                              |
-| ------------- | -------- | ---------------------------------------- |
-| id            | UUID     | Unique identifier                        |
-| loop_id       | String   | FK to loop_runs                          |
-| session_id    | String?  | Session if agent-based verifier          |
-| verifier_type | String   | "command" or "agent"                     |
-| name          | String   | Human-readable name (e.g., "cargo test") |
-| command       | String   | The command or agent launch command      |
-| status        | String   | "pending", "running", "passed", "failed" |
-| exit_code     | Integer? | Process exit code (command verifiers)    |
-| output_path   | String?  | Path to captured output                  |
-| created_at    | String   | RFC 3339 timestamp                       |
-| finished_at   | String?  | Set when verifier completes              |
-
-**Module:** `planeai_core::loop_service::LoopService` — migrated via `LoopService::migrate(conn)` (called from each binary's DB migration chain).
-
-**Execution primitive:** `planeai_core::verifier::run_verifier_gate(conn, request)` — a structured, reusable operation that both the AXI CLI and the recipe tick runtime consume. Returns `Result<VerifyGateResult, VerifyGateError>`.
-
-**AXI CLI:** `planeai-cli axi loop verify --loop-id <id> --session <id> --name <name> --command <cmd>` is a thin TOON-rendering wrapper around the primitive.
-
-**Design notes:**
-
-- Gates are local proof artifacts — they prove a command passed on a specific machine at a specific time. They are not production-level proof.
-- Output lives on disk under the project artifact root (`<project>/.planeai/loops/<loop_id>/verifiers/<run_id>.log`), not in the database.
-- Logs are stored under the project root (not the session worktree) so they survive worktree cleanup.
-- CWD resolution is strict: session worktree_path → project path → error. No fallback to caller CWD.
-- `LoopService::complete_verifier_run()` atomically updates the verifier row and appends the `verifier_completed` event in one transaction.
-- Multiple verifiers can run in parallel against the same loop (append-only, no coordination).
-- Default timeout: 10 minutes. Default output cap: 10 MB.
-- `--command` is trusted (human/recipe-authored). Agent-generated commands should not be passed directly.
-
-## Loop Recipes
-
-Declarative YAML definitions that describe reusable loop workflows. A recipe specifies roles, steps, knowledge, tools, and policy constraints — the loop runner executes one step per tick.
-
-**Schema:** `planeai.loop.recipe.v1`
-
-**Key types:**
-
-| Type             | Description                                                                                                                                                                                 |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `LoopRecipe`     | Parsed YAML definition (roles, steps, policy, inputs, knowledge, tools)                                                                                                                     |
-| `RecipeInput`    | Input definition within a recipe: `type` (text\|textarea\|branch\|task\|boolean\|select\|number), `label`, `description`, `default`, `required`, `options` (for select: `[{value, label}]`) |
-| `RecipeSnapshot` | Runtime state stored in `policy_json` — recipe + resolved inputs + tick counter + created sessions                                                                                          |
-| `RecipeService`  | Discovery, loading, validation, and snapshot creation (file-based, no DB)                                                                                                                   |
-
-**`RecipeSnapshot` sub-types:**
-
-| Type             | Key Fields                                                                                             |
-| ---------------- | ------------------------------------------------------------------------------------------------------ |
-| `RecipeRuntime`  | `current_step`, `tick_count`, `round`, `created_session_ids`, `last_error`, `last_handoff_consumed_at` |
-| `SnapshotPolicy` | `max_rounds`, `max_ticks`, `max_sessions`, `merge_policy`, `auto_approve`                              |
-
-- `last_handoff_consumed_at` (string, nullable) — RFC 3339 timestamp of the last consumed handoff. Used to ignore stale handoffs from previous rounds when checking `handoff.wait` steps.
-- `auto_approve` (bool, default `true`) — when true, sessions created by the recipe are launched in auto-approve (yolo) mode, enabling autonomous tool use without confirmation prompts.
-
-**Discovery precedence:** project (`.planeai/loops/*.yaml`) > user (`~/.config/planeai/loops/*.yaml`) > builtin (embedded in binary).
-
-**Module:** `planeai_core::loop_recipe` (data model), `planeai_core::loop_recipe_service` (service), `planeai::recipe_tick` (runtime executor).
-
-See [docs/LOOP_RECIPES.md](./LOOP_RECIPES.md) for the full schema reference, step kinds, and recipe examples.
 
 ## Running Tests
 

@@ -174,153 +174,6 @@ enum AxiAction {
         #[command(subcommand)]
         action: AxiProjectAction,
     },
-    /// Loop operations — create and inspect durable loop runs
-    Loop {
-        #[command(subcommand)]
-        action: AxiLoopAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum AxiLoopAction {
-    /// Create a new loop run
-    Create {
-        /// Goal description for the loop (deprecated: use --input goal="...")
-        #[arg(long, default_value = "")]
-        goal: String,
-        /// Strategy identifier (e.g., maker-verifier). Alias for --recipe.
-        #[arg(long, default_value = "maker-verifier")]
-        strategy: String,
-        /// Recipe ID or path (takes precedence over --strategy)
-        #[arg(long)]
-        recipe: Option<String>,
-        /// Maximum rounds before the loop stops
-        #[arg(long, default_value_t = 3)]
-        max_rounds: i64,
-        /// Task key to associate with this loop (deprecated: use --input task_key="...")
-        #[arg(long)]
-        task: Option<String>,
-        /// Project name (otherwise resolved from CWD)
-        #[arg(long)]
-        project: Option<String>,
-        /// Start the loop immediately (status = running instead of draft)
-        #[arg(long)]
-        start: bool,
-        /// Base branch for worktree isolation (deprecated: use --input base_branch="...")
-        #[arg(long, hide = true)]
-        base_branch: Option<String>,
-        /// Comma-separated provider names for n-candidates-arbiter strategy
-        /// (shorthand for --input providers="claude,codex,kiro")
-        #[arg(long, value_delimiter = ',')]
-        providers: Vec<String>,
-        /// Provider for the arbiter session in n-candidates-arbiter strategy
-        /// (shorthand for --input arbiter_provider="copilot")
-        #[arg(long)]
-        arbiter_provider: Option<String>,
-        /// Set an input key=value pair (repeatable, e.g. --input goal="Fix bug" --input task_key=BUG-1)
-        #[arg(long = "input", value_name = "KEY=VALUE")]
-        input_kv: Vec<String>,
-        /// Set all inputs as a JSON object (e.g. --inputs '{"goal":"Fix bug","task_key":"BUG-1"}')
-        #[arg(long = "inputs", value_name = "JSON")]
-        inputs_json: Option<String>,
-    },
-    /// Recipe operations — list, inspect, and validate loop recipes
-    Recipe {
-        #[command(subcommand)]
-        action: AxiLoopRecipeAction,
-    },
-    /// Observe loop state: summary, sessions, events, artifacts
-    Observe {
-        /// Loop ID (prefix match supported)
-        id: String,
-        /// Maximum number of recent events to show
-        #[arg(long, default_value_t = 20)]
-        limit: usize,
-    },
-    /// Advance the loop by one tick (append event, return state)
-    Tick {
-        /// Loop ID (prefix match supported)
-        id: String,
-    },
-    /// Stop a loop (mark cancelled)
-    Stop {
-        /// Loop ID (prefix match supported)
-        id: String,
-    },
-    /// Show loop-owned sessions with recursive children
-    Tree {
-        /// Loop ID (prefix match supported)
-        id: String,
-    },
-    /// Structured handoff operations
-    Handoff {
-        #[command(subcommand)]
-        action: AxiLoopHandoffAction,
-    },
-    /// Run a verifier gate command and persist the result
-    Verify {
-        /// Loop ID (prefix match supported)
-        #[arg(long, alias = "loop")]
-        loop_id: String,
-        /// Session ID (prefix match supported)
-        #[arg(long)]
-        session: String,
-        /// Verifier name (e.g., "rust-tests", "eslint")
-        #[arg(long)]
-        name: String,
-        /// Command to execute (run in shell). This is a trusted human/recipe-authored
-        /// command — do not pass agent-generated strings.
-        #[arg(long)]
-        command: String,
-        /// Timeout in milliseconds (default: 600000 = 10 min). Use 0 for no timeout.
-        #[arg(long, default_value_t = 600_000)]
-        timeout_ms: u64,
-        /// Maximum output bytes to capture (default: 10MB). Larger output is truncated.
-        #[arg(long, default_value_t = 10_485_760)]
-        max_output_bytes: usize,
-    },
-}
-
-#[derive(Subcommand)]
-enum AxiLoopHandoffAction {
-    /// Print the expected handoff file path for a session
-    Path {
-        /// Loop ID (prefix match supported)
-        #[arg(long, alias = "loop")]
-        loop_id: String,
-        /// Session ID (prefix match supported)
-        #[arg(long)]
-        session: String,
-    },
-    /// Record a structured handoff from a file
-    Record {
-        /// Loop ID (prefix match supported)
-        #[arg(long, alias = "loop")]
-        loop_id: String,
-        /// Session ID (prefix match supported)
-        #[arg(long)]
-        session: String,
-        /// Path to the handoff JSON file
-        #[arg(long)]
-        path: std::path::PathBuf,
-    },
-}
-
-#[derive(Subcommand)]
-enum AxiLoopRecipeAction {
-    /// List all discovered recipes
-    #[command(name = "ls")]
-    List,
-    /// Show recipe details
-    Show {
-        /// Recipe ID or path to a recipe YAML file
-        id: String,
-    },
-    /// Validate a recipe
-    Validate {
-        /// Recipe ID or path to a recipe YAML file
-        id: String,
-    },
 }
 
 #[derive(Subcommand)]
@@ -743,9 +596,9 @@ fn main() {
 
                 let cfg_dir = planeai::config::config_dir("planeai");
                 let (cfg, _) = planeai::config::load(&cfg_dir);
-                let cleanup_ops = planeai::cleanup::real_ops();
+                let kill_ops = planeai::cleanup::real_kill_ops();
 
-                match planeai::session_ops::destroy(&conn, &session.id, &Some(cfg), &cleanup_ops) {
+                match planeai::session_ops::destroy(&conn, &session.id, &Some(cfg), &kill_ops) {
                     Ok(result) => {
                         notify_session_changed(&result.session.id);
                         let output = serde_json::to_string(&result.session).unwrap();
@@ -755,8 +608,8 @@ fn main() {
                         } else {
                             println!("{output}");
                         }
-                        if !result.cleanup_errors.is_empty() {
-                            for e in &result.cleanup_errors {
+                        if !result.kill_errors.is_empty() {
+                            for e in &result.kill_errors {
                                 eprintln!("{{\"warning\": \"{e}\"}}");
                             }
                             std::process::exit(1);
@@ -1056,7 +909,6 @@ fn run_axi(conn: &rusqlite::Connection, action: Option<AxiAction>) -> i32 {
         Some(AxiAction::Task { action }) => run_axi_task(conn, action, &cwd),
         Some(AxiAction::Session { action }) => run_axi_session(conn, action),
         Some(AxiAction::Project { action }) => run_axi_project(conn, action),
-        Some(AxiAction::Loop { action }) => run_axi_loop(conn, action, &cwd),
     }
 }
 
@@ -1390,202 +1242,6 @@ fn parse_daemon_cursor(cursor: &str) -> Result<u64, String> {
 fn run_axi_project(conn: &rusqlite::Connection, action: AxiProjectAction) -> i32 {
     let (output, code) = match action {
         AxiProjectAction::List => planeai::axi::project_ls(conn),
-    };
-    print!("{output}");
-    code
-}
-
-/// Merge inputs from all CLI sources with precedence: JSON blob < key=value pairs < legacy flags.
-///
-/// Returns the merged input map on success, or `(error_output, exit_code)` on parse errors.
-/// Emits a deprecation warning to stderr when legacy flags are used.
-fn merge_cli_inputs(
-    inputs_json: &Option<String>,
-    input_kv: &[String],
-    goal: String,
-    task: &Option<String>,
-    base_branch: &Option<String>,
-) -> Result<std::collections::BTreeMap<String, serde_json::Value>, (String, i32)> {
-    let mut merged: std::collections::BTreeMap<String, serde_json::Value> =
-        std::collections::BTreeMap::new();
-
-    // Layer 1: --inputs JSON (lowest precedence)
-    if let Some(json_str) = inputs_json {
-        match serde_json::from_str::<serde_json::Value>(json_str) {
-            Ok(serde_json::Value::Object(map)) => {
-                for (k, v) in map {
-                    merged.insert(k, v);
-                }
-            }
-            Ok(_) => {
-                let output = planeai_toon::render(&[planeai_toon::field(
-                    "error",
-                    planeai_toon::str_val("--inputs must be a JSON object"),
-                )]);
-                return Err((output, 1));
-            }
-            Err(e) => {
-                let output = planeai_toon::render(&[planeai_toon::field(
-                    "error",
-                    planeai_toon::str_val(&format!("--inputs: invalid JSON: {e}")),
-                )]);
-                return Err((output, 1));
-            }
-        }
-    }
-
-    // Layer 2: --input key=value pairs
-    for kv in input_kv {
-        if let Some((key, val)) = kv.split_once('=') {
-            merged.insert(key.to_string(), serde_json::Value::String(val.to_string()));
-        } else {
-            let output = planeai_toon::render(&[planeai_toon::field(
-                "error",
-                planeai_toon::str_val(&format!("--input must be key=value, got: {kv}")),
-            )]);
-            return Err((output, 1));
-        }
-    }
-
-    // Layer 3: Legacy flags (highest precedence for backwards compat)
-    let legacy_flag_used = !goal.is_empty() || task.is_some() || base_branch.is_some();
-    if !goal.is_empty() {
-        merged.insert("goal".to_string(), serde_json::Value::String(goal));
-    }
-    if let Some(tk) = task {
-        merged.insert(
-            "task_key".to_string(),
-            serde_json::Value::String(tk.clone()),
-        );
-    }
-    if let Some(bb) = base_branch {
-        merged.insert(
-            "base_branch".to_string(),
-            serde_json::Value::String(bb.clone()),
-        );
-    }
-
-    if legacy_flag_used {
-        eprintln!("warning: --goal, --task, and --base-branch are deprecated. Use --input key=value instead.");
-    }
-
-    Ok(merged)
-}
-
-fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -> i32 {
-    let (output, code) = match action {
-        AxiLoopAction::Create {
-            goal,
-            strategy,
-            recipe,
-            max_rounds,
-            task,
-            project,
-            start,
-            base_branch,
-            providers,
-            arbiter_provider,
-            input_kv,
-            inputs_json,
-        } => {
-            let mut merged =
-                match merge_cli_inputs(&inputs_json, &input_kv, goal, &task, &base_branch) {
-                    Ok(m) => m,
-                    Err((output, code)) => {
-                        return {
-                            print!("{output}");
-                            code
-                        }
-                    }
-                };
-
-            // Inject --providers as inputs.providers (comma-separated)
-            if !providers.is_empty() && !merged.contains_key("providers") {
-                merged.insert(
-                    "providers".to_string(),
-                    serde_json::Value::String(providers.join(",")),
-                );
-            }
-
-            // Inject --arbiter-provider as inputs.arbiter_provider
-            if let Some(ref ap) = arbiter_provider {
-                if !merged.contains_key("arbiter_provider") {
-                    merged.insert(
-                        "arbiter_provider".to_string(),
-                        serde_json::Value::String(ap.clone()),
-                    );
-                }
-            }
-
-            // Extract goal from merged inputs (required)
-            let final_goal = match merged.get("goal").and_then(|v| v.as_str()) {
-                Some(g) if !g.is_empty() => g.to_string(),
-                _ => {
-                    return emit_axi_error("goal is required: use --goal or --input goal=\"...\"");
-                }
-            };
-
-            // Extract task_key from merged inputs
-            let final_task = merged
-                .get("task_key")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            // Pass the full merged inputs map to loop_create
-            let inputs_value = if merged.is_empty() {
-                None
-            } else {
-                Some(merged)
-            };
-
-            planeai::axi::loop_create(
-                conn,
-                cwd,
-                project.as_deref(),
-                final_task.as_deref(),
-                &strategy,
-                recipe.as_deref(),
-                &final_goal,
-                max_rounds,
-                start,
-                inputs_value,
-            )
-        }
-        AxiLoopAction::Observe { id, limit } => planeai::axi::loop_observe(conn, &id, limit),
-        AxiLoopAction::Tick { id } => planeai::axi::loop_tick(conn, &id),
-        AxiLoopAction::Stop { id } => planeai::axi::loop_stop(conn, &id),
-        AxiLoopAction::Tree { id } => planeai::axi::loop_tree(conn, &id),
-        AxiLoopAction::Recipe { action } => match action {
-            AxiLoopRecipeAction::List => planeai::axi::recipe_ls(cwd),
-            AxiLoopRecipeAction::Show { id } => planeai::axi::recipe_show(&id, cwd),
-            AxiLoopRecipeAction::Validate { id } => planeai::axi::recipe_validate(&id, cwd),
-        },
-        AxiLoopAction::Handoff { action } => match action {
-            AxiLoopHandoffAction::Path { loop_id, session } => {
-                planeai::axi::loop_handoff_path(conn, &loop_id, &session, cwd)
-            }
-            AxiLoopHandoffAction::Record {
-                loop_id,
-                session,
-                path,
-            } => planeai::axi::loop_handoff_record(conn, &loop_id, &session, &path, cwd),
-        },
-        AxiLoopAction::Verify {
-            loop_id,
-            session,
-            name,
-            command,
-            timeout_ms,
-            max_output_bytes,
-        } => planeai::axi::loop_verify(
-            conn,
-            &loop_id,
-            &session,
-            &name,
-            &command,
-            timeout_ms,
-            max_output_bytes,
-        ),
     };
     print!("{output}");
     code

@@ -202,17 +202,17 @@ describe("tab-switcher state machine", () => {
 
   it("uses explicit runtime workspace candidates instead of persisted session MRU", () => {
     seedMruWith("agent-a", "agent-b");
-    const candidates = ["task:project:PLA-1", "loop:loop-1", "legacy-session"];
+    const candidates = ["task:project:PLA-1", "task:project:PLA-2", "legacy-session"];
     const validIds = new Set(candidates);
 
     startCycle("task:project:PLA-1", validIds, candidates);
 
     expect(getCycleState().cycleList).toEqual([
-      "loop:loop-1",
+      "task:project:PLA-2",
       "legacy-session",
       "task:project:PLA-1",
     ]);
-    expect(commit()).toBe("loop:loop-1");
+    expect(commit()).toBe("task:project:PLA-2");
   });
 
   it("startCycle returns false when validIds filters all others", () => {

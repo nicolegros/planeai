@@ -581,7 +581,9 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
         planeai_tasks::sqlite::migrate(&conn).unwrap();
-        let project = db::create_project(&conn, "app", "/tmp").unwrap();
+        // Launching checks the project folder exists, and `/tmp` does not on Windows.
+        let project_dir = std::env::temp_dir();
+        let project = db::create_project(&conn, "app", &project_dir.to_string_lossy()).unwrap();
         db::create_session_with_id(
             &conn,
             "s1",

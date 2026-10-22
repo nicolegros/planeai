@@ -28,7 +28,7 @@ Right-click a task to open the context menu with quick actions: start session, e
 To see the work of every project in one list, group the sidebar by status.
 Choose **Status** under **Preferences → Appearance → Sidebar** (⌘, / Ctrl+,), or right-click empty space or a group header in the sidebar to open the view options.
 
-The sidebar then shows a **Sessions** section first, holding loops and sessions that are not linked to a task, followed by one section per status: Running, Needs review, To do, and Done.
+The sidebar then shows a **Sessions** section first, holding sessions that are not linked to a task, followed by one section per status: Running, Needs review, To do, and Done.
 Each section mixes the tasks of every visible project, sorted by priority, then by project order, then by task key.
 Each row shows its project name before the task key.
 Project actions, such as editing a project or toggling auto-dispatch, are only available when the sidebar is grouped by project.

@@ -258,7 +258,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
     category: "agents",
     section: "Default",
     label: "Default agent",
-    description: "Used for new sessions unless a task or loop picks another.",
+    description: "Used for new sessions unless a task picks another.",
     keywords: ["provider", "claude", "codex", "kiro", "copilot"],
   },
   {

@@ -1,7 +1,5 @@
 /**
  * Sidebar navigation ID helpers. The display order itself lives in sidebar-model.ts.
- *
- * Loop dashboards are "loop:<id>" entries; regular sessions remain bare IDs.
  */
 
 /**
@@ -12,24 +10,8 @@ export function shouldHideProject(
   orphanCount: number,
   visibleTaskCount: number,
   hideEmpty: boolean,
-  loopCount: number = 0,
 ): boolean {
-  return hideEmpty && orphanCount === 0 && visibleTaskCount === 0 && loopCount === 0;
-}
-
-/** Detect whether a cycle/MRU item is a loop dashboard vs a session. */
-export function isLoopId(id: string): boolean {
-  return id.startsWith("loop:");
-}
-
-/** Extract the raw loop ID from a prefixed string. */
-export function parseLoopId(id: string): string {
-  return id.slice(5);
-}
-
-/** Create a prefixed loop ID for use in cycle lists. */
-export function toLoopId(loopId: string): string {
-  return `loop:${loopId}`;
+  return hideEmpty && orphanCount === 0 && visibleTaskCount === 0;
 }
 
 /** Create a task workspace ID for navigation and MRU state. */

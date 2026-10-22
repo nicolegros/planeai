@@ -25,8 +25,6 @@ A desktop app that lets you run multiple AI coding agents in parallel — each i
 - **Provider-agnostic** — works with Kiro, Claude, Copilot, Codex, or any CLI agent
 - **Keyboard-first** — command menu (Cmd+K / Ctrl+K), shortcuts for every action
 - **Task management** — built-in task tracker with lifecycle hooks and auto-dispatch
-- **Loop recipes** — declarative YAML workflows for multi-agent loops (maker-verifier, n-candidates-arbiter, custom)
-- **Loop Runs UI** — sidebar panel + dashboard for monitoring loop progress, verifier results, and controlling loops without the terminal
 - **Jira connection** — bundled Jira plugin with PKCE OAuth, plugin-scoped source settings, immediate periodic source sync, a dedicated sidebar section, departed-issue review prompts, and assignment to PlaneAI projects; Jira writeback is supported for configured lifecycle actions.
 - **Git worktree isolation** — parallel agents work on separate branches without conflicts
 - **Cross-platform** — macOS, Linux, and Windows

@@ -21,9 +21,6 @@ describe("plugin session indicators", () => {
 
   it("mounts indicator contributions beside every session-row shape with that row context", () => {
     expect(sidebar).toMatch(
-      /data-plugin-session-indicator=\{childSession\.id\}[\s\S]*?session=\{pluginSessionContext\(childSession\)\}/,
-    );
-    expect(sidebar).toMatch(
       /data-plugin-session-indicator=\{session\.id\}[\s\S]*?session=\{pluginSessionContext\(session\)\}/,
     );
     expect(sidebar).toMatch(

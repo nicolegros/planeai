@@ -17,8 +17,7 @@
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { sidebarNavigationOrder } from "./lib/sidebar-model";
   import { getSidebarModel } from "./lib/sidebar-model-store.svelte";
-  import { isLoopId, parseLoopId, isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
-  import { isTerminal, isActive as isLoopActive } from "./lib/loop-status";
+  import { isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { taskSessionDefaults } from "./lib/task-session-defaults";
   import { pluginPreferencesLocation, settingsLocationQuery, type SettingsLocation } from "./lib/settings-registry";
@@ -47,16 +46,13 @@
   import PluginDialog from "./components/PluginDialog.svelte";
   import LogViewer from "./components/LogViewer.svelte";
   import ToastHost, { toggleToastFocus } from "./components/ToastHost.svelte";
-  import LoopForm from "./components/LoopForm.svelte";
-  import LoopDashboard from "./components/LoopDashboard.svelte";
   import EmptyTaskWorkspace from "./components/EmptyTaskWorkspace.svelte";
   import PluginContributionHost from "./components/PluginContributionHost.svelte";
   import ProviderSessionView from "./components/ProviderSessionView.svelte";
   import { isPluginSession, runtimeProviders } from "./lib/plugin-providers";
   import { sendToAgent } from "./lib/agent-input";
   import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution, TabEnded } from "./lib/types";
-  import * as loopStore from "./lib/loop-store.svelte";
-  import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
+  import { plugins as pluginsApi } from "./lib/api";
   import { showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { providerHandoff, taskWorkspaceLayout as workspaceLayout, toPaneTabs, workspaceOf, type PaneTab, type WorkspaceAgent, type WorkspaceIdentity } from "./lib/task-workspace-layout.svelte";
   import { activeTabOf, findLeaf, tabsOf, type LeafNode, type NavDirection, type SplitDirection, type TabEntry } from "./lib/layout-tree";
@@ -83,7 +79,6 @@
   let showShortcuts = $state(false);
   let showHookPrompt = $state(false);
   let showQuitConfirm = $state(false);
-  let showLoopForm = $state(false);
   let quitDirectCount = $state(0);
   let fileExplorerVisible = $state(false);
   let showLogViewer = $state(false);
@@ -101,13 +96,12 @@
   let sessionToDelete = $state<Session | null>(null);
   let projectToDelete = $state<Project | null>(null);
   let projectToEdit = $state<Project | null>(null);
-  let loopToDelete = $state<import("./lib/types").LoopRunSummary | null>(null);
   let renamingSessionId = $state<string | null>(null);
   let taskPrefill = $state<{ key: string; title: string; description: string; branch: string; name: string; prompt: string; baseBranch?: string; projectId?: string | null } | null>(null);
   let selectedTaskWorkspace = $state<{ task: TaskItem; project: Project } | null>(null);
   let taskWorkspaceToEdit = $state<{ task: TaskItem; project: Project } | null>(null);
   let archivedTaskSessions = $state<Session[]>([]);
-  // Task and loop identities are UI-only; persisted MRU accepts real session IDs only.
+  // Task identities are UI-only; persisted MRU accepts real session IDs only.
   let workspaceMru = $state<string[]>([]);
 
   // ─── Derived from orchestrator ──────────────────────────────────────────────
@@ -140,7 +134,6 @@
     provider: activeSession.provider,
     taskKey: activeSession.task_key,
   } : undefined);
-  const activeLoopId = $derived(loopStore.getActiveLoopId());
   const activePlugin = $derived(pluginInventory.find((plugin) => plugin.id === activePluginId) ?? null);
   const activeContribution = $derived(activePlugin?.ui_contributions.find((contribution) => contribution.id === activeContributionId) ?? null);
   const modalPlugin = $derived(pluginInventory.find((plugin) => plugin.id === pluginDialog?.pluginId) ?? null);
@@ -185,17 +178,17 @@
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
 
-  // Session IDs in sidebar display order (includes loop:<id> entries)
+  // Navigation IDs in sidebar display order
   const sidebarSessionOrder = $derived(sidebarNavigationOrder(getSidebarModel()));
 
   // ─── TaskWorkspace layout ───────────────────────────────────────────────────
   const layoutTree = $derived(workspaceLayout.layout?.tree ?? null);
   const focusedLeafId = $derived(workspaceLayout.layout?.focusedLeafId ?? null);
   const hasMultiplePanes = $derived(workspaceLayout.isSplit);
-  // Split shortcuts act on the visible layout only: never behind a loop
-  // dashboard, a plugin page or an empty TaskWorkspace.
+  // Split shortcuts act on the visible layout only: never behind a plugin
+  // page or an empty TaskWorkspace.
   const canSplit = $derived(
-    !!activeSessionId && !!layoutTree && !isEmptyTaskWorkspace && !activeLoopId && !activePluginId,
+    !!activeSessionId && !!layoutTree && !isEmptyTaskWorkspace && !activePluginId,
   );
   // A single pane shows its tabs in the titlebar; split panes each get their own tab bar.
   const singlePane = $derived(layoutTree?.type === "leaf" ? layoutTree : null);
@@ -231,8 +224,8 @@
   // are caught by the DOM probe inside releaseTerminalDomFocus.
   const keyboardModalOpen = $derived(
     showNewItemModal || !!sessionToDelete || showTaskForm || showProjectForm || !!pluginDialog
-      || showSessionForm || showLoopForm || commandMenuOpen || showShortcuts
-      || !!projectToDelete || !!loopToDelete || showQuitConfirm || showOnboarding,
+      || showSessionForm || commandMenuOpen || showShortcuts
+      || !!projectToDelete || showQuitConfirm || showOnboarding,
   );
   const terminalKeyboardOwnership = $derived({
     zone,
@@ -523,7 +516,7 @@
   }
 
   function closeOverlays(): void {
-    showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; closePluginContributionModal(); showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false; commandMenuRenameId = null;
+    showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; closePluginContributionModal(); sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false; commandMenuRenameId = null;
   }
 
   // Setup can restart mid-session; anything left open would sit under the wizard and keep the keyboard.
@@ -532,7 +525,6 @@
     untrack(() => {
       closeOverlays();
       projectToDelete = null;
-      loopToDelete = null;
     });
   });
 
@@ -617,24 +609,6 @@
     projectToDelete = null;
   }
 
-  /** Delete a loop record only (sessions become standalone). */
-  async function deleteLoopOnly(loopId: string) {
-    await loopsApi.delete(loopId);
-    if (loopStore.getActiveLoopId() === loopId) loopStore.setActiveLoopId(null);
-    loopStore.refreshAllLoops(projects.map(p => p.id));
-  }
-
-  /** Delete a loop and destroy all its linked sessions. */
-  async function deleteLoopAndSessions(loopId: string) {
-    const sessionIds = await loopsApi.delete(loopId);
-    if (loopStore.getActiveLoopId() === loopId) loopStore.setActiveLoopId(null);
-    for (const sid of sessionIds) {
-      const s = sessions.find(x => x.id === sid);
-      if (s) await orchestrator.deleteSession(s);
-    }
-    loopStore.refreshAllLoops(projects.map(p => p.id));
-  }
-
   // ─── Plugin workspace ─────────────────────────────────────────────────────
 
   async function refreshPlugins(): Promise<boolean> {
@@ -683,7 +657,6 @@
     }
     pluginDialog = null;
     if (activePluginId === pluginId && activeContributionId === contributionId) return;
-    loopStore.setActiveLoopId(null);
     activePluginId = pluginId;
     activeContributionId = contributionId;
   }
@@ -760,7 +733,6 @@
       selectedTaskWorkspace = null;
     }
     leavePluginWorkspace();
-    loopStore.setActiveLoopId(null);
     // `selectWorkspaceTask` passes explicit: false — its first-linked session is an
     // arbitrary entry point and must not override a remembered tab.
     orchestrator.selectSession(sessionId, { explicit: opts.explicit ?? true });
@@ -779,7 +751,7 @@
 
   /** Generic "new session" entry points start from the focused task, if any. */
   function openNewSessionForm(): void {
-    if (activeTaskWorkspace && !activeLoopId && !activePluginId) { openSessionForTask(activeTaskWorkspace.task, activeTaskWorkspace.project); return; }
+    if (activeTaskWorkspace && !activePluginId) { openSessionForTask(activeTaskWorkspace.task, activeTaskWorkspace.project); return; }
     taskPrefill = null;
     showSessionForm = true;
   }
@@ -789,7 +761,6 @@
     if (!project) return;
     selectedTaskWorkspace = { task, project };
     touchWorkspaceMru(toTaskWorkspaceId(project.id, task.key));
-    loopStore.setActiveLoopId(null);
     const linked = sessions.find((session) => sessionTaskProjectId(session) === project.id && session.task_key === task.key);
     if (linked) {
       const alreadyActive = linked.id === activeSessionId;
@@ -823,14 +794,7 @@
 
   function jumpToWorkspaceSession(index: number): void {
     leavePluginWorkspace();
-    loopStore.setActiveLoopId(null);
     orchestrator.jumpToSession(index);
-  }
-
-  function selectWorkspaceLoop(loopId: string): void {
-    leavePluginWorkspace();
-    loopStore.setActiveLoopId(loopId);
-    touchWorkspaceMru(`loop:${loopId}`);
   }
 
   /** Promote a UI-only workspace identity without sending it to session MRU persistence. */
@@ -864,7 +828,7 @@
     if (tab && isTerminalTab(tab)) requestTerminalFocus(tab.ptyKey);
   }
 
-  /** Valid IDs for MRU cycling — task workspaces, legacy sessions, and loops. */
+  /** Valid IDs for MRU cycling: task workspaces and legacy sessions. */
   function getSwitchableIds(): Set<string> {
     const ids = new Set<string>(sidebarSessionOrder.filter((id) => {
       const taskWorkspace = parseTaskWorkspaceId(id);
@@ -878,18 +842,12 @@
     for (const session of sessions) {
       if (!session.task_key) ids.add(session.id);
     }
-    for (const p of projects) {
-      for (const loop of loopStore.getLoopsForProject(p.id)) {
-        if (loop.status !== "draft" && !isTerminal(loop.status)) ids.add(`loop:${loop.id}`);
-      }
-    }
     return ids;
   }
 
   onMount(() => {
     projectStore.loadProjects().then(() => {
       taskStore.loadTasks(projectStore.getProjects().map((p) => p.path));
-      loopStore.refreshAllLoops(projectStore.getProjects().map((p) => p.id));
     });
     orchestrator.loadSessions();
     loadSettings().then(() => loadTheme());
@@ -897,7 +855,6 @@
     const cleanupEvents = orchestrator.startEventListeners();
     const cleanupSymphony = orchestrator.startSymphonyPolling();
     const cleanupProjectFocus = projectStore.reloadProjectsOnFocus();
-    const cleanupLoopListener = loopStore.startLoopEventListener(() => projectStore.getProjects().map((p) => p.id));
     const cleanupTaskListener = taskStore.startTaskEventListener(() => projectStore.getProjects().map((p) => p.path));
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     // Backend failures the user should see, from work no window is awaiting.
@@ -997,12 +954,12 @@
         else if (action.type === "jump_to_session") { jumpToWorkspaceSession(action.index); }
         else if (action.type === "tab_switch") {
           const sw = getCycleState();
-          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
+          const currentId = activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
           if (!sw.isCycling) startCycle(currentId, getSwitchableIds(), getWorkspaceMruCandidates());
           else advance(1);
         } else if (action.type === "tab_switch_reverse") {
           const sw = getCycleState();
-          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
+          const currentId = activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
           if (!sw.isCycling) { startCycle(currentId, getSwitchableIds(), getWorkspaceMruCandidates()); advance(-1); }
           else advance(-1);
         } else if (action.type === "focus_terminal") {
@@ -1017,11 +974,11 @@
         else if (action.type === "next_tab") { cycleTab(1); }
         else if (action.type === "prev_tab") { cycleTab(-1); }
         else if (action.type === "next_session") {
-          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
+          const currentId = activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
           if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, 1);
           else navCycle.advance(1);
         } else if (action.type === "prev_session") {
-          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
+          const currentId = activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
           if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, -1);
           else navCycle.advance(-1);
         }
@@ -1044,7 +1001,7 @@
         else if (action.type === "focus_toast") { if (!toggleToastFocus()) focusPluginInteraction(); }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
-      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !pluginDialog && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !pluginDialog && !getCycleState().isCycling && !navCycle.isCycling(),
       () => getActiveZone() === "editor" && workspaceLayout.focusedTab()?.type === "editor",
       () => !!document.activeElement?.closest('[data-form-keyboard]'),
       () => showOnboarding,
@@ -1058,7 +1015,6 @@
         if (e.key === 'Escape') { showNewItemModal = false; }
         else if (e.key === 's') { showNewItemModal = false; openNewSessionForm(); }
         else if (e.key === 't') { showNewItemModal = false; showTaskForm = true; }
-        else if (e.key === 'l') { showNewItemModal = false; showLoopForm = true; }
       } else if (sessionToDelete) {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -1069,12 +1025,6 @@
         e.stopImmediatePropagation();
         if (e.key === 'Escape' || e.key === 'c' || e.key === 'n') projectToDelete = null;
         else if (e.key === 'd' || e.key === 'y') deleteProject(projectToDelete);
-      } else if (loopToDelete) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        if (e.key === 'Escape' || e.key === 'c' || e.key === 'n') { loopToDelete = null; focusTerminal(); }
-        else if (e.key === 'l') { const id = loopToDelete.id; loopToDelete = null; focusTerminal(); deleteLoopOnly(id); }
-        else if (e.key === 'a') { const id = loopToDelete.id; loopToDelete = null; focusTerminal(); deleteLoopAndSessions(id); }
       } else if (showQuitConfirm) {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -1084,11 +1034,9 @@
     }
     window.addEventListener("keydown", onModalKeydown, true);
 
-    /** Route a navigation target (task workspace, session, or loop). */
+    /** Route a navigation target (task workspace or session). */
     function routeNavTarget(target: string): void {
-      if (isLoopId(target)) {
-        selectWorkspaceLoop(parseLoopId(target));
-      } else if (isTaskWorkspaceId(target)) {
+      if (isTaskWorkspaceId(target)) {
         const parsed = parseTaskWorkspaceId(target);
         const project = parsed ? projects.find((candidate) => candidate.id === parsed.projectId) : undefined;
         const task = project && parsed ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === parsed.taskKey) : undefined;
@@ -1103,24 +1051,24 @@
       if (!isModRelease) return;
       if (getCycleState().isCycling) {
         const target = commit();
-        if (target && !isLoopId(target)) {
+        if (target) {
           routeNavTarget(target);
           focusTerminal();
-        } else if (target) routeNavTarget(target);
+        }
       }
       if (navCycle.isCycling()) {
         const target = navCycle.commit();
-        if (target && !isLoopId(target)) {
+        if (target) {
           routeNavTarget(target);
           focusTerminal();
-        } else if (target) routeNavTarget(target);
+        }
       }
     }
     function onBlur() { setTimeout(() => { if (!document.hasFocus()) { if (getCycleState().isCycling) cancel(); if (navCycle.isCycling()) navCycle.cancel(); } }, 0); }
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); unlistenFileDrop.then((fn) => fn()); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupLoopListener(); cleanupProjectFocus(); cleanupTaskListener(); unlistenSettings.then((fn) => fn()); unlistenAppError.then((fn) => fn()); unlistenTabEnded.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); unlistenFileDrop.then((fn) => fn()); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupProjectFocus(); cleanupTaskListener(); unlistenSettings.then((fn) => fn()); unlistenAppError.then((fn) => fn()); unlistenTabEnded.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -1135,7 +1083,6 @@
     activeProvider={activeSession?.provider ?? null}
     onSelectTab={(ptyKey) => {
       leavePluginWorkspace();
-      loopStore.setActiveLoopId(null);
       selectPaneTab(ptyKey);
     }}
     onAddTab={() => openShellTab(singlePane?.id)}
@@ -1168,14 +1115,7 @@
         onOpenPreferences={openPreferences}
         onCreateSession={openNewSessionForm}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
-        onSelectLoop={selectWorkspaceLoop}
-        onStartLoop={(id) => { loopsApi.start(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
-        onTickLoop={(id) => { loopsApi.tick(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
-        onStopLoop={(id) => { loopsApi.stop(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
-        onDeleteLoop={(id) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === id); if (!loop) return; const hasSessions = (loopStore.getSessionsForLoop(id) ?? []).length > 0; if (hasSessions) { loopToDelete = loop; } else { deleteLoopOnly(id); } }}
-        onDeleteLoopSession={(session, loopId) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === loopId); if (loop && isLoopActive(loop.status)) { showToast("Stop the loop before deleting its sessions"); } else { orchestrator.deleteSession(session); } }}
         selectedTaskWorkspace={activeTaskWorkspace ? { projectId: activeTaskWorkspace.project.id, taskKey: activeTaskWorkspace.task.key } : null}
-        selectedLoopId={activeLoopId}
         onToggleDiff={toggleDiff}
         pluginContributions={sidebarPluginContributions}
         {sessionIndicatorContributions}
@@ -1235,16 +1175,6 @@
         onSubmitted={() => { taskWorkspaceToEdit = null; showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
         onCancel={() => { taskWorkspaceToEdit = null; showTaskForm = false; tick().then(() => refocusTerminal()); }}
         onSessionCreated={(session) => { leavePluginWorkspace(); taskWorkspaceToEdit = null; showTaskForm = false; orchestrator.createSession(session); focusTerminal(); }}
-      />
-    </FormDialog>
-    {/if}
-
-    {#if showLoopForm}
-    <FormDialog title="Start Loop" onClose={() => { showLoopForm = false; tick().then(() => refocusTerminal()); }}>
-      <LoopForm
-        projects={projects.map(p => ({ id: p.id, name: p.name, path: p.path }))}
-        onCreated={(loop) => { showLoopForm = false; selectWorkspaceLoop(loop.id); loopStore.refreshAllLoops(projects.map(p => p.id)); focusTerminal(); }}
-        onCancel={() => { showLoopForm = false; tick().then(() => refocusTerminal()); }}
       />
     </FormDialog>
     {/if}
@@ -1362,12 +1292,12 @@
                 />
               </div>
               {:else if session}
-              <!-- Wrapper hides inactive tabs; Terminal's visible prop also pauses during loop overlay -->
+              <!-- Wrapper hides inactive tabs; Terminal's visible prop also pauses during plugin overlay -->
               <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
                 <Terminal
                   focusRequest={terminalFocusRequest}
                   sessionId={tabEntry.ptyKey}
-                  visible={isActiveInLeaf && !activeLoopId && !activePluginId}
+                  visible={isActiveInLeaf && !activePluginId}
                   focused={paneFocused}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
@@ -1448,7 +1378,7 @@
       <EmptyTaskWorkspace
         task={activeTaskWorkspace.task}
         archivedSessions={archivedTaskSessions}
-        active={!activeLoopId && !activePluginId}
+        active={!activePluginId}
         onNewSession={() => openSessionForTask(activeTaskWorkspace.task, activeTaskWorkspace.project)}
         onRestore={restoreTaskSession}
         onEdit={() => { taskWorkspaceToEdit = activeTaskWorkspace; showTaskForm = true; }}
@@ -1457,7 +1387,7 @@
 
     <!-- Always render through the layout tree (a single pane is the normal view) -->
     {#if layoutTree && !isEmptyTaskWorkspace}
-      <div class:hidden={!!activeLoopId || !!activePluginId} class="w-full h-full">
+      <div class:hidden={!!activePluginId} class="w-full h-full">
         <SplitContainer node={layoutTree} renderLeaf={splitLeafSnippet} />
       </div>
     {/if}
@@ -1476,29 +1406,7 @@
       </div>
     {/if}
 
-    {#if activeLoopId && !activePluginId}
-      {@const loopProjectPath = (() => { const loops = projects.flatMap(p => loopStore.getLoopsForProject(p.id)); const loop = loops.find(l => l.id === activeLoopId); return loop ? (projects.find(p => p.id === loop.project_id)?.path ?? "") : ""; })()}
-      <div class="w-full h-full bg-main">
-        <LoopDashboard
-          loopId={activeLoopId}
-          projectPath={loopProjectPath}
-          onSelectSession={selectWorkspaceSession}
-          onOpenArtifact={(path) => {
-            // If no active session, select the first session from this loop
-            if (!activeSession) {
-              const loopSessions = loopStore.getSessionsForLoop(activeLoopId);
-              if (loopSessions.length > 0) {
-                selectWorkspaceSession(loopSessions[0].session_id);
-              } else return;
-            }
-            loopStore.setActiveLoopId(null);
-            if (activeSessionId) openFile(activeSessionId, path);
-          }}
-        />
-      </div>
-    {/if}
-
-    {#if sessions.length === 0 && !activeTaskWorkspace && !showProjectForm && !showSessionForm && !activeLoopId && !activePluginId}
+    {#if sessions.length === 0 && !activeTaskWorkspace && !showProjectForm && !showSessionForm && !activePluginId}
       <div class="flex items-center justify-center h-full">
         <p class="text-t2">No active session. Press <kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">{MOD_LABEL}N</kbd> to create one.</p>
       </div>
@@ -1558,35 +1466,6 @@
         </div>
       </SharedDialog>
     {/if}
-    {#if loopToDelete}
-      {@const ltd = loopToDelete}
-      {@const loopSessionCount = (loopStore.getSessionsForLoop(ltd.id) ?? []).length}
-      <SharedDialog open={true} onOpenChange={(v) => { if (!v) loopToDelete = null; }} title="Delete loop" class="w-[268px] rounded-[13px] border-border-s shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] overflow-hidden">
-        <div>
-          <div class="flex flex-col px-[15px] pt-[13px] pb-[11px] gap-1">
-            <div class="flex items-center">
-              <span class="text-[13px] font-semibold text-t1">Delete loop <span class="font-bold">{ltd.task_key || ltd.goal.slice(0, 20)}</span>?</span>
-              <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
-            </div>
-            <p class="text-[11px] text-t3">This loop has {loopSessionCount} session{loopSessionCount !== 1 ? 's' : ''}.</p>
-          </div>
-          <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
-            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { loopToDelete = null; focusTerminal(); }}>
-              <span class="flex-1 text-[13.5px] text-t1">Cancel</span>
-              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">n</span>
-            </button>
-            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors text-t1" onclick={() => { const id = ltd.id; loopToDelete = null; focusTerminal(); deleteLoopOnly(id); }}>
-              <span class="flex-1 text-[13.5px]">Delete loop only</span>
-              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">l</span>
-            </button>
-            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-red-500/10 transition-colors text-red-400" onclick={() => { const id = ltd.id; loopToDelete = null; focusTerminal(); deleteLoopAndSessions(id); }}>
-              <span class="flex-1 text-[13.5px]">Delete loop and sessions</span>
-              <span class="font-mono text-[10px] text-red-400/70 border border-red-500/30 rounded-[5px] px-1.5 py-[2px]">a</span>
-            </button>
-          </div>
-        </div>
-      </SharedDialog>
-    {/if}
     {#if showQuitConfirm}
       <SharedDialog open={true} onOpenChange={(v) => { if (!v) showQuitConfirm = false; }} title="Quit" class="w-[268px] rounded-[13px] border-border-s shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] overflow-hidden">
         <div>
@@ -1628,11 +1507,6 @@
               <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">☰</span>
               <span class="flex-1 text-[13.5px] text-t1">Task</span>
               <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">t</span>
-            </button>
-            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showNewItemModal = false; showLoopForm = true; }}>
-              <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">⟳</span>
-              <span class="flex-1 text-[13.5px] text-t1">Loop (experimental)</span>
-              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">l</span>
             </button>
           </div>
         </div>

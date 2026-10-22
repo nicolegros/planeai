@@ -37,9 +37,9 @@ The Makefile passes dummy values automatically — prefer `make test` over raw c
 - **Formatter:** oxfmt (not prettier)
 - **Type checker:** svelte-check
 - **Framework:** Svelte 5 with runes (`$state`, `$derived`, `$effect`) — no legacy stores, no `$:`
-- **File naming:** kebab-case (`loop-store.svelte.ts`, `SessionForm.svelte`)
+- **File naming:** kebab-case (`task-store.svelte.ts`, `api.ts`)
 - **Reactive stores:** `.svelte.ts` extension (e.g., `task-store.svelte.ts`)
-- **Components:** PascalCase filenames (`LoopDashboard.svelte`)
+- **Components:** PascalCase filenames (`SessionForm.svelte`)
 - **Complex interactives:** Use bits-ui (not custom popovers/selects)
 - **Design tokens:** CSS custom properties via `@theme` block — never hardcode colors
 - **API calls:** Use `src/lib/api.ts` typed layer — never call `invoke()` directly (ADR-0009)
@@ -93,7 +93,7 @@ Use red-green-refactor when implementing features and fixing bugs:
 ## Commits
 
 Use conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`.
-Scopes are optional but preferred: `feat(loops):`, `fix(daemon):`, `refactor(sidebar):`.
+Scopes are optional but preferred: `feat(tasks):`, `fix(daemon):`, `refactor(sidebar):`.
 
 ## Documentation
 

@@ -7,7 +7,7 @@ import {
   type SidebarModelInput,
   type SidebarSection,
 } from "../sidebar-model";
-import type { LoopRunSummary, LoopSessionItem, Project, Session, TaskItem } from "../types";
+import type { Project, Session, TaskItem } from "../types";
 
 function project(id: string, overrides: Partial<Project> = {}): Project {
   return { id, name: id, path: `/repos/${id}`, hidden: false, path_missing: false, ...overrides };
@@ -57,18 +57,12 @@ function session(
   };
 }
 
-function loop(id: string, projectId: string): LoopRunSummary {
-  return { id, project_id: projectId } as LoopRunSummary;
-}
-
 function input(overrides: Partial<SidebarModelInput> = {}): SidebarModelInput {
   return {
     groupBy: "project",
     projects: [],
     sessions: [],
     tasksByProject: {},
-    loopsByProject: {},
-    loopSessions: {},
     hideDoneTasks: false,
     hideEmptyProjects: false,
     ...overrides,
@@ -126,7 +120,7 @@ describe("buildSidebarModel - project mode", () => {
     ]);
   });
 
-  it("places loops and unlinked sessions in their project", () => {
+  it("places unlinked sessions in their project", () => {
     const sections = buildSidebarModel(
       input({
         projects: [alpha, beta],
@@ -137,22 +131,12 @@ describe("buildSidebarModel - project mode", () => {
           session("s4", "alpha"),
         ],
         tasksByProject: { [beta.path]: [task("B-1", "todo")] },
-        loopsByProject: { beta: [loop("l1", "beta")] },
-        loopSessions: {
-          l1: [
-            { session_id: "s4" } as LoopSessionItem,
-            { session_id: "missing" } as LoopSessionItem,
-          ],
-        },
       }),
     );
     const [a, b] = sections;
     if (a.kind !== "project" || b.kind !== "project") throw new Error("expected project sections");
-    expect(a.orphans.map((r) => r.session.id)).toEqual(["s1"]);
+    expect(a.orphans.map((r) => r.session.id)).toEqual(["s1", "s4"]);
     expect(b.orphans.map((r) => r.session.id)).toEqual(["s3"]);
-    expect(b.loops.map((r) => [r.loop.id, r.children.map((c) => c.session.id)])).toEqual([
-      ["l1", ["s4"]],
-    ]);
   });
 
   it("matches sessions to tasks by project and key when keys repeat across projects", () => {
@@ -232,7 +216,6 @@ describe("buildSidebarModel - status mode", () => {
         groupBy: "status",
         projects: [alpha, beta],
         sessions: [session("s1", "beta"), session("s2", "alpha")],
-        loopsByProject: { beta: [loop("l1", "beta")] },
         tasksByProject: {
           [alpha.path]: [task("A-1", "in_progress"), task("A-2", "done")],
           [beta.path]: [task("B-1", "in_progress"), task("B-2", "in_review")],
@@ -249,7 +232,6 @@ describe("buildSidebarModel - status mode", () => {
     const [sessions, running] = sections;
     if (sessions.kind !== "sessions" || running.kind !== "status")
       throw new Error("unexpected section kinds");
-    expect(sessions.loops.map((r) => [r.loop.id, r.project.id])).toEqual([["l1", "beta"]]);
     expect(sessions.orphans.map((r) => [r.session.id, r.project.id])).toEqual([
       ["s2", "alpha"],
       ["s1", "beta"],
@@ -260,7 +242,7 @@ describe("buildSidebarModel - status mode", () => {
     ]);
   });
 
-  it("omits the sessions section when there are no loops or unlinked sessions", () => {
+  it("omits the sessions section when there are no unlinked sessions", () => {
     const sections = buildSidebarModel(
       input({
         groupBy: "status",
@@ -309,10 +291,6 @@ describe("buildSidebarModel - status mode", () => {
 });
 
 describe("sidebarNavigationOrder", () => {
-  const loopSessions: Record<string, LoopSessionItem[]> = {
-    l1: [{ session_id: "ls1" } as LoopSessionItem],
-  };
-
   it("excludes hidden projects", () => {
     const sections = buildSidebarModel(
       input({
@@ -327,9 +305,7 @@ describe("sidebarNavigationOrder", () => {
     const sections = buildSidebarModel(
       input({
         projects: [alpha, beta],
-        sessions: [session("s1", "alpha"), session("ls1", "alpha")],
-        loopsByProject: { alpha: [loop("l1", "alpha")] },
-        loopSessions,
+        sessions: [session("s1", "alpha"), session("s2", "alpha")],
         tasksByProject: {
           [alpha.path]: [task("A-1", "todo"), task("A-2", "in_progress")],
           [beta.path]: [task("B-1", "todo")],
@@ -337,9 +313,8 @@ describe("sidebarNavigationOrder", () => {
       }),
     );
     expect(sidebarNavigationOrder(sections)).toEqual([
-      "loop:l1",
-      "ls1",
       "s1",
+      "s2",
       "task:alpha:A-2",
       "task:alpha:A-1",
       "task:beta:B-1",
@@ -351,9 +326,7 @@ describe("sidebarNavigationOrder", () => {
       input({
         groupBy: "status",
         projects: [alpha, beta],
-        sessions: [session("s1", "beta"), session("ls1", "alpha")],
-        loopsByProject: { alpha: [loop("l1", "alpha")] },
-        loopSessions,
+        sessions: [session("s1", "beta"), session("s2", "alpha")],
         tasksByProject: {
           [alpha.path]: [task("A-1", "todo")],
           [beta.path]: [task("B-1", "in_progress")],
@@ -361,8 +334,7 @@ describe("sidebarNavigationOrder", () => {
       }),
     );
     expect(sidebarNavigationOrder(sections)).toEqual([
-      "loop:l1",
-      "ls1",
+      "s2",
       "s1",
       "task:beta:B-1",
       "task:alpha:A-1",

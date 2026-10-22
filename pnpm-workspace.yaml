@@ -1,10 +1,5 @@
 minimumReleaseAge: 10080
 
-# Security patch for GHSA-8r5x-fm3f-whwj and GHSA-p8wg-vrv2-v86f, published 2026-10-05.
-# Remove once 4.7.10 is older than minimumReleaseAge (after 2026-10-12).
-minimumReleaseAgeExclude:
-  - handlebars@4.7.10
-
 onlyBuiltDependencies:
   - esbuild
   - "@tailwindcss/oxide"
@@ -24,3 +19,6 @@ auditConfig:
     # in the release workflow, which expands trusted globs from this repo.
     # Remove once braces ships a fix or auto drops fast-glob.
     - GHSA-vfj7-8cjw-p6xm
+    # markdown-it 15.0.3 fixes it but it and its argparse 3.0.3 are still inside
+    # minimumReleaseAge. Bump markdown-it and remove this after 2026-10-23.
+    - GHSA-gfr2-rv44-r23c

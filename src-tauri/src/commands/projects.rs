@@ -299,7 +299,7 @@ pub async fn delete_project(
             let kill_errors = cleanup::kill_backend(
                 &session.backend,
                 session.tmux_name.as_deref(),
-                Some(&session.id),
+                &session.id,
                 &cleanup::real_kill_ops(),
             );
             if !kill_errors.is_empty() {

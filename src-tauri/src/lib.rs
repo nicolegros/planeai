@@ -1,5 +1,4 @@
 pub mod axi;
-pub mod axi_recipe;
 pub mod bench;
 pub mod cleanup;
 pub mod cli;
@@ -11,13 +10,11 @@ pub mod git;
 pub mod ipc;
 pub mod logging;
 pub mod paths;
-pub mod recipe_tick;
 pub mod rmux_client;
 pub mod rmux_ops;
 pub mod rmux_resources;
 pub mod session_ops;
 pub mod session_restart;
-pub mod stale_detection;
 pub mod task_cli;
 pub mod terminal_tabs;
 #[cfg(not(windows))]
