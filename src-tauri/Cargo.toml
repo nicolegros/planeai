@@ -66,7 +66,7 @@ clap = { version = "4", features = ["derive"] }
 tauri = { version = "2.5", features = ["macos-private-api", "devtools"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = "=0.11.0"
+sha2 = "=0.11.1"
 jsonc-parser = { workspace = true }
 regex = { workspace = true }
 rusqlite = { version = "0.40", features = ["bundled"] }
