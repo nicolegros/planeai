@@ -57,7 +57,7 @@
     "oxfmt": "^0.72.0",
     "oxlint": "1.87.0",
     "svelte": "5.57.2",
-    "svelte-check": "4.7.6",
+    "svelte-check": "4.7.7",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vite": "6.4.4",
