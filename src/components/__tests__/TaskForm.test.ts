@@ -35,7 +35,7 @@ const mockStartSession = vi.fn((_params?: unknown) =>
       base_branch: "main",
       task_key: "TASK-2",
     },
-    warning: null,
+    warning: null as string | null,
   }),
 );
 
@@ -310,6 +310,26 @@ describe("TaskForm - Start session toggle", () => {
     expect(mockStartSession).not.toHaveBeenCalled();
     expect(onSessionCreated).not.toHaveBeenCalled();
     expect(onSubmitted).toHaveBeenCalled();
+  });
+
+  it("warns when the session runs in a checkout that already had its branch", async () => {
+    const { showToast } = await import("../../lib/toasts.svelte");
+    const started = await mockStartSession();
+    const warning = "Branch 'feat' is already checked out in /wt, so the session will run there";
+    mockStartSession.mockResolvedValueOnce({ ...started, warning });
+    const onSessionCreated = vi.fn();
+    const target = renderForm({ onSessionCreated, onSubmitted: vi.fn() });
+
+    const titleInput = target.querySelector("[data-field='title'] input") as HTMLInputElement;
+    titleInput.value = "New task";
+    titleInput.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    target.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true }));
+    await tick();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(showToast).toHaveBeenCalledWith(warning, "warning");
+    expect(onSessionCreated).toHaveBeenCalledWith(expect.objectContaining({ id: "sess-new" }));
   });
 
   it("keeps task and shows error if session launch fails", async () => {

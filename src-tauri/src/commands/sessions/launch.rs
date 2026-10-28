@@ -23,11 +23,6 @@ pub struct LaunchResult {
     pub warning: Option<String>,
 }
 
-/// Check if a git error indicates a worktree conflict (branch already checked out).
-fn is_worktree_conflict(e: &str) -> bool {
-    e.contains("already checked out") || e.contains("already used by worktree")
-}
-
 /// Whether a daemon spawn failed because its connection is gone, so the next launch reconnects.
 fn is_daemon_connection_error(e: &str) -> bool {
     e.contains("Broken pipe") || e.contains("Connection refused") || e.contains("No such file")
@@ -215,37 +210,44 @@ pub(crate) async fn launch(
 
     let mut warning: Option<String> = None;
 
-    let (working_dir, worktree_path, created_worktree, created_branch) = if use_worktree {
-        let base = base_branch.as_deref().unwrap_or(DEFAULT_BASE_BRANCH);
+    let worktree_dir = use_worktree.then(|| {
         let short_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
         let sanitized_project = sanitize_project_name(&project_name);
         let home = config::home_dir();
-        let wt_path = format!("{home}/.planeai/worktrees/{sanitized_project}/{short_id}");
-        std::fs::create_dir_all(std::path::Path::new(&wt_path).parent().unwrap())
-            .map_err(|e| format!("failed to create worktree dir: {e}"))?;
-        match git::worktree_add(&repo_path, &wt_path, &branch, base) {
-            Ok(()) => (wt_path.clone(), Some(wt_path), true, true),
-            Err(e) if is_worktree_conflict(&e) => {
-                // Branch already checked out in an existing worktree — reuse it
-                let existing_wt =
-                    git::find_worktree_for_branch(&repo_path, &branch).ok_or_else(|| e.clone())?;
-                tracing::info!(
-                    branch = %branch,
-                    worktree = %existing_wt,
-                    "branch already in worktree, reusing"
-                );
-                warning = Some(format!(
-                    "Branch '{branch}' is already in a worktree — session will run there"
-                ));
-                let worktree_path = git::linked_worktree_path(&repo_path, &existing_wt);
-                (existing_wt, worktree_path, false, false)
-            }
-            Err(e) => return Err(e),
+        format!("{home}/.planeai/worktrees/{sanitized_project}/{short_id}")
+    });
+    let checkout = crate::commands::blocking({
+        let repo_path = repo_path.clone();
+        let branch = branch.clone();
+        let base_branch = base_branch.clone();
+        move || {
+            let target = match &worktree_dir {
+                Some(path) => {
+                    std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap())
+                        .map_err(|e| format!("failed to create worktree dir: {e}"))?;
+                    git::CheckoutTarget::NewWorktree {
+                        path,
+                        base: base_branch.as_deref().unwrap_or(DEFAULT_BASE_BRANCH),
+                    }
+                }
+                None => git::CheckoutTarget::Main {
+                    base: base_branch.as_deref(),
+                },
+            };
+            git::check_out_for_session(&repo_path, &branch, is_new_branch, target)
         }
-    } else {
-        git::checkout_branch(&repo_path, &branch, is_new_branch, base_branch.as_deref())?;
-        (repo_path.clone(), None, false, is_new_branch)
-    };
+    })
+    .await?;
+    if let git::SessionCheckout::Reused { path } = &checkout {
+        tracing::info!(branch = %branch, worktree = %path, "branch already checked out, reusing");
+        warning = Some(format!(
+            "Branch '{branch}' is already checked out in {path}, so the session will run there"
+        ));
+    }
+    let working_dir = checkout.working_dir(&repo_path).to_string();
+    let worktree_path = checkout.worktree_path(&repo_path);
+    let created_worktree = checkout.created_worktree();
+    let created_branch = checkout.created_branch();
 
     let session_id = uuid::Uuid::new_v4().to_string();
 
@@ -402,16 +404,8 @@ pub(crate) async fn launch(
         }
     }
 
-    // If we reused an existing worktree, check if another active session is already there
-    if let (Some(ref warn_msg), Some(ref wt)) = (&warning, &session.worktree_path) {
-        let existing_session_name: Option<String> = conn
-            .query_row(
-                "SELECT name FROM sessions WHERE worktree_path = ?1 AND status = 'active' AND id != ?2 LIMIT 1",
-                rusqlite::params![wt, &session.id],
-                |row| row.get(0),
-            )
-            .ok();
-        if let Some(other_name) = existing_session_name {
+    if let Some(warn_msg) = &warning {
+        if let Some(other_name) = other_session_in_checkout(&conn, &session) {
             warning = Some(format!(
                 "{warn_msg} (session '{other_name}' is also running there)"
             ));
@@ -419,6 +413,16 @@ pub(crate) async fn launch(
     }
 
     Ok(LaunchResult { session, warning })
+}
+
+/// Another active session running in the same checkout as `session`, the main one included.
+fn other_session_in_checkout(conn: &rusqlite::Connection, session: &db::Session) -> Option<String> {
+    conn.query_row(
+        "SELECT name FROM sessions WHERE project_id = ?1 AND worktree_path IS ?2 AND status = 'active' AND id != ?3 LIMIT 1",
+        rusqlite::params![&session.project_id, &session.worktree_path, &session.id],
+        |row| row.get(0),
+    )
+    .ok()
 }
 
 /// Attempt to spawn a session in the daemon. Returns an error string on failure.
@@ -577,7 +581,11 @@ fn rollback_branch_creation(
     created_branch: bool,
 ) {
     if let Some(wt_path) = worktree_path {
-        let errors = planeai_core::cleanup::cleanup_worktree(repo_path, wt_path, Some(branch));
+        let errors = planeai_core::cleanup::cleanup_worktree(
+            repo_path,
+            wt_path,
+            created_branch.then_some(branch),
+        );
         for e in &errors {
             tracing::warn!(error = %e, "rollback: worktree cleanup error");
         }
@@ -625,7 +633,11 @@ fn rollback_branch_creation(
 mod tests {
     use planeai_core::command::shell_args;
 
-    use super::{is_daemon_connection_error, require_task_key, rollback_branch_creation};
+    use super::{
+        is_daemon_connection_error, other_session_in_checkout, require_task_key,
+        rollback_branch_creation,
+    };
+    use crate::db;
 
     #[test]
     fn only_a_lost_daemon_connection_reads_as_a_daemon_crash() {
@@ -692,5 +704,84 @@ mod tests {
     fn rollback_without_worktree_and_not_new_branch_is_noop() {
         // When is_new_branch is false and no worktree, nothing should happen
         rollback_branch_creation("/nonexistent/repo", "main", None, false);
+    }
+
+    #[test]
+    fn a_reused_checkout_names_the_other_session_running_in_it() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", "/repo").unwrap();
+        let other = db::create_project(&conn, "other", "/other").unwrap();
+        let session = |id: &str, project_id: &str, worktree_path: Option<&str>| {
+            db::create_session_with_params(
+                &conn,
+                &planeai_core::services::CreateSessionParams {
+                    id: id.to_string(),
+                    project_id: project_id.to_string(),
+                    name: format!("{id} name"),
+                    branch: "feat".to_string(),
+                    worktree_path: worktree_path.map(str::to_string),
+                    backend: "local".to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        session("main-a", &project.id, None);
+        session("wt-a", &project.id, Some("/wt"));
+        session("main-other", &other.id, None);
+
+        let in_main = session("main-b", &project.id, None);
+        let in_worktree = session("wt-b", &project.id, Some("/wt"));
+        let alone = session("wt-c", &project.id, Some("/elsewhere"));
+
+        assert_eq!(
+            other_session_in_checkout(&conn, &in_main).as_deref(),
+            Some("main-a name")
+        );
+        assert_eq!(
+            other_session_in_checkout(&conn, &in_worktree).as_deref(),
+            Some("wt-a name")
+        );
+        assert_eq!(other_session_in_checkout(&conn, &alone), None);
+    }
+
+    #[test]
+    fn rolling_back_a_worktree_keeps_a_branch_the_launch_did_not_create() {
+        let repo = tempfile::tempdir().unwrap();
+        let worktree = repo.path().join("wt").to_str().unwrap().to_string();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?}");
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ]);
+        git(&["branch", "existing"]);
+        git(&["worktree", "add", "-q", &worktree, "existing"]);
+
+        rollback_branch_creation(
+            repo.path().to_str().unwrap(),
+            "existing",
+            Some(&worktree),
+            false,
+        );
+
+        assert!(!std::path::Path::new(&worktree).exists());
+        assert_eq!(git(&["branch", "--list", "existing"]), "existing");
     }
 }

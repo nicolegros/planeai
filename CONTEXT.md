@@ -444,7 +444,12 @@ Sessions can run in two modes:
 
 ### Branch redirect
 
-When a worktree launch targets a branch that is already checked out in another worktree, the session redirects to that existing worktree path rather than failing. The session records that worktree path.
+A session can start on a branch that already exists.
+A worktree launch checks the branch out in a new worktree instead of creating it.
+When another checkout already holds the branch, the session runs in that checkout rather than failing, and the launch returns a warning the app shows as a toast.
+This applies to worktree and checkout launches alike, since git allows a branch in one worktree at a time.
+The session records that worktree path but does not own it, so stale worktree cleanup leaves it alone.
+`git::check_out_for_session` makes this decision for both the app and the CLI.
 
 ### Data model
 

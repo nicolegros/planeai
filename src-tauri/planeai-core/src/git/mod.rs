@@ -98,6 +98,75 @@ mod tests {
     }
 
     #[test]
+    fn a_session_checks_out_an_existing_branch_or_reuses_the_checkout_holding_it() {
+        let repo = init_repo();
+        let repo_path = repo.path().to_str().unwrap();
+        let worktrees = tempfile::tempdir().unwrap();
+        let at = |name: &str| worktrees.path().join(name).to_str().unwrap().to_string();
+        git(repo.path(), &["branch", "free"]);
+        git(repo.path(), &["worktree", "add", "-b", "busy", &at("busy")]);
+        let busy = find_worktree_for_branch(repo_path, "busy").unwrap();
+        let main = find_worktree_for_branch(repo_path, "main").unwrap();
+        let in_worktree = |name: &str, branch: &str, create: bool| {
+            let path = at(name);
+            check_out_for_session(
+                repo_path,
+                branch,
+                create,
+                CheckoutTarget::NewWorktree {
+                    path: &path,
+                    base: "main",
+                },
+            )
+            .unwrap()
+        };
+        let in_main = |branch: &str, create: bool| {
+            check_out_for_session(
+                repo_path,
+                branch,
+                create,
+                CheckoutTarget::Main { base: None },
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            in_worktree("free", "free", true),
+            SessionCheckout::NewWorktree {
+                path: at("free"),
+                created_branch: false
+            }
+        );
+        assert_eq!(
+            in_worktree("fresh", "fresh", true),
+            SessionCheckout::NewWorktree {
+                path: at("fresh"),
+                created_branch: true
+            }
+        );
+        assert_eq!(
+            in_worktree("again", "busy", true),
+            SessionCheckout::Reused { path: busy.clone() }
+        );
+        assert_eq!(
+            in_worktree("on-main", "main", false),
+            SessionCheckout::Reused { path: main }
+        );
+        assert_eq!(
+            in_main("busy", false),
+            SessionCheckout::Reused { path: busy }
+        );
+        assert_eq!(
+            in_main("main", false),
+            SessionCheckout::Main {
+                created_branch: false
+            }
+        );
+        assert!(!worktrees.path().join("again").exists());
+        assert!(!worktrees.path().join("on-main").exists());
+    }
+
+    #[test]
     fn resolve_base_branch_local_returns_unchanged() {
         let repo = init_repo();
         let result = resolve_base_branch(repo.path().to_str().unwrap(), "main").unwrap();
@@ -168,6 +237,52 @@ mod tests {
             .unwrap();
 
         (clone, remote_dir)
+    }
+
+    #[test]
+    fn a_session_worktree_tracks_a_branch_that_only_exists_on_the_remote() {
+        let (repo, _remote) = init_repo_with_remote();
+        let repo_path = repo.path().to_str().unwrap();
+        git(repo.path(), &["fetch", "origin"]);
+        let worktrees = tempfile::tempdir().unwrap();
+        let path = worktrees.path().join("wt").to_str().unwrap().to_string();
+
+        let checkout = check_out_for_session(
+            repo_path,
+            "feat/new",
+            false,
+            CheckoutTarget::NewWorktree {
+                path: &path,
+                base: "main",
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            checkout,
+            SessionCheckout::NewWorktree {
+                path: path.clone(),
+                created_branch: true
+            }
+        );
+        let output = Command::new("git")
+            .args(["log", "-1", "--format=%s", "feat/new"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "new feature"
+        );
+        let upstream = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "feat/new@{upstream}"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&upstream.stdout).trim(),
+            "origin/feat/new"
+        );
     }
 
     #[test]

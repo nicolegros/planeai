@@ -254,7 +254,7 @@
               branch: sessionBranch || null,
               prompt: sessionPrompt || null,
             });
-            if (warning) showToast(warning, "success");
+            if (warning) showToast(warning, "warning");
             onSessionCreated?.(session);
           } catch (e: any) {
             showToast(`Task created but session failed: ${e}`);

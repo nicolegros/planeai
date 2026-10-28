@@ -160,67 +160,46 @@ pub fn build_session_plan(
     })
 }
 
-/// Check if a git error indicates a worktree conflict.
-fn is_worktree_conflict(e: &str) -> bool {
-    e.contains("already checked out") || e.contains("already used by worktree")
-}
-
-/// Try to reuse an existing worktree where the branch is already checked out.
-fn reuse_existing_worktree(
-    repo: &str,
-    branch: &str,
-    original_err: String,
-) -> Result<String, String> {
-    match git::find_worktree_for_branch(repo, branch) {
-        Some(wt_path) => {
-            tracing::info!(
-                branch = %branch,
-                worktree = %wt_path,
-                "branch already in worktree, reusing"
-            );
-            Ok(wt_path)
-        }
-        None => Err(original_err),
-    }
-}
-
 pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<String, String> {
-    // Resolve working_dir — may differ from plan if branch lives in a worktree
-    let effective_working_dir;
-    let mut was_redirected = false;
-
-    match &plan.branch_strategy {
+    let (repo, branch, checkout) = match &plan.branch_strategy {
         BranchStrategy::Checkout {
             repo,
             branch,
             new,
             base,
-        } => match git::checkout_branch(repo, branch, *new, base.as_deref()) {
-            Ok(()) => {
-                effective_working_dir = plan.working_dir.clone();
-            }
-            Err(e) if !*new && is_worktree_conflict(&e) => {
-                effective_working_dir = reuse_existing_worktree(repo, branch, e)?;
-                was_redirected = true;
-            }
-            Err(e) => return Err(e),
-        },
+        } => (
+            repo,
+            branch,
+            git::check_out_for_session(
+                repo,
+                branch,
+                *new,
+                git::CheckoutTarget::Main {
+                    base: base.as_deref(),
+                },
+            )?,
+        ),
         BranchStrategy::Worktree {
             repo,
             path,
             branch,
             base,
-        } => match git::worktree_add(repo, path, branch, base) {
-            Ok(()) => {
-                effective_working_dir = path.clone();
-            }
-            Err(e) if is_worktree_conflict(&e) => {
-                effective_working_dir = reuse_existing_worktree(repo, branch, e)?;
-                was_redirected = true;
-            }
-            Err(e) => return Err(e),
-        },
+        } => (
+            repo,
+            branch,
+            git::check_out_for_session(
+                repo,
+                branch,
+                true,
+                git::CheckoutTarget::NewWorktree { path, base },
+            )?,
+        ),
+    };
+    if let git::SessionCheckout::Reused { path } = &checkout {
+        tracing::info!(branch = %branch, worktree = %path, "branch already checked out, reusing");
     }
+    let effective_working_dir = checkout.working_dir(repo).to_string();
+    let worktree_path = checkout.worktree_path(repo);
 
     if plan.backend == "daemon" {
         let socket_path = planeai_ipc::daemon_socket_path();
@@ -284,18 +263,6 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
         let _ = tmux_name;
     }
 
-    // Store worktree_path so agents know where to run.
-    // For redirected sessions (branch already in another worktree), store that path.
-    // For worktree-created sessions, store the new worktree path.
-    let worktree_path = match &plan.branch_strategy {
-        BranchStrategy::Checkout { repo, .. } | BranchStrategy::Worktree { repo, .. }
-            if was_redirected =>
-        {
-            git::linked_worktree_path(repo, &effective_working_dir)
-        }
-        BranchStrategy::Worktree { path, .. } => Some(path.clone()),
-        BranchStrategy::Checkout { .. } => None,
-    };
     let session = db::create_session_with_params(
         conn,
         &planeai_core::services::CreateSessionParams {
@@ -305,7 +272,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             tmux_name: plan.tmux_name.clone(),
             branch: plan.branch.clone(),
             worktree_path,
-            worktree_owned: Some(true),
+            worktree_owned: Some(checkout.created_worktree()),
             provider: Some(plan.provider.clone()),
             backend: plan.backend.clone(),
             auto_approve: plan.yolo,
@@ -519,12 +486,23 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_local_session_keeps_its_prompt_for_the_apps_first_attach() {
+    fn run_git(dir: &str, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// A repo with one commit on `main`, and its canonical path.
+    fn git_repo() -> (tempfile::TempDir, String) {
         let repo = tempfile::tempdir().unwrap();
         let repo_path = repo.path().canonicalize().unwrap().display().to_string();
-        for args in [
-            &["init", "-q", "-b", "main"][..],
+        run_git(&repo_path, &["init", "-q", "-b", "main"]);
+        run_git(
+            &repo_path,
             &[
                 "-c",
                 "user.name=t",
@@ -536,14 +514,78 @@ mod tests {
                 "-m",
                 "init",
             ],
-        ] {
-            let status = std::process::Command::new("git")
-                .args(args)
-                .current_dir(&repo_path)
-                .status()
-                .unwrap();
-            assert!(status.success(), "git {args:?}");
-        }
+        );
+        (repo, repo_path)
+    }
+
+    #[test]
+    fn a_session_starts_on_an_existing_branch_even_when_a_worktree_has_it() {
+        let (repo, repo_path) = git_repo();
+        let worktrees_dir = tempfile::tempdir().unwrap();
+        // Canonical Windows paths are `\\?\` paths, which git rejects as arguments.
+        let worktrees = worktrees_dir.path().display().to_string();
+        let canonical = |path: &str| std::fs::canonicalize(path).unwrap();
+        let busy = format!("{worktrees}/busy");
+        run_git(&repo_path, &["branch", "feat/free"]);
+        run_git(
+            &repo_path,
+            &["worktree", "add", "-q", "-b", "feat/busy", &busy],
+        );
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", &repo_path).unwrap();
+        let env = Env {
+            socket_path: repo.path().join("no-gui.sock"),
+            ..test_env("local")
+        };
+        let start = |id: &str, branch: &str, worktree: bool| {
+            let opts = SessionCreateOpts {
+                branch: branch.to_string(),
+                new_branch: false,
+                worktree,
+                ..task_opts(Some("MYA-1"), None)
+            };
+            let mut plan = build_session_plan(id, &opts, &env, &project).unwrap();
+            if worktree {
+                plan.branch_strategy = BranchStrategy::Worktree {
+                    repo: repo_path.clone(),
+                    path: format!("{worktrees}/{id}"),
+                    branch: branch.to_string(),
+                    base: "main".to_string(),
+                };
+            }
+            execute_plan(&plan, &conn, &env).unwrap();
+            let session = db::get_session(&conn, id).unwrap().unwrap();
+            let owned = db::session_owns_worktree(&conn, id).unwrap();
+            (session.worktree_path.as_deref().map(canonical), owned)
+        };
+
+        let free_worktree = format!("{worktrees}/free-session");
+        assert_eq!(
+            start("free-session", "feat/free", true),
+            (Some(canonical(&free_worktree)), true)
+        );
+        assert_eq!(
+            run_git(&free_worktree, &["branch", "--show-current"]),
+            "feat/free"
+        );
+        assert_eq!(
+            start("busy-worktree", "feat/busy", true),
+            (Some(canonical(&busy)), false)
+        );
+        assert_eq!(
+            start("busy-checkout", "feat/busy", false),
+            (Some(canonical(&busy)), false)
+        );
+        assert_eq!(
+            run_git(&repo_path, &["branch", "--list", "feat/*"]),
+            "+ feat/busy\n+ feat/free"
+        );
+    }
+
+    #[test]
+    fn a_local_session_keeps_its_prompt_for_the_apps_first_attach() {
+        let (repo, repo_path) = git_repo();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
         let project = db::create_project(&conn, "myapp", &repo_path).unwrap();
