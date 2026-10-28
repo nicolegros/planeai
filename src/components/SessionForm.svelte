@@ -242,7 +242,7 @@
           provider: providers.key,
           taskKey: taskKeyParam, taskProjectId: taskProjectIdParam, taskPrompt: taskPromptParam,
         });
-        if (warning) showToast(warning, "success");
+        if (warning) showToast(warning, "warning");
         onCreated(session);
       } catch (e) { error = String(e); submitting = false; }
     } else {
@@ -255,7 +255,7 @@
           provider: providers.key,
           taskKey: taskKeyParam, taskProjectId: taskProjectIdParam, taskPrompt: taskPromptParam,
         });
-        if (warning) showToast(warning, "success");
+        if (warning) showToast(warning, "warning");
         onCreated(session);
       } catch (e) { error = String(e); submitting = false; }
     }

@@ -184,8 +184,6 @@ pub fn detect_default_branch(repo_path: &str) -> Result<String, String> {
     Err("could not detect default branch".to_string())
 }
 
-/// Find the worktree path where a given branch is checked out.
-/// Returns None if the branch is not checked out in any worktree.
 /// The worktree path a session records for `worktree_path`: None when it is the repo's
 /// main checkout, so the session is treated as a checkout session.
 pub fn linked_worktree_path(repo_path: &str, worktree_path: &str) -> Option<String> {
@@ -193,6 +191,8 @@ pub fn linked_worktree_path(repo_path: &str, worktree_path: &str) -> Option<Stri
     (canonical(repo_path) != canonical(worktree_path)).then(|| worktree_path.to_string())
 }
 
+/// Find the worktree path where a given branch is checked out.
+/// Returns None if the branch is not checked out in any worktree.
 pub fn find_worktree_for_branch(repo_path: &str, branch: &str) -> Option<String> {
     let output = git_cmd()
         .args(["worktree", "list", "--porcelain"])
@@ -220,4 +220,91 @@ pub fn find_worktree_for_branch(repo_path: &str, branch: &str) -> Option<String>
     }
 
     None
+}
+
+fn local_branch_exists(repo_path: &str, branch: &str) -> bool {
+    git_cmd()
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
+        .current_dir(repo_path)
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Add a worktree that checks out an existing branch, or a remote one git can track.
+fn worktree_add_existing(repo_path: &str, worktree_path: &str, branch: &str) -> Result<(), String> {
+    let output = git_cmd()
+        .args(["worktree", "add", worktree_path, branch])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(())
+}
+
+/// Where a new session should check out its branch.
+#[derive(Debug, Clone, Copy)]
+pub enum CheckoutTarget<'a> {
+    /// Switch the repo's main checkout to the branch.
+    Main { base: Option<&'a str> },
+    /// Add a worktree at `path` for the branch.
+    NewWorktree { path: &'a str, base: &'a str },
+}
+
+/// The checkout a session runs in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionCheckout {
+    /// Another checkout already had the branch, so the session runs there.
+    Reused {
+        path: String,
+    },
+    Main {
+        created_branch: bool,
+    },
+    NewWorktree {
+        path: String,
+        created_branch: bool,
+    },
+}
+
+/// Check out `branch` for a new session. A branch some other checkout already holds is
+/// reused there, since git allows a branch in one worktree at a time. `create` asks for a
+/// new branch, and is ignored when the branch already exists locally.
+pub fn check_out_for_session(
+    repo_path: &str,
+    branch: &str,
+    create: bool,
+    target: CheckoutTarget,
+) -> Result<SessionCheckout, String> {
+    if let Some(path) = find_worktree_for_branch(repo_path, branch) {
+        let is_main = linked_worktree_path(repo_path, &path).is_none();
+        if !(is_main && matches!(target, CheckoutTarget::Main { .. })) {
+            return Ok(SessionCheckout::Reused { path });
+        }
+    }
+    let created_branch = create && !local_branch_exists(repo_path, branch);
+    match target {
+        CheckoutTarget::Main { base } => {
+            checkout_branch(repo_path, branch, created_branch, base)?;
+            Ok(SessionCheckout::Main { created_branch })
+        }
+        CheckoutTarget::NewWorktree { path, base } => {
+            if created_branch {
+                worktree_add(repo_path, path, branch, base)?;
+            } else {
+                worktree_add_existing(repo_path, path, branch)?;
+            }
+            Ok(SessionCheckout::NewWorktree {
+                path: path.to_string(),
+                created_branch,
+            })
+        }
+    }
 }

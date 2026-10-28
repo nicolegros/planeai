@@ -160,67 +160,50 @@ pub fn build_session_plan(
     })
 }
 
-/// Check if a git error indicates a worktree conflict.
-fn is_worktree_conflict(e: &str) -> bool {
-    e.contains("already checked out") || e.contains("already used by worktree")
-}
-
-/// Try to reuse an existing worktree where the branch is already checked out.
-fn reuse_existing_worktree(
-    repo: &str,
-    branch: &str,
-    original_err: String,
-) -> Result<String, String> {
-    match git::find_worktree_for_branch(repo, branch) {
-        Some(wt_path) => {
-            tracing::info!(
-                branch = %branch,
-                worktree = %wt_path,
-                "branch already in worktree, reusing"
-            );
-            Ok(wt_path)
-        }
-        None => Err(original_err),
-    }
-}
-
 pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<String, String> {
-    // Resolve working_dir — may differ from plan if branch lives in a worktree
-    let effective_working_dir;
-    let mut was_redirected = false;
-
-    match &plan.branch_strategy {
+    let (repo, branch, checkout) = match &plan.branch_strategy {
         BranchStrategy::Checkout {
             repo,
             branch,
             new,
             base,
-        } => match git::checkout_branch(repo, branch, *new, base.as_deref()) {
-            Ok(()) => {
-                effective_working_dir = plan.working_dir.clone();
-            }
-            Err(e) if !*new && is_worktree_conflict(&e) => {
-                effective_working_dir = reuse_existing_worktree(repo, branch, e)?;
-                was_redirected = true;
-            }
-            Err(e) => return Err(e),
-        },
+        } => (
+            repo,
+            branch,
+            git::check_out_for_session(
+                repo,
+                branch,
+                *new,
+                git::CheckoutTarget::Main {
+                    base: base.as_deref(),
+                },
+            )?,
+        ),
         BranchStrategy::Worktree {
             repo,
             path,
             branch,
             base,
-        } => match git::worktree_add(repo, path, branch, base) {
-            Ok(()) => {
-                effective_working_dir = path.clone();
-            }
-            Err(e) if is_worktree_conflict(&e) => {
-                effective_working_dir = reuse_existing_worktree(repo, branch, e)?;
-                was_redirected = true;
-            }
-            Err(e) => return Err(e),
-        },
-    }
+        } => (
+            repo,
+            branch,
+            git::check_out_for_session(
+                repo,
+                branch,
+                true,
+                git::CheckoutTarget::NewWorktree { path, base },
+            )?,
+        ),
+    };
+    let (effective_working_dir, worktree_path, owns_worktree) = match checkout {
+        git::SessionCheckout::Reused { path } => {
+            tracing::info!(branch = %branch, worktree = %path, "branch already checked out, reusing");
+            let worktree_path = git::linked_worktree_path(repo, &path);
+            (path, worktree_path, false)
+        }
+        git::SessionCheckout::Main { .. } => (plan.working_dir.clone(), None, true),
+        git::SessionCheckout::NewWorktree { path, .. } => (path.clone(), Some(path), true),
+    };
 
     if plan.backend == "daemon" {
         let socket_path = planeai_ipc::daemon_socket_path();
@@ -284,18 +267,6 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
         let _ = tmux_name;
     }
 
-    // Store worktree_path so agents know where to run.
-    // For redirected sessions (branch already in another worktree), store that path.
-    // For worktree-created sessions, store the new worktree path.
-    let worktree_path = match &plan.branch_strategy {
-        BranchStrategy::Checkout { repo, .. } | BranchStrategy::Worktree { repo, .. }
-            if was_redirected =>
-        {
-            git::linked_worktree_path(repo, &effective_working_dir)
-        }
-        BranchStrategy::Worktree { path, .. } => Some(path.clone()),
-        BranchStrategy::Checkout { .. } => None,
-    };
     let session = db::create_session_with_params(
         conn,
         &planeai_core::services::CreateSessionParams {
@@ -305,7 +276,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             tmux_name: plan.tmux_name.clone(),
             branch: plan.branch.clone(),
             worktree_path,
-            worktree_owned: Some(true),
+            worktree_owned: Some(owns_worktree),
             provider: Some(plan.provider.clone()),
             backend: plan.backend.clone(),
             auto_approve: plan.yolo,
@@ -555,10 +526,18 @@ mod tests {
     fn a_session_starts_on_an_existing_branch_even_when_a_worktree_has_it() {
         let (repo, repo_path) = git_repo();
         let worktrees = tempfile::tempdir().unwrap();
-        let worktrees = worktrees.path().canonicalize().unwrap().display().to_string();
+        let worktrees = worktrees
+            .path()
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string();
         let busy = format!("{worktrees}/busy");
         run_git(&repo_path, &["branch", "feat/free"]);
-        run_git(&repo_path, &["worktree", "add", "-q", "-b", "feat/busy", &busy]);
+        run_git(
+            &repo_path,
+            &["worktree", "add", "-q", "-b", "feat/busy", &busy],
+        );
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
         let project = db::create_project(&conn, "myapp", &repo_path).unwrap();

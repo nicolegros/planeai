@@ -23,11 +23,6 @@ pub struct LaunchResult {
     pub warning: Option<String>,
 }
 
-/// Check if a git error indicates a worktree conflict (branch already checked out).
-fn is_worktree_conflict(e: &str) -> bool {
-    e.contains("already checked out") || e.contains("already used by worktree")
-}
-
 /// Whether a daemon spawn failed because its connection is gone, so the next launch reconnects.
 fn is_daemon_connection_error(e: &str) -> bool {
     e.contains("Broken pipe") || e.contains("Connection refused") || e.contains("No such file")
@@ -215,36 +210,50 @@ pub(crate) async fn launch(
 
     let mut warning: Option<String> = None;
 
-    let (working_dir, worktree_path, created_worktree, created_branch) = if use_worktree {
-        let base = base_branch.as_deref().unwrap_or(DEFAULT_BASE_BRANCH);
+    let worktree_dir = use_worktree.then(|| {
         let short_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
         let sanitized_project = sanitize_project_name(&project_name);
         let home = config::home_dir();
-        let wt_path = format!("{home}/.planeai/worktrees/{sanitized_project}/{short_id}");
-        std::fs::create_dir_all(std::path::Path::new(&wt_path).parent().unwrap())
-            .map_err(|e| format!("failed to create worktree dir: {e}"))?;
-        match git::worktree_add(&repo_path, &wt_path, &branch, base) {
-            Ok(()) => (wt_path.clone(), Some(wt_path), true, true),
-            Err(e) if is_worktree_conflict(&e) => {
-                // Branch already checked out in an existing worktree — reuse it
-                let existing_wt =
-                    git::find_worktree_for_branch(&repo_path, &branch).ok_or_else(|| e.clone())?;
-                tracing::info!(
-                    branch = %branch,
-                    worktree = %existing_wt,
-                    "branch already in worktree, reusing"
-                );
-                warning = Some(format!(
-                    "Branch '{branch}' is already in a worktree — session will run there"
-                ));
-                let worktree_path = git::linked_worktree_path(&repo_path, &existing_wt);
-                (existing_wt, worktree_path, false, false)
-            }
-            Err(e) => return Err(e),
+        format!("{home}/.planeai/worktrees/{sanitized_project}/{short_id}")
+    });
+    let checkout = crate::commands::blocking({
+        let repo_path = repo_path.clone();
+        let branch = branch.clone();
+        let base_branch = base_branch.clone();
+        move || {
+            let target = match &worktree_dir {
+                Some(path) => {
+                    std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap())
+                        .map_err(|e| format!("failed to create worktree dir: {e}"))?;
+                    git::CheckoutTarget::NewWorktree {
+                        path,
+                        base: base_branch.as_deref().unwrap_or(DEFAULT_BASE_BRANCH),
+                    }
+                }
+                None => git::CheckoutTarget::Main {
+                    base: base_branch.as_deref(),
+                },
+            };
+            git::check_out_for_session(&repo_path, &branch, is_new_branch, target)
         }
-    } else {
-        git::checkout_branch(&repo_path, &branch, is_new_branch, base_branch.as_deref())?;
-        (repo_path.clone(), None, false, is_new_branch)
+    })
+    .await?;
+    let (working_dir, worktree_path, created_worktree, created_branch) = match checkout {
+        git::SessionCheckout::Reused { path } => {
+            tracing::info!(branch = %branch, worktree = %path, "branch already checked out, reusing");
+            warning = Some(format!(
+                "Branch '{branch}' is already checked out in {path}, so the session will run there"
+            ));
+            let worktree_path = git::linked_worktree_path(&repo_path, &path);
+            (path, worktree_path, false, false)
+        }
+        git::SessionCheckout::Main { created_branch } => {
+            (repo_path.clone(), None, false, created_branch)
+        }
+        git::SessionCheckout::NewWorktree {
+            path,
+            created_branch,
+        } => (path.clone(), Some(path), true, created_branch),
     };
 
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -577,7 +586,11 @@ fn rollback_branch_creation(
     created_branch: bool,
 ) {
     if let Some(wt_path) = worktree_path {
-        let errors = planeai_core::cleanup::cleanup_worktree(repo_path, wt_path, Some(branch));
+        let errors = planeai_core::cleanup::cleanup_worktree(
+            repo_path,
+            wt_path,
+            created_branch.then_some(branch),
+        );
         for e in &errors {
             tracing::warn!(error = %e, "rollback: worktree cleanup error");
         }
@@ -692,5 +705,44 @@ mod tests {
     fn rollback_without_worktree_and_not_new_branch_is_noop() {
         // When is_new_branch is false and no worktree, nothing should happen
         rollback_branch_creation("/nonexistent/repo", "main", None, false);
+    }
+
+    #[test]
+    fn rolling_back_a_worktree_keeps_a_branch_the_launch_did_not_create() {
+        let repo = tempfile::tempdir().unwrap();
+        let worktree = repo.path().join("wt").to_str().unwrap().to_string();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?}");
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ]);
+        git(&["branch", "existing"]);
+        git(&["worktree", "add", "-q", &worktree, "existing"]);
+
+        rollback_branch_creation(
+            repo.path().to_str().unwrap(),
+            "existing",
+            Some(&worktree),
+            false,
+        );
+
+        assert!(!std::path::Path::new(&worktree).exists());
+        assert_eq!(git(&["branch", "--list", "existing"]), "existing");
     }
 }
