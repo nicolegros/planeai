@@ -519,12 +519,23 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_local_session_keeps_its_prompt_for_the_apps_first_attach() {
+    fn run_git(dir: &str, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// A repo with one commit on `main`, and its canonical path.
+    fn git_repo() -> (tempfile::TempDir, String) {
         let repo = tempfile::tempdir().unwrap();
         let repo_path = repo.path().canonicalize().unwrap().display().to_string();
-        for args in [
-            &["init", "-q", "-b", "main"][..],
+        run_git(&repo_path, &["init", "-q", "-b", "main"]);
+        run_git(
+            &repo_path,
             &[
                 "-c",
                 "user.name=t",
@@ -536,14 +547,73 @@ mod tests {
                 "-m",
                 "init",
             ],
-        ] {
-            let status = std::process::Command::new("git")
-                .args(args)
-                .current_dir(&repo_path)
-                .status()
-                .unwrap();
-            assert!(status.success(), "git {args:?}");
-        }
+        );
+        (repo, repo_path)
+    }
+
+    #[test]
+    fn a_session_starts_on_an_existing_branch_even_when_a_worktree_has_it() {
+        let (repo, repo_path) = git_repo();
+        let worktrees = tempfile::tempdir().unwrap();
+        let worktrees = worktrees.path().canonicalize().unwrap().display().to_string();
+        let busy = format!("{worktrees}/busy");
+        run_git(&repo_path, &["branch", "feat/free"]);
+        run_git(&repo_path, &["worktree", "add", "-q", "-b", "feat/busy", &busy]);
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", &repo_path).unwrap();
+        let env = Env {
+            socket_path: repo.path().join("no-gui.sock"),
+            ..test_env("local")
+        };
+        let start = |id: &str, branch: &str, worktree: bool| {
+            let opts = SessionCreateOpts {
+                branch: branch.to_string(),
+                new_branch: false,
+                worktree,
+                ..task_opts(Some("MYA-1"), None)
+            };
+            let mut plan = build_session_plan(id, &opts, &env, &project).unwrap();
+            if worktree {
+                plan.branch_strategy = BranchStrategy::Worktree {
+                    repo: repo_path.clone(),
+                    path: format!("{worktrees}/{id}"),
+                    branch: branch.to_string(),
+                    base: "main".to_string(),
+                };
+            }
+            execute_plan(&plan, &conn, &env).unwrap();
+            let session = db::get_session(&conn, id).unwrap().unwrap();
+            let owned = db::session_owns_worktree(&conn, id).unwrap();
+            (session.worktree_path, owned)
+        };
+
+        let free_worktree = format!("{worktrees}/free-session");
+        assert_eq!(
+            start("free-session", "feat/free", true),
+            (Some(free_worktree.clone()), true)
+        );
+        assert_eq!(
+            run_git(&free_worktree, &["branch", "--show-current"]),
+            "feat/free"
+        );
+        assert_eq!(
+            start("busy-worktree", "feat/busy", true),
+            (Some(busy.clone()), false)
+        );
+        assert_eq!(
+            start("busy-checkout", "feat/busy", false),
+            (Some(busy.clone()), false)
+        );
+        assert_eq!(
+            run_git(&repo_path, &["branch", "--list", "feat/*"]),
+            "+ feat/busy\n+ feat/free"
+        );
+    }
+
+    #[test]
+    fn a_local_session_keeps_its_prompt_for_the_apps_first_attach() {
+        let (repo, repo_path) = git_repo();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
         let project = db::create_project(&conn, "myapp", &repo_path).unwrap();
