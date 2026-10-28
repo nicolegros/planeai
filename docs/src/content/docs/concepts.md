@@ -83,3 +83,7 @@ When you run multiple agents in parallel on the same repository, they'll conflic
 Worktrees are created automatically when you start a session with a task (or when auto-dispatch launches one). Each agent works in complete isolation: no merge conflicts, no stash juggling, no stepping on each other's changes. When the work is done, you merge the branch like any other feature branch.
 
 This is what makes true parallel development possible — three agents can work on three different features simultaneously without interference.
+
+You can also start a session on a branch that already exists.
+Git lets a branch live in only one checkout at a time, so when another worktree (or the main checkout) already has that branch, the new session runs there instead.
+planeai shows a warning naming that checkout, and any session already running in it, because the sessions then share one working directory.

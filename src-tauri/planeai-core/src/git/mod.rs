@@ -240,6 +240,52 @@ mod tests {
     }
 
     #[test]
+    fn a_session_worktree_tracks_a_branch_that_only_exists_on_the_remote() {
+        let (repo, _remote) = init_repo_with_remote();
+        let repo_path = repo.path().to_str().unwrap();
+        git(repo.path(), &["fetch", "origin"]);
+        let worktrees = tempfile::tempdir().unwrap();
+        let path = worktrees.path().join("wt").to_str().unwrap().to_string();
+
+        let checkout = check_out_for_session(
+            repo_path,
+            "feat/new",
+            false,
+            CheckoutTarget::NewWorktree {
+                path: &path,
+                base: "main",
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            checkout,
+            SessionCheckout::NewWorktree {
+                path: path.clone(),
+                created_branch: true
+            }
+        );
+        let output = Command::new("git")
+            .args(["log", "-1", "--format=%s", "feat/new"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "new feature"
+        );
+        let upstream = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "feat/new@{upstream}"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&upstream.stdout).trim(),
+            "origin/feat/new"
+        );
+    }
+
+    #[test]
     fn resolve_base_branch_remote_fetches_and_returns_origin_ref() {
         let (repo, _remote) = init_repo_with_remote();
         let result = resolve_base_branch(repo.path().to_str().unwrap(), "remote:feat/new").unwrap();

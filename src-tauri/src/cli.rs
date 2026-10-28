@@ -195,15 +195,11 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             )?,
         ),
     };
-    let (effective_working_dir, worktree_path, owns_worktree) = match checkout {
-        git::SessionCheckout::Reused { path } => {
-            tracing::info!(branch = %branch, worktree = %path, "branch already checked out, reusing");
-            let worktree_path = git::linked_worktree_path(repo, &path);
-            (path, worktree_path, false)
-        }
-        git::SessionCheckout::Main { .. } => (plan.working_dir.clone(), None, true),
-        git::SessionCheckout::NewWorktree { path, .. } => (path.clone(), Some(path), true),
-    };
+    if let git::SessionCheckout::Reused { path } = &checkout {
+        tracing::info!(branch = %branch, worktree = %path, "branch already checked out, reusing");
+    }
+    let effective_working_dir = checkout.working_dir(repo).to_string();
+    let worktree_path = checkout.worktree_path(repo);
 
     if plan.backend == "daemon" {
         let socket_path = planeai_ipc::daemon_socket_path();
@@ -276,7 +272,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             tmux_name: plan.tmux_name.clone(),
             branch: plan.branch.clone(),
             worktree_path,
-            worktree_owned: Some(owns_worktree),
+            worktree_owned: Some(checkout.created_worktree()),
             provider: Some(plan.provider.clone()),
             backend: plan.backend.clone(),
             auto_approve: plan.yolo,
@@ -525,13 +521,10 @@ mod tests {
     #[test]
     fn a_session_starts_on_an_existing_branch_even_when_a_worktree_has_it() {
         let (repo, repo_path) = git_repo();
-        let worktrees = tempfile::tempdir().unwrap();
-        let worktrees = worktrees
-            .path()
-            .canonicalize()
-            .unwrap()
-            .display()
-            .to_string();
+        let worktrees_dir = tempfile::tempdir().unwrap();
+        // Canonical Windows paths are `\\?\` paths, which git rejects as arguments.
+        let worktrees = worktrees_dir.path().display().to_string();
+        let canonical = |path: &str| std::fs::canonicalize(path).unwrap();
         let busy = format!("{worktrees}/busy");
         run_git(&repo_path, &["branch", "feat/free"]);
         run_git(
@@ -564,13 +557,13 @@ mod tests {
             execute_plan(&plan, &conn, &env).unwrap();
             let session = db::get_session(&conn, id).unwrap().unwrap();
             let owned = db::session_owns_worktree(&conn, id).unwrap();
-            (session.worktree_path, owned)
+            (session.worktree_path.as_deref().map(canonical), owned)
         };
 
         let free_worktree = format!("{worktrees}/free-session");
         assert_eq!(
             start("free-session", "feat/free", true),
-            (Some(free_worktree.clone()), true)
+            (Some(canonical(&free_worktree)), true)
         );
         assert_eq!(
             run_git(&free_worktree, &["branch", "--show-current"]),
@@ -578,11 +571,11 @@ mod tests {
         );
         assert_eq!(
             start("busy-worktree", "feat/busy", true),
-            (Some(busy.clone()), false)
+            (Some(canonical(&busy)), false)
         );
         assert_eq!(
             start("busy-checkout", "feat/busy", false),
-            (Some(busy.clone()), false)
+            (Some(canonical(&busy)), false)
         );
         assert_eq!(
             run_git(&repo_path, &["branch", "--list", "feat/*"]),

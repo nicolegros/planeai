@@ -238,23 +238,16 @@ pub(crate) async fn launch(
         }
     })
     .await?;
-    let (working_dir, worktree_path, created_worktree, created_branch) = match checkout {
-        git::SessionCheckout::Reused { path } => {
-            tracing::info!(branch = %branch, worktree = %path, "branch already checked out, reusing");
-            warning = Some(format!(
-                "Branch '{branch}' is already checked out in {path}, so the session will run there"
-            ));
-            let worktree_path = git::linked_worktree_path(&repo_path, &path);
-            (path, worktree_path, false, false)
-        }
-        git::SessionCheckout::Main { created_branch } => {
-            (repo_path.clone(), None, false, created_branch)
-        }
-        git::SessionCheckout::NewWorktree {
-            path,
-            created_branch,
-        } => (path.clone(), Some(path), true, created_branch),
-    };
+    if let git::SessionCheckout::Reused { path } = &checkout {
+        tracing::info!(branch = %branch, worktree = %path, "branch already checked out, reusing");
+        warning = Some(format!(
+            "Branch '{branch}' is already checked out in {path}, so the session will run there"
+        ));
+    }
+    let working_dir = checkout.working_dir(&repo_path).to_string();
+    let worktree_path = checkout.worktree_path(&repo_path);
+    let created_worktree = checkout.created_worktree();
+    let created_branch = checkout.created_branch();
 
     let session_id = uuid::Uuid::new_v4().to_string();
 
@@ -411,16 +404,8 @@ pub(crate) async fn launch(
         }
     }
 
-    // If we reused an existing worktree, check if another active session is already there
-    if let (Some(ref warn_msg), Some(ref wt)) = (&warning, &session.worktree_path) {
-        let existing_session_name: Option<String> = conn
-            .query_row(
-                "SELECT name FROM sessions WHERE worktree_path = ?1 AND status = 'active' AND id != ?2 LIMIT 1",
-                rusqlite::params![wt, &session.id],
-                |row| row.get(0),
-            )
-            .ok();
-        if let Some(other_name) = existing_session_name {
+    if let Some(warn_msg) = &warning {
+        if let Some(other_name) = other_session_in_checkout(&conn, &session) {
             warning = Some(format!(
                 "{warn_msg} (session '{other_name}' is also running there)"
             ));
@@ -428,6 +413,16 @@ pub(crate) async fn launch(
     }
 
     Ok(LaunchResult { session, warning })
+}
+
+/// Another active session running in the same checkout as `session`, the main one included.
+fn other_session_in_checkout(conn: &rusqlite::Connection, session: &db::Session) -> Option<String> {
+    conn.query_row(
+        "SELECT name FROM sessions WHERE project_id = ?1 AND worktree_path IS ?2 AND status = 'active' AND id != ?3 LIMIT 1",
+        rusqlite::params![&session.project_id, &session.worktree_path, &session.id],
+        |row| row.get(0),
+    )
+    .ok()
 }
 
 /// Attempt to spawn a session in the daemon. Returns an error string on failure.
@@ -638,7 +633,11 @@ fn rollback_branch_creation(
 mod tests {
     use planeai_core::command::shell_args;
 
-    use super::{is_daemon_connection_error, require_task_key, rollback_branch_creation};
+    use super::{
+        is_daemon_connection_error, other_session_in_checkout, require_task_key,
+        rollback_branch_creation,
+    };
+    use crate::db;
 
     #[test]
     fn only_a_lost_daemon_connection_reads_as_a_daemon_crash() {
@@ -705,6 +704,46 @@ mod tests {
     fn rollback_without_worktree_and_not_new_branch_is_noop() {
         // When is_new_branch is false and no worktree, nothing should happen
         rollback_branch_creation("/nonexistent/repo", "main", None, false);
+    }
+
+    #[test]
+    fn a_reused_checkout_names_the_other_session_running_in_it() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", "/repo").unwrap();
+        let other = db::create_project(&conn, "other", "/other").unwrap();
+        let session = |id: &str, project_id: &str, worktree_path: Option<&str>| {
+            db::create_session_with_params(
+                &conn,
+                &planeai_core::services::CreateSessionParams {
+                    id: id.to_string(),
+                    project_id: project_id.to_string(),
+                    name: format!("{id} name"),
+                    branch: "feat".to_string(),
+                    worktree_path: worktree_path.map(str::to_string),
+                    backend: "local".to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        session("main-a", &project.id, None);
+        session("wt-a", &project.id, Some("/wt"));
+        session("main-other", &other.id, None);
+
+        let in_main = session("main-b", &project.id, None);
+        let in_worktree = session("wt-b", &project.id, Some("/wt"));
+        let alone = session("wt-c", &project.id, Some("/elsewhere"));
+
+        assert_eq!(
+            other_session_in_checkout(&conn, &in_main).as_deref(),
+            Some("main-a name")
+        );
+        assert_eq!(
+            other_session_in_checkout(&conn, &in_worktree).as_deref(),
+            Some("wt-a name")
+        );
+        assert_eq!(other_session_in_checkout(&conn, &alone), None);
     }
 
     #[test]

@@ -274,9 +274,39 @@ pub enum SessionCheckout {
     },
 }
 
+impl SessionCheckout {
+    pub fn working_dir<'a>(&'a self, repo_path: &'a str) -> &'a str {
+        match self {
+            Self::Reused { path } | Self::NewWorktree { path, .. } => path,
+            Self::Main { .. } => repo_path,
+        }
+    }
+
+    /// The `worktree_path` the session records: None when it runs in the main checkout.
+    pub fn worktree_path(&self, repo_path: &str) -> Option<String> {
+        linked_worktree_path(repo_path, self.working_dir(repo_path))
+    }
+
+    /// Whether the session's launch made this worktree, so undoing the launch removes it.
+    pub fn created_worktree(&self) -> bool {
+        matches!(self, Self::NewWorktree { .. })
+    }
+
+    /// Whether the launch made the local branch, so undoing the launch deletes it.
+    pub fn created_branch(&self) -> bool {
+        match self {
+            Self::Reused { .. } => false,
+            Self::Main { created_branch } | Self::NewWorktree { created_branch, .. } => {
+                *created_branch
+            }
+        }
+    }
+}
+
 /// Check out `branch` for a new session. A branch some other checkout already holds is
-/// reused there, since git allows a branch in one worktree at a time. `create` asks for a
-/// new branch, and is ignored when the branch already exists locally.
+/// reused there, since git allows a branch in one worktree at a time. `create` branches
+/// off the base when the branch does not exist locally; otherwise git checks out the
+/// branch, tracking a remote one of the same name.
 pub fn check_out_for_session(
     repo_path: &str,
     branch: &str,
@@ -289,14 +319,15 @@ pub fn check_out_for_session(
             return Ok(SessionCheckout::Reused { path });
         }
     }
-    let created_branch = create && !local_branch_exists(repo_path, branch);
+    let created_branch = !local_branch_exists(repo_path, branch);
+    let branch_off_base = create && created_branch;
     match target {
         CheckoutTarget::Main { base } => {
-            checkout_branch(repo_path, branch, created_branch, base)?;
+            checkout_branch(repo_path, branch, branch_off_base, base)?;
             Ok(SessionCheckout::Main { created_branch })
         }
         CheckoutTarget::NewWorktree { path, base } => {
-            if created_branch {
+            if branch_off_base {
                 worktree_add(repo_path, path, branch, base)?;
             } else {
                 worktree_add_existing(repo_path, path, branch)?;
