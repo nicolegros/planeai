@@ -108,7 +108,7 @@
 
   // Below this width the labelled New project button truncates to "Ne…".
   const compactProjectButton = $derived(projects.length > 0 && sidebarWidth < 400);
-  const headerBtnClass ="h-[32px] flex items-center justify-between px-3 rounded-lg bg-panel-hi border border-border text-t2 text-[12px] font-medium hover:opacity-80 transition-opacity min-w-0";
+  const headerBtnClass = "h-[32px] flex items-center justify-between px-3 rounded-lg bg-panel-hi border border-border text-t2 text-[12px] font-medium hover:opacity-80 transition-opacity min-w-0";
 
   // Task status options for context menu (maps internal values to display labels)
   const STATUS_OPTIONS = [
