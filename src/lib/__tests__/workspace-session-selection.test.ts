@@ -72,8 +72,8 @@ describe("TaskWorkspace session selection", () => {
 
   it("routes titlebar, command menu, shortcut and frame navigation through the placement resolver", () => {
     // Which surface each origin opens is resolvePluginOpen's job (plugin-navigation.test.ts).
-    expect(appSource).toMatch(
-      /const titlebarContributions = \$derived\([\s\S]*?contribution\.placement === "titlebar"/,
+    expect(appSource).toContain(
+      'const titlebarContributions = $derived(activeSession ? runningContributions("titlebar") : []);',
     );
     expect(appSource).toMatch(
       /function openPlugin\(pluginId: string, contributionId: string, origin: PluginOpenOrigin\): void \{\s*const target = resolvePluginOpen\(pluginInventory, pluginId, contributionId, origin, !!activeSession\);/,
@@ -88,8 +88,8 @@ describe("TaskWorkspace session selection", () => {
   });
 
   it("lists dialog contributions with main panes in the command menu and shortcuts", () => {
-    expect(appSource).toMatch(
-      /const globalPluginCommands = \$derived\([\s\S]*?contribution\.placement === "main-pane" \|\| contribution\.placement === "dialog"/,
+    expect(appSource).toContain(
+      'const globalPluginCommands = $derived(runningContributions("main-pane", "dialog"));',
     );
     expect(appSource).toMatch(
       /const pluginCommands = \$derived\(\[\.\.\.globalPluginCommands, \.\.\.sessionPanelCommands\]\)/,
