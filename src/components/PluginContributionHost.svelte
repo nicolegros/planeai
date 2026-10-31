@@ -872,7 +872,7 @@
         : contribution.placement === "session.indicator"
           ? "h-4 w-4 shrink-0 pointer-events-none"
           : contribution.placement === "session.meta"
-            ? "h-4 max-w-[160px] shrink-0 overflow-hidden pointer-events-none"
+            ? "h-4 shrink-0 overflow-hidden pointer-events-none"
             : "w-full"
   }
   tabindex="-1"
