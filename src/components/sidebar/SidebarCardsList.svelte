@@ -41,17 +41,19 @@
     onRowAction: (action: RowAction, row: SidebarRow) => void;
     onRowContextMenu: (e: MouseEvent, row: SidebarRow) => void;
     onProjectContextMenu: (e: MouseEvent, project: Project) => void;
-    sessionIndicatorContributions: PluginSlot[];
-    sessionMetaContributions: PluginSlot[];
-    pluginSessionContext: (session: Session) => PluginSessionContext;
-    onPluginNavigate: (pluginId: string, contributionId: string) => void;
-    onPluginClose: () => void;
+    plugins: {
+      indicators: PluginSlot[];
+      /** Slots beside the branch line. */
+      meta: PluginSlot[];
+      sessionContext: (session: Session) => PluginSessionContext;
+      onNavigate?: (pluginId: string, contributionId: string) => void;
+      onClose?: () => void;
+    };
   }
 
   let {
     sections, showTaskKeys, showProjects, navIndex, isCollapsed, onToggle, shownPages, onShowMore,
-    isActive, isPreviewing, isFading, rename, projectAutoMode, onSelectRow, onRowAction, onRowContextMenu, onProjectContextMenu,
-    sessionIndicatorContributions, sessionMetaContributions, pluginSessionContext, onPluginNavigate, onPluginClose,
+    isActive, isPreviewing, isFading, rename, projectAutoMode, onSelectRow, onRowAction, onRowContextMenu, onProjectContextMenu, plugins,
   }: Props = $props();
 
   const ACTIVITY_SLOTS: Record<SessionActivity, { icon: LucideIcon; label: string; class: string }> = {
@@ -102,11 +104,15 @@
   <ChevronDown class="size-3 shrink-0 text-t3 transition-transform {collapsed ? '-rotate-90' : ''}" />
 {/snippet}
 
+{#snippet pluginHost(item: PluginSlot, session: Session)}
+  <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={plugins.sessionContext(session)} onNavigate={plugins.onNavigate ?? (() => {})} onClose={plugins.onClose ?? (() => {})} />
+{/snippet}
+
 {#snippet trailing(session: Session | undefined, activity: SessionActivity | null)}
   {#if session}
-    {#each sessionIndicatorContributions as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
+    {#each plugins.indicators as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
       <span class="flex size-4 shrink-0 has-[[data-plugin-indicator-visible=false]]:hidden" data-plugin-session-indicator={session.id}>
-        <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={pluginSessionContext(session)} onNavigate={onPluginNavigate} onClose={onPluginClose} />
+        {@render pluginHost(item, session)}
       </span>
     {/each}
   {/if}
@@ -181,10 +187,8 @@
             <span class="flex h-4 min-w-0 items-center gap-1.5 text-xs text-t2">
               <GitBranch class="size-3.5 shrink-0" />
               <span class="flex min-w-0" title={session.branch}><span class="truncate">{head}</span><span class="shrink-0">{tail}</span></span>
-              {#each sessionMetaContributions as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
-                <span class="flex shrink-0" data-plugin-session-meta={session.id}>
-                  <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={pluginSessionContext(session)} onNavigate={onPluginNavigate} onClose={onPluginClose} />
-                </span>
+              {#each plugins.meta as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
+                <span class="flex shrink-0" data-plugin-session-meta={session.id}>{@render pluginHost(item, session)}</span>
               {/each}
               {#if session.provider}<span class="ml-auto shrink-0 font-mono text-[10px] text-t3">{session.provider}</span>{/if}
             </span>

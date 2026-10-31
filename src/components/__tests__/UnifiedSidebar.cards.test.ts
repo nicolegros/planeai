@@ -1,6 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
-import type { Project, Session, TaskItem } from "../../lib/types";
+import type {
+  PluginInventory,
+  PluginUiContribution,
+  Project,
+  Session,
+  TaskItem,
+} from "../../lib/types";
 
 const { configGet, configUpdate, projectList, sessionList, taskListAll, taskMove } = vi.hoisted(
   () => ({
@@ -306,6 +312,33 @@ describe("UnifiedSidebar in the Cards layout", () => {
       expect(onStartRename).toHaveBeenCalledWith("");
     },
   );
+
+  it("mounts session indicator and meta plugin slots on session cards", async () => {
+    const plugin = { id: "ci", name: "CI", source_kind: "builtin" } as PluginInventory;
+    const slot = (placement: PluginUiContribution["placement"]) => ({
+      plugin,
+      contribution: { id: placement, label: placement, placement } as PluginUiContribution,
+    });
+    mounted = await mountSidebar(
+      { sidebar_group_by: "status" },
+      {
+        sessionIndicatorContributions: [slot("session.indicator")],
+        sessionMetaContributions: [slot("session.meta")],
+      },
+    );
+
+    const card = rowOf(mounted.target, "scratch");
+    expect(
+      card
+        .querySelector('[data-plugin-session-indicator="scratch"] [data-plugin-ui-contribution]')
+        ?.getAttribute("data-plugin-ui-contribution"),
+    ).toBe("ci:session.indicator");
+    expect(
+      card
+        .querySelector('[data-plugin-session-meta="scratch"] [data-plugin-ui-contribution]')
+        ?.getAttribute("data-plugin-ui-contribution"),
+    ).toBe("ci:session.meta");
+  });
 
   it("splits the top rows into project folders when grouped by project", async () => {
     mounted = await mountSidebar({});

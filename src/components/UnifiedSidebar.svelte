@@ -709,11 +709,13 @@
         onRowAction={runRowAction}
         {onRowContextMenu}
         {onProjectContextMenu}
-        {sessionIndicatorContributions}
-        {sessionMetaContributions}
-        {pluginSessionContext}
-        onPluginNavigate={onPluginNavigate ?? (() => {})}
-        onPluginClose={onPluginClose ?? (() => {})}
+        plugins={{
+          indicators: sessionIndicatorContributions,
+          meta: sessionMetaContributions,
+          sessionContext: pluginSessionContext,
+          onNavigate: onPluginNavigate,
+          onClose: onPluginClose,
+        }}
       />
     {:else}
       {#each sections as section (section.key)}
