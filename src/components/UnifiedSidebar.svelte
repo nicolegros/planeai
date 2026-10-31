@@ -705,7 +705,7 @@
       <SidebarCardsList
         {sections}
         {showTaskKeys}
-        showProjects={groupBy === "project" || !getSettings().hide_project_labels}
+        showProjects={!getSettings().hide_project_labels}
         navIndex={(key) => flatNavIndex.get(key) ?? -1}
         {isCollapsed}
         onToggle={toggleSection}

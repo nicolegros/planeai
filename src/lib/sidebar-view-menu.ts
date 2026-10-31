@@ -14,6 +14,8 @@ export function sidebarViewMenuItems(
 ): MenuItem[] {
   const groupBy = resolveSidebarGroupBy(settings);
   const layout = resolveSidebarLayout(settings);
+  // Classic grouped by project shows rows under their project header, never a project label.
+  const projectLabelsApply = layout === "cards" || groupBy === "status";
   return [
     {
       label: "Group by project",
@@ -49,8 +51,10 @@ export function sidebarViewMenuItems(
     {
       label: "Show project labels",
       checked: !settings.hide_project_labels,
-      disabled: groupBy === "project",
-      title: groupBy === "project" ? "Only applies when grouped by status" : undefined,
+      disabled: !projectLabelsApply,
+      title: projectLabelsApply
+        ? undefined
+        : "Only applies when grouped by status or in the Cards layout",
       onSelect: () => update({ hide_project_labels: !settings.hide_project_labels }),
     },
   ];

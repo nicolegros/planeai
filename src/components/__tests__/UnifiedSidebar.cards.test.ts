@@ -253,6 +253,16 @@ describe("UnifiedSidebar in the Cards layout", () => {
     expect(rowOf(mounted.target, "Title B-1").textContent).not.toContain("beta-service");
   });
 
+  it("shows the project line on shelf cards when grouped by project unless labels are hidden", async () => {
+    mounted = await mountSidebar({});
+    expect(rowOf(mounted.target, "Title B-1").textContent).toContain("beta-service");
+    unmount(mounted.component);
+    mounted.target.remove();
+
+    mounted = await mountSidebar({ hide_project_labels: true });
+    expect(rowOf(mounted.target, "Title B-1").textContent).not.toContain("beta-service");
+  });
+
   it("splits the top rows into project folders when grouped by project", async () => {
     mounted = await mountSidebar({});
 

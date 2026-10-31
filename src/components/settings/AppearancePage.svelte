@@ -11,6 +11,7 @@
   const config = $derived(getSettings());
   const groupBy = $derived(resolveSidebarGroupBy(config));
   const layout = $derived(resolveSidebarLayout(config));
+  const projectLabelsApply = $derived(layout === "cards" || groupBy === "status");
 </script>
 
 <SettingsSection title="Color" help="Mode follows macOS when set to System.">
@@ -44,11 +45,11 @@
   <SettingRow id="show-task-keys">
     <Switch label="Show task keys" checked={!config.hide_task_keys} onCheckedChange={(checked) => saveSettings({ hide_task_keys: !checked })} />
   </SettingRow>
-  <SettingRow id="show-project-labels" disabled={groupBy !== "status"}>
+  <SettingRow id="show-project-labels" disabled={!projectLabelsApply}>
     <Switch
       label="Show project labels"
       checked={!config.hide_project_labels}
-      disabled={groupBy !== "status"}
+      disabled={!projectLabelsApply}
       onCheckedChange={(checked) => saveSettings({ hide_project_labels: !checked })}
     />
   </SettingRow>

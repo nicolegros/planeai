@@ -8,7 +8,7 @@ function leaves(items: ReturnType<typeof sidebarViewMenuItems>): Leaf[] {
 }
 
 describe("sidebarViewMenuItems", () => {
-  it("checks project grouping, the cards layout and both labels by default, with project labels disabled", () => {
+  it("checks project grouping, the cards layout and both labels by default", () => {
     const items = leaves(sidebarViewMenuItems({}, vi.fn()));
     expect(items.map((i) => [i.label, !!i.checked, !!i.disabled])).toEqual([
       ["Group by project", true, false],
@@ -16,8 +16,17 @@ describe("sidebarViewMenuItems", () => {
       ["Classic layout", false, false],
       ["Cards layout", true, false],
       ["Show task keys", true, false],
-      ["Show project labels", true, true],
+      ["Show project labels", true, false],
     ]);
+  });
+
+  it("disables project labels only in the Classic layout grouped by project", () => {
+    const items = sidebarViewMenuItems({ sidebar_layout: "classic" }, vi.fn());
+    expect(items.at(-1)).toMatchObject({
+      label: "Show project labels",
+      disabled: true,
+      title: "Only applies when grouped by status or in the Cards layout",
+    });
   });
 
   it("enables project labels when grouped by status and reflects hidden options", () => {

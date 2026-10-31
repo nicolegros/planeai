@@ -29,7 +29,7 @@ These are normal options users should configure.
 | `sidebar_layout`          | string   | `"cards"`                         | Sidebar row layout: `cards` (attention rows on top, status shelves below) or `classic` (compact rows in status groups)                                           |
 | `sidebar_group_by`        | string   | `"project"`                       | Sidebar top-level grouping: `project` or `status`                                                                                                                |
 | `hide_task_keys`          | bool     | `false`                           | Hide task keys on sidebar task rows                                                                                                                              |
-| `hide_project_labels`     | bool     | `false`                           | Hide project names on sidebar rows when grouped by status                                                                                                        |
+| `hide_project_labels`     | bool     | `false`                           | Hide project names on sidebar rows when grouped by status or in the Cards layout                                                                                 |
 | `onboarding_completed`    | bool     | see description                   | `false` on first launch until setup is finished or skipped; configs written before this field existed load as `true`                                             |
 
 ### 2. Advanced compatibility config

@@ -65,7 +65,8 @@ Each section mixes the tasks of every visible project, sorted by priority, then 
 Each row shows its project name before the task key.
 Project actions, such as editing a project or toggling auto-dispatch, are only available when the sidebar is grouped by project.
 
-The same places turn off task keys ("Show task keys") and, when grouping by status, project names ("Show project labels"; in Cards it drops the project line from cards).
+The same places turn off task keys ("Show task keys") and project names ("Show project labels").
+Project names apply when grouping by status or in Cards, where the option drops the project line from cards outside a project folder.
 These choices are saved in `config.json` as `sidebar_layout`, `sidebar_group_by`, `hide_task_keys`, and `hide_project_labels`.
 Done sections start collapsed, and the sidebar remembers which sections you collapse.
 
