@@ -245,10 +245,8 @@
     const session = rowSession(row);
     if (action === "review" && session) { onSelectSession(session.id); onToggleDiff?.(); }
     else if (action === "restart" && session) onRestartSession(session);
-    else if (action === "done") {
-      if (row.kind === "task") moveTask(row, "done");
-      else fadeOutThenAct(row.session.id, () => onArchiveSession(row.session));
-    }
+    else if (action === "done" && row.kind === "task") moveTask(row, "done");
+    else if (action === "archive" && row.kind === "session") fadeOutThenAct(row.session.id, () => onArchiveSession(row.session));
     else if (action === "start" && row.kind === "task") onPickTask(row.task, row.project.path);
     else if (action === "reopen" && row.kind === "task") moveTask(row, "todo");
   }

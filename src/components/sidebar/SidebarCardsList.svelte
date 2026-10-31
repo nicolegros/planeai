@@ -61,6 +61,7 @@
     review: { icon: GitCompare, label: "Review diff" },
     restart: { icon: RotateCcw, label: "Restart session" },
     done: { icon: Check, label: "Mark done", text: "Done" },
+    archive: { icon: Check, label: "Archive session", text: "Done" },
     start: { icon: Play, label: "Start session", text: "Start" },
     reopen: { icon: Undo2, label: "Reopen", text: "Reopen" },
   };
@@ -122,12 +123,11 @@
     <div class="flex h-full items-center gap-0.5 rounded-md {active ? 'bg-sidebar-row-active' : 'bg-sidebar-row-hover'}">
       {#each rowActions(row, shelf) as action (action)}
         {@const spec = ACTIONS[action]}
-        {@const label = action === "done" && row.kind === "session" ? "Archive session" : spec.label}
         <button
           type="button"
           class="flex items-center rounded-md text-t2 hover:bg-sidebar-row-hover hover:text-t1 {spec.text ? 'h-6 gap-1 px-1.5 text-xs' : 'size-6 justify-center'}"
-          aria-label={label}
-          title={label}
+          aria-label={spec.label}
+          title={spec.label}
           onclick={(e) => { e.stopPropagation(); onRowAction(action, row); }}
         ><spec.icon class="size-3.5 shrink-0" />{spec.text}</button>
       {/each}

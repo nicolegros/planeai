@@ -70,14 +70,14 @@ describe("sessionActivity", () => {
 });
 
 describe("rowActions", () => {
-  it("offers review or restart before Done on cards, and one action on slim rows", () => {
+  it("offers review or restart before Done or Archive on cards, and one action on slim rows", () => {
     expect([
       rowActions(sessionRow(session("live"))),
       rowActions(taskRow("A-1", "in_review", session("gone", "exited"))),
       rowActions(taskRow("A-2", "in_review")),
       rowActions(taskRow("A-3", "todo"), "todo"),
       rowActions(taskRow("A-4", "done", session("old")), "done"),
-    ]).toEqual([["review", "done"], ["restart", "done"], ["done"], ["start"], ["reopen"]]);
+    ]).toEqual([["review", "archive"], ["restart", "done"], ["done"], ["start"], ["reopen"]]);
   });
 });
 

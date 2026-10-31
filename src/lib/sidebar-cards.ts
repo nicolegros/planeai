@@ -24,15 +24,16 @@ export function sessionActivity(
   return null;
 }
 
-export type RowAction = "review" | "restart" | "done" | "start" | "reopen";
+export type RowAction = "review" | "restart" | "done" | "archive" | "start" | "reopen";
 
 /** Hover actions of a row, left to right. `shelf` is the shelf the row sits in, if any. */
 export function rowActions(row: SidebarRow, shelf?: ShelfStatus): RowAction[] {
   if (shelf === "todo") return ["start"];
   if (shelf === "done") return ["reopen"];
+  const finish = row.kind === "session" ? "archive" : "done";
   const session = rowSession(row);
-  if (!session) return ["done"];
-  return [session.status === "exited" ? "restart" : "review", "done"];
+  if (!session) return [finish];
+  return [session.status === "exited" ? "restart" : "review", finish];
 }
 
 /** The status dot of a collapsed folder, most urgent first. */
