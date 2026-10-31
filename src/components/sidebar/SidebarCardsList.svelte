@@ -79,7 +79,6 @@
 
   const activityOf = (row: SidebarRow) => sessionActivity(rowSession(row), agentStates, reviewReady);
   const isSelected = (navIdx: number) => getActiveZone() === "sidebar" && navIdx === getSelectedIndex();
-  const rowKey = (row: SidebarRow) => (row.kind === "task" ? `task:${row.project.id}:${row.task.key}` : `session:${row.session.id}`);
 
   const motionMs = () => (window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 150);
   // A row moving between lists glides from its old place; a row without a counterpart fades and slides in or out.
@@ -112,7 +111,7 @@
   {/if}
   {#if activity}
     {@const slot = ACTIVITY_SLOTS[activity]}
-    <span class="flex shrink-0 items-center gap-1 text-xs tabular-nums transition-opacity group-focus-within:opacity-0 group-hover:opacity-0 {slot.class}" data-row-status={activity}>
+    <span class="flex shrink-0 items-center gap-1 text-xs tabular-nums transition-opacity group-focus-within:opacity-0 group-hover:opacity-0 {slot.class}">
       <slot.icon class="size-3.5" />{slot.label}
     </span>
   {/if}
@@ -137,9 +136,9 @@
   </div>
 {/snippet}
 
-{#snippet titleParts(row: SidebarRow, receded: boolean, withParent: boolean)}
+{#snippet titleParts(row: SidebarRow, receded: boolean)}
   {#if row.kind === "task"}
-    {#if showTaskKeys && withParent && row.task.parent_key}<span class="shrink-0 font-mono text-[10px] text-t3">{row.task.parent_key} ›</span>{/if}
+    {#if showTaskKeys && row.task.parent_key}<span class="shrink-0 font-mono text-[10px] text-t3">{row.task.parent_key} ›</span>{/if}
     {#if showTaskKeys}<span class="shrink-0 font-mono text-[10px] text-t3">{row.task.key}</span>{/if}
   {/if}
   <span class="min-w-0 flex-1 truncate text-[13px] text-t1 {receded ? 'font-normal group-hover:font-medium group-has-focus-visible:font-medium' : 'font-medium'}">{row.kind === "task" ? row.task.title : row.session.name || row.session.branch}</span>
@@ -177,10 +176,10 @@
               <span class="min-w-0 flex-1 truncate text-xs text-t2" title={row.project.path}>{row.project.name}</span>
               {@render trailing(session, activity)}
             </span>
-            <span class="flex min-w-0 items-center gap-1.5">{@render titleParts(row, receded, true)}</span>
+            <span class="flex min-w-0 items-center gap-1.5">{@render titleParts(row, receded)}</span>
           {:else}
             <span class="flex h-5 items-center gap-1.5">
-              {@render titleParts(row, receded, true)}
+              {@render titleParts(row, receded)}
               {@render trailing(session, activity)}
             </span>
           {/if}
@@ -265,8 +264,8 @@
     </div>
     {#if !collapsed && section.rows.length > 0}
       <ul class="flex flex-col gap-0.5">
-        {#each section.rows as row (rowKey(row))}
-          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key: rowKey(row) }} out:send={{ key: rowKey(row) }} class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">{@render card(row, true)}</li>
+        {#each section.rows as row (sidebarRowNavKey(row))}
+          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key: sidebarRowNavKey(row) }} out:send={{ key: sidebarRowNavKey(row) }} class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">{@render card(row, true)}</li>
         {/each}
       </ul>
     {/if}
@@ -292,8 +291,8 @@
     </button>
     {#if !collapsed}
       <ul class="flex flex-col gap-0.5">
-        {#each page.rows as row (rowKey(row))}
-          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key: rowKey(row) }} out:send={{ key: rowKey(row) }} class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">
+        {#each page.rows as row (sidebarRowNavKey(row))}
+          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key: sidebarRowNavKey(row) }} out:send={{ key: sidebarRowNavKey(row) }} class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">
             {#if SHELVES[section.status].variant === "card"}{@render card(row, false)}{:else}{@render slim(row, section.status)}{/if}
           </li>
         {/each}
@@ -317,8 +316,8 @@
       {@render folder(section)}
     {:else if section.kind === "attention"}
       <ul class="flex flex-col gap-0.5">
-        {#each section.rows as row (rowKey(row))}
-          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key: rowKey(row) }} out:send={{ key: rowKey(row) }} class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">{@render card(row, false)}</li>
+        {#each section.rows as row (sidebarRowNavKey(row))}
+          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key: sidebarRowNavKey(row) }} out:send={{ key: sidebarRowNavKey(row) }} class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">{@render card(row, false)}</li>
         {/each}
       </ul>
     {/if}
