@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getSettings } from "../../lib/settings.svelte";
-  import { resolveSidebarGroupBy, resolveSidebarLayout } from "../../lib/sidebar-model";
+  import { projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout } from "../../lib/sidebar-model";
   import { SegmentedControl, Switch } from "../ui";
   import SettingRow from "./SettingRow.svelte";
   import SettingsSection from "./SettingsSection.svelte";
@@ -11,7 +11,7 @@
   const config = $derived(getSettings());
   const groupBy = $derived(resolveSidebarGroupBy(config));
   const layout = $derived(resolveSidebarLayout(config));
-  const projectLabelsApply = $derived(layout === "cards" || groupBy === "status");
+  const labelsApply = $derived(projectLabelsApply(config));
 </script>
 
 <SettingsSection title="Color" help="Mode follows macOS when set to System.">
@@ -45,11 +45,11 @@
   <SettingRow id="show-task-keys">
     <Switch label="Show task keys" checked={!config.hide_task_keys} onCheckedChange={(checked) => saveSettings({ hide_task_keys: !checked })} />
   </SettingRow>
-  <SettingRow id="show-project-labels" disabled={!projectLabelsApply}>
+  <SettingRow id="show-project-labels" disabled={!labelsApply}>
     <Switch
       label="Show project labels"
       checked={!config.hide_project_labels}
-      disabled={!projectLabelsApply}
+      disabled={!labelsApply}
       onCheckedChange={(checked) => saveSettings({ hide_project_labels: !checked })}
     />
   </SettingRow>

@@ -14,6 +14,14 @@ export function resolveSidebarLayout(settings: {
   return settings.sidebar_layout ?? "cards";
 }
 
+/** Project labels only apply where rows are not already under their project: Cards, or Classic grouped by status. */
+export function projectLabelsApply(
+  settings: Parameters<typeof resolveSidebarLayout>[0] &
+    Parameters<typeof resolveSidebarGroupBy>[0],
+): boolean {
+  return resolveSidebarLayout(settings) === "cards" || resolveSidebarGroupBy(settings) === "status";
+}
+
 export function resolveSidebarGroupBy(settings: {
   sidebar_group_by?: SidebarGroupBy | null;
 }): SidebarGroupBy {

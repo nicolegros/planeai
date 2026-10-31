@@ -1,6 +1,6 @@
 import type { MenuItem } from "../components/ui/ContextMenu.svelte";
 import type { AppConfig } from "./settings.svelte";
-import { resolveSidebarGroupBy, resolveSidebarLayout } from "./sidebar-model";
+import { projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout } from "./sidebar-model";
 
 type SidebarViewSettings = Pick<
   AppConfig,
@@ -14,8 +14,7 @@ export function sidebarViewMenuItems(
 ): MenuItem[] {
   const groupBy = resolveSidebarGroupBy(settings);
   const layout = resolveSidebarLayout(settings);
-  // Classic grouped by project shows rows under their project header, never a project label.
-  const projectLabelsApply = layout === "cards" || groupBy === "status";
+  const labelsApply = projectLabelsApply(settings);
   return [
     {
       label: "Group by project",
@@ -51,10 +50,8 @@ export function sidebarViewMenuItems(
     {
       label: "Show project labels",
       checked: !settings.hide_project_labels,
-      disabled: !projectLabelsApply,
-      title: projectLabelsApply
-        ? undefined
-        : "Only applies when grouped by status or in the Cards layout",
+      disabled: !labelsApply,
+      title: labelsApply ? undefined : "Only applies when grouped by status or in the Cards layout",
       onSelect: () => update({ hide_project_labels: !settings.hide_project_labels }),
     },
   ];

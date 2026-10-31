@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSidebarModel,
+  projectLabelsApply,
   resolveSidebarLayout,
   sidebarNavItemKey,
   sidebarNavItems,
@@ -385,6 +386,17 @@ describe("resolveSidebarLayout", () => {
     expect([resolveSidebarLayout({}), resolveSidebarLayout({ sidebar_layout: "classic" })]).toEqual(
       ["cards", "classic"],
     );
+  });
+});
+
+describe("projectLabelsApply", () => {
+  it("applies everywhere except Classic grouped by project", () => {
+    expect([
+      projectLabelsApply({}),
+      projectLabelsApply({ sidebar_layout: "cards", sidebar_group_by: "project" }),
+      projectLabelsApply({ sidebar_layout: "classic", sidebar_group_by: "status" }),
+      projectLabelsApply({ sidebar_layout: "classic", sidebar_group_by: "project" }),
+    ]).toEqual([true, true, true, false]);
   });
 });
 
