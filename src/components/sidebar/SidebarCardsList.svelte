@@ -223,7 +223,7 @@
         {#if row.kind === "task" && showTaskKeys}<span class="shrink-0 font-mono text-[10px] text-t3">{row.task.key}</span>{/if}
         <span class="min-w-0 truncate text-[13px] {shelf === 'done' ? 'text-t3' : 'text-t1'}">{row.kind === "task" ? row.task.title : row.session.name || row.session.branch}</span>
       </span>
-      <span class="flex h-6 min-w-8 shrink-0 items-center justify-end gap-1.5">{@render trailing(session, activity)}</span>
+      {#if session}<span class="flex h-6 shrink-0 items-center justify-end gap-1.5">{@render trailing(session, activity)}</span>{/if}
     </button>
     {@render hoverActions(row, shelf, active, "top-1")}
   </div>
