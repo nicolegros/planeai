@@ -48,11 +48,11 @@ Custom user themes are plain CSS files in `~/.config/planeai/themes/` that overr
 
 Defined in an `@theme inline` block from the role tokens, so every built-in and custom theme gets them without overrides.
 
-| Token                  | Purpose                                           | Value                                           |
-| ---------------------- | ------------------------------------------------- | ----------------------------------------------- |
-| `sidebar-row-hover`    | Hovered Cards sidebar row                         | `t1` at 5% over transparent                     |
-| `sidebar-row-selected` | Keyboard-selected Cards sidebar row               | `t1` at 7% over transparent                     |
-| `sidebar-row-active`   | Active Cards sidebar row                          | `t1` at 9% over transparent                     |
+| Token                  | Purpose                             | Value                       |
+| ---------------------- | ----------------------------------- | --------------------------- |
+| `sidebar-row-hover`    | Hovered Cards sidebar row           | `t1` at 5% over transparent |
+| `sidebar-row-selected` | Keyboard-selected Cards sidebar row | `t1` at 7% over transparent |
+| `sidebar-row-active`   | Active Cards sidebar row            | `t1` at 9% over transparent |
 
 ### Usage in Tailwind
 

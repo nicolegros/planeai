@@ -257,8 +257,8 @@ describe("UnifiedSidebar in the Cards layout", () => {
     mounted = await mountSidebar({});
 
     expect(navLabels(mounted.target).slice(0, 5)).toEqual([
-      "[A alpha 0]",
-      "[B beta-service 2]",
+      "[alpha 0]",
+      "[beta-service 2]",
       "scratch",
       "Title B-2",
       "[Running 2]",
