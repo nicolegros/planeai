@@ -1,6 +1,6 @@
 <script lang="ts">
   import { projects as projectsApi } from "../lib/api";
-  import { sessionTaskProjectId, type TaskItem, type Session, type Project, type PluginInventory, type PluginSessionAction, type PluginSlot } from "../lib/types";
+  import { sessionTaskProjectId, type TaskItem, type Session, type Project, type PluginSessionAction, type PluginSlot } from "../lib/types";
   import type { PluginSessionContext } from "../lib/plugin-sdk";
   import { pluginSessionActionsForProvider } from "../lib/plugin-session-actions";
   import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
