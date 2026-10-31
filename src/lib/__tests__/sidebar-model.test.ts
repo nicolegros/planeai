@@ -524,7 +524,6 @@ describe("sidebarNavItems - cards layout", () => {
     expect(sidebarNavItems(sections(), expanded, () => 1).at(-1)).toEqual({
       type: "show_more",
       shelfKey: "shelf:done",
-      count: 2,
     });
   });
 

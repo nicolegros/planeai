@@ -310,7 +310,7 @@ export type SidebarNavItem =
   | { type: "group_header"; key: string; parentKey: string | null; defaultCollapsed: boolean }
   | { type: "orphan"; session: Session }
   | { type: "task"; row: SidebarTaskRow }
-  | { type: "show_more"; shelfKey: string; count: number };
+  | { type: "show_more"; shelfKey: string };
 
 /** Resolves a section's collapse state; `fallback` is its default when the user never toggled it. */
 export type IsCollapsed = (key: string, fallback: boolean) => boolean;
@@ -412,8 +412,7 @@ export function sidebarNavItems(
         if (isCollapsed(section.key, section.defaultCollapsed)) break;
         const page = shelfPage(section, shownPages(section.key));
         pushRows(page.rows);
-        if (page.more > 0)
-          items.push({ type: "show_more", shelfKey: section.key, count: page.more });
+        if (page.more > 0) items.push({ type: "show_more", shelfKey: section.key });
         break;
       }
     }
