@@ -277,9 +277,11 @@ describe("UnifiedSidebar in the Cards layout", () => {
 
     navButtons(mounted.target)[1].click();
     flushSync();
-    expect(
-      mounted.target.querySelector<HTMLElement>("[data-folder-urgency]")!.dataset.folderUrgency,
-    ).toBe("review");
+    const dot = mounted.target.querySelector<HTMLElement>("[data-folder-urgency]")!;
+    expect(dot.dataset.folderUrgency).toBe("review");
+    expect(dot.getAttribute("role")).toBe("img");
+    expect(dot.getAttribute("aria-label")).toBe("Needs review");
+    expect(dot.title).toBe("Needs review");
   });
 
   it("keeps the Classic rows when the layout is classic", async () => {

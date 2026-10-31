@@ -66,10 +66,10 @@
     reopen: { icon: Undo2, label: "Reopen", text: "Reopen" },
   };
 
-  const URGENCY_DOTS: Record<FolderUrgency, string> = {
-    exited: "bg-status-exited",
-    review: "bg-status-review",
-    running: "bg-status-running",
+  const URGENCY_DOTS: Record<FolderUrgency, { class: string; label: string }> = {
+    exited: { class: "bg-status-exited", label: "Has an exited session" },
+    review: { class: "bg-status-review", label: "Needs review" },
+    running: { class: "bg-status-running", label: "Working" },
   };
 
   const top = $derived(sections.filter((s) => s.kind === "attention" || s.kind === "folder"));
@@ -244,7 +244,7 @@
       >
         {#if project.path_missing}<span class="size-4 shrink-0"></span>{/if}
         <span class="min-w-0 truncate text-[13px] font-medium text-t1">{project.name}</span>
-        {#if urgency}<span class="size-1.5 shrink-0 rounded-full {URGENCY_DOTS[urgency]}" data-folder-urgency={urgency}></span>{/if}
+        {#if urgency}<span class="size-1.5 shrink-0 rounded-full {URGENCY_DOTS[urgency].class}" role="img" aria-label={URGENCY_DOTS[urgency].label} title={URGENCY_DOTS[urgency].label} data-folder-urgency={urgency}></span>{/if}
         {#if projectAutoMode[project.id]}<Zap class="size-2.5 shrink-0 text-status-running" />{/if}
         <span class="ml-auto text-xs tabular-nums text-t3">{section.rows.length}</span>
         {@render chevron(collapsed)}
