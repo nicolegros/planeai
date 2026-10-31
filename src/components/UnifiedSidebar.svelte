@@ -108,7 +108,8 @@
 
   // Below this width the labelled New project button truncates to "Ne…".
   const compactProjectButton = $derived(projects.length > 0 && sidebarWidth < 400);
-  const headerBtnClass = "h-[32px] flex items-center justify-between px-3 rounded-lg bg-panel-hi border border-border text-t2 text-[12px] font-medium hover:opacity-80 transition-opacity min-w-0";
+  // Justify and padding are set per button: Tailwind does not resolve conflicting utilities by class order.
+  const headerBtnClass = "h-[32px] flex items-center rounded-lg bg-panel-hi border border-border text-t2 text-[12px] font-medium hover:opacity-80 transition-opacity min-w-0";
 
   // Task status options for context menu (maps internal values to display labels)
   const STATUS_OPTIONS = [
@@ -655,7 +656,7 @@
       <button
         onclick={() => onCreateSession?.()}
         aria-label="New session"
-        class="{headerBtnClass} flex-[3]"
+        class="{headerBtnClass} flex-[3] justify-between px-3"
       >
         <span class="flex items-center gap-1.5 overflow-hidden">
           <Plus class="size-3.5 shrink-0" />
@@ -664,28 +665,18 @@
         {#if sidebarWidth >= 220}<span class="font-mono text-[10px] text-t3 shrink-0 ml-1">{MOD_LABEL}N</span>{/if}
       </button>
     {/if}
-    {#if compactProjectButton}
-      <button
-        onclick={() => onAddProject?.()}
-        aria-label="New project"
-        title="New project ({MOD_LABEL}⇧N)"
-        class="{headerBtnClass} w-8 shrink-0 justify-center !px-0"
-      >
+    <button
+      onclick={() => onAddProject?.()}
+      aria-label="New project"
+      title={compactProjectButton ? `New project (${MOD_LABEL}⇧N)` : undefined}
+      class="{headerBtnClass} {compactProjectButton ? 'w-8 shrink-0 justify-center px-0' : `justify-between px-3 ${projects.length > 0 ? 'flex-[2]' : 'flex-[1]'}`}"
+    >
+      <span class="flex items-center gap-1.5 overflow-hidden">
         <FolderPlus class="size-3.5 shrink-0" />
-      </button>
-    {:else}
-      <button
-        onclick={() => onAddProject?.()}
-        aria-label="New project"
-        class="{headerBtnClass} {projects.length > 0 ? 'flex-[2]' : 'flex-[1]'}"
-      >
-        <span class="flex items-center gap-1.5 overflow-hidden">
-          <FolderPlus class="size-3.5 shrink-0" />
-          <span class="truncate">New project</span>
-        </span>
-        <span class="font-mono text-[10px] text-t3 shrink-0 ml-1">{MOD_LABEL}⇧N</span>
-      </button>
-    {/if}
+        {#if !compactProjectButton}<span class="truncate">New project</span>{/if}
+      </span>
+      {#if !compactProjectButton}<span class="font-mono text-[10px] text-t3 shrink-0 ml-1">{MOD_LABEL}⇧N</span>{/if}
+    </button>
   </div>
 
   {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.header") as item (`${item.plugin.id}:${item.contribution.id}`)}

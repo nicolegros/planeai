@@ -51,6 +51,7 @@ import { _resetForTests, loadSessions } from "../../lib/session-orchestrator.sve
 import { getSelectedIndex, setSelectedIndex } from "../../lib/sidebar-nav.svelte";
 import { loadTasks } from "../../lib/task-store.svelte";
 import { loadSettings } from "../../lib/settings.svelte";
+import { setLayoutWidth } from "../../lib/layout-state";
 
 const alpha: Project = {
   id: "alpha",
@@ -261,6 +262,26 @@ describe("UnifiedSidebar in the Cards layout", () => {
 
     mounted = await mountSidebar({ hide_project_labels: true });
     expect(rowOf(mounted.target, "Title B-1").textContent).not.toContain("beta-service");
+  });
+
+  it("shows New project as an unpadded icon button below 400px and labelled above", async () => {
+    const newProject = () =>
+      mounted!.target.querySelector<HTMLButtonElement>("button[aria-label='New project']")!;
+
+    mounted = await mountSidebar({});
+    expect(newProject().textContent!.trim()).toBe("");
+    expect(newProject().title).toMatch(/^New project \(.+⇧N\)$/);
+    expect(newProject().classList).toContain("px-0");
+    expect(newProject().classList).not.toContain("px-3");
+    unmount(mounted.component);
+    mounted.target.remove();
+
+    setLayoutWidth("sidebar", 400);
+    mounted = await mountSidebar({});
+    expect(newProject().textContent!.replace(/\s+/g, " ").trim()).toMatch(/^New project .+⇧N$/);
+    expect(newProject().title).toBe("");
+    expect(newProject().classList).toContain("px-3");
+    expect(newProject().classList).not.toContain("px-0");
   });
 
   it("splits the top rows into project folders when grouped by project", async () => {
