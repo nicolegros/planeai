@@ -177,5 +177,6 @@ Minimal, purposeful animation only:
 - Terminal caret: `blink-caret 1.1s`
 - Selection changes: instant or 120–150ms transition
 - Sidebar archive/delete: 200ms opacity fade-out before action executes
+- Cards sidebar rows: 150ms ease-out FLIP (`animate:flip`) within a list, and a `crossfade` keyed by row so a row moving between lists (Needs review to Done) glides there; a row without a counterpart fades and slides 8px. All of it drops to 0ms under `prefers-reduced-motion: reduce`. Collapsing a shelf or folder is instant.
 
 No decorative animation.

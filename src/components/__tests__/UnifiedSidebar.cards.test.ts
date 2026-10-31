@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import type { Project, Session, TaskItem } from "../../lib/types";
 
@@ -180,6 +180,25 @@ function press(key: string): void {
 describe("UnifiedSidebar in the Cards layout", () => {
   let mounted: { target: HTMLElement; component: ReturnType<typeof mount> } | undefined;
 
+  // jsdom lacks the Web Animations API that the row motion runs on; every animation finishes at once.
+  beforeAll(() => {
+    Element.prototype.getAnimations = () => [];
+    Element.prototype.animate = function () {
+      const animation = {
+        currentTime: 0,
+        playState: "finished",
+        onfinish: null as (() => void) | null,
+      };
+      queueMicrotask(() => animation.onfinish?.());
+      return Object.assign(animation, { cancel() {} }) as unknown as Animation;
+    };
+  });
+
+  afterAll(() => {
+    delete (Element.prototype as Partial<Element>).animate;
+    delete (Element.prototype as Partial<Element>).getAnimations;
+  });
+
   beforeEach(() => {
     localStorage.clear();
     _resetForTests();
@@ -270,6 +289,34 @@ describe("UnifiedSidebar in the Cards layout", () => {
 
     expect(taskMove).toHaveBeenCalledWith("B-2", "done", beta.path);
     await vi.waitFor(() => expect(navLabels(mounted!.target).at(-1)).toBe("[Done 2]"));
+  });
+
+  it("animates a row leaving its list, unless the user prefers reduced motion", async () => {
+    const animate = vi.spyOn(Element.prototype, "animate");
+    const matchMedia = window.matchMedia;
+    const moveToDone = async (title: string, doneCount: number) => {
+      mounted = await mountSidebar({ sidebar_group_by: "status" });
+      animate.mockClear();
+      clickAction(mounted.target, title, "Mark done");
+      await vi.waitFor(() => expect(navLabels(mounted!.target).at(-1)).toBe(`[Done ${doneCount}]`));
+      unmount(mounted.component);
+      mounted.target.remove();
+      mounted = undefined;
+      return animate.mock.calls.length > 0;
+    };
+
+    const animated = await moveToDone("Title B-2", 2);
+    window.matchMedia = (query: string) =>
+      ({
+        ...matchMedia(query),
+        matches: query === "(prefers-reduced-motion: reduce)",
+      }) as MediaQueryList;
+    try {
+      expect([animated, await moveToDone("Title B-1", 3)]).toEqual([true, false]);
+    } finally {
+      window.matchMedia = matchMedia;
+      animate.mockRestore();
+    }
   });
 
   it("archives an unlinked session from its Done action", async () => {

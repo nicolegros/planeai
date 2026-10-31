@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { flip } from "svelte/animate";
+  import { cubicOut } from "svelte/easing";
+  import { crossfade } from "svelte/transition";
   import { Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, GitBranch, GitCompare, Play, RotateCcw, TriangleAlert, Undo2, Zap, type LucideIcon } from "@lucide/svelte";
   import PluginContributionHost from "../PluginContributionHost.svelte";
   import ProjectMonogram from "./ProjectMonogram.svelte";
@@ -77,6 +80,14 @@
   const activityOf = (row: SidebarRow) => sessionActivity(rowSession(row), agentStates, reviewReady);
   const isSelected = (navIdx: number) => getActiveZone() === "sidebar" && navIdx === getSelectedIndex();
   const rowKey = (row: SidebarRow) => (row.kind === "task" ? `task:${row.project.id}:${row.task.key}` : `session:${row.session.id}`);
+
+  const motionMs = () => (window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 150);
+  // A row moving between lists glides from its old place; a row without a counterpart fades and slides in or out.
+  const [send, receive] = crossfade({
+    duration: motionMs,
+    easing: cubicOut,
+    fallback: () => ({ duration: motionMs(), easing: cubicOut, css: (t) => `opacity: ${t}; transform: translateY(${(t - 1) * 8}px)` }),
+  });
 
   function rowStateClass(active: boolean, selected: boolean, ringed: boolean): string {
     const background = active ? "bg-sidebar-row-active" : selected ? "bg-sidebar-row-selected" : "hover:bg-sidebar-row-hover";
@@ -255,7 +266,7 @@
     {#if !collapsed && section.rows.length > 0}
       <ul class="flex flex-col gap-0.5">
         {#each section.rows as row (rowKey(row))}
-          <li class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">{@render card(row, true)}</li>
+          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key: rowKey(row) }} out:send={{ key: rowKey(row) }} class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">{@render card(row, true)}</li>
         {/each}
       </ul>
     {/if}
@@ -282,7 +293,7 @@
     {#if !collapsed}
       <ul class="flex flex-col gap-0.5">
         {#each page.rows as row (rowKey(row))}
-          <li class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">
+          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key: rowKey(row) }} out:send={{ key: rowKey(row) }} class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">
             {#if SHELVES[section.status].variant === "card"}{@render card(row, false)}{:else}{@render slim(row, section.status)}{/if}
           </li>
         {/each}
@@ -307,7 +318,7 @@
     {:else if section.kind === "attention"}
       <ul class="flex flex-col gap-0.5">
         {#each section.rows as row (rowKey(row))}
-          <li class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">{@render card(row, false)}</li>
+          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key: rowKey(row) }} out:send={{ key: rowKey(row) }} class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">{@render card(row, false)}</li>
         {/each}
       </ul>
     {/if}
