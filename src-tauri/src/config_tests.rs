@@ -67,6 +67,7 @@ fn load_reads_existing_config_file() {
         projects_base_path: None,
         hide_done_tasks: None,
         hide_empty_projects: None,
+        sidebar_layout: None,
         sidebar_group_by: None,
         hide_task_keys: None,
         hide_project_labels: None,
@@ -875,6 +876,7 @@ fn refresh_rejects_invalid_editor_configuration() {
 fn sidebar_view_options_round_trip_through_config_file() {
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
+        sidebar_layout: Some(SidebarLayout::Classic),
         sidebar_group_by: Some(SidebarGroupBy::Status),
         hide_task_keys: Some(true),
         hide_project_labels: Some(false),
@@ -883,10 +885,12 @@ fn sidebar_view_options_round_trip_through_config_file() {
     write_whole(dir.path(), &config).unwrap();
 
     let content = fs::read_to_string(dir.path().join("config.json")).unwrap();
+    assert!(content.contains(r#""sidebar_layout": "classic""#));
     assert!(content.contains(r#""sidebar_group_by": "status""#));
 
     let (loaded, warnings) = load(dir.path());
     assert!(warnings.is_empty());
+    assert_eq!(loaded.sidebar_layout, Some(SidebarLayout::Classic));
     assert_eq!(loaded.sidebar_group_by, Some(SidebarGroupBy::Status));
     assert_eq!(loaded.hide_task_keys, Some(true));
     assert_eq!(loaded.hide_project_labels, Some(false));
@@ -895,11 +899,32 @@ fn sidebar_view_options_round_trip_through_config_file() {
 #[test]
 fn sidebar_view_options_default_to_unset() {
     let config = Config::default();
+    assert_eq!(config.sidebar_layout, None);
     assert_eq!(config.sidebar_group_by, None);
     assert_eq!(config.hide_task_keys, None);
     assert_eq!(config.hide_project_labels, None);
     let json = serde_json::to_string(&config).unwrap();
     assert!(!json.contains("sidebar_group_by"));
+    assert!(!json.contains("sidebar_layout"));
+}
+
+#[test]
+fn unknown_sidebar_layout_is_reported_as_a_config_error() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{ "sidebar_layout": "grid" }"#,
+    )
+    .unwrap();
+
+    let (_, warnings) = load(dir.path());
+
+    assert_eq!(warnings.len(), 1);
+    assert!(
+        warnings[0].contains("unknown variant `grid`"),
+        "{}",
+        warnings[0]
+    );
 }
 
 #[test]

@@ -70,6 +70,13 @@ fn invalid_editor_config() -> EditorConfig {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum SidebarLayout {
+    Classic,
+    Cards,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum SidebarGroupBy {
     Project,
     Status,
@@ -103,6 +110,9 @@ pub struct Config {
     pub hide_done_tasks: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_empty_projects: Option<bool>,
+    /// Sidebar row layout; `None` uses cards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_layout: Option<SidebarLayout>,
     /// Top-level sidebar grouping; `None` groups by project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidebar_group_by: Option<SidebarGroupBy>,
@@ -411,6 +421,7 @@ impl Default for Config {
             projects_base_path: None,
             hide_done_tasks: None,
             hide_empty_projects: None,
+            sidebar_layout: None,
             sidebar_group_by: None,
             hide_task_keys: None,
             hide_project_labels: None,

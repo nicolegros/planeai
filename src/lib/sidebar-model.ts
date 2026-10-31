@@ -6,6 +6,13 @@ import { sessionTaskProjectId, type Project, type Session, type TaskItem } from 
 import { shouldHideProject, toTaskWorkspaceId } from "./sidebar-session-order";
 
 export type SidebarGroupBy = "project" | "status";
+export type SidebarLayout = "classic" | "cards";
+
+export function resolveSidebarLayout(settings: {
+  sidebar_layout?: SidebarLayout | null;
+}): SidebarLayout {
+  return settings.sidebar_layout ?? "cards";
+}
 
 export function resolveSidebarGroupBy(settings: {
   sidebar_group_by?: SidebarGroupBy | null;

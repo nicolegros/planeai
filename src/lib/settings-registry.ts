@@ -177,6 +177,14 @@ export const SETTINGS: readonly SettingDefinition[] = [
     ...appearance("theme"),
   },
   {
+    id: "sidebar-layout",
+    category: "appearance",
+    section: "Sidebar",
+    label: "Layout",
+    keywords: ["cards", "classic", "compact", "rows"],
+    ...optional("sidebar_layout", "cards"),
+  },
+  {
     id: "sidebar-group-by",
     category: "appearance",
     section: "Sidebar",

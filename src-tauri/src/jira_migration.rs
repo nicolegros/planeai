@@ -957,6 +957,7 @@ mod tests {
             projects_base_path: None,
             hide_done_tasks: None,
             hide_empty_projects: None,
+            sidebar_layout: None,
             sidebar_group_by: None,
             hide_task_keys: None,
             hide_project_labels: None,

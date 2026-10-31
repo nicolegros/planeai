@@ -1,10 +1,10 @@
 import type { MenuItem } from "../components/ui/ContextMenu.svelte";
 import type { AppConfig } from "./settings.svelte";
-import { resolveSidebarGroupBy } from "./sidebar-model";
+import { resolveSidebarGroupBy, resolveSidebarLayout } from "./sidebar-model";
 
 type SidebarViewSettings = Pick<
   AppConfig,
-  "sidebar_group_by" | "hide_task_keys" | "hide_project_labels"
+  "sidebar_layout" | "sidebar_group_by" | "hide_task_keys" | "hide_project_labels"
 >;
 
 /** Items of the sidebar view options menu, opened by right-clicking the sidebar. */
@@ -13,6 +13,7 @@ export function sidebarViewMenuItems(
   update: (patch: Partial<SidebarViewSettings>) => void,
 ): MenuItem[] {
   const groupBy = resolveSidebarGroupBy(settings);
+  const layout = resolveSidebarLayout(settings);
   return [
     {
       label: "Group by project",
@@ -25,6 +26,19 @@ export function sidebarViewMenuItems(
       checked: groupBy === "status",
       radio: true,
       onSelect: () => update({ sidebar_group_by: "status" }),
+    },
+    { separator: true },
+    {
+      label: "Classic layout",
+      checked: layout === "classic",
+      radio: true,
+      onSelect: () => update({ sidebar_layout: "classic" }),
+    },
+    {
+      label: "Cards layout",
+      checked: layout === "cards",
+      radio: true,
+      onSelect: () => update({ sidebar_layout: "cards" }),
     },
     { separator: true },
     {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getSettings } from "../../lib/settings.svelte";
-  import { resolveSidebarGroupBy } from "../../lib/sidebar-model";
+  import { resolveSidebarGroupBy, resolveSidebarLayout } from "../../lib/sidebar-model";
   import { SegmentedControl, Switch } from "../ui";
   import SettingRow from "./SettingRow.svelte";
   import SettingsSection from "./SettingsSection.svelte";
@@ -10,6 +10,7 @@
 
   const config = $derived(getSettings());
   const groupBy = $derived(resolveSidebarGroupBy(config));
+  const layout = $derived(resolveSidebarLayout(config));
 </script>
 
 <SettingsSection title="Color" help="Mode follows macOS when set to System.">
@@ -22,6 +23,15 @@
 </SettingsSection>
 
 <SettingsSection title="Sidebar">
+  <SettingRow id="sidebar-layout">
+    <SegmentedControl
+      name="sidebar-layout"
+      label="Layout"
+      options={[{ value: "classic", label: "Classic" }, { value: "cards", label: "Cards" }]}
+      value={layout}
+      onValueChange={(value) => saveSettings({ sidebar_layout: value })}
+    />
+  </SettingRow>
   <SettingRow id="sidebar-group-by">
     <SegmentedControl
       name="sidebar-group-by"

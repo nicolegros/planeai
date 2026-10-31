@@ -312,8 +312,10 @@ describe("reset to default", () => {
 });
 
 describe("appearance", () => {
-  it("defaults to project grouping with project labels disabled", async () => {
+  it("defaults to the cards layout and project grouping with project labels disabled", async () => {
     await render("/?page=preferences&section=appearance");
+    expect(radio("sidebar-layout", "cards").checked).toBe(true);
+    expect(radio("sidebar-layout", "classic").checked).toBe(false);
     expect(radio("sidebar-group-by", "project").checked).toBe(true);
     expect(radio("sidebar-group-by", "status").checked).toBe(false);
     expect(toggle("Show task keys").getAttribute("aria-checked")).toBe("true");
@@ -323,6 +325,7 @@ describe("appearance", () => {
   it("saves the grouping and label choices", async () => {
     mocks.config.sidebar_group_by = "status";
     await render("/?page=preferences&section=appearance");
+    radio("sidebar-layout", "classic").click();
     radio("sidebar-group-by", "project").click();
     toggle("Show task keys").click();
     expect(toggle("Show project labels").disabled).toBe(false);
@@ -330,6 +333,7 @@ describe("appearance", () => {
     toggle("Hide empty projects").click();
     await flush();
     expect(mocks.updateSettings.mock.calls.map(([patch]) => patch)).toEqual([
+      { sidebar_layout: "classic" },
       { sidebar_group_by: "project" },
       { hide_task_keys: true },
       { hide_project_labels: true },
