@@ -177,6 +177,14 @@ export const SETTINGS: readonly SettingDefinition[] = [
     ...appearance("theme"),
   },
   {
+    id: "sidebar-layout",
+    category: "appearance",
+    section: "Sidebar",
+    label: "Layout",
+    keywords: ["cards", "classic", "compact", "rows"],
+    ...optional("sidebar_layout", "cards"),
+  },
+  {
     id: "sidebar-group-by",
     category: "appearance",
     section: "Sidebar",
@@ -197,7 +205,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
     category: "appearance",
     section: "Sidebar",
     label: "Show project labels",
-    description: "Only when grouped by status.",
+    description: "Only when grouped by status or in the Cards layout.",
     ...optional("hide_project_labels", false),
   },
   {

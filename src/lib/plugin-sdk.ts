@@ -133,7 +133,7 @@ export interface PluginSessionContext {
 export interface PluginUiContext {
   plugin: PluginInventory;
   contribution: PluginUiContribution;
-  /** Present for session.main (a provider's session UI), session.panel, session.indicator, and titlebar contributions. */
+  /** Present for session.main (a provider's session UI), session.panel, session.indicator, session.meta, and titlebar contributions. */
   session?: PluginSessionContext;
   /** Present for a provider's session UI: the provider the session runs on. */
   provider?: PluginProviderContext;

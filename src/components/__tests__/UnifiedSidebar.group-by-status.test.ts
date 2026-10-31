@@ -108,6 +108,7 @@ function baseConfig(overrides: Record<string, unknown> = {}) {
     terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
     providers: {},
     default_provider: "kiro",
+    sidebar_layout: "classic",
     ...overrides,
   };
 }

@@ -1,10 +1,10 @@
 import type { MenuItem } from "../components/ui/ContextMenu.svelte";
 import type { AppConfig } from "./settings.svelte";
-import { resolveSidebarGroupBy } from "./sidebar-model";
+import { projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout } from "./sidebar-model";
 
 type SidebarViewSettings = Pick<
   AppConfig,
-  "sidebar_group_by" | "hide_task_keys" | "hide_project_labels"
+  "sidebar_layout" | "sidebar_group_by" | "hide_task_keys" | "hide_project_labels"
 >;
 
 /** Items of the sidebar view options menu, opened by right-clicking the sidebar. */
@@ -13,6 +13,8 @@ export function sidebarViewMenuItems(
   update: (patch: Partial<SidebarViewSettings>) => void,
 ): MenuItem[] {
   const groupBy = resolveSidebarGroupBy(settings);
+  const layout = resolveSidebarLayout(settings);
+  const labelsApply = projectLabelsApply(settings);
   return [
     {
       label: "Group by project",
@@ -28,6 +30,19 @@ export function sidebarViewMenuItems(
     },
     { separator: true },
     {
+      label: "Classic layout",
+      checked: layout === "classic",
+      radio: true,
+      onSelect: () => update({ sidebar_layout: "classic" }),
+    },
+    {
+      label: "Cards layout",
+      checked: layout === "cards",
+      radio: true,
+      onSelect: () => update({ sidebar_layout: "cards" }),
+    },
+    { separator: true },
+    {
       label: "Show task keys",
       checked: !settings.hide_task_keys,
       onSelect: () => update({ hide_task_keys: !settings.hide_task_keys }),
@@ -35,8 +50,8 @@ export function sidebarViewMenuItems(
     {
       label: "Show project labels",
       checked: !settings.hide_project_labels,
-      disabled: groupBy === "project",
-      title: groupBy === "project" ? "Only applies when grouped by status" : undefined,
+      disabled: !labelsApply,
+      title: labelsApply ? undefined : "Only applies when grouped by status or in the Cards layout",
       onSelect: () => update({ hide_project_labels: !settings.hide_project_labels }),
     },
   ];

@@ -495,6 +495,46 @@ describe("PluginContributionHost", () => {
     expect(host.dataset.pluginIndicatorVisible).toBe("false");
   });
 
+  it("sizes a local session meta slot to its reported content width, up to 160px", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "session.meta" },
+    }) as typeof component;
+
+    const host = await vi.waitFor(() => {
+      const next = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    const frame = host.shadowRoot!.querySelector<HTMLIFrameElement>("iframe")!;
+    const contentWindow = { postMessage: vi.fn() } as unknown as Window;
+    Object.defineProperty(frame, "contentWindow", { configurable: true, value: contentWindow });
+    const reportWidth = (width: number) =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: contentWindow,
+          data: { type: "content-width", width },
+        }),
+      );
+    const widths = () => [host.style.width, frame.style.width, frame.style.height];
+
+    expect(host.getAttribute("role")).toBeNull();
+    expect(host.className).toContain("pointer-events-none");
+    expect(frame.tabIndex).toBe(-1);
+    expect(widths()).toEqual(["0px", "0px", "16px"]);
+
+    reportWidth(42.4);
+    expect(widths()).toEqual(["43px", "43px", "16px"]);
+
+    reportWidth(400);
+    expect(widths()).toEqual(["160px", "160px", "16px"]);
+
+    reportWidth(0);
+    expect(widths()).toEqual(["0px", "0px", "16px"]);
+  });
+
   it("provides local iframes with semantic PlaneAI tokens and live theme updates", async () => {
     document.documentElement.style.setProperty("--color-main", "#123456");
     target = document.createElement("div");

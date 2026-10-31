@@ -14,9 +14,19 @@ const app = sourceFiles["../../App.svelte"];
 describe("plugin session indicators", () => {
   it("derives running session indicators and passes them to the sidebar", () => {
     expect(app).toMatch(
-      /const sessionIndicatorContributions = \$derived\([\s\S]*?placement === "session\.indicator"/,
+      /function runningContributions\([\s\S]*?plugin\.state === "running"[\s\S]*?placements\.includes\(contribution\.placement\)/,
+    );
+    expect(app).toContain(
+      'const sessionIndicatorContributions = $derived(runningContributions("session.indicator"));',
     );
     expect(app).toContain("{sessionIndicatorContributions}");
+  });
+
+  it("derives running session meta slots and passes them to the sidebar", () => {
+    expect(app).toContain(
+      'const sessionMetaContributions = $derived(runningContributions("session.meta"));',
+    );
+    expect(app).toContain("{sessionMetaContributions}");
   });
 
   it("mounts indicator contributions beside every session-row shape with that row context", () => {

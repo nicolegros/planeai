@@ -88,6 +88,7 @@ export type PluginUiPlacement =
   | "dialog"
   | "session.panel"
   | "session.indicator"
+  | "session.meta"
   | "titlebar"
   | "interaction"
   /** Host-synthesized placement for a provider's session UI; never declared in manifests. */
@@ -101,6 +102,9 @@ export interface PluginUiContribution {
   order: number | null;
   shortcut: string | null;
 }
+
+/** A running plugin's UI contribution, as hosts render it. */
+export type PluginSlot = { plugin: PluginInventory; contribution: PluginUiContribution };
 
 export type ProviderFeature = "auto_approve" | "handoff";
 

@@ -8,26 +8,44 @@ function leaves(items: ReturnType<typeof sidebarViewMenuItems>): Leaf[] {
 }
 
 describe("sidebarViewMenuItems", () => {
-  it("checks project grouping and both labels by default, with project labels disabled", () => {
+  it("checks project grouping, the cards layout and both labels by default", () => {
     const items = leaves(sidebarViewMenuItems({}, vi.fn()));
     expect(items.map((i) => [i.label, !!i.checked, !!i.disabled])).toEqual([
       ["Group by project", true, false],
       ["Group by status", false, false],
+      ["Classic layout", false, false],
+      ["Cards layout", true, false],
       ["Show task keys", true, false],
-      ["Show project labels", true, true],
+      ["Show project labels", true, false],
     ]);
+  });
+
+  it("disables project labels only in the Classic layout grouped by project", () => {
+    const items = sidebarViewMenuItems({ sidebar_layout: "classic" }, vi.fn());
+    expect(items.at(-1)).toMatchObject({
+      label: "Show project labels",
+      disabled: true,
+      title: "Only applies when grouped by status or in the Cards layout",
+    });
   });
 
   it("enables project labels when grouped by status and reflects hidden options", () => {
     const items = leaves(
       sidebarViewMenuItems(
-        { sidebar_group_by: "status", hide_task_keys: true, hide_project_labels: true },
+        {
+          sidebar_layout: "classic",
+          sidebar_group_by: "status",
+          hide_task_keys: true,
+          hide_project_labels: true,
+        },
         vi.fn(),
       ),
     );
     expect(items.map((i) => [i.label, !!i.checked, !!i.disabled])).toEqual([
       ["Group by project", false, false],
       ["Group by status", true, false],
+      ["Classic layout", true, false],
+      ["Cards layout", false, false],
       ["Show task keys", false, false],
       ["Show project labels", false, false],
     ]);
@@ -42,6 +60,8 @@ describe("sidebarViewMenuItems", () => {
     expect(update.mock.calls.map(([patch]) => patch)).toEqual([
       { sidebar_group_by: "project" },
       { sidebar_group_by: "status" },
+      { sidebar_layout: "classic" },
+      { sidebar_layout: "cards" },
       { hide_task_keys: false },
       { hide_project_labels: true },
     ]);

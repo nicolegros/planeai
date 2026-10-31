@@ -105,6 +105,14 @@ describe("modified and reset", () => {
     expect(isModified(vim, config({ vim_mode: false }), defaults)).toBe(true);
   });
 
+  it("treats the cards sidebar layout as the default", () => {
+    const layout = settingById("sidebar-layout")!;
+    expect(isModified(layout, config(), defaults)).toBe(false);
+    expect(isModified(layout, config({ sidebar_layout: "cards" }), defaults)).toBe(false);
+    expect(isModified(layout, config({ sidebar_layout: "classic" }), defaults)).toBe(true);
+    expect(searchSettings("cards", [], defaults).map((r) => r.id)).toContain("sidebar-layout");
+  });
+
   it("resets an optional field by clearing it", () => {
     const vim = settingById("vim-mode")!;
     expect(resetPatch(vim, config({ vim_mode: false }), defaults)).toEqual({ vim_mode: null });

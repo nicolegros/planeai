@@ -1,19 +1,22 @@
 <script lang="ts">
   import { projects as projectsApi } from "../lib/api";
-  import { sessionTaskProjectId, type TaskItem, type Session, type Project, type PluginInventory, type PluginSessionAction, type PluginUiContribution } from "../lib/types";
+  import { sessionTaskProjectId, type TaskItem, type Session, type Project, type PluginSessionAction, type PluginSlot } from "../lib/types";
   import type { PluginSessionContext } from "../lib/plugin-sdk";
   import { pluginSessionActionsForProvider } from "../lib/plugin-session-actions";
   import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
-  import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, resolveSidebarGroupBy, sidebarNavItemKey, sidebarNavItems, type SidebarNavItem, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
+  import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarRow, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
+  import { rowSession, type RowAction } from "../lib/sidebar-cards";
   import { getSidebarModel } from "../lib/sidebar-model-store.svelte";
   import { sidebarViewMenuItems } from "../lib/sidebar-view-menu";
   import { projectContextMenuItems } from "../lib/project-context-menu";
   import { locateProjectFolder } from "../lib/locate-project";
   import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, Lightbulb, Settings, TriangleAlert } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
+  import SessionRenameInput from "./sidebar/SessionRenameInput.svelte";
+  import SidebarCardsList from "./sidebar/SidebarCardsList.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getCollapsedSections, getLayoutWidth, setCollapsedSections, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
@@ -44,22 +47,24 @@
     onSessionsChanged?: () => void;
     onToggleDiff?: () => void;
     selectedTaskWorkspace?: { projectId: string; taskKey: string } | null;
-    pluginContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
-    sessionIndicatorContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
+    pluginContributions?: PluginSlot[];
+    sessionIndicatorContributions?: PluginSlot[];
+    /** Rendered on Cards rows only; Classic rows have no room for them. */
+    sessionMetaContributions?: PluginSlot[];
     pluginSessionActions?: PluginSessionAction[];
     onPluginSessionAction?: (session: Session, action: PluginSessionAction) => void;
     onPluginNavigate?: (pluginId: string, contributionId: string) => void;
     onPluginClose?: () => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onToggleDiff, selectedTaskWorkspace = null, pluginContributions = [], sessionIndicatorContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onToggleDiff, selectedTaskWorkspace = null, pluginContributions = [], sessionIndicatorContributions = [], sessionMetaContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
-  function pluginContributionKey(item: { plugin: PluginInventory; contribution: PluginUiContribution }): string {
+  function pluginContributionKey(item: PluginSlot): string {
     return `${item.plugin.id}:${item.contribution.id}`;
   }
 
-  function markSidebarContributionFailed(item: { plugin: PluginInventory; contribution: PluginUiContribution }): void {
+  function markSidebarContributionFailed(item: PluginSlot): void {
     const key = pluginContributionKey(item);
     if (failedSidebarContributions.has(key)) return;
     failedSidebarContributions = new Set([...failedSidebarContributions, key]);
@@ -89,9 +94,9 @@
   const zone = $derived(getActiveZone());
   const sections = $derived(getSidebarModel());
   const groupBy = $derived(resolveSidebarGroupBy(getSettings()));
+  const layout = $derived(resolveSidebarLayout(getSettings()));
   const showTaskKeys = $derived(!getSettings().hide_task_keys);
-  // Project labels only make sense when rows from several projects are mixed.
-  const showProjectLabels = $derived(groupBy === "status" && !getSettings().hide_project_labels);
+  const showProjectLabels = $derived(projectLabelsApply(getSettings()) && !getSettings().hide_project_labels);
 
   let navRef = $state<HTMLElement | undefined>(undefined);
   let sidebarWidth = $state(getLayoutWidth("sidebar", 266));
@@ -101,7 +106,10 @@
   let renameValue = $state("");
   let fadingSessionIds = $state<Set<string>>(new Set());
 
-  const headerBtnClass = "h-[32px] flex items-center justify-between px-3 rounded-lg bg-panel-hi border border-border text-t2 text-[12px] font-medium hover:opacity-80 transition-opacity min-w-0";
+  // Below this width the labelled New project button truncates to "Ne…".
+  const compactProjectButton = $derived(projects.length > 0 && sidebarWidth < 400);
+  // Justify and padding are set per button: Tailwind does not resolve conflicting utilities by class order.
+  const headerBtnClass = "h-[32px] flex items-center rounded-lg bg-panel-hi border border-border text-t2 text-[12px] font-medium hover:opacity-80 transition-opacity min-w-0";
 
   // Task status options for context menu (maps internal values to display labels)
   const STATUS_OPTIONS = [
@@ -129,6 +137,13 @@
     return collapsedSections[key] ?? fallback;
   }
 
+  // Open "Show more" pages per shelf, for this mount only.
+  let shelfPages = $state<Record<string, number>>({});
+  const shownPages = (shelfKey: string) => shelfPages[shelfKey] ?? 1;
+  function showMore(shelfKey: string) {
+    shelfPages = { ...shelfPages, [shelfKey]: shownPages(shelfKey) + 1 };
+  }
+
   function setCollapsed(key: string, collapsed: boolean, fallback: boolean) {
     if (isCollapsed(key, fallback) === collapsed) return;
     const { [key]: _previous, ...rest } = collapsedSections;
@@ -142,7 +157,6 @@
       if (s) renameValue = s.name || s.branch;
     }
   });
-  function autofocus(node: HTMLInputElement) { requestAnimationFrame(() => node.focus()); }
   function startRename(session: Session) {
     renameValue = session.name || session.branch;
     onStartRename(session.id);
@@ -202,6 +216,41 @@
     focusTerminal();
   }
 
+  function selectRow(row: SidebarRow) {
+    if (row.kind === "task") handleTaskClick(row.task, row.project);
+    else handleOrphanClick(row.session);
+  }
+
+  function onRowContextMenu(e: MouseEvent, row: SidebarRow) {
+    if (row.kind === "task") onTaskContextMenu(e, row);
+    else onContextMenu(e, row.session);
+  }
+
+  function isRowActive(row: SidebarRow): boolean {
+    if (row.kind === "session") return row.session.id === activeSessionId;
+    return (selectedTaskWorkspace?.projectId === row.project.id && selectedTaskWorkspace.taskKey === row.task.key) || row.linkedSession?.id === activeSessionId;
+  }
+
+  function isRowPreviewing(row: SidebarRow): boolean {
+    if (row.kind === "session") return row.session.id === previewSessionId;
+    return row.linkedSession?.id === previewSessionId || (previewTaskWorkspace?.projectId === row.project.id && previewTaskWorkspace.taskKey === row.task.key);
+  }
+
+  function isRowFading(row: SidebarRow): boolean {
+    const session = rowSession(row);
+    return !!session && fadingSessionIds.has(session.id);
+  }
+
+  function runRowAction(action: RowAction, row: SidebarRow) {
+    const session = rowSession(row);
+    if (action === "review" && session) { onSelectSession(session.id); onToggleDiff?.(); }
+    else if (action === "restart" && session) onRestartSession(session);
+    else if (action === "done" && row.kind === "task") moveTask(row, "done");
+    else if (action === "archive" && row.kind === "session") fadeOutThenAct(row.session.id, () => onArchiveSession(row.session));
+    else if (action === "start" && row.kind === "task") onPickTask(row.task, row.project.path);
+    else if (action === "reopen" && row.kind === "task") moveTask(row, "todo");
+  }
+
   function fadeOutThenAct(sessionId: string, action: () => void | Promise<void>) {
     fadingSessionIds = new Set([...fadingSessionIds, sessionId]);
     setTimeout(() => {
@@ -230,22 +279,16 @@
   // After a status change the task lives in another group; keep the keyboard selection on it,
   // or on its group header when that group is collapsed.
   function selectTaskOrItsGroup(projectId: string, taskKey: string) {
-    const taskIdx = flatNavIndex.get(navKey.task(projectId, taskKey));
-    if (taskIdx !== undefined) { setSelectedIndex(taskIdx); return; }
-    for (const section of sections) {
-      const groups = section.kind === "project" ? section.groups : section.kind === "status" ? [section.group] : [];
-      const group = groups.find((g) => g.rows.some((r) => r.project.id === projectId && r.task.key === taskKey));
-      if (!group) continue;
-      const groupIdx = flatNavIndex.get(navKey.group(group.key)) ?? flatNavIndex.get(navKey.project(section.key));
-      if (groupIdx !== undefined) setSelectedIndex(groupIdx);
-      return;
+    for (const key of [navKey.task(projectId, taskKey), ...taskHeaderNavKeys(sections, projectId, taskKey)]) {
+      const idx = flatNavIndex.get(key);
+      if (idx !== undefined) { setSelectedIndex(idx); return; }
     }
   }
 
   // Flat nav list for keyboard navigation
   type NavItem = SidebarNavItem | { type: "plugin"; contributionKey: string; row: PluginSidebarNavRow };
   const flatNav = $derived.by(() => {
-    const result: NavItem[] = sidebarNavItems(sections, isCollapsed);
+    const result: NavItem[] = sidebarNavItems(sections, isCollapsed, shownPages);
     for (const contribution of activePluginContributions.filter((item) => item.contribution.placement === "sidebar.section")) {
       const contributionKey = `${contribution.plugin.id}:${contribution.contribution.id}`;
       for (const row of getPluginSidebarRows(contributionKey)) {
@@ -373,7 +416,7 @@
           const parentIdx = flatNavIndex.get(navKey.project(current.parentKey));
           if (parentIdx !== undefined) setSelectedIndex(parentIdx);
         }
-      } else if (current.type === "task" || current.type === "orphan") {
+      } else if (current.type === "task" || current.type === "orphan" || current.type === "show_more") {
         // Jump to parent group header or project header
         for (let i = idx - 1; i >= 0; i--) {
           if (flatNav[i].type === "group_header" || flatNav[i].type === "project_header") {
@@ -409,6 +452,11 @@
 
     if (current.type === "group_header") {
       if (action.type === "select") toggleSection(current.key, current.defaultCollapsed);
+      return;
+    }
+
+    if (current.type === "show_more") {
+      if (action.type === "select") showMore(current.shelfKey);
       return;
     }
 
@@ -500,13 +548,7 @@
         {@const isPreviewing = session.id === previewSessionId}
         <li class="transition-opacity duration-200 {fadingSessionIds.has(session.id) ? 'opacity-0' : 'opacity-100'}">
           {#if renamingSessionId === session.id}
-            <input
-              use:autofocus
-              class="w-full px-2 py-1.5 rounded-md text-sm bg-panel border border-accent outline-none text-t1"
-              bind:value={renameValue}
-              onkeydown={(e) => { if (e.key === 'Enter') commitRename(session.id); if (e.key === 'Escape') onStartRename(""); }}
-              onblur={() => commitRename(session.id)}
-            />
+            <SessionRenameInput bind:value={renameValue} onCommit={() => commitRename(session.id)} onCancel={() => onStartRename("")} />
           {:else}
             <div class="session-row relative flex items-center gap-1.5">
               <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
@@ -607,7 +649,7 @@
       <button
         onclick={() => onCreateSession?.()}
         aria-label="New session"
-        class="{headerBtnClass} flex-[3]"
+        class="{headerBtnClass} flex-[3] justify-between px-3"
       >
         <span class="flex items-center gap-1.5 overflow-hidden">
           <Plus class="size-3.5 shrink-0" />
@@ -619,13 +661,14 @@
     <button
       onclick={() => onAddProject?.()}
       aria-label="New project"
-      class="{headerBtnClass} {projects.length > 0 ? 'flex-[2]' : 'flex-[1]'}"
+      title={compactProjectButton ? `New project (${MOD_LABEL}⇧N)` : undefined}
+      class="{headerBtnClass} {compactProjectButton ? 'w-8 shrink-0 justify-center px-0' : `justify-between px-3 ${projects.length > 0 ? 'flex-[2]' : 'flex-[1]'}`}"
     >
       <span class="flex items-center gap-1.5 overflow-hidden">
         <FolderPlus class="size-3.5 shrink-0" />
-        {#if sidebarWidth >= 220 || projects.length === 0}<span class="truncate">New project</span>{/if}
+        {#if !compactProjectButton}<span class="truncate">New project</span>{/if}
       </span>
-      {#if sidebarWidth >= 220 || projects.length === 0}<span class="font-mono text-[10px] text-t3 shrink-0 ml-1">{MOD_LABEL}⇧N</span>{/if}
+      {#if !compactProjectButton}<span class="font-mono text-[10px] text-t3 shrink-0 ml-1">{MOD_LABEL}⇧N</span>{/if}
     </button>
   </div>
 
@@ -634,12 +677,45 @@
   {/each}
 
   <!-- Main content -->
-  <nav bind:this={navRef} class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide select-none" oncontextmenu={onNavContextMenu}>
+  <nav bind:this={navRef} class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide select-none {layout === 'cards' ? 'flex flex-col' : ''}" oncontextmenu={onNavContextMenu}>
     {#if projects.length === 0}
       <div class="mt-12 text-center px-4 space-y-3">
         <p class="text-xs text-t3">No projects yet</p>
         <button onclick={onAddProject} class="text-xs text-accent hover:underline">Add a project →</button>
       </div>
+    {:else if layout === "cards"}
+      <SidebarCardsList
+        {sections}
+        {showTaskKeys}
+        showProjects={showProjectLabels}
+        navIndex={(key) => flatNavIndex.get(key) ?? -1}
+        {isCollapsed}
+        onToggle={toggleSection}
+        {shownPages}
+        onShowMore={showMore}
+        isActive={isRowActive}
+        isPreviewing={isRowPreviewing}
+        isFading={isRowFading}
+        rename={{
+          sessionId: renamingSessionId,
+          value: renameValue,
+          onInput: (value) => (renameValue = value),
+          onCommit: commitRename,
+          onCancel: () => onStartRename(""),
+        }}
+        {projectAutoMode}
+        onSelectRow={selectRow}
+        onRowAction={runRowAction}
+        {onRowContextMenu}
+        {onProjectContextMenu}
+        plugins={{
+          indicators: sessionIndicatorContributions,
+          meta: sessionMetaContributions,
+          sessionContext: pluginSessionContext,
+          onNavigate: onPluginNavigate,
+          onClose: onPluginClose,
+        }}
+      />
     {:else}
       {#each sections as section (section.key)}
         {#if section.kind === "project"}
@@ -684,7 +760,7 @@
               {@render orphanList(section.orphans)}
             {/if}
           </div>
-        {:else}
+        {:else if section.kind === "status"}
           <div>
             {@render groupHeader(section.key, section.defaultCollapsed, TASK_STATUS_LABELS[section.group.status], section.group.rows.length, TASK_STATUS_DOT_CLASSES[section.group.status], "top")}
             {#if !isCollapsed(section.key, section.defaultCollapsed)}{@render taskList(section.group.rows)}{/if}

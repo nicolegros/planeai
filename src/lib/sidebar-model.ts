@@ -6,6 +6,21 @@ import { sessionTaskProjectId, type Project, type Session, type TaskItem } from 
 import { shouldHideProject, toTaskWorkspaceId } from "./sidebar-session-order";
 
 export type SidebarGroupBy = "project" | "status";
+export type SidebarLayout = "classic" | "cards";
+
+export function resolveSidebarLayout(settings: {
+  sidebar_layout?: SidebarLayout | null;
+}): SidebarLayout {
+  return settings.sidebar_layout ?? "cards";
+}
+
+/** Project labels only apply where rows are not already under their project: Cards, or Classic grouped by status. */
+export function projectLabelsApply(
+  settings: Parameters<typeof resolveSidebarLayout>[0] &
+    Parameters<typeof resolveSidebarGroupBy>[0],
+): boolean {
+  return resolveSidebarLayout(settings) === "cards" || resolveSidebarGroupBy(settings) === "status";
+}
 
 export function resolveSidebarGroupBy(settings: {
   sidebar_group_by?: SidebarGroupBy | null;
@@ -31,15 +46,37 @@ export const TASK_STATUS_DOT_CLASSES: Record<TaskStatus, string> = {
 };
 
 export interface SidebarTaskRow {
+  kind: "task";
   task: TaskItem;
   project: Project;
   linkedSession: Session | undefined;
 }
 
+/** A session linked to no existing task. */
 export interface SidebarSessionRow {
+  kind: "session";
   session: Session;
   project: Project;
 }
+
+export type SidebarRow = SidebarTaskRow | SidebarSessionRow;
+
+/** Cards keeps `in_review` tasks on top with unlinked sessions; every other status gets a shelf. */
+export type ShelfStatus = Exclude<TaskStatus, "in_review">;
+
+export interface Shelf {
+  variant: "card" | "slim";
+  defaultCollapsed: boolean;
+  /** Rows shown per "Show more" step; null shows every row. */
+  pageSize: number | null;
+}
+
+/** Cards shelves in display order. Their labels are TASK_STATUS_LABELS. */
+export const SHELVES: Record<ShelfStatus, Shelf> = {
+  in_progress: { variant: "card", defaultCollapsed: false, pageSize: null },
+  todo: { variant: "slim", defaultCollapsed: false, pageSize: null },
+  done: { variant: "slim", defaultCollapsed: true, pageSize: 25 },
+};
 
 export interface SidebarStatusGroup {
   key: string;
@@ -59,7 +96,25 @@ export interface SidebarProjectSection {
   defaultCollapsed: boolean;
 }
 
+/** A project's top rows in Cards grouped by project. */
+export interface SidebarFolderSection {
+  kind: "folder";
+  key: string;
+  project: Project;
+  rows: SidebarRow[];
+  defaultCollapsed: boolean;
+}
+
+export interface SidebarShelfSection {
+  kind: "shelf";
+  key: string;
+  status: ShelfStatus;
+  rows: SidebarTaskRow[];
+  defaultCollapsed: boolean;
+}
+
 export type SidebarSection =
+  // Classic
   | SidebarProjectSection
   | {
       kind: "sessions";
@@ -67,9 +122,14 @@ export type SidebarSection =
       orphans: SidebarSessionRow[];
       defaultCollapsed: boolean;
     }
-  | { kind: "status"; key: string; group: SidebarStatusGroup; defaultCollapsed: boolean };
+  | { kind: "status"; key: string; group: SidebarStatusGroup; defaultCollapsed: boolean }
+  // Cards
+  | { kind: "attention"; key: string; rows: SidebarRow[] }
+  | SidebarFolderSection
+  | SidebarShelfSection;
 
 export interface SidebarModelInput {
+  layout: SidebarLayout;
   groupBy: SidebarGroupBy;
   projects: Project[];
   sessions: Session[];
@@ -84,30 +144,33 @@ function normalizeTaskStatus(status: string): TaskStatus {
 
 const keyCollator = new Intl.Collator(undefined, { numeric: true });
 
+/** Rows of one status in sidebar order. */
+function rowsWithStatus(
+  rows: SidebarTaskRow[],
+  status: TaskStatus,
+  projectOrder: Map<string, number>,
+): SidebarTaskRow[] {
+  return rows
+    .filter((row) => normalizeTaskStatus(row.task.status) === status)
+    .sort(
+      (a, b) =>
+        b.task.priority - a.task.priority ||
+        (projectOrder.get(a.project.id) ?? 0) - (projectOrder.get(b.project.id) ?? 0) ||
+        keyCollator.compare(a.task.key, b.task.key),
+    );
+}
+
 function groupRows(
   rows: SidebarTaskRow[],
   projectOrder: Map<string, number>,
   hideDoneTasks: boolean,
   keyFor: (status: TaskStatus) => string,
 ): SidebarStatusGroup[] {
-  const byStatus = new Map<TaskStatus, SidebarTaskRow[]>();
-  for (const row of rows) {
-    const status = normalizeTaskStatus(row.task.status);
-    let list = byStatus.get(status);
-    if (!list) byStatus.set(status, (list = []));
-    list.push(row);
-  }
   const groups: SidebarStatusGroup[] = [];
   for (const status of TASK_STATUSES) {
     if (status === "done" && hideDoneTasks) continue;
-    const statusRows = byStatus.get(status);
-    if (!statusRows) continue;
-    statusRows.sort(
-      (a, b) =>
-        b.task.priority - a.task.priority ||
-        (projectOrder.get(a.project.id) ?? 0) - (projectOrder.get(b.project.id) ?? 0) ||
-        keyCollator.compare(a.task.key, b.task.key),
-    );
+    const statusRows = rowsWithStatus(rows, status, projectOrder);
+    if (statusRows.length === 0) continue;
     groups.push({
       key: keyFor(status),
       status,
@@ -119,7 +182,7 @@ function groupRows(
 }
 
 export function buildSidebarModel(input: SidebarModelInput): SidebarSection[] {
-  const { groupBy, sessions, tasksByProject, hideDoneTasks, hideEmptyProjects } = input;
+  const { layout, groupBy, sessions, tasksByProject, hideDoneTasks, hideEmptyProjects } = input;
   const projects = input.projects.filter((p) => !p.hidden);
   const projectOrder = new Map(projects.map((p, i) => [p.id, i]));
 
@@ -142,13 +205,64 @@ export function buildSidebarModel(input: SidebarModelInput): SidebarSection[] {
           s.project_id === project.id &&
           (!s.task_key || !existingTasks.has(taskId(sessionTaskProjectId(s), s.task_key))),
       )
-      .map((session) => ({ session, project }));
+      .map((session) => ({ kind: "session", session, project }));
   const tasksFor = (project: Project): SidebarTaskRow[] =>
     (tasksByProject[project.path] ?? []).map((task) => ({
+      kind: "task",
       task,
       project,
       linkedSession: sessionsByTask.get(taskId(project.id, task.key)),
     }));
+
+  if (layout === "cards") {
+    const shown = projects
+      .map((project) => ({
+        project,
+        orphans: orphansFor(project),
+        tasks: tasksFor(project).filter(
+          (row) => !(hideDoneTasks && normalizeTaskStatus(row.task.status) === "done"),
+        ),
+      }))
+      .filter((p) => !shouldHideProject(p.orphans.length, p.tasks.length, hideEmptyProjects));
+    // Unlinked sessions keep their order and come before the tasks waiting for review.
+    const topRows = (orphans: SidebarSessionRow[], tasks: SidebarTaskRow[]): SidebarRow[] => [
+      ...orphans,
+      ...rowsWithStatus(tasks, "in_review", projectOrder),
+    ];
+
+    const sections: SidebarSection[] = [];
+    if (groupBy === "project") {
+      for (const { project, orphans, tasks } of shown) {
+        const rows = topRows(orphans, tasks);
+        sections.push({
+          kind: "folder",
+          key: `folder:${project.id}`,
+          project,
+          rows,
+          defaultCollapsed: rows.length === 0,
+        });
+      }
+    } else {
+      const rows = topRows(
+        shown.flatMap((p) => p.orphans),
+        shown.flatMap((p) => p.tasks),
+      );
+      if (rows.length > 0) sections.push({ kind: "attention", key: "attention", rows });
+    }
+    const allTasks = shown.flatMap((p) => p.tasks);
+    for (const status of Object.keys(SHELVES) as ShelfStatus[]) {
+      const rows = rowsWithStatus(allTasks, status, projectOrder);
+      if (rows.length === 0) continue;
+      sections.push({
+        kind: "shelf",
+        key: `shelf:${status}`,
+        status,
+        rows,
+        defaultCollapsed: SHELVES[status].defaultCollapsed,
+      });
+    }
+    return sections;
+  }
 
   if (groupBy === "status") {
     const sections: SidebarSection[] = [];
@@ -200,13 +314,28 @@ export function buildSidebarModel(input: SidebarModelInput): SidebarSection[] {
 }
 
 export type SidebarNavItem =
-  | { type: "project_header"; section: SidebarProjectSection }
+  | { type: "project_header"; section: SidebarProjectSection | SidebarFolderSection }
   | { type: "group_header"; key: string; parentKey: string | null; defaultCollapsed: boolean }
   | { type: "orphan"; session: Session }
-  | { type: "task"; row: SidebarTaskRow };
+  | { type: "task"; row: SidebarTaskRow }
+  | { type: "show_more"; shelfKey: string };
 
 /** Resolves a section's collapse state; `fallback` is its default when the user never toggled it. */
 export type IsCollapsed = (key: string, fallback: boolean) => boolean;
+
+/** How many pages of a shelf are open. */
+export type ShownPages = (shelfKey: string) => number;
+
+/** The rows a paged shelf shows, and how many the next "Show more" adds. */
+export function shelfPage(
+  shelf: SidebarShelfSection,
+  pages: number,
+): { rows: SidebarTaskRow[]; more: number } {
+  const { pageSize } = SHELVES[shelf.status];
+  if (pageSize === null) return { rows: shelf.rows, more: 0 };
+  const rows = shelf.rows.slice(0, pageSize * pages);
+  return { rows, more: Math.min(pageSize, shelf.rows.length - rows.length) };
+}
 
 /** Lookup keys of nav items, shared by sidebarNavItemKey and every index lookup. */
 export const navKey = {
@@ -214,16 +343,32 @@ export const navKey = {
   group: (sectionKey: string) => `group:${sectionKey}`,
   orphan: (sessionId: string) => `orphan:${sessionId}`,
   task: (projectId: string, taskKey: string) => toTaskWorkspaceId(projectId, taskKey),
+  more: (shelfKey: string) => `more:${shelfKey}`,
 };
 
-/** Sidebar rows in display order, skipping the content of collapsed sections. */
+/** Nav key of a row, task or session. */
+export function sidebarRowNavKey(row: SidebarRow): string {
+  return row.kind === "task"
+    ? navKey.task(row.project.id, row.task.key)
+    : navKey.orphan(row.session.id);
+}
+
+/**
+ * Sidebar rows in display order, skipping the content of collapsed sections
+ * and the shelf rows past their open pages. By default everything is open.
+ */
 export function sidebarNavItems(
   sections: SidebarSection[],
   isCollapsed: IsCollapsed = () => false,
+  shownPages: ShownPages = () => Infinity,
 ): SidebarNavItem[] {
   const items: SidebarNavItem[] = [];
-  const pushOrphans = (orphans: SidebarSessionRow[]) => {
-    for (const { session } of orphans) items.push({ type: "orphan", session });
+  const pushRows = (rows: SidebarRow[]) => {
+    for (const row of rows) {
+      items.push(
+        row.kind === "task" ? { type: "task", row } : { type: "orphan", session: row.session },
+      );
+    }
   };
   const pushGroup = (group: SidebarStatusGroup, parentKey: string | null) => {
     items.push({
@@ -237,22 +382,47 @@ export function sidebarNavItems(
   };
 
   for (const section of sections) {
-    if (section.kind === "project") {
-      items.push({ type: "project_header", section });
-      if (isCollapsed(section.key, section.defaultCollapsed)) continue;
-      pushOrphans(section.orphans);
-      for (const group of section.groups) pushGroup(group, section.key);
-    } else if (section.kind === "sessions") {
-      items.push({
-        type: "group_header",
-        key: section.key,
-        parentKey: null,
-        defaultCollapsed: section.defaultCollapsed,
-      });
-      if (isCollapsed(section.key, section.defaultCollapsed)) continue;
-      pushOrphans(section.orphans);
-    } else {
-      pushGroup(section.group, null);
+    switch (section.kind) {
+      case "project":
+        items.push({ type: "project_header", section });
+        if (isCollapsed(section.key, section.defaultCollapsed)) break;
+        pushRows(section.orphans);
+        for (const group of section.groups) pushGroup(group, section.key);
+        break;
+      case "sessions":
+        items.push({
+          type: "group_header",
+          key: section.key,
+          parentKey: null,
+          defaultCollapsed: section.defaultCollapsed,
+        });
+        if (isCollapsed(section.key, section.defaultCollapsed)) break;
+        pushRows(section.orphans);
+        break;
+      case "status":
+        pushGroup(section.group, null);
+        break;
+      case "attention":
+        pushRows(section.rows);
+        break;
+      case "folder":
+        items.push({ type: "project_header", section });
+        if (isCollapsed(section.key, section.defaultCollapsed)) break;
+        pushRows(section.rows);
+        break;
+      case "shelf": {
+        items.push({
+          type: "group_header",
+          key: section.key,
+          parentKey: null,
+          defaultCollapsed: section.defaultCollapsed,
+        });
+        if (isCollapsed(section.key, section.defaultCollapsed)) break;
+        const page = shelfPage(section, shownPages(section.key));
+        pushRows(page.rows);
+        if (page.more > 0) items.push({ type: "show_more", shelfKey: section.key });
+        break;
+      }
     }
   }
   return items;
@@ -269,7 +439,38 @@ export function sidebarNavItemKey(item: SidebarNavItem): string {
       return navKey.orphan(item.session.id);
     case "task":
       return navKey.task(item.row.project.id, item.row.task.key);
+    case "show_more":
+      return navKey.more(item.shelfKey);
   }
+}
+
+/** Nav keys of the headers enclosing a task, innermost first. */
+export function taskHeaderNavKeys(
+  sections: SidebarSection[],
+  projectId: string,
+  taskKey: string,
+): string[] {
+  const isTask = (row: SidebarRow) =>
+    row.kind === "task" && row.project.id === projectId && row.task.key === taskKey;
+  for (const section of sections) {
+    switch (section.kind) {
+      case "project": {
+        const group = section.groups.find((g) => g.rows.some(isTask));
+        if (group) return [navKey.group(group.key), navKey.project(section.key)];
+        break;
+      }
+      case "status":
+        if (section.group.rows.some(isTask)) return [navKey.group(section.group.key)];
+        break;
+      case "folder":
+        if (section.rows.some(isTask)) return [navKey.project(section.key)];
+        break;
+      case "shelf":
+        if (section.rows.some(isTask)) return [navKey.group(section.key)];
+        break;
+    }
+  }
+  return [];
 }
 
 /**
