@@ -513,7 +513,10 @@ describe("PluginContributionHost", () => {
     Object.defineProperty(frame, "contentWindow", { configurable: true, value: contentWindow });
     const reportWidth = (width: number) =>
       window.dispatchEvent(
-        new MessageEvent("message", { source: contentWindow, data: { type: "content-width", width } }),
+        new MessageEvent("message", {
+          source: contentWindow,
+          data: { type: "content-width", width },
+        }),
       );
     const widths = () => [host.style.width, frame.style.width, frame.style.height];
 
