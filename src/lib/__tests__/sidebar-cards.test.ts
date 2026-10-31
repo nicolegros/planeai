@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   folderUrgency,
-  projectHue,
   rowActions,
   sessionActivity,
   splitBranch,
@@ -101,12 +100,6 @@ describe("folderUrgency", () => {
       folderUrgency([sessionRow(session("idle"))], activityOf),
       folderUrgency([], activityOf),
     ]).toEqual(["exited", "review", "review", "running", null, null]);
-  });
-});
-
-describe("projectHue", () => {
-  it("maps a project id to a stable hue", () => {
-    expect(["alpha", "beta", "planeai", ""].map(projectHue)).toEqual([107, 191, 311, 61]);
   });
 });
 

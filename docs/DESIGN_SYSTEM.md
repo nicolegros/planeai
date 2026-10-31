@@ -53,8 +53,6 @@ Defined in an `@theme inline` block from the role tokens, so every built-in and 
 | `sidebar-row-hover`    | Hovered Cards sidebar row                         | `t1` at 5% over transparent                     |
 | `sidebar-row-selected` | Keyboard-selected Cards sidebar row               | `t1` at 7% over transparent                     |
 | `sidebar-row-active`   | Active Cards sidebar row                          | `t1` at 9% over transparent                     |
-| `monogram`             | Project monogram tile, tinted by `--monogram-hue` | a muted hue at 22% over `panel`                 |
-| `on-monogram`          | Project monogram letter                           | a deeper shade of the same hue at 70% over `t1` |
 
 ### Usage in Tailwind
 

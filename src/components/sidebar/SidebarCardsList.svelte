@@ -4,7 +4,6 @@
   import { crossfade } from "svelte/transition";
   import { Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, GitBranch, GitCompare, Play, RotateCcw, TriangleAlert, Undo2, Zap, type LucideIcon } from "@lucide/svelte";
   import PluginContributionHost from "../PluginContributionHost.svelte";
-  import ProjectMonogram from "./ProjectMonogram.svelte";
   import { getActiveZone } from "../../lib/focus.svelte";
   import { getSelectedIndex } from "../../lib/sidebar-nav.svelte";
   import { locateProjectFolder } from "../../lib/locate-project";
@@ -172,7 +171,6 @@
         <span class="flex w-full flex-col gap-1 transition-opacity {receded ? 'opacity-75 group-hover:opacity-100 group-has-focus-visible:opacity-100' : ''}">
           {#if showProjects && !inFolder}
             <span class="flex h-5 items-center gap-1.5">
-              <ProjectMonogram project={row.project} />
               <span class="min-w-0 flex-1 truncate text-xs text-t2" title={row.project.path}>{row.project.name}</span>
               {@render trailing(session, activity)}
             </span>
@@ -219,7 +217,7 @@
       oncontextmenu={(e) => onRowContextMenu(e, row)}
     >
       <span class="flex min-w-0 flex-1 items-center gap-2 transition-opacity {receded ? 'opacity-75 group-hover:opacity-100 group-has-focus-visible:opacity-100' : ''}">
-        <ProjectMonogram project={row.project} class={active || selected ? "" : "opacity-40 grayscale transition group-focus-within:opacity-100 group-focus-within:grayscale-0 group-hover:opacity-100 group-hover:grayscale-0"} />
+        {#if showProjects}<span class="max-w-[40%] shrink-0 truncate text-xs text-t3" title={row.project.path}>{row.project.name}</span>{/if}
         {#if row.kind === "task" && showTaskKeys}<span class="shrink-0 font-mono text-[10px] text-t3">{row.task.key}</span>{/if}
         <span class="min-w-0 truncate text-[13px] {shelf === 'done' ? 'text-t3' : 'text-t1'}">{row.kind === "task" ? row.task.title : row.session.name || row.session.branch}</span>
       </span>
@@ -244,7 +242,7 @@
         onclick={() => onToggle(section.key, section.defaultCollapsed)}
         oncontextmenu={(e) => onProjectContextMenu(e, project)}
       >
-        {#if project.path_missing}<span class="size-4 shrink-0"></span>{:else}<ProjectMonogram {project} />{/if}
+        {#if project.path_missing}<span class="size-4 shrink-0"></span>{/if}
         <span class="min-w-0 truncate text-[13px] font-medium text-t1">{project.name}</span>
         {#if urgency}<span class="size-1.5 shrink-0 rounded-full {URGENCY_DOTS[urgency]}" data-folder-urgency={urgency}></span>{/if}
         {#if projectAutoMode[project.id]}<Zap class="size-2.5 shrink-0 text-status-running" />{/if}

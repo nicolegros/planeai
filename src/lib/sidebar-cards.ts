@@ -1,6 +1,6 @@
 /**
  * Pure rules of the Cards sidebar rows: what a row's session is doing, which hover actions it offers,
- * how urgent a collapsed folder is, and how a project's monogram is tinted.
+ * how urgent a collapsed folder is.
  */
 import type { Session } from "./types";
 import type { ShelfStatus, SidebarRow } from "./sidebar-model";
@@ -53,16 +53,6 @@ export function folderUrgency(
     }
   }
   return urgency;
-}
-
-/** A stable hue in degrees for a project's monogram tile (FNV-1a of its id). */
-export function projectHue(projectId: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < projectId.length; i++) {
-    hash ^= projectId.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0) % 360;
 }
 
 /**
