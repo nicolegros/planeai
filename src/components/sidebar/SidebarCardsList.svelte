@@ -4,6 +4,7 @@
   import { crossfade } from "svelte/transition";
   import { Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, GitBranch, GitCompare, Play, RotateCcw, TriangleAlert, Undo2, Zap, type LucideIcon } from "@lucide/svelte";
   import PluginContributionHost from "../PluginContributionHost.svelte";
+  import SessionRenameInput from "./SessionRenameInput.svelte";
   import { getActiveZone } from "../../lib/focus.svelte";
   import { getSelectedIndex } from "../../lib/sidebar-nav.svelte";
   import { locateProjectFolder } from "../../lib/locate-project";
@@ -28,10 +29,13 @@
     isActive: (row: SidebarRow) => boolean;
     isPreviewing: (row: SidebarRow) => boolean;
     isFading: (row: SidebarRow) => boolean;
-    renamingSessionId: string | null;
-    renameValue: string;
-    onCommitRename: (sessionId: string) => void;
-    onCancelRename: () => void;
+    rename: {
+      sessionId: string | null;
+      value: string;
+      onInput: (value: string) => void;
+      onCommit: (sessionId: string) => void;
+      onCancel: () => void;
+    };
     projectAutoMode: Record<string, boolean>;
     onSelectRow: (row: SidebarRow) => void;
     onRowAction: (action: RowAction, row: SidebarRow) => void;
@@ -46,8 +50,7 @@
 
   let {
     sections, showTaskKeys, showProjects, navIndex, isCollapsed, onToggle, shownPages, onShowMore,
-    isActive, isPreviewing, isFading, renamingSessionId, renameValue = $bindable(), onCommitRename, onCancelRename,
-    projectAutoMode, onSelectRow, onRowAction, onRowContextMenu, onProjectContextMenu,
+    isActive, isPreviewing, isFading, rename, projectAutoMode, onSelectRow, onRowAction, onRowContextMenu, onProjectContextMenu,
     sessionIndicatorContributions, sessionMetaContributions, pluginSessionContext, onPluginNavigate, onPluginClose,
   }: Props = $props();
 
@@ -93,8 +96,6 @@
     const ring = ringed ? "ring-2 ring-inset ring-accent" : active ? "ring-1 ring-inset ring-border-s" : "";
     return `${background} ${ring}`;
   }
-
-  function autofocus(node: HTMLInputElement) { requestAnimationFrame(() => node.focus()); }
 </script>
 
 {#snippet chevron(collapsed: boolean)}
@@ -150,15 +151,9 @@
   {@const selected = isSelected(navIdx)}
   {@const active = isActive(row)}
   {@const receded = (activity === null || activity === "exited") && !active && !selected}
-  {#if row.kind === "session" && renamingSessionId === row.session.id}
+  {#if row.kind === "session" && rename.sessionId === row.session.id}
     {@const id = row.session.id}
-    <input
-      use:autofocus
-      class="w-full px-2 py-1.5 rounded-md text-sm bg-panel border border-accent outline-none text-t1"
-      bind:value={renameValue}
-      onkeydown={(e) => { if (e.key === "Enter") onCommitRename(id); if (e.key === "Escape") onCancelRename(); }}
-      onblur={() => onCommitRename(id)}
-    />
+    <SessionRenameInput bind:value={() => rename.value, rename.onInput} onCommit={() => rename.onCommit(id)} onCancel={rename.onCancel} />
   {:else}
     <div class="group relative">
       <button

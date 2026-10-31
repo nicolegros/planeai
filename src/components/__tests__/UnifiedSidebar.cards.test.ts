@@ -284,6 +284,29 @@ describe("UnifiedSidebar in the Cards layout", () => {
     expect(newProject().classList).not.toContain("px-0");
   });
 
+  it.each(["cards", "classic"])(
+    "renames a session from its input in the %s layout",
+    async (layout) => {
+      const onRenameSession = vi.fn();
+      const onStartRename = vi.fn();
+      mounted = await mountSidebar(
+        { sidebar_layout: layout, sidebar_group_by: "status" },
+        { renamingSessionId: "scratch", onRenameSession, onStartRename },
+      );
+      const input = mounted.target.querySelector<HTMLInputElement>(
+        "input[aria-label='Rename session']",
+      )!;
+      expect(input.value).toBe("scratch");
+
+      input.value = "  renamed  ";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flushSync();
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(onRenameSession).toHaveBeenCalledWith("scratch", "renamed");
+      expect(onStartRename).toHaveBeenCalledWith("");
+    },
+  );
+
   it("splits the top rows into project folders when grouped by project", async () => {
     mounted = await mountSidebar({});
 

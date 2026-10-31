@@ -15,6 +15,7 @@
   import { locateProjectFolder } from "../lib/locate-project";
   import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, Lightbulb, Settings, TriangleAlert } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
+  import SessionRenameInput from "./sidebar/SessionRenameInput.svelte";
   import SidebarCardsList from "./sidebar/SidebarCardsList.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getCollapsedSections, getLayoutWidth, setCollapsedSections, setLayoutWidth } from "../lib/layout-state";
@@ -157,7 +158,6 @@
       if (s) renameValue = s.name || s.branch;
     }
   });
-  function autofocus(node: HTMLInputElement) { requestAnimationFrame(() => node.focus()); }
   function startRename(session: Session) {
     renameValue = session.name || session.branch;
     onStartRename(session.id);
@@ -549,13 +549,7 @@
         {@const isPreviewing = session.id === previewSessionId}
         <li class="transition-opacity duration-200 {fadingSessionIds.has(session.id) ? 'opacity-0' : 'opacity-100'}">
           {#if renamingSessionId === session.id}
-            <input
-              use:autofocus
-              class="w-full px-2 py-1.5 rounded-md text-sm bg-panel border border-accent outline-none text-t1"
-              bind:value={renameValue}
-              onkeydown={(e) => { if (e.key === 'Enter') commitRename(session.id); if (e.key === 'Escape') onStartRename(""); }}
-              onblur={() => commitRename(session.id)}
-            />
+            <SessionRenameInput bind:value={renameValue} onCommit={() => commitRename(session.id)} onCancel={() => onStartRename("")} />
           {:else}
             <div class="session-row relative flex items-center gap-1.5">
               <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
@@ -703,10 +697,13 @@
         isActive={isRowActive}
         isPreviewing={isRowPreviewing}
         isFading={isRowFading}
-        {renamingSessionId}
-        bind:renameValue
-        onCommitRename={commitRename}
-        onCancelRename={() => onStartRename("")}
+        rename={{
+          sessionId: renamingSessionId,
+          value: renameValue,
+          onInput: (value) => (renameValue = value),
+          onCommit: commitRename,
+          onCancel: () => onStartRename(""),
+        }}
         {projectAutoMode}
         onSelectRow={selectRow}
         onRowAction={runRowAction}
