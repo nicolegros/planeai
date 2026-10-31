@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSidebarModel,
+  resolveSidebarLayout,
   sidebarNavItemKey,
   sidebarNavItems,
   sidebarNavigationOrder,
+  taskHeaderNavKeys,
   type SidebarModelInput,
+  type SidebarRow,
   type SidebarSection,
 } from "../sidebar-model";
 import type { Project, Session, TaskItem } from "../types";
@@ -59,6 +62,7 @@ function session(
 
 function input(overrides: Partial<SidebarModelInput> = {}): SidebarModelInput {
   return {
+    layout: "classic",
     groupBy: "project",
     projects: [],
     sessions: [],
@@ -373,5 +377,222 @@ describe("sidebarNavItems", () => {
       "group:status:done",
       "task:alpha:A-2",
     ]);
+  });
+});
+
+describe("resolveSidebarLayout", () => {
+  it("defaults to cards", () => {
+    expect([resolveSidebarLayout({}), resolveSidebarLayout({ sidebar_layout: "classic" })]).toEqual(
+      ["cards", "classic"],
+    );
+  });
+});
+
+const rowId = (row: SidebarRow) => (row.kind === "task" ? row.task.key : row.session.id);
+
+function cardsShape(sections: SidebarSection[]) {
+  return sections.map((section) => {
+    switch (section.kind) {
+      case "attention":
+        return [section.key, section.rows.map(rowId)];
+      case "folder":
+      case "shelf":
+        return [section.key, section.defaultCollapsed, section.rows.map(rowId)];
+      default:
+        throw new Error(`unexpected ${section.kind} section in Cards`);
+    }
+  });
+}
+
+describe("buildSidebarModel - cards layout", () => {
+  const tasks = {
+    [alpha.path]: [
+      task("A-1", "in_progress"),
+      task("A-2", "in_review"),
+      task("A-3", "todo"),
+      task("A-4", "done"),
+      task("A-5", "in_review", 2),
+    ],
+    [beta.path]: [task("B-1", "in_review", 1), task("B-2", "todo", 3), task("B-3", "blocked")],
+  };
+  const sessions = [
+    session("s1", "beta"),
+    session("s2", "alpha"),
+    session("linked", "alpha", "A-1"),
+  ];
+
+  it("grouped by status, puts unlinked sessions then review tasks on top and status shelves below", () => {
+    const sections = buildSidebarModel(
+      input({
+        layout: "cards",
+        groupBy: "status",
+        projects: [alpha, beta],
+        sessions,
+        tasksByProject: tasks,
+      }),
+    );
+    expect(cardsShape(sections)).toEqual([
+      ["attention", ["s2", "s1", "A-5", "B-1", "A-2"]],
+      ["shelf:in_progress", false, ["A-1"]],
+      ["shelf:todo", false, ["B-2", "A-3", "B-3"]],
+      ["shelf:done", true, ["A-4"]],
+    ]);
+  });
+
+  it("grouped by project, splits only the top rows into project folders and keeps shelves global", () => {
+    const gamma = project("gamma");
+    const sections = buildSidebarModel(
+      input({
+        layout: "cards",
+        projects: [alpha, beta, gamma],
+        sessions,
+        tasksByProject: { ...tasks, [gamma.path]: [task("G-1", "todo")] },
+      }),
+    );
+    expect(cardsShape(sections)).toEqual([
+      ["folder:alpha", false, ["s2", "A-5", "A-2"]],
+      ["folder:beta", false, ["s1", "B-1"]],
+      ["folder:gamma", true, []],
+      ["shelf:in_progress", false, ["A-1"]],
+      ["shelf:todo", false, ["B-2", "A-3", "B-3", "G-1"]],
+      ["shelf:done", true, ["A-4"]],
+    ]);
+  });
+
+  it("omits empty shelves and the top area when nothing needs attention", () => {
+    const sections = buildSidebarModel(
+      input({
+        layout: "cards",
+        groupBy: "status",
+        projects: [alpha],
+        tasksByProject: { [alpha.path]: [task("A-1", "todo")] },
+      }),
+    );
+    expect(cardsShape(sections)).toEqual([["shelf:todo", false, ["A-1"]]]);
+  });
+
+  it("drops the Done shelf with hideDoneTasks and skips hidden and empty projects", () => {
+    const sections = buildSidebarModel(
+      input({
+        layout: "cards",
+        projects: [alpha, beta, project("hidden", { hidden: true })],
+        sessions: [session("s-hidden", "hidden")],
+        hideDoneTasks: true,
+        hideEmptyProjects: true,
+        tasksByProject: {
+          [alpha.path]: [task("A-1", "done")],
+          [beta.path]: [task("B-1", "todo")],
+          "/repos/hidden": [task("H-1", "in_review")],
+        },
+      }),
+    );
+    expect(cardsShape(sections)).toEqual([
+      ["folder:beta", true, []],
+      ["shelf:todo", false, ["B-1"]],
+    ]);
+  });
+});
+
+describe("sidebarNavItems - cards layout", () => {
+  const doneTasks = Array.from({ length: 27 }, (_, i) => task(`D-${i + 1}`, "done"));
+  const sections = () =>
+    buildSidebarModel(
+      input({
+        layout: "cards",
+        projects: [alpha],
+        sessions: [session("s1", "alpha")],
+        tasksByProject: {
+          [alpha.path]: [task("A-1", "in_review"), task("A-2", "todo"), ...doneTasks],
+        },
+      }),
+    );
+  const expanded = () => false;
+
+  it("lists folder rows, shelf headers and the first page of Done with a Show more row", () => {
+    const keys = sidebarNavItems(sections(), expanded, () => 1).map(sidebarNavItemKey);
+    expect(keys.slice(0, 7)).toEqual([
+      "folder:alpha",
+      "orphan:s1",
+      "task:alpha:A-1",
+      "group:shelf:todo",
+      "task:alpha:A-2",
+      "group:shelf:done",
+      "task:alpha:D-1",
+    ]);
+    expect(keys.slice(-2)).toEqual(["task:alpha:D-25", "more:shelf:done"]);
+    expect(keys).toHaveLength(32);
+    expect(sidebarNavItems(sections(), expanded, () => 1).at(-1)).toEqual({
+      type: "show_more",
+      shelfKey: "shelf:done",
+      count: 2,
+    });
+  });
+
+  it("shows every Done row once enough pages are open", () => {
+    const keys = sidebarNavItems(sections(), expanded, () => 2).map(sidebarNavItemKey);
+    expect(keys.slice(-2)).toEqual(["task:alpha:D-26", "task:alpha:D-27"]);
+    expect(keys).toHaveLength(33);
+  });
+
+  it("skips the rows of collapsed folders and shelves, with Done collapsed by default", () => {
+    const collapsed: Record<string, boolean> = { "folder:alpha": true };
+    const keys = sidebarNavItems(sections(), (key, fallback) => collapsed[key] ?? fallback).map(
+      sidebarNavItemKey,
+    );
+    expect(keys).toEqual([
+      "folder:alpha",
+      "group:shelf:todo",
+      "task:alpha:A-2",
+      "group:shelf:done",
+    ]);
+  });
+});
+
+describe("sidebarNavigationOrder - cards layout", () => {
+  it("follows the Cards display order, including every Done row", () => {
+    const sections = buildSidebarModel(
+      input({
+        layout: "cards",
+        groupBy: "status",
+        projects: [alpha, beta],
+        sessions: [session("s1", "beta"), session("linked", "alpha", "A-3")],
+        tasksByProject: {
+          [alpha.path]: [task("A-1", "done"), task("A-2", "todo"), task("A-3", "in_progress")],
+          [beta.path]: [task("B-1", "in_review")],
+        },
+      }),
+    );
+    expect(sidebarNavigationOrder(sections)).toEqual([
+      "s1",
+      "task:beta:B-1",
+      "task:alpha:A-3",
+      "task:alpha:A-2",
+      "task:alpha:A-1",
+    ]);
+  });
+});
+
+describe("taskHeaderNavKeys", () => {
+  const tasksByProject = {
+    [alpha.path]: [task("A-1", "in_review"), task("A-2", "todo")],
+  };
+
+  it("names the enclosing group, then project, in Classic", () => {
+    const sections = buildSidebarModel(input({ projects: [alpha], tasksByProject }));
+    expect(taskHeaderNavKeys(sections, "alpha", "A-2")).toEqual([
+      "group:project-status:alpha:todo",
+      "project:alpha",
+    ]);
+  });
+
+  it("names the folder or shelf in Cards, and nothing for an unknown task", () => {
+    const sections = buildSidebarModel(
+      input({ layout: "cards", projects: [alpha], tasksByProject }),
+    );
+    expect([
+      taskHeaderNavKeys(sections, "alpha", "A-1"),
+      taskHeaderNavKeys(sections, "alpha", "A-2"),
+      taskHeaderNavKeys(sections, "alpha", "A-9"),
+    ]).toEqual([["folder:alpha"], ["group:shelf:todo"], []]);
   });
 });

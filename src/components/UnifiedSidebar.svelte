@@ -7,7 +7,7 @@
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
-  import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, resolveSidebarGroupBy, sidebarNavItemKey, sidebarNavItems, type SidebarNavItem, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
+  import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, resolveSidebarGroupBy, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
   import { getSidebarModel } from "../lib/sidebar-model-store.svelte";
   import { sidebarViewMenuItems } from "../lib/sidebar-view-menu";
   import { projectContextMenuItems } from "../lib/project-context-menu";
@@ -232,15 +232,9 @@
   // After a status change the task lives in another group; keep the keyboard selection on it,
   // or on its group header when that group is collapsed.
   function selectTaskOrItsGroup(projectId: string, taskKey: string) {
-    const taskIdx = flatNavIndex.get(navKey.task(projectId, taskKey));
-    if (taskIdx !== undefined) { setSelectedIndex(taskIdx); return; }
-    for (const section of sections) {
-      const groups = section.kind === "project" ? section.groups : section.kind === "status" ? [section.group] : [];
-      const group = groups.find((g) => g.rows.some((r) => r.project.id === projectId && r.task.key === taskKey));
-      if (!group) continue;
-      const groupIdx = flatNavIndex.get(navKey.group(group.key)) ?? flatNavIndex.get(navKey.project(section.key));
-      if (groupIdx !== undefined) setSelectedIndex(groupIdx);
-      return;
+    for (const key of [navKey.task(projectId, taskKey), ...taskHeaderNavKeys(sections, projectId, taskKey)]) {
+      const idx = flatNavIndex.get(key);
+      if (idx !== undefined) { setSelectedIndex(idx); return; }
     }
   }
 
@@ -686,7 +680,7 @@
               {@render orphanList(section.orphans)}
             {/if}
           </div>
-        {:else}
+        {:else if section.kind === "status"}
           <div>
             {@render groupHeader(section.key, section.defaultCollapsed, TASK_STATUS_LABELS[section.group.status], section.group.rows.length, TASK_STATUS_DOT_CLASSES[section.group.status], "top")}
             {#if !isCollapsed(section.key, section.defaultCollapsed)}{@render taskList(section.group.rows)}{/if}

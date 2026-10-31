@@ -8,6 +8,7 @@ import * as taskStore from "./task-store.svelte";
 const model = $derived.by((): SidebarSection[] => {
   const settings = getSettings();
   return buildSidebarModel({
+    layout: "classic",
     groupBy: resolveSidebarGroupBy(settings),
     projects: projectStore.getProjects(),
     sessions: orchestrator.getSessions(),
