@@ -93,6 +93,8 @@
     fallback: () => ({ duration: motionMs(), easing: cubicOut, css: (t) => `opacity: ${t}; transform: translateY(${(t - 1) * 8}px)` }),
   });
 
+  const rowItemClass = (row: SidebarRow) => `transition-opacity duration-200 ${isFading(row) ? "opacity-0" : "opacity-100"}`;
+
   function rowStateClass(active: boolean, selected: boolean, ringed: boolean): string {
     const background = active ? "bg-sidebar-row-active" : selected ? "bg-sidebar-row-selected" : "hover:bg-sidebar-row-hover";
     const ring = ringed ? "ring-2 ring-inset ring-accent" : active ? "ring-1 ring-inset ring-border-s" : "";
@@ -262,7 +264,8 @@
     {#if !collapsed && section.rows.length > 0}
       <ul class="flex flex-col gap-0.5">
         {#each section.rows as row (sidebarRowNavKey(row))}
-          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key: sidebarRowNavKey(row) }} out:send={{ key: sidebarRowNavKey(row) }} class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">{@render card(row, true)}</li>
+          {@const key = sidebarRowNavKey(row)}
+          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key }} out:send={{ key }} class={rowItemClass(row)}>{@render card(row, true)}</li>
         {/each}
       </ul>
     {/if}
@@ -289,7 +292,8 @@
     {#if !collapsed}
       <ul class="flex flex-col gap-0.5">
         {#each page.rows as row (sidebarRowNavKey(row))}
-          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key: sidebarRowNavKey(row) }} out:send={{ key: sidebarRowNavKey(row) }} class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">
+          {@const key = sidebarRowNavKey(row)}
+          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key }} out:send={{ key }} class={rowItemClass(row)}>
             {#if SHELVES[section.status].variant === "card"}{@render card(row, false)}{:else}{@render slim(row, section.status)}{/if}
           </li>
         {/each}
@@ -314,7 +318,8 @@
     {:else if section.kind === "attention"}
       <ul class="flex flex-col gap-0.5">
         {#each section.rows as row (sidebarRowNavKey(row))}
-          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key: sidebarRowNavKey(row) }} out:send={{ key: sidebarRowNavKey(row) }} class="transition-opacity duration-200 {isFading(row) ? 'opacity-0' : 'opacity-100'}">{@render card(row, false)}</li>
+          {@const key = sidebarRowNavKey(row)}
+          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key }} out:send={{ key }} class={rowItemClass(row)}>{@render card(row, false)}</li>
         {/each}
       </ul>
     {/if}
