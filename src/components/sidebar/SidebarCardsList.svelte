@@ -12,9 +12,7 @@
   import { SHELVES, TASK_STATUS_LABELS, navKey, shelfPage, sidebarRowNavKey, type IsCollapsed, type ShelfStatus, type ShownPages, type SidebarFolderSection, type SidebarRow, type SidebarSection, type SidebarShelfSection } from "../../lib/sidebar-model";
   import { folderUrgency, rowActions, rowSession, sessionActivity, splitBranch, type FolderUrgency, type RowAction, type SessionActivity } from "../../lib/sidebar-cards";
   import type { PluginSessionContext } from "../../lib/plugin-sdk";
-  import type { PluginInventory, PluginUiContribution, Project, Session } from "../../lib/types";
-
-  type PluginSlot = { plugin: PluginInventory; contribution: PluginUiContribution };
+  import type { PluginSlot, Project, Session } from "../../lib/types";
 
   interface Props {
     sections: SidebarSection[];

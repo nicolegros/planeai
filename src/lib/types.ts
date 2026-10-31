@@ -103,6 +103,9 @@ export interface PluginUiContribution {
   shortcut: string | null;
 }
 
+/** A running plugin's UI contribution, as hosts render it. */
+export type PluginSlot = { plugin: PluginInventory; contribution: PluginUiContribution };
+
 export type ProviderFeature = "auto_approve" | "handoff";
 
 /** What a terminal tab runs when it starts; a program runs without a shell to parse it. */

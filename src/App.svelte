@@ -51,7 +51,7 @@
   import ProviderSessionView from "./components/ProviderSessionView.svelte";
   import { isPluginSession, runtimeProviders } from "./lib/plugin-providers";
   import { sendToAgent } from "./lib/agent-input";
-  import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution, TabEnded } from "./lib/types";
+  import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution, PluginSlot, TabEnded } from "./lib/types";
   import { plugins as pluginsApi } from "./lib/api";
   import { showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { providerHandoff, taskWorkspaceLayout as workspaceLayout, toPaneTabs, workspaceOf, type PaneTab, type WorkspaceAgent, type WorkspaceIdentity } from "./lib/task-workspace-layout.svelte";
@@ -138,7 +138,6 @@
   const activeContribution = $derived(activePlugin?.ui_contributions.find((contribution) => contribution.id === activeContributionId) ?? null);
   const modalPlugin = $derived(pluginInventory.find((plugin) => plugin.id === pluginDialog?.pluginId) ?? null);
   const modalContribution = $derived(modalPlugin?.ui_contributions.find((contribution) => contribution.id === pluginDialog?.contributionId) ?? null);
-  type PluginSlot = { plugin: PluginInventory; contribution: PluginUiContribution };
   const comparePluginContribution = (left: PluginSlot, right: PluginSlot) =>
     (left.contribution.order ?? 0) - (right.contribution.order ?? 0) || left.plugin.name.localeCompare(right.plugin.name) || left.plugin.id.localeCompare(right.plugin.id) || left.contribution.id.localeCompare(right.contribution.id);
   function runningContributions(...placements: PluginUiContribution["placement"][]): PluginSlot[] {

@@ -1,13 +1,13 @@
 <script lang="ts">
   import { projects as projectsApi } from "../lib/api";
-  import { sessionTaskProjectId, type TaskItem, type Session, type Project, type PluginInventory, type PluginSessionAction, type PluginUiContribution } from "../lib/types";
+  import { sessionTaskProjectId, type TaskItem, type Session, type Project, type PluginInventory, type PluginSessionAction, type PluginSlot } from "../lib/types";
   import type { PluginSessionContext } from "../lib/plugin-sdk";
   import { pluginSessionActionsForProvider } from "../lib/plugin-session-actions";
   import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
-  import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarRow, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
+  import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarRow, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
   import { rowSession, type RowAction } from "../lib/sidebar-cards";
   import { getSidebarModel } from "../lib/sidebar-model-store.svelte";
   import { sidebarViewMenuItems } from "../lib/sidebar-view-menu";
@@ -47,10 +47,10 @@
     onSessionsChanged?: () => void;
     onToggleDiff?: () => void;
     selectedTaskWorkspace?: { projectId: string; taskKey: string } | null;
-    pluginContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
-    sessionIndicatorContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
+    pluginContributions?: PluginSlot[];
+    sessionIndicatorContributions?: PluginSlot[];
     /** Rendered on Cards rows only; Classic rows have no room for them. */
-    sessionMetaContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
+    sessionMetaContributions?: PluginSlot[];
     pluginSessionActions?: PluginSessionAction[];
     onPluginSessionAction?: (session: Session, action: PluginSessionAction) => void;
     onPluginNavigate?: (pluginId: string, contributionId: string) => void;
@@ -60,11 +60,11 @@
   let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onToggleDiff, selectedTaskWorkspace = null, pluginContributions = [], sessionIndicatorContributions = [], sessionMetaContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
-  function pluginContributionKey(item: { plugin: PluginInventory; contribution: PluginUiContribution }): string {
+  function pluginContributionKey(item: PluginSlot): string {
     return `${item.plugin.id}:${item.contribution.id}`;
   }
 
-  function markSidebarContributionFailed(item: { plugin: PluginInventory; contribution: PluginUiContribution }): void {
+  function markSidebarContributionFailed(item: PluginSlot): void {
     const key = pluginContributionKey(item);
     if (failedSidebarContributions.has(key)) return;
     failedSidebarContributions = new Set([...failedSidebarContributions, key]);
@@ -96,8 +96,7 @@
   const groupBy = $derived(resolveSidebarGroupBy(getSettings()));
   const layout = $derived(resolveSidebarLayout(getSettings()));
   const showTaskKeys = $derived(!getSettings().hide_task_keys);
-  // Project labels only make sense when rows from several projects are mixed.
-  const showProjectLabels = $derived(groupBy === "status" && !getSettings().hide_project_labels);
+  const showProjectLabels = $derived(projectLabelsApply(getSettings()) && !getSettings().hide_project_labels);
 
   let navRef = $state<HTMLElement | undefined>(undefined);
   let sidebarWidth = $state(getLayoutWidth("sidebar", 266));
@@ -688,7 +687,7 @@
       <SidebarCardsList
         {sections}
         {showTaskKeys}
-        showProjects={!getSettings().hide_project_labels}
+        showProjects={showProjectLabels}
         navIndex={(key) => flatNavIndex.get(key) ?? -1}
         {isCollapsed}
         onToggle={toggleSection}
