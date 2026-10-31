@@ -136,7 +136,14 @@
   const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "dialog", "sidebar.header"];
 
   /** Local placements told about their plugin's data changes in place, since remounting them would flash. */
-  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "sidebar.header", "main-pane", "dialog"];
+  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "session.meta", "sidebar.header", "main-pane", "dialog"];
+
+  /** Visual-only placements drawn inside a sidebar row: pointer-inert, unfocusable and 16px tall. */
+  function inSessionRow(placement: PluginUiContribution["placement"]): boolean {
+    return placement === "session.indicator" || placement === "session.meta";
+  }
+
+  const SESSION_META_MAX_WIDTH = 160;
 
   /** Placements the host shows in its dialog chrome. */
   function inDialog(placement: PluginUiContribution["placement"]): boolean {
@@ -215,6 +222,7 @@
     const isTitlebar = contribution.placement === "titlebar";
     const bridge = providerSession;
     const isSessionIndicator = contribution.placement === "session.indicator";
+    const isSessionMeta = contribution.placement === "session.meta";
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
@@ -224,17 +232,19 @@
           ? "block h-4 w-4 border-0"
           : "block w-full border-0";
     frame.style.display = "block";
-    frame.style.width = isTitlebar ? "88px" : isSessionIndicator ? "16px" : "100%";
+    frame.style.width = isTitlebar ? "88px" : isSessionIndicator ? "16px" : isSessionMeta ? "0px" : "100%";
     frame.style.border = "0";
     // A content-sized frame shows the host surface around it, and its auto-height document lets it shrink.
     const isContentSized = contentSizedPlacements.includes(contribution.placement);
-    if (isTitlebar || isSessionIndicator || isContentSized) frame.style.backgroundColor = "transparent";
+    if (isTitlebar || inSessionRow(contribution.placement) || isContentSized) frame.style.backgroundColor = "transparent";
     if (bridge) {
       // App releases this frame's keyboard like a terminal's, and a click into it claims the keyboard back.
       frame.setAttribute(PROVIDER_FRAME_ATTRIBUTE, "");
       frame.addEventListener("focus", () => onFocused?.());
     }
-    if (isSessionIndicator) {
+    // A meta slot takes no room until its plugin reports how wide its content is.
+    if (isSessionMeta && container) container.style.width = "0px";
+    if (inSessionRow(contribution.placement)) {
       frame.style.height = "16px";
       frame.style.pointerEvents = "none";
       frame.tabIndex = -1;
@@ -254,7 +264,7 @@
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'">
       <style id="planeai-plugin-theme">${localPluginThemeCss()}</style>
       <style id="planeai-plugin-base">${localPluginBaseCss}</style>
-      ${isTitlebar ? '<style id="planeai-plugin-titlebar">html,body{background:transparent}</style>' : isSessionIndicator ? '<style id="planeai-plugin-indicator">html,body{background:transparent}</style>' : isContentSized ? '<style id="planeai-plugin-content-sized">html,body{height:auto;min-height:0;background:transparent}</style>' : ""}
+      ${isTitlebar ? '<style id="planeai-plugin-titlebar">html,body{background:transparent}</style>' : inSessionRow(contribution.placement) ? '<style id="planeai-plugin-indicator">html,body{background:transparent}</style>' : isContentSized ? '<style id="planeai-plugin-content-sized">html,body{height:auto;min-height:0;background:transparent}</style>' : ""}
       <script>
         let cleanup = null;
         let nextRequestId = 0;
@@ -564,8 +574,13 @@
           .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "content-height" && contentSizedPlacements.includes(contribution.placement) && typeof message.height === "number" && Number.isFinite(message.height)) {
         frame.style.height = `${Math.min(Math.max(Math.ceil(message.height), 1), 10_000)}px`;
-      } else if (message.type === "content-width" && contribution.placement === "session.indicator" && typeof message.width === "number" && Number.isFinite(message.width)) {
+      } else if (message.type === "content-width" && inSessionRow(contribution.placement) && typeof message.width === "number" && Number.isFinite(message.width)) {
         container?.setAttribute("data-plugin-indicator-visible", message.width > 0 ? "true" : "false");
+        if (isSessionMeta) {
+          const width = `${Math.min(Math.max(Math.ceil(message.width), 0), SESSION_META_MAX_WIDTH)}px`;
+          frame.style.width = width;
+          if (container) container.style.width = width;
+        }
       } else if (message.type === "navigation") {
         if (message.action === "open" && message.pluginId && message.contributionId) {
           onNavigate(message.pluginId, message.contributionId);
@@ -818,7 +833,7 @@
         refreshLocalPluginData();
         return;
       }
-      if (!["sidebar.section", "interaction", "session.panel", "session.indicator"].includes(contribution.placement)) return;
+      if (!["sidebar.section", "interaction", "session.panel", "session.indicator", "session.meta"].includes(contribution.placement)) return;
       if (plugin.source_kind === "builtin" && dataChangeListeners.size > 0) {
         notify(dataChangeListeners);
       } else {
@@ -856,10 +871,12 @@
         ? "h-full w-full"
         : contribution.placement === "session.indicator"
           ? "h-4 w-4 shrink-0 pointer-events-none"
-          : "w-full"
+          : contribution.placement === "session.meta"
+            ? "h-4 max-w-[160px] shrink-0 overflow-hidden pointer-events-none"
+            : "w-full"
   }
   tabindex="-1"
-  role={contribution.placement === "session.indicator" ? undefined : "region"}
+  role={inSessionRow(contribution.placement) ? undefined : "region"}
   aria-label={`${plugin.name} · ${contribution.label}`}
   data-plugin-ui-contribution={`${plugin.id}:${contribution.id}`}
   data-plugin-sidebar-contribution={contribution.placement.startsWith("sidebar.") ? "" : undefined}

@@ -88,6 +88,7 @@ export type PluginUiPlacement =
   | "dialog"
   | "session.panel"
   | "session.indicator"
+  | "session.meta"
   | "titlebar"
   | "interaction"
   /** Host-synthesized placement for a provider's session UI; never declared in manifests. */

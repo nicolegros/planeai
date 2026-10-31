@@ -333,8 +333,12 @@ For example, local UI CSS can adopt or intentionally customize the host theme:
 The fixture UI calls `context.host.call("fixture.status")`, loads a saved greeting with `context.host.settings.get()`, replaces it when **Save greeting** is selected, calls `data.changed()`, and removes its click handler in its disposer.
 
 Each `ui_contributions` item requires a unique safe `id`, `label`, `placement`, and `entrypoint`.
-Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, `main-pane`, `dialog`, `session.panel`, and `titlebar`.
+Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, `main-pane`, `dialog`, `session.panel`, `session.indicator`, `session.meta`, and `titlebar`.
 Sidebar contributions may set integer `order`.
+`session.indicator` and `session.meta` are visual-only slots drawn on every sidebar row that has a session, with that row's session context; they take no shortcut, no order, no pointer events and no focus.
+A `session.indicator` is a 16px square beside the row's status.
+A `session.meta` is a 16px-tall inline slot after the branch on the third line of a Cards row, for example a `#656` pull-request pill; the Classic layout does not show it.
+Its local frame starts 0px wide, so post `{ type: "content-width", width }` to `parent` once the content is laid out (lay it out with `width: max-content`); the slot follows that width up to 160px, and reporting `0` collapses it.
 A local `sidebar.header`, `dialog`, or `session.panel` frame is as tall as its content, which the host bridge measures and reports, so a compact header control takes only the space it draws.
 `main-pane`, `dialog`, and `session.panel` contributions may declare an optional portable `Mod+[Shift+][Alt+]A-Z` shortcut, and `main-pane` and `dialog` contributions are discoverable in Cmd+K while running.
 PlaneAI rejects duplicate declared shortcuts across installed plugins.

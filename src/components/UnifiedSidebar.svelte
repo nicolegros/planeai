@@ -46,13 +46,15 @@
     selectedTaskWorkspace?: { projectId: string; taskKey: string } | null;
     pluginContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
     sessionIndicatorContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
+    /** Rendered on Cards rows only; Classic rows have no room for them. */
+    sessionMetaContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
     pluginSessionActions?: PluginSessionAction[];
     onPluginSessionAction?: (session: Session, action: PluginSessionAction) => void;
     onPluginNavigate?: (pluginId: string, contributionId: string) => void;
     onPluginClose?: () => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onToggleDiff, selectedTaskWorkspace = null, pluginContributions = [], sessionIndicatorContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onToggleDiff, selectedTaskWorkspace = null, pluginContributions = [], sessionIndicatorContributions = [], sessionMetaContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
   function pluginContributionKey(item: { plugin: PluginInventory; contribution: PluginUiContribution }): string {

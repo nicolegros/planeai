@@ -150,6 +150,11 @@
       plugin.ui_contributions.filter((contribution) => contribution.placement === "session.indicator").map((contribution) => ({ plugin, contribution })),
     ).sort(comparePluginContribution),
   );
+  const sessionMetaContributions = $derived(
+    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+      plugin.ui_contributions.filter((contribution) => contribution.placement === "session.meta").map((contribution) => ({ plugin, contribution })),
+    ).sort(comparePluginContribution),
+  );
   const globalPluginCommands = $derived(
     pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
       plugin.ui_contributions.filter((contribution) => contribution.placement === "main-pane" || contribution.placement === "dialog").map((contribution) => ({ plugin, contribution })),
@@ -1119,6 +1124,7 @@
         onToggleDiff={toggleDiff}
         pluginContributions={sidebarPluginContributions}
         {sessionIndicatorContributions}
+        {sessionMetaContributions}
         pluginSessionActions={pluginSessionActions}
         onPluginSessionAction={runPluginSessionAction}
         onPluginNavigate={navigatePlugin}

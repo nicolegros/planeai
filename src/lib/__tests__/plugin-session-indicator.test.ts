@@ -19,6 +19,13 @@ describe("plugin session indicators", () => {
     expect(app).toContain("{sessionIndicatorContributions}");
   });
 
+  it("derives running session meta slots and passes them to the sidebar", () => {
+    expect(app).toMatch(
+      /const sessionMetaContributions = \$derived\([\s\S]*?placement === "session\.meta"/,
+    );
+    expect(app).toContain("{sessionMetaContributions}");
+  });
+
   it("mounts indicator contributions beside every session-row shape with that row context", () => {
     expect(sidebar).toMatch(
       /data-plugin-session-indicator=\{session\.id\}[\s\S]*?session=\{pluginSessionContext\(session\)\}/,
