@@ -43,6 +43,24 @@
   --font-mono: "IBM Plex Mono", monospace;
 }
 
+/* Derived from the role tokens where they are used, so every built-in and custom theme gets them. */
+@theme inline {
+  --color-sidebar-row-hover: color-mix(in oklab, var(--color-t1) 5%, transparent);
+  --color-sidebar-row-selected: color-mix(in oklab, var(--color-t1) 7%, transparent);
+  --color-sidebar-row-active: color-mix(in oklab, var(--color-t1) 9%, transparent);
+  /* A project monogram sets --monogram-hue (degrees). */
+  --color-monogram: color-mix(
+    in oklab,
+    oklch(0.7 0.12 var(--monogram-hue)) 22%,
+    var(--color-panel)
+  );
+  --color-on-monogram: color-mix(
+    in oklab,
+    oklch(0.55 0.14 var(--monogram-hue)) 70%,
+    var(--color-t1)
+  );
+}
+
 @custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {

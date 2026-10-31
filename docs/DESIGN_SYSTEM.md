@@ -44,6 +44,18 @@ Custom user themes are plain CSS files in `~/.config/planeai/themes/` that overr
 | `status-exited`  | Exited/error/red           | `#cf222e` | `#ff7b72` |
 | `status-idle`    | Idle sessions              | `#aeaeb5` | `#5b5b61` |
 
+### Derived tokens
+
+Defined in an `@theme inline` block from the role tokens, so every built-in and custom theme gets them without overrides.
+
+| Token                  | Purpose                                           | Value                                           |
+| ---------------------- | ------------------------------------------------- | ----------------------------------------------- |
+| `sidebar-row-hover`    | Hovered Cards sidebar row                         | `t1` at 5% over transparent                     |
+| `sidebar-row-selected` | Keyboard-selected Cards sidebar row               | `t1` at 7% over transparent                     |
+| `sidebar-row-active`   | Active Cards sidebar row                          | `t1` at 9% over transparent                     |
+| `monogram`             | Project monogram tile, tinted by `--monogram-hue` | a muted hue at 22% over `panel`                 |
+| `on-monogram`          | Project monogram letter                           | a deeper shade of the same hue at 70% over `t1` |
+
 ### Usage in Tailwind
 
 ```svelte
@@ -131,6 +143,7 @@ All icons from `@lucide/svelte`. Key icons:
 - **Sidebar cursor (keyboard nav):** `ring-2 ring-accent` on the selected item
 - **Session preview (Cmd/Ctrl+{/}):** `ring-2 ring-accent` on the previewed item
 - **Active session:** `bg-accent-bg` + 2px left accent bar
+- **Active Cards row:** `bg-sidebar-row-active` + `ring-1 ring-inset ring-border-s`; keyboard selection and preview use an inset `ring-2 ring-accent`
 
 ### Modals
 

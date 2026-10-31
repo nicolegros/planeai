@@ -7,7 +7,7 @@ planeai includes a built-in task tracker designed for AI agent workflows. Tasks 
 
 ## The task board
 
-Tasks appear in the sidebar, grouped by project and status. Each status group shows tasks sorted by priority (highest first), then by task key. Done groups start collapsed:
+Tasks appear in the sidebar, sorted by priority (highest first), then by project order, then by task key. They are grouped by status:
 
 | Status          | Meaning                                |
 | --------------- | -------------------------------------- |
@@ -23,18 +23,50 @@ Click any task to interact with it:
 
 Right-click a task to open the context menu with quick actions: start session, edit, or move to a different status.
 
+### Cards and Classic layouts
+
+The sidebar has two layouts, chosen under **Preferences → Appearance → Sidebar → Layout** or from the view options (right-click empty space or a section header in the sidebar).
+Cards is the default.
+
+In **Cards**, what needs you sits at the top: sessions that are not linked to a task, and tasks waiting for review.
+Each is a card showing its project, its task key and title, and, when it has a session, the session's branch and agent.
+The other tasks sit in shelves at the bottom of the list: **Running** as cards, **To do** and **Done** as slim rows.
+Done starts collapsed and shows 25 tasks at a time; **Show 25 more** (also reachable from the keyboard) reveals the next ones.
+A shelf with no tasks is not shown, and **Hide done tasks** removes the Done shelf.
+
+The right side of a row shows what its session is doing: **Working**, **Ready** for review, or **Exited**.
+Rows with nothing to look at, such as idle sessions and tasks never started, are slightly faded until you hover or select them.
+Hovering a row swaps its status for quick actions:
+
+| Row                         | Actions                         |
+| --------------------------- | ------------------------------- |
+| Card with a running session | Review diff, Done               |
+| Card with an exited session | Restart, Done                   |
+| Card without a session      | Done                            |
+| To do row                   | Start (starts a session)        |
+| Done row                    | Reopen (moves it back to To do) |
+
+**Done** moves a task to Done, or archives a session that has no task.
+
+**Classic** shows compact rows in collapsible status groups, as described below.
+
 ### Grouping by status
 
 To see the work of every project in one list, group the sidebar by status.
 Choose **Status** under **Preferences → Appearance → Sidebar** (⌘, / Ctrl+,), or right-click empty space or a group header in the sidebar to open the view options.
 
-The sidebar then shows a **Sessions** section first, holding sessions that are not linked to a task, followed by one section per status: Running, Needs review, To do, and Done.
+In Cards, grouping only changes the top of the list.
+Grouped by project, the sessions and tasks waiting for review are split into one folder per project; a folder with nothing in it starts collapsed, and a collapsed folder shows a dot for its most urgent row (red for an exited session, amber for a review, green for a working agent).
+Grouped by status, they form one list.
+The shelves are the same either way and mix every project.
+
+In Classic, the sidebar then shows a **Sessions** section first, holding sessions that are not linked to a task, followed by one section per status: Running, Needs review, To do, and Done.
 Each section mixes the tasks of every visible project, sorted by priority, then by project order, then by task key.
 Each row shows its project name before the task key.
 Project actions, such as editing a project or toggling auto-dispatch, are only available when the sidebar is grouped by project.
 
-The same places turn off task keys ("Show task keys") and, when grouping by status, project names ("Show project labels").
-These choices are saved in `config.json` as `sidebar_group_by`, `hide_task_keys`, and `hide_project_labels`.
+The same places turn off task keys ("Show task keys") and, when grouping by status, project names ("Show project labels"; in Cards it drops the project line from cards).
+These choices are saved in `config.json` as `sidebar_layout`, `sidebar_group_by`, `hide_task_keys`, and `hide_project_labels`.
 Done sections start collapsed, and the sidebar remembers which sections you collapse.
 
 ### Finding a task from the keyboard

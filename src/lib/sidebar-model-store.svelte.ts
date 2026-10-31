@@ -1,4 +1,9 @@
-import { buildSidebarModel, resolveSidebarGroupBy, type SidebarSection } from "./sidebar-model";
+import {
+  buildSidebarModel,
+  resolveSidebarGroupBy,
+  resolveSidebarLayout,
+  type SidebarSection,
+} from "./sidebar-model";
 import { getSettings } from "./settings.svelte";
 import * as projectStore from "./project-store.svelte";
 import * as orchestrator from "./session-orchestrator.svelte";
@@ -8,7 +13,7 @@ import * as taskStore from "./task-store.svelte";
 const model = $derived.by((): SidebarSection[] => {
   const settings = getSettings();
   return buildSidebarModel({
-    layout: "classic",
+    layout: resolveSidebarLayout(settings),
     groupBy: resolveSidebarGroupBy(settings),
     projects: projectStore.getProjects(),
     sessions: orchestrator.getSessions(),

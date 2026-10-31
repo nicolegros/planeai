@@ -7,13 +7,15 @@
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
-  import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, resolveSidebarGroupBy, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
+  import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarRow, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
+  import { rowSession, type RowAction } from "../lib/sidebar-cards";
   import { getSidebarModel } from "../lib/sidebar-model-store.svelte";
   import { sidebarViewMenuItems } from "../lib/sidebar-view-menu";
   import { projectContextMenuItems } from "../lib/project-context-menu";
   import { locateProjectFolder } from "../lib/locate-project";
   import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, Lightbulb, Settings, TriangleAlert } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
+  import SidebarCardsList from "./sidebar/SidebarCardsList.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getCollapsedSections, getLayoutWidth, setCollapsedSections, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
@@ -91,6 +93,7 @@
   const zone = $derived(getActiveZone());
   const sections = $derived(getSidebarModel());
   const groupBy = $derived(resolveSidebarGroupBy(getSettings()));
+  const layout = $derived(resolveSidebarLayout(getSettings()));
   const showTaskKeys = $derived(!getSettings().hide_task_keys);
   // Project labels only make sense when rows from several projects are mixed.
   const showProjectLabels = $derived(groupBy === "status" && !getSettings().hide_project_labels);
@@ -129,6 +132,13 @@
 
   function isCollapsed(key: string, fallback: boolean): boolean {
     return collapsedSections[key] ?? fallback;
+  }
+
+  // Open "Show more" pages per shelf, for this mount only.
+  let shelfPages = $state<Record<string, number>>({});
+  const shownPages = (shelfKey: string) => shelfPages[shelfKey] ?? 1;
+  function showMore(shelfKey: string) {
+    shelfPages = { ...shelfPages, [shelfKey]: shownPages(shelfKey) + 1 };
   }
 
   function setCollapsed(key: string, collapsed: boolean, fallback: boolean) {
@@ -204,6 +214,43 @@
     focusTerminal();
   }
 
+  function selectRow(row: SidebarRow) {
+    if (row.kind === "task") handleTaskClick(row.task, row.project);
+    else handleOrphanClick(row.session);
+  }
+
+  function onRowContextMenu(e: MouseEvent, row: SidebarRow) {
+    if (row.kind === "task") onTaskContextMenu(e, row);
+    else onContextMenu(e, row.session);
+  }
+
+  function isRowActive(row: SidebarRow): boolean {
+    if (row.kind === "session") return row.session.id === activeSessionId;
+    return (selectedTaskWorkspace?.projectId === row.project.id && selectedTaskWorkspace.taskKey === row.task.key) || row.linkedSession?.id === activeSessionId;
+  }
+
+  function isRowPreviewing(row: SidebarRow): boolean {
+    if (row.kind === "session") return row.session.id === previewSessionId;
+    return row.linkedSession?.id === previewSessionId || (previewTaskWorkspace?.projectId === row.project.id && previewTaskWorkspace.taskKey === row.task.key);
+  }
+
+  function isRowFading(row: SidebarRow): boolean {
+    const session = rowSession(row);
+    return !!session && fadingSessionIds.has(session.id);
+  }
+
+  function runRowAction(action: RowAction, row: SidebarRow) {
+    const session = rowSession(row);
+    if (action === "review" && session) { onSelectSession(session.id); onToggleDiff?.(); }
+    else if (action === "restart" && session) onRestartSession(session);
+    else if (action === "done") {
+      if (row.kind === "task") moveTask(row, "done");
+      else fadeOutThenAct(row.session.id, () => onArchiveSession(row.session));
+    }
+    else if (action === "start" && row.kind === "task") onPickTask(row.task, row.project.path);
+    else if (action === "reopen" && row.kind === "task") moveTask(row, "todo");
+  }
+
   function fadeOutThenAct(sessionId: string, action: () => void | Promise<void>) {
     fadingSessionIds = new Set([...fadingSessionIds, sessionId]);
     setTimeout(() => {
@@ -241,7 +288,7 @@
   // Flat nav list for keyboard navigation
   type NavItem = SidebarNavItem | { type: "plugin"; contributionKey: string; row: PluginSidebarNavRow };
   const flatNav = $derived.by(() => {
-    const result: NavItem[] = sidebarNavItems(sections, isCollapsed);
+    const result: NavItem[] = sidebarNavItems(sections, isCollapsed, shownPages);
     for (const contribution of activePluginContributions.filter((item) => item.contribution.placement === "sidebar.section")) {
       const contributionKey = `${contribution.plugin.id}:${contribution.contribution.id}`;
       for (const row of getPluginSidebarRows(contributionKey)) {
@@ -369,7 +416,7 @@
           const parentIdx = flatNavIndex.get(navKey.project(current.parentKey));
           if (parentIdx !== undefined) setSelectedIndex(parentIdx);
         }
-      } else if (current.type === "task" || current.type === "orphan") {
+      } else if (current.type === "task" || current.type === "orphan" || current.type === "show_more") {
         // Jump to parent group header or project header
         for (let i = idx - 1; i >= 0; i--) {
           if (flatNav[i].type === "group_header" || flatNav[i].type === "project_header") {
@@ -405,6 +452,11 @@
 
     if (current.type === "group_header") {
       if (action.type === "select") toggleSection(current.key, current.defaultCollapsed);
+      return;
+    }
+
+    if (current.type === "show_more") {
+      if (action.type === "select") showMore(current.shelfKey);
       return;
     }
 
@@ -630,12 +682,40 @@
   {/each}
 
   <!-- Main content -->
-  <nav bind:this={navRef} class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide select-none" oncontextmenu={onNavContextMenu}>
+  <nav bind:this={navRef} class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide select-none {layout === 'cards' ? 'flex flex-col' : ''}" oncontextmenu={onNavContextMenu}>
     {#if projects.length === 0}
       <div class="mt-12 text-center px-4 space-y-3">
         <p class="text-xs text-t3">No projects yet</p>
         <button onclick={onAddProject} class="text-xs text-accent hover:underline">Add a project →</button>
       </div>
+    {:else if layout === "cards"}
+      <SidebarCardsList
+        {sections}
+        {showTaskKeys}
+        showProjects={groupBy === "project" || !getSettings().hide_project_labels}
+        navIndex={(key) => flatNavIndex.get(key) ?? -1}
+        {isCollapsed}
+        onToggle={toggleSection}
+        {shownPages}
+        onShowMore={showMore}
+        isActive={isRowActive}
+        isPreviewing={isRowPreviewing}
+        isFading={isRowFading}
+        {renamingSessionId}
+        bind:renameValue
+        onCommitRename={commitRename}
+        onCancelRename={() => onStartRename("")}
+        {projectAutoMode}
+        onSelectRow={selectRow}
+        onRowAction={runRowAction}
+        {onRowContextMenu}
+        {onProjectContextMenu}
+        {sessionIndicatorContributions}
+        {sessionMetaContributions}
+        {pluginSessionContext}
+        onPluginNavigate={onPluginNavigate ?? (() => {})}
+        onPluginClose={onPluginClose ?? (() => {})}
+      />
     {:else}
       {#each sections as section (section.key)}
         {#if section.kind === "project"}
