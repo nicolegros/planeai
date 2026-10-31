@@ -138,48 +138,22 @@
   const activeContribution = $derived(activePlugin?.ui_contributions.find((contribution) => contribution.id === activeContributionId) ?? null);
   const modalPlugin = $derived(pluginInventory.find((plugin) => plugin.id === pluginDialog?.pluginId) ?? null);
   const modalContribution = $derived(modalPlugin?.ui_contributions.find((contribution) => contribution.id === pluginDialog?.contributionId) ?? null);
-  const comparePluginContribution = (left: { plugin: PluginInventory; contribution: PluginUiContribution }, right: { plugin: PluginInventory; contribution: PluginUiContribution }) =>
+  type PluginSlot = { plugin: PluginInventory; contribution: PluginUiContribution };
+  const comparePluginContribution = (left: PluginSlot, right: PluginSlot) =>
     (left.contribution.order ?? 0) - (right.contribution.order ?? 0) || left.plugin.name.localeCompare(right.plugin.name) || left.plugin.id.localeCompare(right.plugin.id) || left.contribution.id.localeCompare(right.contribution.id);
-  const sidebarPluginContributions = $derived(
-    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
-      plugin.ui_contributions.filter((contribution) => ["sidebar.header", "sidebar.navigation", "sidebar.section", "sidebar.footer"].includes(contribution.placement)).map((contribution) => ({ plugin, contribution })),
-    ).sort(comparePluginContribution),
-  );
-  const sessionIndicatorContributions = $derived(
-    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
-      plugin.ui_contributions.filter((contribution) => contribution.placement === "session.indicator").map((contribution) => ({ plugin, contribution })),
-    ).sort(comparePluginContribution),
-  );
-  const sessionMetaContributions = $derived(
-    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
-      plugin.ui_contributions.filter((contribution) => contribution.placement === "session.meta").map((contribution) => ({ plugin, contribution })),
-    ).sort(comparePluginContribution),
-  );
-  const globalPluginCommands = $derived(
-    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
-      plugin.ui_contributions.filter((contribution) => contribution.placement === "main-pane" || contribution.placement === "dialog").map((contribution) => ({ plugin, contribution })),
-    ).sort(comparePluginContribution),
-  );
-  const sessionPanelCommands = $derived(
-    activeSession
-      ? pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
-          plugin.ui_contributions.filter((contribution) => contribution.placement === "session.panel").map((contribution) => ({ plugin, contribution })),
-        ).sort(comparePluginContribution)
-      : [],
-  );
-  const titlebarContributions = $derived(
-    activeSession
-      ? pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
-          plugin.ui_contributions.filter((contribution) => contribution.placement === "titlebar").map((contribution) => ({ plugin, contribution })),
-        ).sort(comparePluginContribution)
-      : [],
-  );
+  function runningContributions(...placements: PluginUiContribution["placement"][]): PluginSlot[] {
+    return pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+      plugin.ui_contributions.filter((contribution) => placements.includes(contribution.placement)).map((contribution) => ({ plugin, contribution })),
+    ).sort(comparePluginContribution);
+  }
+  const sidebarPluginContributions = $derived(runningContributions("sidebar.header", "sidebar.navigation", "sidebar.section", "sidebar.footer"));
+  const sessionIndicatorContributions = $derived(runningContributions("session.indicator"));
+  const sessionMetaContributions = $derived(runningContributions("session.meta"));
+  const globalPluginCommands = $derived(runningContributions("main-pane", "dialog"));
+  const sessionPanelCommands = $derived(activeSession ? runningContributions("session.panel") : []);
+  const titlebarContributions = $derived(activeSession ? runningContributions("titlebar") : []);
   const pluginCommands = $derived([...globalPluginCommands, ...sessionPanelCommands]);
-  const interactionPluginContributions = $derived(
-    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
-      plugin.ui_contributions.filter((contribution) => contribution.placement === "interaction").map((contribution) => ({ plugin, contribution })),
-    ).sort(comparePluginContribution),
-  );
+  const interactionPluginContributions = $derived(runningContributions("interaction"));
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
 
