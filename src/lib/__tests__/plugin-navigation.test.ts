@@ -68,11 +68,14 @@ describe("resolvePluginOpen", () => {
     expect(surfaceOf("routines", "routines", "command", false)).toBe("dialog:routines/routines");
   });
 
-  it("keeps a session panel in the dialog from its titlebar entry and shortcut, and in the main pane otherwise", () => {
+  it("keeps a session panel in the dialog from its titlebar entry, shortcut and meta slot, and in the main pane otherwise", () => {
     expect(surfaceOf("github", "pull-request", "titlebar", true)).toBe(
       "dialog:github/pull-request",
     );
     expect(surfaceOf("github", "pull-request", "shortcut", true)).toBe(
+      "dialog:github/pull-request",
+    );
+    expect(surfaceOf("github", "pull-request", "session-meta", true)).toBe(
       "dialog:github/pull-request",
     );
     expect(surfaceOf("github", "pull-request", "navigation", true)).toBe(

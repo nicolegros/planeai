@@ -641,6 +641,11 @@
 
   const navigatePlugin = (pluginId: string, contributionId: string) => openPlugin(pluginId, contributionId, "navigation");
 
+  function openSessionPluginPanel(sessionId: string, pluginId: string, contributionId: string): void {
+    selectWorkspaceSession(sessionId);
+    openPlugin(pluginId, contributionId, "session-meta");
+  }
+
   function focusPluginInteraction(): boolean {
     const interaction = document.querySelector<HTMLElement>("[data-plugin-interaction-host] [data-plugin-ui-contribution]");
     if (!interaction) return false;
@@ -1102,6 +1107,7 @@
         onPluginSessionAction={runPluginSessionAction}
         onPluginNavigate={navigatePlugin}
         onPluginClose={leavePluginWorkspace}
+        onOpenPluginSessionPanel={openSessionPluginPanel}
       />
   {/if}
 

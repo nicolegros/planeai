@@ -161,7 +161,9 @@ function labelOf(button: HTMLElement): string {
   if (button.hasAttribute("aria-expanded")) {
     return `[${button.textContent!.replace(/\s+/g, " ").trim()}]`;
   }
-  return (button.querySelector("span.text-\\[13px\\]") ?? button).textContent!.trim();
+  const labelledBy = button.getAttribute("aria-labelledby");
+  const content = labelledBy ? document.getElementById(labelledBy)! : button;
+  return (content.querySelector("span.text-\\[13px\\]") ?? content).textContent!.trim();
 }
 
 function navLabels(root: HTMLElement): string[] {

@@ -1,7 +1,7 @@
 import type { PluginInventory, PluginUiContribution } from "./types";
 
 /** How the user asked to open a contribution. */
-export type PluginOpenOrigin = "navigation" | "command" | "shortcut" | "titlebar";
+export type PluginOpenOrigin = "navigation" | "command" | "shortcut" | "titlebar" | "session-meta";
 
 export type PluginOpenTarget =
   | { surface: "dialog" | "main-pane"; plugin: PluginInventory; contribution: PluginUiContribution }
@@ -9,8 +9,8 @@ export type PluginOpenTarget =
 
 /**
  * Where a contribution opens. A dialog opens in the host dialog from anywhere and
- * needs no session. A session panel needs the selected session: its titlebar entry
- * and shortcut open it in the dialog, other routes show it as a main pane.
+ * needs no session. A session panel needs the selected session: its titlebar entry,
+ * shortcut and sidebar meta slot open it in the dialog, other routes show it as a main pane.
  */
 export function resolvePluginOpen(
   inventory: readonly PluginInventory[],
@@ -34,11 +34,16 @@ export function resolvePluginOpen(
     case "session.panel":
       if (!hasSession) return { surface: "unavailable" };
       return {
-        surface: origin === "titlebar" || origin === "shortcut" ? "dialog" : "main-pane",
+        surface: origin === "navigation" || origin === "command" ? "main-pane" : "dialog",
         plugin,
         contribution,
       };
     default:
       return { surface: "unavailable" };
   }
+}
+
+/** The session panel a plugin's sidebar meta slot opens: its first, in contribution order. */
+export function sessionPanelOf(plugin: PluginInventory): PluginUiContribution | undefined {
+  return plugin.ui_contributions.find((contribution) => contribution.placement === "session.panel");
 }

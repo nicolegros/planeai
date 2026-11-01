@@ -18,6 +18,7 @@
   import type { PluginInventory, PluginProvider, PluginUiContribution } from "../lib/types";
   import { isSessionRequest, serveSessionRequest, type ProviderSessionBridge } from "../lib/provider-session-bridge";
   import { pluginFrameFonts } from "../lib/plugin-frame-fonts";
+  import { parseTooltipLines, type PluginTooltipLine } from "../lib/plugin-tooltip";
 
   interface Props {
     plugin: PluginInventory;
@@ -35,6 +36,8 @@
     onFocused?: () => void;
     /** Resolves the focused session at action time for local plugin recipients. */
     getFocusedAgentSession?: () => PluginSessionContext | undefined;
+    /** session.meta only: the lines the plugin asks the host to show when its slot is hovered or focused. */
+    onTooltip?: (lines: PluginTooltipLine[]) => void;
   }
 
   type LocalPluginFrameMessage = {
@@ -62,9 +65,10 @@
     height?: number;
     width?: number;
     text?: unknown;
+    lines?: unknown;
   };
 
-  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, providerSession, onFocused, getFocusedAgentSession = () => undefined }: Props = $props();
+  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, providerSession, onFocused, getFocusedAgentSession = () => undefined, onTooltip }: Props = $props();
   const serializedSession = $derived(session ? JSON.stringify(session) : "");
   let container = $state<HTMLElement>();
   let disposer: PluginUiDisposer | null = null;
@@ -108,6 +112,7 @@
     ["success", "--color-status-running"],
     ["warning", "--color-status-review"],
     ["danger", "--color-status-exited"],
+    ["info", "--color-status-working"],
   ] as const;
 
   function escapePluginThemeValue(value: string): string {
@@ -581,6 +586,9 @@
           frame.style.width = width;
           if (container) container.style.width = width;
         }
+      } else if (message.type === "tooltip" && isSessionMeta) {
+        const lines = parseTooltipLines(message.lines);
+        if (lines) onTooltip?.(lines);
       } else if (message.type === "navigation") {
         if (message.action === "open" && message.pluginId && message.contributionId) {
           onNavigate(message.pluginId, message.contributionId);

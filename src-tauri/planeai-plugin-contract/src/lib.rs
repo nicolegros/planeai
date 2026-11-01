@@ -52,12 +52,16 @@ pub const PROVIDER_HOST_API_VERSION: &str = "planeai.plugin-host.v3";
 /// `host.sessions.providers`) and the `dialog` placement.
 pub const TASK_SESSION_HOST_API_VERSION: &str = "planeai.plugin-host.v4";
 
+/// The `session.meta` placement, with its tooltip and click-through to the plugin's session panel.
+pub const SESSION_META_HOST_API_VERSION: &str = "planeai.plugin-host.v5";
+
 /// Every host API this host serves, oldest first; each includes the ones before it.
-const HOST_API_VERSIONS: [&str; 4] = [
+const HOST_API_VERSIONS: [&str; 5] = [
     HOST_API_VERSION,
     RECIPIENT_HOST_API_VERSION,
     PROVIDER_HOST_API_VERSION,
     TASK_SESSION_HOST_API_VERSION,
+    SESSION_META_HOST_API_VERSION,
 ];
 
 pub fn supports_host_api_version(version: &str) -> bool {
@@ -280,6 +284,13 @@ fn validate_ui_contributions(object: &Map<String, Value>, plugin_id: &str) -> Re
                 TASK_SESSION_HOST_API_VERSION,
             )?;
         }
+        if placement == "session.meta" {
+            require_host_api(
+                object,
+                "the session.meta placement",
+                SESSION_META_HOST_API_VERSION,
+            )?;
+        }
         let has_order = match contribution.get("order") {
             None | Some(Value::Null) => false,
             Some(Value::Number(value))
@@ -448,7 +459,7 @@ mod tests {
             "id": "integration",
             "name": "Integration",
             "version": "0.1.0",
-            "host_api_version": "planeai.plugin-host.v4",
+            "host_api_version": SESSION_META_HOST_API_VERSION,
             "source_kind": "local",
             "backend_entrypoints": { "macos-arm64": "bin/plugin" },
             "capabilities": [
@@ -499,6 +510,17 @@ mod tests {
                 "{placement}"
             );
         }
+    }
+
+    #[test]
+    fn session_meta_requires_host_api_v5() {
+        let mut manifest = manifest();
+        manifest["ui_contributions"][0]["placement"] = json!("session.meta");
+        manifest["host_api_version"] = json!(TASK_SESSION_HOST_API_VERSION);
+        assert_eq!(
+            validate_local_manifest(&manifest, "macos-arm64").map_err(|error| error.to_string()),
+            Err("the session.meta placement requires host API planeai.plugin-host.v5".into())
+        );
     }
 
     #[test]
