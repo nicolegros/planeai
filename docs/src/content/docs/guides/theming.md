@@ -117,6 +117,7 @@ Each theme defines variables in `:root` (light mode) and `.dark` (dark mode):
 | Token                    | Description                      |
 | ------------------------ | -------------------------------- |
 | `--color-status-running` | Active/running indicator (green) |
+| `--color-status-working` | Agent working indicator (blue)   |
 | `--color-status-review`  | Needs review indicator (amber)   |
 | `--color-status-exited`  | Error/exited indicator (red)     |
 | `--color-status-idle`    | Idle/inactive indicator (gray)   |
@@ -206,6 +207,7 @@ Each theme defines variables in `:root` (light mode) and `.dark` (dark mode):
   --color-accent-bg: rgba(30, 102, 245, 0.1);
   --color-scrim: rgba(76, 79, 105, 0.3);
   --color-status-running: #40a02b;
+  --color-status-working: #1e66f5;
   --color-status-review: #df8e1d;
   --color-status-exited: #d20f39;
   --color-status-idle: #9ca0b0;
@@ -233,6 +235,7 @@ Each theme defines variables in `:root` (light mode) and `.dark` (dark mode):
   --color-accent-bg: rgba(138, 173, 244, 0.12);
   --color-scrim: rgba(0, 0, 0, 0.55);
   --color-status-running: #a6da95;
+  --color-status-working: #8aadf4;
   --color-status-review: #eed49f;
   --color-status-exited: #ed8796;
   --color-status-idle: #5b6078;

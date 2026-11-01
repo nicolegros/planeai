@@ -283,6 +283,7 @@ static TOKENS: &[(&str, Rule)] = &[
         }
     }),
     ("--color-status-running", |d| d.p[2].hex()),
+    ("--color-status-working", |d| d.p[4].hex()),
     ("--color-status-review", |d| d.p[3].hex()),
     ("--color-status-exited", |d| d.p[1].hex()),
     ("--color-status-idle", |d| d.t3.hex()),

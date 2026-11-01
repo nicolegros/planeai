@@ -55,7 +55,7 @@
   }: Props = $props();
 
   const ACTIVITY_SLOTS: Record<SessionActivity, { icon: LucideIcon; label: string; class: string }> = {
-    working: { icon: CircleDashed, label: "Working", class: "text-status-running" },
+    working: { icon: CircleDashed, label: "Working", class: "text-status-working" },
     ready: { icon: CircleCheck, label: "Ready", class: "text-status-review" },
     exited: { icon: CircleAlert, label: "Exited", class: "text-status-exited" },
   };
@@ -72,7 +72,7 @@
   const URGENCY_DOTS: Record<FolderUrgency, { class: string; label: string }> = {
     exited: { class: "bg-status-exited", label: "Has an exited session" },
     review: { class: "bg-status-review", label: "Needs review" },
-    running: { class: "bg-status-running", label: "Working" },
+    running: { class: "bg-status-working", label: "Working" },
   };
 
   const top = $derived(sections.filter((s) => s.kind === "attention" || s.kind === "folder"));
