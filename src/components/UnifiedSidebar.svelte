@@ -4,7 +4,7 @@
   import type { PluginSessionContext } from "../lib/plugin-sdk";
   import { pluginSessionActionsForProvider } from "../lib/plugin-session-actions";
   import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
-  import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
+  import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard, activatesItselfOnEnter, focusedSidebarControl } from "../lib/sidebar-nav.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
   import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarRow, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
@@ -399,8 +399,12 @@
     if (flatNav.length === 0) return;
     const origin = e.composedPath().find((node): node is Element => node instanceof Element);
     if (shouldBypassSidebarKeyboard(origin ?? document.activeElement)) return;
+    const control = focusedSidebarControl(origin ?? document.activeElement);
+    if (activatesItselfOnEnter(e, control)) return;
 
     const action = handleSidebarKey(e, flatNav.length);
+    // Once navigation moves the highlight, the next Enter belongs to the highlighted row.
+    if (e.defaultPrevented) control?.blur();
     if (!action) return;
 
     const idx = getSelectedIndex();

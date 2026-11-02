@@ -44,6 +44,16 @@ export function shouldBypassSidebarKeyboard(element: Element | null): boolean {
   );
 }
 
+/** The sidebar button holding focus that is not a navigation row, such as a meta slot or a hover action. */
+export function focusedSidebarControl(element: Element | null): HTMLElement | null {
+  return element?.closest<HTMLElement>("button:not([data-nav-index])") ?? null;
+}
+
+/** A control reached by keyboard keeps Enter; after a mouse click, Enter still selects the highlighted row. */
+export function activatesItselfOnEnter(e: KeyboardEvent, control: HTMLElement | null): boolean {
+  return e.key === "Enter" && Boolean(control?.matches(":focus-visible"));
+}
+
 /**
  * Handle a keydown event for sidebar navigation.
  * Returns a SidebarNavAction if matched, or null if consumed as navigation / no match.
