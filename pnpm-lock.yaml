@@ -47,8 +47,8 @@ importers:
         specifier: ^6.7.4
         version: 6.7.6
       '@codemirror/view':
-        specifier: ^6.43.14
-        version: 6.43.14
+        specifier: ^6.43.15
+        version: 6.43.15
       '@fontsource-variable/ibm-plex-sans':
         specifier: 5.3.0
         version: 5.3.0
@@ -66,7 +66,7 @@ importers:
         version: 1.0.0-beta.6(@shikijs/themes@3.23.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(shiki@3.23.0)
       '@replit/codemirror-vim':
         specifier: ^6.4.0
-        version: 6.4.0(@codemirror/commands@6.11.1)(@codemirror/language@6.13.1)(@codemirror/search@6.7.2)(@codemirror/state@6.7.6)(@codemirror/view@6.43.14)
+        version: 6.4.0(@codemirror/commands@6.11.1)(@codemirror/language@6.13.1)(@codemirror/search@6.7.2)(@codemirror/state@6.7.6)(@codemirror/view@6.43.15)
       '@tauri-apps/api':
         specifier: 2.12.4
         version: 2.12.4
@@ -309,8 +309,8 @@ packages:
   '@codemirror/streamparser@6.0.0':
     resolution: {integrity: sha512-JTFPF6xrfjt0mnfGPgzcLiMwYmvIyNaoizp8BYzv8FE8KrT6GBGDZ190rtt+O7Wke3gG/MFHyiY9YGNeimof4w==}
 
-  '@codemirror/view@6.43.14':
-    resolution: {integrity: sha512-hC45YnmJNR1rz42OF57BLoQNFMV12/13drnvibDsR2quNDmldcb4WvYVV81hFQg56i9lcqQMEDqilhX2QDcGQQ==}
+  '@codemirror/view@6.43.15':
+    resolution: {integrity: sha512-HHsfpqFeHyXLs983pSRe38Xajs0vFWZQ2BuX0m7Ki8w3jZ5iD8cuR3lBz2/5/X53Dhf32SBHKh6rtSTB6tKeGw==}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -1129,8 +1129,8 @@ packages:
   '@shikijs/types@3.23.0':
     resolution: {integrity: sha512-3JZ5HXOZfYjsYSk0yPwBrkupyYSLpAE26Qc0HLghhZNGTZg/SKxXIIgoxOpmmeQP0RRSDJTk1/vPfw9tbw+jSQ==}
 
-  '@shikijs/vscode-textmate@10.0.2':
-    resolution: {integrity: sha512-83yeghZ2xxin3Nj8z1NMd/NCuca+gsYXswywDy5bHvwlWL8tpTQmzGeUuHd9FC3E/SBEMvzJRwWEOz5gGes9Qg==}
+  '@shikijs/vscode-textmate@10.1.0':
+    resolution: {integrity: sha512-cVBuhDQjBZaNMTwBquYfPydrUP+E3hE6oYGasx8h6ZrODIM7/r+gxLDXdd66oszbrggZHEntdE6j+5gYIVyMWQ==}
 
   '@sveltejs/acorn-typescript@1.0.13':
     resolution: {integrity: sha512-wgKggnhZVL9Bfx1OaKKTrYY9BFRk6C8UAkQNUcIv1+llzYrIqy+RZm5HPKzn0NpEBvTVhTqB4kQyllZywsRBRQ==}
@@ -3276,6 +3276,9 @@ packages:
   style-mod@4.1.3:
     resolution: {integrity: sha512-i/n8VsZydrugj3Iuzll8+x/00GH2vnYsk1eomD8QiRrSAeW6ItbCQDtfXCeJHd0iwiNagqjQkvpvREEPtW3IoQ==}
 
+  style-mod@4.1.4:
+    resolution: {integrity: sha512-XXWIQt633/EpAFx8aZDOTjBzrCaGmhvEQlQo6MVPfa2OzO2cWo+4hV9h+6UkHYlXGfy+ODXKUdP7Pthmcu5ATw==}
+
   style-to-object@1.0.14:
     resolution: {integrity: sha512-LIN7rULI0jBscWQYaSswptyderlarFkjQ+t79nzty8tcIAceVomEVlLzH5VP4Cmsv6MtKhs7qaAiwlcp+Mgaxw==}
 
@@ -3506,11 +3509,11 @@ packages:
   unist-util-stringify-position@4.0.0:
     resolution: {integrity: sha512-0ASV06AAoKCDkS2+xw5RXJywruurpbC4JZSm7nr7MOt1ojAzvyyaO+UxZf18j8FCF6kmzCZKcAgN/yu2gm2XgQ==}
 
-  unist-util-visit-parents@6.0.2:
-    resolution: {integrity: sha512-goh1s1TBrqSqukSc8wrjwWhL0hiJxgA8m4kFxGlQ+8FYQ3C/m11FcTs4YYem7V664AhHVvgoQLk890Ssdsr2IQ==}
+  unist-util-visit-parents@6.1.0:
+    resolution: {integrity: sha512-vKXxz6O38sKDj1mtx/k2cWvkkFBuYGx6uGrlzBkVeWCRF/F8sdI0j3Wbkz/5rVNRRuVc8UrgRdbCxNhmYXgP3w==}
 
-  unist-util-visit@5.1.0:
-    resolution: {integrity: sha512-m+vIdyeCOpdr/QeQCu2EzxX/ohgS8KbnPDgFni4dQsfSCtpz8UqDyY5GjRru8PDKuYn7Fq19j1CQ+nJSsGKOzg==}
+  unist-util-visit@5.2.0:
+    resolution: {integrity: sha512-fpsYs/VVoZxfGY9/j3FQpZmN8wdLJaV1Pt38AaJNZu9uKIHcFU3halCdBveEq1HGKO1OEfJY65w1zvoFV1b3qQ==}
 
   universal-user-agent@6.0.1:
     resolution: {integrity: sha512-yCzhz6FN2wU1NiiQRogkTQszlQSlpWaw8SvVegAc+bDxbzHgh1vX8uIe8OYyMH6DwH+sdTJsgMl36+mSMdRJIQ==}
@@ -3937,14 +3940,14 @@ snapshots:
     dependencies:
       '@codemirror/language': 6.13.1
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       '@lezer/common': 1.5.2
 
   '@codemirror/commands@6.11.1':
     dependencies:
       '@codemirror/language': 6.13.1
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       '@lezer/common': 1.5.2
 
   '@codemirror/lang-angular@0.1.4':
@@ -3984,7 +3987,7 @@ snapshots:
       '@codemirror/lang-javascript': 6.2.5
       '@codemirror/language': 6.13.1
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       '@lezer/common': 1.5.2
       '@lezer/css': 1.3.3
       '@lezer/html': 1.3.13
@@ -4000,7 +4003,7 @@ snapshots:
       '@codemirror/language': 6.13.1
       '@codemirror/lint': 6.9.7
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       '@lezer/common': 1.5.2
       '@lezer/javascript': 1.5.4
 
@@ -4010,7 +4013,7 @@ snapshots:
       '@codemirror/lang-html': 6.4.11
       '@codemirror/language': 6.13.1
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       '@lezer/common': 1.5.2
       '@lezer/highlight': 1.2.5
       '@lezer/lr': 1.4.10
@@ -4034,7 +4037,7 @@ snapshots:
       '@codemirror/lang-html': 6.4.11
       '@codemirror/language': 6.13.1
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       '@lezer/common': 1.5.2
       '@lezer/highlight': 1.2.5
       '@lezer/lr': 1.4.10
@@ -4045,7 +4048,7 @@ snapshots:
       '@codemirror/lang-html': 6.4.11
       '@codemirror/language': 6.13.1
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       '@lezer/common': 1.5.2
       '@lezer/markdown': 1.6.4
 
@@ -4108,7 +4111,7 @@ snapshots:
       '@codemirror/autocomplete': 6.20.3
       '@codemirror/language': 6.13.1
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       '@lezer/common': 1.5.2
       '@lezer/xml': 1.0.6
 
@@ -4152,7 +4155,7 @@ snapshots:
     dependencies:
       '@codemirror/state': 6.7.6
       '@codemirror/streamparser': 6.0.0
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       '@lezer/common': 1.5.2
       '@lezer/highlight': 1.2.5
       '@lezer/lr': 1.4.10
@@ -4165,7 +4168,7 @@ snapshots:
   '@codemirror/lint@6.9.7':
     dependencies:
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       crelt: 1.0.7
 
   '@codemirror/lsp-client@6.3.0':
@@ -4174,7 +4177,7 @@ snapshots:
       '@codemirror/language': 6.13.1
       '@codemirror/lint': 6.9.7
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       '@lezer/highlight': 1.2.5
       marked: 15.0.12
       vscode-languageserver-protocol: 3.18.3
@@ -4183,14 +4186,14 @@ snapshots:
     dependencies:
       '@codemirror/language': 6.13.1
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       '@lezer/highlight': 1.2.5
       style-mod: 4.1.3
 
   '@codemirror/search@6.7.2':
     dependencies:
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       crelt: 1.0.7
 
   '@codemirror/state@6.7.6':
@@ -4199,11 +4202,11 @@ snapshots:
 
   '@codemirror/streamparser@6.0.0': {}
 
-  '@codemirror/view@6.43.14':
+  '@codemirror/view@6.43.15':
     dependencies:
       '@codemirror/state': 6.7.6
       crelt: 1.0.7
-      style-mod: 4.1.3
+      style-mod: 4.1.4
       w3c-keyname: 2.2.8
 
   '@cspotcode/source-map-support@0.8.1':
@@ -4710,13 +4713,13 @@ snapshots:
 
   '@replit/codemirror-vim-core@0.1.0': {}
 
-  '@replit/codemirror-vim@6.4.0(@codemirror/commands@6.11.1)(@codemirror/language@6.13.1)(@codemirror/search@6.7.2)(@codemirror/state@6.7.6)(@codemirror/view@6.43.14)':
+  '@replit/codemirror-vim@6.4.0(@codemirror/commands@6.11.1)(@codemirror/language@6.13.1)(@codemirror/search@6.7.2)(@codemirror/state@6.7.6)(@codemirror/view@6.43.15)':
     dependencies:
       '@codemirror/commands': 6.11.1
       '@codemirror/language': 6.13.1
       '@codemirror/search': 6.7.2
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
       '@replit/codemirror-vim-core': 0.1.0
 
   '@rollup/rollup-android-arm-eabi@4.62.2':
@@ -4797,7 +4800,7 @@ snapshots:
   '@shikijs/core@3.23.0':
     dependencies:
       '@shikijs/types': 3.23.0
-      '@shikijs/vscode-textmate': 10.0.2
+      '@shikijs/vscode-textmate': 10.1.0
       '@types/hast': 3.0.5
       hast-util-to-html: 9.0.5
     optional: true
@@ -4805,14 +4808,14 @@ snapshots:
   '@shikijs/engine-javascript@3.23.0':
     dependencies:
       '@shikijs/types': 3.23.0
-      '@shikijs/vscode-textmate': 10.0.2
+      '@shikijs/vscode-textmate': 10.1.0
       oniguruma-to-es: 4.3.6
     optional: true
 
   '@shikijs/engine-oniguruma@3.23.0':
     dependencies:
       '@shikijs/types': 3.23.0
-      '@shikijs/vscode-textmate': 10.0.2
+      '@shikijs/vscode-textmate': 10.1.0
     optional: true
 
   '@shikijs/langs@3.23.0':
@@ -4827,11 +4830,11 @@ snapshots:
 
   '@shikijs/types@3.23.0':
     dependencies:
-      '@shikijs/vscode-textmate': 10.0.2
+      '@shikijs/vscode-textmate': 10.1.0
       '@types/hast': 3.0.5
     optional: true
 
-  '@shikijs/vscode-textmate@10.0.2':
+  '@shikijs/vscode-textmate@10.1.0':
     optional: true
 
   '@sveltejs/acorn-typescript@1.0.13(acorn@8.18.0)':
@@ -5353,7 +5356,7 @@ snapshots:
       '@codemirror/lint': 6.9.7
       '@codemirror/search': 6.7.2
       '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.14
+      '@codemirror/view': 6.43.15
 
   color-convert@1.9.3:
     dependencies:
@@ -6328,7 +6331,7 @@ snapshots:
       micromark-util-sanitize-uri: 2.0.1
       trim-lines: 3.0.1
       unist-util-position: 5.0.0
-      unist-util-visit: 5.1.0
+      unist-util-visit: 5.2.0
       vfile: 6.0.3
     optional: true
 
@@ -6901,7 +6904,7 @@ snapshots:
       '@shikijs/langs': 3.23.0
       '@shikijs/themes': 3.23.0
       '@shikijs/types': 3.23.0
-      '@shikijs/vscode-textmate': 10.0.2
+      '@shikijs/vscode-textmate': 10.1.0
       '@types/hast': 3.0.5
     optional: true
 
@@ -7047,6 +7050,8 @@ snapshots:
       peek-readable: 4.1.0
 
   style-mod@4.1.3: {}
+
+  style-mod@4.1.4: {}
 
   style-to-object@1.0.14:
     dependencies:
@@ -7320,17 +7325,17 @@ snapshots:
       '@types/unist': 3.0.3
     optional: true
 
-  unist-util-visit-parents@6.0.2:
+  unist-util-visit-parents@6.1.0:
     dependencies:
       '@types/unist': 3.0.3
       unist-util-is: 6.0.1
     optional: true
 
-  unist-util-visit@5.1.0:
+  unist-util-visit@5.2.0:
     dependencies:
       '@types/unist': 3.0.3
       unist-util-is: 6.0.1
-      unist-util-visit-parents: 6.0.2
+      unist-util-visit-parents: 6.1.0
     optional: true
 
   universal-user-agent@6.0.1: {}
