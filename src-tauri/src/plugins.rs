@@ -1714,12 +1714,34 @@ fn read_plugin_settings(data_dir: &Path) -> Result<Value, String> {
     Ok(settings)
 }
 
+/// Holds an exclusive OS lock on a plugin's settings for the duration of `update`.
+/// Each open handle locks separately, so this serializes threads and every PlaneAI
+/// process sharing the data directory; without it, concurrent patches overwrite each other.
+fn with_plugin_settings_lock<T>(
+    data_dir: &Path,
+    update: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    std::fs::create_dir_all(data_dir)
+        .map_err(|error| format!("failed to create plugin settings directory: {error}"))?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(data_dir.join(".settings.lock"))
+        .map_err(|error| format!("failed to open plugin settings lock: {error}"))?;
+    lock.lock()
+        .map_err(|error| format!("failed to lock plugin settings: {error}"))?;
+    update()
+}
+
 fn replace_plugin_settings(data_dir: &Path, settings: Value) -> Result<Value, String> {
     if !settings.is_object() {
         return Err("plugin settings must be a JSON object".to_string());
     }
-    std::fs::create_dir_all(data_dir)
-        .map_err(|error| format!("failed to create plugin settings directory: {error}"))?;
+    with_plugin_settings_lock(data_dir, || write_plugin_settings(data_dir, settings))
+}
+
+fn write_plugin_settings(data_dir: &Path, settings: Value) -> Result<Value, String> {
     let temporary = data_dir.join(format!(".settings-{}.tmp", uuid::Uuid::new_v4()));
     let path = data_dir.join("settings.json");
     let serialized = serde_json::to_vec_pretty(&settings)
@@ -1796,14 +1818,16 @@ fn patch_plugin_settings(data_dir: &Path, patch: Value) -> Result<(), String> {
     let patch = patch
         .as_object()
         .ok_or("plugin settings patch must be a JSON object")?;
-    let mut settings = read_plugin_settings(data_dir)?;
-    merge_plugin_settings_patch(
-        settings
-            .as_object_mut()
-            .expect("read_plugin_settings validates JSON objects"),
-        patch,
-    );
-    replace_plugin_settings(data_dir, settings).map(|_| ())
+    with_plugin_settings_lock(data_dir, || {
+        let mut settings = read_plugin_settings(data_dir)?;
+        merge_plugin_settings_patch(
+            settings
+                .as_object_mut()
+                .expect("read_plugin_settings validates JSON objects"),
+            patch,
+        );
+        write_plugin_settings(data_dir, settings).map(|_| ())
+    })
 }
 
 fn legacy_jira_issue_matches(
@@ -4291,6 +4315,38 @@ impl<T> OptionalRow<T> for rusqlite::Result<T> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn concurrent_settings_patches_keep_every_update() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let data_dir = directory.path().to_path_buf();
+        replace_plugin_settings(
+            &data_dir,
+            serde_json::json!({ "github": { "pull_requests": {} } }),
+        )
+        .unwrap();
+        let writers: Vec<_> = (0..20)
+            .map(|index| {
+                let data_dir = data_dir.clone();
+                std::thread::spawn(move || {
+                    patch_plugin_settings(
+                        &data_dir,
+                        serde_json::json!({ "github": { "pull_requests": { format!("s{index}"): [index] } } }),
+                    )
+                    .unwrap();
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let settings = read_plugin_settings(&data_dir).unwrap();
+        let kept = settings["github"]["pull_requests"]
+            .as_object()
+            .unwrap()
+            .len();
+        assert_eq!(kept, 20, "every concurrent patch survives");
+    }
+
     use super::*;
     use planeai_plugin_contract::HOST_API_VERSION;
 
