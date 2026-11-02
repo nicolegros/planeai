@@ -375,6 +375,35 @@ describe("CommandMenu", () => {
       expect(props.onOpenFile).toHaveBeenCalledWith("src/components/CommandMenu.svelte");
     });
 
+    it("highlights the new best match when the previous one is still in the results", async () => {
+      vi.mocked(git.searchFiles).mockImplementation(
+        (_repo, query) =>
+          new Promise((resolve) =>
+            setTimeout(
+              () =>
+                resolve(
+                  query === "menu"
+                    ? ["src/lib/menu.ts", "README.md"]
+                    : ["README.md", "src/lib/menu.ts"],
+                ),
+              5,
+            ),
+          ),
+      );
+      const props = { ...menuProps(), openFileMode: true, onOpenFile: vi.fn() };
+      render(props);
+      const input = await findFileInput();
+      await vi.waitFor(() => expect(visibleItemLabels()).toEqual(["README.md", "src/lib/menu.ts"]));
+
+      await typeQuery(input, "menu");
+      await vi.waitFor(() => expect(visibleItemLabels()).toEqual(["src/lib/menu.ts", "README.md"]));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await tick();
+
+      expect(props.onOpenFile).toHaveBeenCalledWith("src/lib/menu.ts");
+    });
+
     it("keeps the results of the latest query when an earlier search answers last", async () => {
       let answerFirstKeystroke: (files: string[]) => void = () => {};
       vi.mocked(git.searchFiles).mockImplementation((_repo, query) => {

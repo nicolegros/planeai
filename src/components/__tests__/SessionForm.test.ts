@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { mount, flushSync, tick } from "svelte";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { mount, unmount, flushSync, tick } from "svelte";
 
 vi.mock("../../lib/api", () => ({
   sessions: { launch: vi.fn(() => new Promise(() => {})) },
@@ -60,9 +60,16 @@ const baseProps = {
   onCreateTask: vi.fn(),
 };
 
+const mounted: ReturnType<typeof mount>[] = [];
+
+afterEach(async () => {
+  await Promise.all(mounted.splice(0).map((component) => unmount(component)));
+  document.body.replaceChildren();
+});
+
 function renderForm(props = {}) {
   const target = document.createElement("div");
-  mount(SessionForm, { target, props: { ...baseProps, ...props } });
+  mounted.push(mount(SessionForm, { target, props: { ...baseProps, ...props } }));
   return target;
 }
 
@@ -345,7 +352,6 @@ it("resets a typed name when another task is picked", async () => {
   flushSync();
 
   expect(nameInput.value).toBe("PROJ-2: Add feature");
-  target.remove();
 });
 
 describe("cross-project task link", () => {
@@ -423,16 +429,18 @@ describe("cross-project task link", () => {
     );
     const target = document.createElement("div");
     document.body.append(target);
-    mount(SessionForm, {
-      target,
-      props: {
-        ...baseProps,
-        projects: twoProjects,
-        currentProjectId: "p1",
-        taskPrefill: prefill,
-        ...props,
-      },
-    });
+    mounted.push(
+      mount(SessionForm, {
+        target,
+        props: {
+          ...baseProps,
+          projects: twoProjects,
+          currentProjectId: "p1",
+          taskPrefill: prefill,
+          ...props,
+        },
+      }),
+    );
     await settle();
     await pickOption(target, "project", "Other");
     return target;
@@ -460,7 +468,6 @@ describe("cross-project task link", () => {
         taskProjectId: "p1",
       }),
     );
-    target.remove();
   });
 
   it("relinks to a task of the new project when one is picked", async () => {
@@ -477,7 +484,6 @@ describe("cross-project task link", () => {
     expect(sessions.launch).toHaveBeenCalledWith(
       expect.objectContaining({ projectId: "p2", taskKey: "OTH-1", taskProjectId: null }),
     );
-    target.remove();
   });
 
   it("falls back to the other repo's default branch when it lacks the task's base", async () => {
@@ -486,7 +492,6 @@ describe("cross-project task link", () => {
     const base = target.querySelector("[data-field='base']")!;
     expect(base.querySelector("input")!.value).toBe("main");
     expect(target.textContent).toContain("Task base release/2.x not found in Other, using main");
-    target.remove();
   });
 
   it("asks for a base branch when the other repo has neither the task's base nor a detectable default", async () => {
@@ -505,7 +510,6 @@ describe("cross-project task link", () => {
     expect(target.textContent).toContain("Select a base branch.");
     expect(sessions.launch).not.toHaveBeenCalled();
     vi.mocked(projects.detectDefaultBranch).mockResolvedValue("main");
-    target.remove();
   });
 
   it("keeps the prefilled task linked when the project changes before its tasks load", async () => {
@@ -530,10 +534,17 @@ describe("cross-project task link", () => {
     );
     const target = document.createElement("div");
     document.body.append(target);
-    mount(SessionForm, {
-      target,
-      props: { ...baseProps, projects: twoProjects, currentProjectId: "p1", taskPrefill: prefill },
-    });
+    mounted.push(
+      mount(SessionForm, {
+        target,
+        props: {
+          ...baseProps,
+          projects: twoProjects,
+          currentProjectId: "p1",
+          taskPrefill: prefill,
+        },
+      }),
+    );
     await settle();
     await pickOption(target, "project", "Other");
     releaseOwnerTasks();
@@ -542,7 +553,6 @@ describe("cross-project task link", () => {
     expect(target.querySelector("[data-field='task']")?.textContent).toContain(
       "Linked to task in Project",
     );
-    target.remove();
   });
 
   it("numbers the name across the task but the branch only within the repo", async () => {
@@ -568,7 +578,6 @@ describe("cross-project task link", () => {
       "proj-1/fix-bug",
     );
     expect(target.querySelector<HTMLInputElement>("#use-worktree")?.checked).toBe(false);
-    target.remove();
   });
 });
 
