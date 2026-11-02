@@ -79,6 +79,8 @@
   /** Best matches for `fileQuery`; null until the first search answers. */
   let fileResults = $state<string[] | null>(null);
   let fileQuery = $state("");
+  /** Moved to the best match whenever results land, since bits-ui keeps a stale highlight across async results. */
+  let fileHighlight = $state("");
   let projectAutoModes = $state<Record<string, boolean>>({});
 
   async function openArchived() {
@@ -135,7 +137,9 @@
     if (!repoPath) return;
     const seq = ++fileSearchSeq;
     const results = await git.searchFiles(repoPath, fileQuery, FILE_RESULT_LIMIT).catch(() => []);
-    if (seq === fileSearchSeq) fileResults = results;
+    if (seq !== fileSearchSeq) return;
+    fileResults = results;
+    fileHighlight = results[0] ?? "";
   }
 
   let renameTargetId = $state<string | null>(null);
@@ -410,7 +414,7 @@
           </Command.List>
         </Command.Root>
       {:else if subMenu === "openFile"}
-        <Command.Root class="flex flex-col" loop disablePointerSelection shouldFilter={false}>
+        <Command.Root class="flex flex-col" loop disablePointerSelection shouldFilter={false} bind:value={fileHighlight}>
           <Command.Input
             bind:value={fileQuery}
             oninput={searchFiles}
