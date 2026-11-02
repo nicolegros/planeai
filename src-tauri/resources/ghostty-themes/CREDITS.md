@@ -59,6 +59,8 @@ The Ayu and Ayu Light themes were created by [alebcay](https://github.com/alebca
 
 The Ayu Mirage theme was adapted from the [VS Code theme](https://github.com/ayu-theme/vscode-ayu) of the same name.
 
+The Barbenheimer Bunker, Dreamhouse and Nuclear Sunrise themes are based on the [Barbenheimer Zed theme](https://github.com/jayvicsanantonio/barbenheimer-zed-theme) by [Jayvic San Antonio](https://github.com/jayvicsanantonio) and were ported by [JangHyun-bin](https://github.com/JangHyun-bin).
+
 The Batman, Spiderman, and The Hulk themes were created by [pyrophos](https://github.com/pyrophos)
 
 The Belafonte Day, Belafonte Night, Paraiso Dark, and C64 themes were created by [idleberg](https://github.com/idleberg)
@@ -435,6 +437,8 @@ The Purple Peter theme was created by [DeChamp](https://github.com/dechamp)
 The Purple Rain theme was created by [msorre2](https://github.com/msorre2)
 
 The [Raycast](https://raycast.com) Dark/Light themes were created by [thomaspaulmann](https://github.com/thomaspaulmann) and [itsnwa](https://github.com/itsnwa).
+
+The Rainbows and Unicorns themes (Rainbows and Unicorns, Arcade, Den, EGA 85, Mane, Miami, Paper White, Sorbet, VHS and Workbench) were created by [Rod Leviton](https://github.com/rodleviton) for [SparkleBIOS](https://github.com/reactivepixels/sparklebios).
 
 The Rebecca theme was created [vic](https://github.com/vic) based on his [emacs rebecca-theme](https://github.com/vic/rebecca-theme)
 
@@ -941,3 +945,23 @@ The This One Goes to 11 theme was created by Mark Badolato.
 The Code 2026 Dark theme was created by [Angel Rada](https://github.com/code-2026-theme).
 
 The Code 2026 Light theme was created by [Angel Rada](https://github.com/code-2026-theme).
+
+The Analog Heartbeat theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Analog Heartbeat: Phosphor theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Hadal Bloom theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Moss & Ember theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Neon Raincheck theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Neon Raincheck: After Hours theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Paper Crane theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Paper Crane: Midnight Ink theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Sonoran Afterglow theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Sonoran Blue Hour theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
