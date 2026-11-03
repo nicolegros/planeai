@@ -55,6 +55,8 @@ fn load_reads_existing_config_file() {
                     command: "claude".to_string(),
                     yolo_flag: Some("--dangerously-skip-permissions".to_string()),
                     resume_command: Some("claude --resume".to_string()),
+                    // Backfilled on load, like the resume command of older configs.
+                    mcp_args: Config::default().providers["claude"].mcp_args.clone(),
                     ..Default::default()
                 },
             );

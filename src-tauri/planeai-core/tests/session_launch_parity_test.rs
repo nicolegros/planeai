@@ -909,7 +909,7 @@ fn daemon_shell_tab_env_includes_usr_local_bin() {
 
     let extra_path_dirs: Vec<String> = vec![];
     let mut path_buf = String::new();
-    let env = build_daemon_env(&extra_path_dirs, "session:1", &mut path_buf);
+    let env = build_daemon_env(&extra_path_dirs, "session:1", &mut path_buf, None);
 
     let path = env.get("PATH").unwrap();
     assert!(
@@ -931,7 +931,7 @@ fn daemon_shell_tab_and_local_shell_tab_have_same_path() {
 
     // Daemon shell tab uses build_daemon_env
     let mut path_buf = String::new();
-    let daemon_env = build_daemon_env(&extra_path_dirs, "tab:1", &mut path_buf);
+    let daemon_env = build_daemon_env(&extra_path_dirs, "tab:1", &mut path_buf, None);
     let daemon_path = daemon_env.get("PATH").unwrap();
 
     // Local shell tab uses augmented_path (via prepare_session)

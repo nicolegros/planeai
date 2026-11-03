@@ -753,7 +753,12 @@ mod tests {
                 },
             )
             .unwrap();
-            match resolve_attach_plan(&conn, &config_with_provider(), provider, None)
+            // MCP arguments are covered by their own test.
+            let config = config::Config {
+                mcp_enabled: Some(false),
+                ..config_with_provider()
+            };
+            match resolve_attach_plan(&conn, &config, provider, None)
                 .unwrap()
                 .pty_target
             {
