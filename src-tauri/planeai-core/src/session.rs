@@ -14,14 +14,22 @@ pub trait Backend: Send + Sync {
         branch: &str,
         base: &str,
     ) -> Result<(), String>;
+    /// `mcp_url` is the URL the agent's command was built with; the agent's token is minted for it.
     fn create_tmux_session(
         &self,
         name: &str,
         cwd: &str,
         cmd: &str,
         session_id: &str,
+        mcp_url: Option<&str>,
     ) -> Result<(), String>;
-    fn create_daemon_session(&self, session_id: &str, cmd: &str, cwd: &str) -> Result<(), String>;
+    fn create_daemon_session(
+        &self,
+        session_id: &str,
+        cmd: &str,
+        cwd: &str,
+        mcp_url: Option<&str>,
+    ) -> Result<(), String>;
     /// Spawn the agent in PlaneAI's private rmux daemon.
     ///
     /// `workspace` is the rmux session name shared by every resource of this
@@ -32,6 +40,7 @@ pub trait Backend: Send + Sync {
         workspace: &str,
         cmd: &str,
         cwd: &str,
+        mcp_url: Option<&str>,
     ) -> Result<(), String>;
     fn insert_session(&self, session: &NewSession) -> Result<(), String>;
     fn notify_gui(&self, session_id: &str) -> Result<(), String>;
@@ -141,6 +150,7 @@ impl SessionDispatcher {
             .as_deref()
             .map(|tpl| vars.render(tpl));
 
+        let mcp_url = backend.mcp_url();
         let provider_config = crate::session_launch::ProviderConfig {
             command: self.dispatch_config.provider_command.clone(),
             yolo_flag: self.dispatch_config.yolo_flag.clone(),
@@ -153,7 +163,7 @@ impl SessionDispatcher {
             rendered_prompt.as_deref(),
             true, // autonomous: auto-dispatched sessions always use autonomous template
             self.dispatch_config.prompt_wrapper.as_deref(),
-            backend.mcp_url().as_deref(),
+            mcp_url.as_deref(),
         );
         let cmd = launch_result.command;
         // The prompt is task content: log its size, never its text.
@@ -171,11 +181,25 @@ impl SessionDispatcher {
         // A backend that spawns nothing here would insert a session row with no
         // agent behind it, so every persistent backend must be handled.
         match self.dispatch_config.session_backend.as_str() {
-            "tmux" => backend.create_tmux_session(&tmux_name, &wt_path, &cmd, &session_id)?,
-            "daemon" => backend.create_daemon_session(&session_id, &cmd, &wt_path)?,
+            "tmux" => backend.create_tmux_session(
+                &tmux_name,
+                &wt_path,
+                &cmd,
+                &session_id,
+                mcp_url.as_deref(),
+            )?,
+            "daemon" => {
+                backend.create_daemon_session(&session_id, &cmd, &wt_path, mcp_url.as_deref())?
+            }
             "rmux" => {
                 let workspace = rmux_workspace_name(&self.project_id, &task.key);
-                backend.create_rmux_session(&session_id, &workspace, &cmd, &wt_path)?
+                backend.create_rmux_session(
+                    &session_id,
+                    &workspace,
+                    &cmd,
+                    &wt_path,
+                    mcp_url.as_deref(),
+                )?
             }
             // `local` sessions spawn their PTY on attach.
             _ => {}

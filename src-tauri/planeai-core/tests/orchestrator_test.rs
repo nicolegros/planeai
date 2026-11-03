@@ -69,14 +69,34 @@ impl Backend for TestBackend {
         self.worktree_repos.lock().unwrap().push(repo.to_string());
         Ok(())
     }
-    fn create_tmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+    fn create_tmux_session(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<(), String> {
         Ok(())
     }
-    fn create_daemon_session(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+    fn create_daemon_session(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<(), String> {
         Ok(())
     }
 
-    fn create_rmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+    fn create_rmux_session(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<(), String> {
         Ok(())
     }
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
@@ -261,14 +281,34 @@ async fn orchestrator_kills_session_when_task_becomes_terminal() {
         fn create_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
             Ok(())
         }
-        fn create_tmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+        fn create_tmux_session(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<(), String> {
             Ok(())
         }
-        fn create_daemon_session(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+        fn create_daemon_session(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<(), String> {
             Ok(())
         }
 
-        fn create_rmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+        fn create_rmux_session(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<(), String> {
             Ok(())
         }
         fn insert_session(&self, session: &NewSession) -> Result<(), String> {
@@ -395,14 +435,34 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
         fn create_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
             Ok(())
         }
-        fn create_tmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+        fn create_tmux_session(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<(), String> {
             Ok(())
         }
-        fn create_daemon_session(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+        fn create_daemon_session(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<(), String> {
             Ok(())
         }
 
-        fn create_rmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+        fn create_rmux_session(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<(), String> {
             Ok(())
         }
         fn insert_session(&self, session: &NewSession) -> Result<(), String> {
@@ -528,14 +588,34 @@ async fn orchestrator_does_not_redispatch_task_with_exited_session() {
         fn create_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
             Ok(())
         }
-        fn create_tmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+        fn create_tmux_session(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<(), String> {
             Ok(())
         }
-        fn create_daemon_session(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+        fn create_daemon_session(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<(), String> {
             Ok(())
         }
 
-        fn create_rmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+        fn create_rmux_session(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<(), String> {
             Ok(())
         }
         fn insert_session(&self, session: &NewSession) -> Result<(), String> {

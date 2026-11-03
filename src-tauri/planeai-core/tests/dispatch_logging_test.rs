@@ -29,13 +29,33 @@ impl Backend for AcceptingBackend {
     fn create_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
         Ok(())
     }
-    fn create_tmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+    fn create_tmux_session(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<(), String> {
         Ok(())
     }
-    fn create_daemon_session(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+    fn create_daemon_session(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<(), String> {
         Ok(())
     }
-    fn create_rmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+    fn create_rmux_session(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<(), String> {
         Ok(())
     }
     fn insert_session(&self, _: &NewSession) -> Result<(), String> {
