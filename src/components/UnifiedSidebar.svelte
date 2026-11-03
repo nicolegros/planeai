@@ -9,7 +9,7 @@
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
   import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarRow, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
   import { rowActivity, rowSession, type RowAction, type RowActivity } from "../lib/sidebar-cards";
-  import { getSidebarModel } from "../lib/sidebar-model-store.svelte";
+  import { getSidebarModel, isCollapsed, setCollapsed, shownPages, showMore } from "../lib/sidebar-model-store.svelte";
   import { sidebarViewMenuItems } from "../lib/sidebar-view-menu";
   import { projectContextMenuItems } from "../lib/project-context-menu";
   import { locateProjectFolder } from "../lib/locate-project";
@@ -18,7 +18,7 @@
   import SessionRenameInput from "./sidebar/SessionRenameInput.svelte";
   import SidebarCardsList from "./sidebar/SidebarCardsList.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
-  import { getCollapsedSections, getLayoutWidth, setCollapsedSections, setLayoutWidth } from "../lib/layout-state";
+  import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { isTextEntryElement, MOD_LABEL } from "../lib/keyboard";
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
   import { showToast } from "../lib/toasts.svelte";
@@ -105,9 +105,6 @@
 
   let navRef = $state<HTMLElement | undefined>(undefined);
   let sidebarWidth = $state(getLayoutWidth("sidebar", 266));
-  // Only sections the user set away from their default are stored.
-  let collapsedSections = $state<Record<string, boolean>>(getCollapsedSections());
-  $effect(() => setCollapsedSections($state.snapshot(collapsedSections)));
   let renameValue = $state("");
   let fadingSessionIds = $state<Set<string>>(new Set());
 
@@ -136,23 +133,6 @@
     const current = projectAutoMode[project.id] ?? false;
     await projectsApi.setAutoMode(project.id, !current);
     projectAutoMode[project.id] = !current;
-  }
-
-  function isCollapsed(key: string, fallback: boolean): boolean {
-    return collapsedSections[key] ?? fallback;
-  }
-
-  // Open "Show more" pages per shelf, for this mount only.
-  let shelfPages = $state<Record<string, number>>({});
-  const shownPages = (shelfKey: string) => shelfPages[shelfKey] ?? 1;
-  function showMore(shelfKey: string) {
-    shelfPages = { ...shelfPages, [shelfKey]: shownPages(shelfKey) + 1 };
-  }
-
-  function setCollapsed(key: string, collapsed: boolean, fallback: boolean) {
-    if (isCollapsed(key, fallback) === collapsed) return;
-    const { [key]: _previous, ...rest } = collapsedSections;
-    collapsedSections = collapsed === fallback ? rest : { ...rest, [key]: collapsed };
   }
 
   // Rename
