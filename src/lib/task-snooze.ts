@@ -188,7 +188,9 @@ export function customSnoozeTime(input: CustomSnooze, now: Date): { at: Date } |
       at.getMinutes() === minute;
     if (!exists) return { error: "That time does not exist." };
   }
-  if (Number.isNaN(at.getTime())) return { error: "That is too far ahead." };
+  // The backend stores times as RFC 3339 text, which has four-digit years.
+  if (Number.isNaN(at.getTime()) || at.getUTCFullYear() > 9999)
+    return { error: "That is too far ahead." };
   if (at.getTime() <= now.getTime()) return { error: "That time has passed." };
   return { at };
 }

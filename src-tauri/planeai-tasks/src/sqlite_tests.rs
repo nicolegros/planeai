@@ -972,6 +972,52 @@ fn snoozing_into_the_past_or_a_done_task_is_rejected() {
 }
 
 #[test]
+fn a_snooze_past_the_year_9999_is_rejected() {
+    let (_directory, repo, conn) = shared_db();
+    let far = at("9999-12-31T23:59:59Z") + chrono::Duration::seconds(1);
+
+    let snoozed = snooze(&conn, "TEST", "TEST-1", far, at("2026-11-03T10:00:00Z"));
+    let restored = restore_snooze(
+        &conn,
+        "TEST",
+        "TEST-1",
+        Snooze {
+            snoozed_until: Some(far),
+            ..tomorrow()
+        },
+    );
+
+    assert_eq!(
+        snoozed.unwrap_err().to_string(),
+        "the snooze time is too far ahead"
+    );
+    assert_eq!(
+        restored.unwrap_err().to_string(),
+        "the snooze time is too far ahead"
+    );
+    assert_eq!(stored_snooze_of(&repo), StoredSnooze::default());
+}
+
+#[test]
+fn a_snooze_in_the_year_9999_is_kept() {
+    let (_directory, repo, conn) = shared_db();
+
+    snooze(
+        &conn,
+        "TEST",
+        "TEST-1",
+        at("9999-12-31T23:59:59Z"),
+        at("2026-11-03T10:00:00Z"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        repo.get("TEST-1").unwrap().snooze.snoozed_until,
+        Some(at("9999-12-31T23:59:59Z"))
+    );
+}
+
+#[test]
 fn waking_by_hand_clears_the_snooze_and_bumps_the_revision() {
     let (_directory, repo, conn) = shared_db();
     snooze_tomorrow(&conn);

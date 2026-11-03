@@ -334,6 +334,19 @@ mod tests {
     }
 
     #[test]
+    fn the_cli_refuses_a_snooze_past_the_year_9999() {
+        let (_directory, conn, repo) = shared();
+
+        let far = run_task_snooze(&conn, &repo, "PLA", "PLA-1", "3000000d");
+
+        assert_eq!(far, Err("the snooze time is too far ahead".to_string()));
+        assert_eq!(
+            run_task_show(&repo, "PLA-1").map(|shown| shown.contains("\"snoozed_until\":null")),
+            Ok(true)
+        );
+    }
+
+    #[test]
     fn task_add_creates_and_returns_json() {
         let (_conn, repo) = setup();
         let result = run_task_add(

@@ -1,4 +1,4 @@
-use chrono::{DateTime, SecondsFormat, SubsecRound, Utc};
+use chrono::{DateTime, Datelike, SecondsFormat, SubsecRound, Utc};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -306,6 +306,11 @@ fn write_snooze(
     key: &str,
     snooze: Snooze,
 ) -> Result<StoredSnooze, Error> {
+    let times = [snooze.snoozed_until, snooze.snoozed_at, snooze.woke_at];
+    // Times are stored as fixed-width RFC 3339 text, which only holds four-digit years.
+    if times.into_iter().flatten().any(|at| at.year() > 9999) {
+        return Err(Error::Rejected("the snooze time is too far ahead".into()));
+    }
     let format = |at: Option<DateTime<Utc>>| at.map(|at| format_time(at.trunc_subsecs(3)));
     conn.execute(
         "UPDATE tasks SET snoozed_until = ?1, snoozed_at = ?2, woke_at = ?3, snooze_rev = snooze_rev + 1

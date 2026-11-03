@@ -158,6 +158,15 @@ describe("customSnoozeTime", () => {
     });
   });
 
+  it("refuses a time past the year 9999, which the backend cannot store", () => {
+    expect(customSnoozeTime({ mode: "after", amount: "3000000", unit: "days" }, now)).toEqual({
+      error: "That is too far ahead.",
+    });
+    expect(customSnoozeTime({ mode: "after", amount: "2000000", unit: "days" }, now)).toEqual({
+      at: new Date(now.getTime() + 2_000_000 * 24 * 3_600_000),
+    });
+  });
+
   it("takes a local date and time, or an amount from now", () => {
     expect(customSnoozeTime({ mode: "at", date: "2026-11-04", time: "09:30" }, now)).toEqual({
       at: new Date(2026, 10, 4, 9, 30),
