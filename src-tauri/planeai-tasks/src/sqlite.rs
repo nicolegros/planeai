@@ -250,7 +250,11 @@ pub fn mark_unread(conn: &Connection, prefix: &str, key: &str) -> Result<Visit, 
     }
 }
 
-fn read_snooze(conn: &Connection, prefix: &str, key: &str) -> Result<(Status, Snooze), Error> {
+fn read_status_and_snooze(
+    conn: &Connection,
+    prefix: &str,
+    key: &str,
+) -> Result<(Status, Snooze), Error> {
     let (status, until, at, woke) = conn
         .query_row(
             "SELECT status, snoozed_until, snoozed_at, woke_at FROM tasks WHERE key = ?1 AND project_prefix = ?2",
@@ -294,7 +298,11 @@ fn write_snooze(
         ],
     )
     .map_err(|e| Error::Storage(e.to_string()))?;
-    Ok(read_snooze(conn, prefix, key)?.1)
+    Ok(read_status_and_snooze(conn, prefix, key)?.1)
+}
+
+pub fn read_snooze(conn: &Connection, prefix: &str, key: &str) -> Result<Snooze, Error> {
+    Ok(read_status_and_snooze(conn, prefix, key)?.1)
 }
 
 /// Hides the task until `until`; its status and agents are left alone.
@@ -305,7 +313,7 @@ pub fn snooze(
     until: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<Snooze, Error> {
-    let (status, _) = read_snooze(conn, prefix, key)?;
+    let (status, _) = read_status_and_snooze(conn, prefix, key)?;
     if status == Status::Done {
         return Err(Error::Rejected("a done task cannot be snoozed".into()));
     }
@@ -336,7 +344,7 @@ pub fn restore_snooze(
     key: &str,
     snooze: Snooze,
 ) -> Result<Snooze, Error> {
-    let (status, _) = read_snooze(conn, prefix, key)?;
+    let (status, _) = read_status_and_snooze(conn, prefix, key)?;
     if status == Status::Done && snooze != Snooze::default() {
         return Err(Error::Rejected("a done task cannot be snoozed".into()));
     }
@@ -363,7 +371,7 @@ pub fn wake_early(
     if woke == 0 {
         return Ok(None);
     }
-    Ok(Some(read_snooze(conn, prefix, key)?.1))
+    Ok(Some(read_status_and_snooze(conn, prefix, key)?.1))
 }
 
 /// Derive a project prefix from a project name.

@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager};
 
+use planeai_tasks::model::Snooze;
 use planeai_tasks::provider::Error as TaskError;
 use planeai_tasks::sqlite::Visit;
 
@@ -18,6 +19,24 @@ pub struct TaskActivity {
     pub task_key: String,
     #[serde(flatten)]
     pub visit: Visit,
+    #[serde(flatten)]
+    pub snooze: Snooze,
+}
+
+/// What an agent did; only the ones that need the user wake a snoozed task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activity {
+    /// A turn ended on its own: hook Stop, a silence timeout, provider Idle.
+    Finished,
+    /// The agent waits on the user: hook Notification, provider NeedsAttention.
+    NeedsAttention,
+    Exited,
+}
+
+impl Activity {
+    fn wakes(self) -> bool {
+        !matches!(self, Self::Finished)
+    }
 }
 
 /// The project's task prefix, which scopes every visit write to that project.
@@ -28,10 +47,12 @@ pub fn project_prefix(conn: &Connection, project_id: &str) -> Result<String, Str
         .ok_or_else(|| format!("project not found: {project_id}"))
 }
 
-/// Records activity on the session's task; `None` when the session has no task that still exists.
+/// Records activity on the session's task, waking it early if snoozed and the agent needs the user;
+/// `None` when the session has no task that still exists.
 pub fn stamp(
     conn: &Connection,
     session_id: &str,
+    activity: Activity,
     at: DateTime<Utc>,
 ) -> Result<Option<TaskActivity>, String> {
     let Some(session) = db::get_session(conn, session_id).map_err(|e| e.to_string())? else {
@@ -49,11 +70,22 @@ pub fn stamp(
     let Ok(prefix) = project_prefix(conn, &project_id) else {
         return Ok(None);
     };
-    match planeai_tasks::sqlite::record_activity(conn, &prefix, &task_key, at) {
-        Ok(visit) => Ok(Some(TaskActivity {
+    let recorded =
+        planeai_tasks::sqlite::record_activity(conn, &prefix, &task_key, at).and_then(|visit| {
+            if activity.wakes() {
+                planeai_tasks::sqlite::wake_early(conn, &prefix, &task_key, at)?;
+            }
+            Ok((
+                visit,
+                planeai_tasks::sqlite::read_snooze(conn, &prefix, &task_key)?,
+            ))
+        });
+    match recorded {
+        Ok((visit, snooze)) => Ok(Some(TaskActivity {
             project_id,
             task_key,
             visit,
+            snooze,
         })),
         Err(TaskError::NotFound) => Ok(None),
         Err(error) => Err(error.to_string()),
@@ -61,7 +93,7 @@ pub fn stamp(
 }
 
 /// Records activity on the session's task off the calling thread and tells the frontend.
-pub fn record(app: &AppHandle, session_id: &str) {
+pub fn record(app: &AppHandle, session_id: &str, activity: Activity) {
     let app = app.clone();
     let session_id = session_id.to_string();
     tauri::async_runtime::spawn(async move {
@@ -69,7 +101,7 @@ pub fn record(app: &AppHandle, session_id: &str) {
         let id = session_id.clone();
         let stamped = crate::commands::blocking(move || {
             let conn = db.lock().map_err(|e| e.to_string())?;
-            stamp(&conn, &id, Utc::now())
+            stamp(&conn, &id, activity, Utc::now())
         })
         .await;
         match stamped {
@@ -154,7 +186,7 @@ mod tests {
         let key = add_task(&mut conn, &project.prefix);
         add_session(&conn, "s1", &project.id, Some(&key), None);
 
-        let activity = stamp(&conn, "s1", at("2026-11-03T10:00:00Z")).unwrap();
+        let activity = stamp(&conn, "s1", Activity::Finished, at("2026-11-03T10:00:00Z")).unwrap();
 
         assert_eq!(
             activity,
@@ -165,6 +197,7 @@ mod tests {
                     last_visited_at: None,
                     last_activity_at: Some(at("2026-11-03T10:00:00Z")),
                 },
+                snooze: Snooze::default(),
             })
         );
         assert_eq!(
@@ -181,7 +214,7 @@ mod tests {
         let key = add_task(&mut conn, &owner.prefix);
         add_session(&conn, "s1", &repo.id, Some(&key), Some(&owner.id));
 
-        let activity = stamp(&conn, "s1", at("2026-11-03T10:00:00Z")).unwrap();
+        let activity = stamp(&conn, "s1", Activity::Finished, at("2026-11-03T10:00:00Z")).unwrap();
 
         assert_eq!(activity.map(|a| a.project_id), Some(owner.id));
         assert_eq!(
@@ -198,9 +231,27 @@ mod tests {
         add_session(&conn, "unlinked", &project.id, None, None);
         add_session(&conn, "dangling", &project.id, Some("PLA-404"), None);
 
-        let unlinked = stamp(&conn, "unlinked", at("2026-11-03T10:00:00Z")).unwrap();
-        let dangling = stamp(&conn, "dangling", at("2026-11-03T10:00:00Z")).unwrap();
-        let unknown = stamp(&conn, "missing", at("2026-11-03T10:00:00Z")).unwrap();
+        let unlinked = stamp(
+            &conn,
+            "unlinked",
+            Activity::Finished,
+            at("2026-11-03T10:00:00Z"),
+        )
+        .unwrap();
+        let dangling = stamp(
+            &conn,
+            "dangling",
+            Activity::Finished,
+            at("2026-11-03T10:00:00Z"),
+        )
+        .unwrap();
+        let unknown = stamp(
+            &conn,
+            "missing",
+            Activity::Finished,
+            at("2026-11-03T10:00:00Z"),
+        )
+        .unwrap();
 
         assert_eq!((unlinked, dangling, unknown), (None, None, None));
         assert_eq!(activity_of(&conn, &key), None);
@@ -214,7 +265,7 @@ mod tests {
         add_session(&conn, "s1", &project.id, Some(&key), None);
         db::archive_session(&conn, "s1").unwrap();
 
-        let activity = stamp(&conn, "s1", at("2026-11-03T10:00:00Z")).unwrap();
+        let activity = stamp(&conn, "s1", Activity::Finished, at("2026-11-03T10:00:00Z")).unwrap();
 
         assert_eq!(activity, None);
         assert_eq!(activity_of(&conn, &key), None);
@@ -229,6 +280,11 @@ mod tests {
                 last_visited_at: None,
                 last_activity_at: Some(at("2026-11-03T10:00:00.250Z")),
             },
+            snooze: Snooze {
+                snoozed_until: Some(at("2026-11-04T09:00:00Z")),
+                snoozed_at: Some(at("2026-11-03T09:00:00Z")),
+                woke_at: Some(at("2026-11-03T10:00:00.250Z")),
+            },
         };
         assert_eq!(
             serde_json::to_value(activity).unwrap(),
@@ -237,7 +293,99 @@ mod tests {
                 "task_key": "PLA-1",
                 "last_visited_at": null,
                 "last_activity_at": "2026-11-03T10:00:00.250Z",
+                "snoozed_until": "2026-11-04T09:00:00Z",
+                "snoozed_at": "2026-11-03T09:00:00Z",
+                "woke_at": "2026-11-03T10:00:00.250Z",
             })
         );
+    }
+
+    fn snoozed_task(conn: &mut Connection) -> (db::Project, String) {
+        let project = db::create_project(conn, "planeai", "/tmp/planeai").unwrap();
+        let key = add_task(conn, &project.prefix);
+        add_session(conn, "s1", &project.id, Some(&key), None);
+        planeai_tasks::sqlite::snooze(
+            conn,
+            &project.prefix,
+            &key,
+            at("2026-11-04T09:00:00Z"),
+            at("2026-11-03T10:00:00Z"),
+        )
+        .unwrap();
+        (project, key)
+    }
+
+    fn woke_at(conn: &Connection, key: &str) -> Option<String> {
+        conn.query_row("SELECT woke_at FROM tasks WHERE key = ?1", [key], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn an_agent_asking_for_attention_or_exiting_wakes_a_snoozed_task() {
+        for activity in [Activity::NeedsAttention, Activity::Exited] {
+            let mut conn = setup();
+            let (_, key) = snoozed_task(&mut conn);
+
+            let stamped = stamp(&conn, "s1", activity, at("2026-11-03T12:00:00Z")).unwrap();
+
+            assert_eq!(
+                stamped.map(|a| a.snooze.woke_at),
+                Some(Some(at("2026-11-03T12:00:00Z"))),
+                "{activity:?}"
+            );
+            assert_eq!(
+                woke_at(&conn, &key).as_deref(),
+                Some("2026-11-03T12:00:00.000+00:00"),
+                "{activity:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_finished_turn_leaves_a_snoozed_task_asleep() {
+        let mut conn = setup();
+        let (_, key) = snoozed_task(&mut conn);
+
+        let stamped = stamp(&conn, "s1", Activity::Finished, at("2026-11-03T12:00:00Z")).unwrap();
+
+        assert_eq!(
+            stamped.map(|a| a.snooze),
+            Some(Snooze {
+                snoozed_until: Some(at("2026-11-04T09:00:00Z")),
+                snoozed_at: Some(at("2026-11-03T10:00:00Z")),
+                woke_at: None,
+            })
+        );
+        assert_eq!(woke_at(&conn, &key), None);
+    }
+
+    #[test]
+    fn attention_from_before_the_snooze_does_not_wake_it() {
+        let mut conn = setup();
+        let (_, key) = snoozed_task(&mut conn);
+
+        stamp(
+            &conn,
+            "s1",
+            Activity::NeedsAttention,
+            at("2026-11-03T09:59:59Z"),
+        )
+        .unwrap();
+
+        assert_eq!(woke_at(&conn, &key), None);
+    }
+
+    #[test]
+    fn an_archived_session_does_not_wake_a_snoozed_task() {
+        let mut conn = setup();
+        let (_, key) = snoozed_task(&mut conn);
+        db::archive_session(&conn, "s1").unwrap();
+
+        let stamped = stamp(&conn, "s1", Activity::Exited, at("2026-11-03T12:00:00Z")).unwrap();
+
+        assert_eq!(stamped, None);
+        assert_eq!(woke_at(&conn, &key), None);
     }
 }
