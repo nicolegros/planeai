@@ -34,7 +34,7 @@ The other tasks sit in shelves at the bottom of the list: **Running** as cards, 
 Done starts collapsed and shows 25 tasks at a time; **Show 25 more** (also reachable from the keyboard) reveals the next ones.
 A shelf with no tasks is not shown, and **Hide done tasks** removes the Done shelf.
 
-The right side of a row shows what its session is doing: **Working**, **Ready** for review, or **Exited**.
+The right side of a row shows what needs you: **Working** while its agent runs, **Unread** once the agent finished since you last opened the task, or **Exited**.
 Rows with nothing to look at, such as idle sessions and tasks never started, are slightly faded until you hover or select them.
 Hovering a row swaps its status for quick actions:
 
@@ -47,6 +47,17 @@ Hovering a row swaps its status for quick actions:
 | Done row                    | Reopen (moves it back to To do) |
 
 **Done** moves a task to Done, or archives a session that has no task.
+
+### Unread tasks
+
+A task turns **Unread** when one of its agents finishes a turn, asks for your attention, or exits, and you have not opened the task since.
+It works for every task, with or without a worktree, and stays unread across restarts.
+Opening the task, typing into one of its sessions, or coming back to the window while it is open marks it read.
+A task you are looking at does not turn unread when its agent finishes.
+
+Right-click a task and choose **Mark as unread** to keep it in view for later, or **Mark as read** to clear it without opening it.
+With the sidebar focused, **u** does the same for the highlighted task.
+Sessions that are not linked to a task show **Unread** too, until you open or type into them; that state lasts until PlaneAI quits.
 
 **Classic** shows compact rows in collapsible status groups, as described below.
 
