@@ -16,7 +16,7 @@ vi.mock("../../lib/plugin-frame-fonts", () => ({ pluginFrameFonts: () => Promise
 vi.mock("../../lib/toasts.svelte", () => ({ showToast: vi.fn() }));
 vi.mock("../../lib/settings.svelte", () => ({ isDark: () => false }));
 
-import SessionMetaSlot from "../sidebar/SessionMetaSlot.svelte";
+import SessionMetaSlot from "./SessionMetaSlotHarness.svelte";
 import type { PluginSessionContext } from "../../lib/plugin-sdk";
 import type { PluginInventory, PluginUiContribution } from "../../lib/types";
 
@@ -32,12 +32,15 @@ const contribution = (
   shortcut: null,
 });
 
-function github(contributions: PluginUiContribution[]): PluginInventory {
+function github(
+  contributions: PluginUiContribution[],
+  hostApiVersion = "planeai.plugin-host.v5",
+): PluginInventory {
   return {
     id: "github",
     name: "GitHub",
     version: "0.1.0",
-    host_api_version: "planeai.plugin-host.v5",
+    host_api_version: hostApiVersion,
     source_kind: "local",
     backend_entrypoint: "bin/plugin",
     capabilities: [],
@@ -72,10 +75,14 @@ afterEach(() => {
   target?.remove();
 });
 
-async function mountSlot(contributions: PluginUiContribution[], onOpenPanel = vi.fn()) {
+async function mountSlot(
+  contributions: PluginUiContribution[],
+  onOpenPanel = vi.fn(),
+  hostApiVersion?: string,
+) {
   target = document.createElement("div");
   document.body.append(target);
-  const plugin = github(contributions);
+  const plugin = github(contributions, hostApiVersion);
   component = mount(SessionMetaSlot, {
     target,
     props: {
@@ -136,6 +143,15 @@ describe("SessionMetaSlot", () => {
 
     post({ type: "tooltip", lines: [] });
     expect(button.getAttribute("aria-label")).toBe("Pull requests");
+  });
+
+  it("stays a visual-only slot for a plugin on a host API older than v5", async () => {
+    await mountSlot(
+      [contribution("pill", "session.meta"), contribution("pull-request", "session.panel")],
+      vi.fn(),
+      "planeai.plugin-host.v4",
+    );
+    expect(target.querySelector("button")).toBeNull();
   });
 
   it("stays a visual-only slot when its plugin has no session panel", async () => {

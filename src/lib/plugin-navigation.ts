@@ -43,7 +43,18 @@ export function resolvePluginOpen(
   }
 }
 
+const HOST_API_PREFIX = "planeai.plugin-host.v";
+/** A meta slot's tooltip and click-through came with this host API; older plugins keep a visual-only slot. */
+const SESSION_META_PANEL_HOST_API = 5;
+
+function hostApiNumber(version: string): number {
+  return version.startsWith(HOST_API_PREFIX)
+    ? Number(version.slice(HOST_API_PREFIX.length)) || 0
+    : 0;
+}
+
 /** The session panel a plugin's sidebar meta slot opens: its first, in contribution order. */
-export function sessionPanelOf(plugin: PluginInventory): PluginUiContribution | undefined {
+export function metaSlotPanelOf(plugin: PluginInventory): PluginUiContribution | undefined {
+  if (hostApiNumber(plugin.host_api_version) < SESSION_META_PANEL_HOST_API) return undefined;
   return plugin.ui_contributions.find((contribution) => contribution.placement === "session.panel");
 }

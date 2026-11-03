@@ -21,7 +21,7 @@ my-plugin/
     └── entry.js
 ```
 
-`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers), `planeai.plugin-host.v4` for plugins that use the `sessions.start` capability or the `dialog` placement, or `planeai.plugin-host.v5` for plugins that use the `session.meta` placement (each version includes the ones before it); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
+`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers), `planeai.plugin-host.v4` for plugins that use the `sessions.start` capability or the `dialog` placement, or `planeai.plugin-host.v5` for a `session.meta` slot with a tooltip that opens the plugin's session panel (each version includes the ones before it); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
 
 Every backend and UI path must be a package-relative file path: no absolute paths and no `..`. The active platform's backend must exist and be executable. On Unix, its executable mode is preserved in the imported copy.
 
@@ -296,7 +296,7 @@ PlaneAI injects a host-owned baseline stylesheet into every local UI iframe. It 
 Frames sized to their content (`dialog`, `session.panel` and `sidebar.header`) get an auto-height, transparent document instead, so they shrink as their content does and show the host surface around them.
 Measure your content rather than the viewport there: an element at `height: 100%` resolves to its content height.
 
-Use only these stable semantic custom properties, never PlaneAI's internal `--color-*` or `--font-*` variables: `--planeai-font-sans`, `--planeai-font-mono`, `--planeai-canvas`, `--planeai-main`, `--planeai-surface`, `--planeai-surface-raised`, `--planeai-text`, `--planeai-text-muted`, `--planeai-text-subtle`, `--planeai-border`, `--planeai-border-strong`, `--planeai-accent`, `--planeai-on-accent`, `--planeai-accent-subtle`, `--planeai-success`, `--planeai-warning`, `--planeai-danger`, `--planeai-info` (host API v5), `--planeai-radius`, and `--planeai-space-1` through `--planeai-space-6`. PlaneAI updates those properties in place whenever its active theme or appearance changes; it does not remount your UI.
+Use only these stable semantic custom properties, never PlaneAI's internal `--color-*` or `--font-*` variables: `--planeai-font-sans`, `--planeai-font-mono`, `--planeai-canvas`, `--planeai-main`, `--planeai-surface`, `--planeai-surface-raised`, `--planeai-text`, `--planeai-text-muted`, `--planeai-text-subtle`, `--planeai-border`, `--planeai-border-strong`, `--planeai-accent`, `--planeai-on-accent`, `--planeai-accent-subtle`, `--planeai-success`, `--planeai-warning`, `--planeai-danger`, `--planeai-info`, `--planeai-radius`, and `--planeai-space-1` through `--planeai-space-6`. PlaneAI updates those properties in place whenever its active theme or appearance changes; it does not remount your UI.
 
 The theme fonts are available in every local UI iframe, so text set in `var(--planeai-font-sans)` or `var(--planeai-font-mono)` renders in the same IBM Plex Sans and IBM Plex Mono as PlaneAI.
 PlaneAI registers their Latin faces (Plex Sans at weights 100 to 700, Plex Mono at 400 and 500) in the frame's `document.fonts` before it calls `mount`, so your first layout already uses them.
@@ -335,12 +335,12 @@ The fixture UI calls `context.host.call("fixture.status")`, loads a saved greeti
 Each `ui_contributions` item requires a unique safe `id`, `label`, `placement`, and `entrypoint`.
 Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, `main-pane`, `dialog`, `session.panel`, `session.indicator`, `session.meta`, and `titlebar`.
 Sidebar contributions may set integer `order`.
-`session.indicator` and `session.meta` are visual-only slots drawn on every sidebar row that has a session, with that row's session context; they take no shortcut, no order, no pointer events and no focus.
+`session.indicator` and `session.meta` are slots drawn on every sidebar row that has a session, with that row's session context; they take no shortcut and no order, and their frames get no pointer events and no focus.
 A `session.indicator` is a 16px square beside the row's status.
 A `session.meta` is a 16px-tall inline slot after the branch on the third line of a Cards row, for example a `#656` pull-request pill; the Classic layout does not show it.
 Its local frame starts 0px wide, so post `{ type: "content-width", width }` to `parent` once the content is laid out (lay it out with `width: max-content`); the slot follows that width up to 160px, and reporting `0` collapses it.
-`session.meta` requires host API `planeai.plugin-host.v5`.
-When the plugin also declares a `session.panel`, the slot becomes a button: clicking it selects that row's session and opens the plugin's first `session.panel` in PlaneAI's dialog.
+On host API `planeai.plugin-host.v5`, when the plugin also declares a `session.panel`, the slot becomes a focusable button: clicking it selects that row's session and opens the plugin's first `session.panel` in PlaneAI's dialog.
+On older host APIs, and without a `session.panel`, the slot stays visual-only.
 To describe the slot on hover and keyboard focus, post `{ type: "tooltip", lines: [{ text, tone? }] }` to `parent`; PlaneAI draws the tooltip and adds the lines to the button's accessible name.
 `tone` is one of `success`, `warning`, `danger`, `info`, or `muted`, and colors the line with the matching theme token.
 PlaneAI keeps the first 12 lines and the first 200 characters of each, and an empty `lines` list removes the tooltip.
