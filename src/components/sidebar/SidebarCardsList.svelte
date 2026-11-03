@@ -5,13 +5,15 @@
   import { crossfade } from "svelte/transition";
   import { AlarmClock, AlarmClockOff, Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, GitBranch, GitCompare, Play, RotateCcw, TriangleAlert, Undo2, Zap, type LucideIcon } from "@lucide/svelte";
   import PluginContributionHost from "../PluginContributionHost.svelte";
+  import JumpHintBadge from "./JumpHintBadge.svelte";
   import SessionMetaSlot from "./SessionMetaSlot.svelte";
   import SessionRenameInput from "./SessionRenameInput.svelte";
   import { getActiveZone } from "../../lib/focus.svelte";
+  import { jumpHintFor } from "../../lib/jump-hints.svelte";
   import { getSelectedIndex } from "../../lib/sidebar-nav.svelte";
   import { locateProjectFolder } from "../../lib/locate-project";
   import * as orchestrator from "../../lib/session-orchestrator.svelte";
-  import { LANES, SHELVES, navKey, shelfPage, sidebarRowNavKey, type IsCollapsed, type ShelfLane, type ShownPages, type SidebarFolderSection, type SidebarRow, type SidebarSection, type SidebarShelfSection } from "../../lib/sidebar-model";
+  import { LANES, SHELVES, navKey, shelfPage, sidebarRowNavKey, sidebarRowTargetId, type IsCollapsed, type ShelfLane, type ShownPages, type SidebarFolderSection, type SidebarRow, type SidebarSection, type SidebarShelfSection } from "../../lib/sidebar-model";
   import { folderUrgency, isQuiet, rowActions, rowActivity, rowSession, splitBranch, WOKE_TITLE, type FolderUrgency, type RowAction, type RowActivity } from "../../lib/sidebar-cards";
   import { snoozeAnchor } from "../../lib/snooze-picker.svelte";
   import { getLaneNow } from "../../lib/snooze-clock.svelte";
@@ -128,17 +130,19 @@
   <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={plugins.sessionContext(session)} onNavigate={plugins.onNavigate ?? (() => {})} onClose={plugins.onClose ?? (() => {})} />
 {/snippet}
 
-{#snippet trailing(row: SidebarRow, session: Session | undefined, activity: RowActivity | null)}
+{#snippet trailing(row: SidebarRow, session: Session | undefined, activity: RowActivity | null, hint: string | undefined)}
+  {#if hint}<JumpHintBadge label={hint} />{/if}
   {#if session}
+    <!-- Hidden, not unmounted, so plugin indicators keep their state through a hint. -->
     {#each plugins.indicators as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
-      <span class="flex size-4 shrink-0 has-[[data-plugin-indicator-visible=false]]:hidden" data-plugin-session-indicator={session.id}>
+      <span class="size-4 shrink-0 has-[[data-plugin-indicator-visible=false]]:hidden {hint ? 'hidden' : 'flex'}" data-plugin-session-indicator={session.id}>
         {@render pluginHost(item, session)}
       </span>
     {/each}
   {/if}
-  {#if activity === "snoozed"}
+  {#if activity === "snoozed" && !hint}
     <SnoozeCountdown snoozedUntil={row.kind === "task" ? row.task.snoozed_until : null} class="shrink-0 text-xs transition-opacity group-focus-within:opacity-0 group-hover:opacity-0" />
-  {:else if activity}
+  {:else if activity && !hint}
     {@const slot = ACTIVITY_SLOTS[activity]}
     <span class="flex shrink-0 items-center gap-1 text-xs tabular-nums transition-opacity group-focus-within:opacity-0 group-hover:opacity-0 {slot.class}">
       <slot.icon class="size-3.5" />{slot.label}
@@ -176,6 +180,7 @@
   {@const session = rowSession(row)}
   {@const activity = activityOf(row)}
   {@const navIdx = navIndex(sidebarRowNavKey(row))}
+  {@const hint = jumpHintFor(sidebarRowTargetId(row))}
   {@const selected = isSelected(navIdx)}
   {@const active = isActive(row)}
   {@const receded = isQuiet(activity) && !active && !selected}
@@ -201,13 +206,13 @@
           {#if showProjects && !inFolder}
             <span class="flex h-5 items-center gap-1.5">
               <span class="min-w-0 flex-1 truncate text-xs text-t2" title={row.project.path}>{row.project.name}</span>
-              {@render trailing(row, session, activity)}
+              {@render trailing(row, session, activity, hint)}
             </span>
             <span class="flex min-w-0 items-center gap-1.5">{@render titleParts(row, receded)}</span>
           {:else}
             <span class="flex h-5 items-center gap-1.5">
               {@render titleParts(row, receded)}
-              {@render trailing(row, session, activity)}
+              {@render trailing(row, session, activity, hint)}
             </span>
           {/if}
           {#if session}
@@ -224,7 +229,7 @@
             </span>
           {/if}
       </div>
-      {@render hoverActions(row, undefined, activity, active, "top-1.5")}
+      {#if !hint}{@render hoverActions(row, undefined, activity, active, "top-1.5")}{/if}
     </div>
   {/if}
 {/snippet}
@@ -233,6 +238,7 @@
   {@const session = rowSession(row)}
   {@const activity = activityOf(row)}
   {@const navIdx = navIndex(sidebarRowNavKey(row))}
+  {@const hint = jumpHintFor(sidebarRowTargetId(row))}
   {@const selected = isSelected(navIdx)}
   {@const active = isActive(row)}
   {@const receded = (shelf === "done" || isQuiet(activity)) && !active && !selected}
@@ -250,9 +256,9 @@
         {#if row.kind === "task" && showTaskKeys}<span class="shrink-0 font-mono text-[10px] text-t3">{row.task.key}</span>{/if}
         <span class="min-w-0 truncate text-[13px] {shelf === 'done' ? 'text-t3' : 'text-t1'}">{row.kind === "task" ? row.task.title : row.session.name || row.session.branch}</span>
       </span>
-      {#if session || activity}<span class="flex h-6 shrink-0 items-center justify-end gap-1.5">{@render trailing(row, session, activity)}</span>{/if}
+      {#if session || activity || hint}<span class="flex h-6 shrink-0 items-center justify-end gap-1.5">{@render trailing(row, session, activity, hint)}</span>{/if}
     </button>
-    {@render hoverActions(row, shelf, activity, active, "top-1")}
+    {#if !hint}{@render hoverActions(row, shelf, activity, active, "top-1")}{/if}
   </div>
 {/snippet}
 
