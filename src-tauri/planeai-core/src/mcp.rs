@@ -30,6 +30,19 @@ impl McpEndpoint {
         [(URL_ENV, &self.url), (TOKEN_ENV, &self.token)]
     }
 
+    /// Hand the token over in a new file only the user can read, for a spawner whose
+    /// environment variables would show on its command line; the agent's shell deletes it.
+    pub fn write_token_file(&self, dir: &Path) -> std::io::Result<PathBuf> {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(dir)?;
+        let file = dir.join(format!("{}.token", uuid::Uuid::new_v4().simple()));
+        write_private(&file, self.token.as_bytes())?;
+        Ok(file)
+    }
+
     pub fn owned_env(&self) -> impl Iterator<Item = (String, String)> + '_ {
         self.env()
             .into_iter()

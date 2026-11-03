@@ -31,6 +31,7 @@ Claude Code and Codex both speak MCP natively, show its tools by name, and let a
 - The agent gets `PLANEAI_MCP_URL` and `PLANEAI_MCP_TOKEN` in its environment.
   Each provider has an `mcp_args` template appended to its launch command, where `{mcp_url}` becomes the server URL.
   The token never appears on a command line: Claude Code expands `${PLANEAI_MCP_TOKEN}` in its `--mcp-config` header, and Codex reads it through `bearer_token_env_var`.
+  tmux can only set an environment variable through `new-session -e`, which shows in `ps` and stays in the tmux session's environment, so a tmux launch writes the token to a private file in the app data folder instead; the agent's shell reads it, deletes it and exports it before running the agent.
   An empty `mcp_args` opts a provider out.
 - Claude Code and Codex ship with templates.
   Kiro and Copilot ship empty, because neither has a verified per-launch way to add an MCP server; users can fill in their own.
