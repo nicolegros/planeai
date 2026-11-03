@@ -53,7 +53,7 @@ pub const PROVIDER_HOST_API_VERSION: &str = "planeai.plugin-host.v3";
 pub const TASK_SESSION_HOST_API_VERSION: &str = "planeai.plugin-host.v4";
 
 /// A `session.meta` slot's tooltip and click-through to the plugin's session panel; on older
-/// host APIs the slot stays visual-only.
+/// host APIs the slot stays visual-only. The frontend enforces it in `src/lib/plugin-navigation.ts`.
 pub const SESSION_META_HOST_API_VERSION: &str = "planeai.plugin-host.v5";
 
 /// Every host API this host serves, oldest first; each includes the ones before it.

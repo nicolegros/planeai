@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Tooltip } from "bits-ui";
+  import { mergeProps, Tooltip } from "bits-ui";
   import PluginContributionHost from "../PluginContributionHost.svelte";
   import { metaSlotPanelOf } from "../../lib/plugin-navigation";
   import { PLUGIN_TONE_COLORS, type PluginTooltipLine } from "../../lib/plugin-tooltip";
@@ -31,18 +31,17 @@
       {#snippet child({ props })}
         <!-- Hidden until the plugin reports content, so an empty slot is never a tab stop. -->
         <button
-          {...props}
+          {...mergeProps(props, { onclick: (e: MouseEvent) => { e.stopPropagation(); onOpenPanel(session.id, item.plugin.id, panel.id); } })}
           type="button"
           class="flex shrink-0 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent [&:not(:has([data-plugin-indicator-visible=true]))]:invisible"
           aria-label={label}
-          onclick={(e) => { e.stopPropagation(); (props.onclick as ((event: MouseEvent) => void) | undefined)?.(e); onOpenPanel(session.id, item.plugin.id, panel.id); }}
         >{@render frame()}</button>
       {/snippet}
     </Tooltip.Trigger>
     <Tooltip.Portal>
       <Tooltip.Content side="bottom" align="start" sideOffset={6} class="z-50 flex max-w-80 flex-col gap-0.5 rounded-md border border-border bg-panel px-2.5 py-1.5 text-xs shadow-lg">
         {#each lines as line, index (index)}
-          <span class="truncate text-t1" style:color={line.tone ? `var(${PLUGIN_TONE_COLORS[line.tone]})` : undefined}>{line.text}</span>
+          <span class="truncate" style:color={`var(${line.tone ? PLUGIN_TONE_COLORS[line.tone] : "--color-t1"})`}>{line.text}</span>
         {/each}
       </Tooltip.Content>
     </Tooltip.Portal>

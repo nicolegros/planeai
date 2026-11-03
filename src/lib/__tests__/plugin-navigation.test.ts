@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolvePluginOpen } from "../plugin-navigation";
+import { metaSlotPanelOf, resolvePluginOpen } from "../plugin-navigation";
 import type { PluginInventory, PluginUiContribution } from "../types";
 
 function contribution(
@@ -101,5 +101,29 @@ describe("resolvePluginOpen", () => {
     expect(surfaceOf("routines", "sidebar", "navigation", true)).toBe("unavailable");
     expect(surfaceOf("routines", "missing", "navigation", true)).toBe("unavailable");
     expect(surfaceOf("stopped", "manager", "navigation", true)).toBe("unavailable");
+  });
+});
+
+describe("metaSlotPanelOf", () => {
+  const withApi = (
+    host_api_version: string,
+    contributions = [contribution("pull-request", "session.panel")],
+  ) => ({
+    ...plugin("github", contributions),
+    host_api_version,
+  });
+
+  it("gives a meta slot its plugin's first session panel from host API v5 on", () => {
+    expect(metaSlotPanelOf(withApi("planeai.plugin-host.v5"))?.id).toBe("pull-request");
+    expect(metaSlotPanelOf(withApi("planeai.plugin-host.v10"))?.id).toBe("pull-request");
+  });
+
+  it("keeps the slot visual-only before v5, for an unknown version, or without a session panel", () => {
+    expect(metaSlotPanelOf(withApi("planeai.plugin-host.v4"))).toBeUndefined();
+    expect(metaSlotPanelOf(withApi("planeai.plugin-host.vx"))).toBeUndefined();
+    expect(metaSlotPanelOf(withApi("other.v9"))).toBeUndefined();
+    expect(
+      metaSlotPanelOf(withApi("planeai.plugin-host.v5", [contribution("d", "dialog")])),
+    ).toBeUndefined();
   });
 });

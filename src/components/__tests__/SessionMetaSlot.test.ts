@@ -145,6 +145,23 @@ describe("SessionMetaSlot", () => {
     expect(button.getAttribute("aria-label")).toBe("Pull requests");
   });
 
+  it("closes its tooltip when the pill is activated", async () => {
+    const { post } = await mountSlot([
+      contribution("pill", "session.meta"),
+      contribution("pull-request", "session.panel"),
+    ]);
+    post({ type: "tooltip", lines: [{ text: "#12 Fix login" }] });
+    const button = target.querySelector<HTMLButtonElement>("button")!;
+    const tooltipText = () =>
+      [...document.querySelectorAll("[data-tooltip-content]")].map((node) => node.textContent);
+
+    button.focus();
+    await vi.waitFor(() => expect(tooltipText()).toEqual(["#12 Fix login"]));
+
+    button.click();
+    await vi.waitFor(() => expect(tooltipText()).toEqual([]));
+  });
+
   it("stays a visual-only slot for a plugin on a host API older than v5", async () => {
     await mountSlot(
       [contribution("pill", "session.meta"), contribution("pull-request", "session.panel")],

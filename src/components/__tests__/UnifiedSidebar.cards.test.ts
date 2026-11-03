@@ -342,7 +342,7 @@ describe("UnifiedSidebar in the Cards layout", () => {
     ).toBe("ci:session.meta");
   });
 
-  it("lets Enter open a keyboard-focused meta pill, and gives Enter back to the row after a move", async () => {
+  it("leaves Enter to a keyboard-focused meta pill, and gives Enter back to the row after a move", async () => {
     const onSelectSession = vi.fn();
     const onOpenPluginSessionPanel = vi.fn();
     const contribution = (id: string, placement: PluginUiContribution["placement"]) =>
@@ -376,15 +376,15 @@ describe("UnifiedSidebar in the Cards layout", () => {
     pill.focus();
     vi.spyOn(pill, "matches").mockImplementation((selector) => selector === ":focus-visible");
     const pressOn = (target: Element, key: string) => {
-      target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
       flushSync();
+      return event;
     };
 
-    pressOn(pill, "Enter");
-    expect(
-      onSelectSession,
-      "Enter activates the focused pill, not the highlighted row",
-    ).not.toHaveBeenCalled();
+    const enter = pressOn(pill, "Enter");
+    expect(enter.defaultPrevented, "the browser activates the pill").toBe(false);
+    expect(onSelectSession, "Enter does not select the highlighted row").not.toHaveBeenCalled();
 
     pill.click();
     expect(onOpenPluginSessionPanel).toHaveBeenCalledWith("scratch", "github", "panel");

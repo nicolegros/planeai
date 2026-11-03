@@ -339,10 +339,10 @@ Sidebar contributions may set integer `order`.
 A `session.indicator` is a 16px square beside the row's status.
 A `session.meta` is a 16px-tall inline slot after the branch on the third line of a Cards row, for example a `#656` pull-request pill; the Classic layout does not show it.
 Its local frame starts 0px wide, so post `{ type: "content-width", width }` to `parent` once the content is laid out (lay it out with `width: max-content`); the slot follows that width up to 160px, and reporting `0` collapses it.
-On host API `planeai.plugin-host.v5`, when the plugin also declares a `session.panel`, the slot becomes a focusable button: clicking it selects that row's session and opens the plugin's first `session.panel` in PlaneAI's dialog.
-On older host APIs, and without a `session.panel`, the slot stays visual-only.
-To describe the slot on hover and keyboard focus, post `{ type: "tooltip", lines: [{ text, tone? }] }` to `parent`; PlaneAI draws the tooltip and adds the lines to the button's accessible name.
-`tone` is one of `success`, `warning`, `danger`, `info`, or `muted`, and colors the line with the matching theme token.
+On host API `planeai.plugin-host.v5` or later, when the plugin also declares a `session.panel`, the slot becomes a focusable button: clicking it selects that row's session and opens the plugin's first `session.panel` in PlaneAI's dialog.
+On older host APIs, or without a `session.panel`, the slot stays visual-only.
+When the slot is a button, describe it on hover and keyboard focus by posting `{ type: "tooltip", lines: [{ text, tone? }] }` to `parent`; PlaneAI draws the tooltip and adds the lines to the button's accessible name.
+`tone` is one of `success`, `warning`, `danger`, `info`, or `muted`, and colors the line like the matching `--planeai-*` token, with `muted` as `--planeai-text-subtle`.
 PlaneAI keeps the first 12 lines and the first 200 characters of each, and an empty `lines` list removes the tooltip.
 A local `sidebar.header`, `dialog`, or `session.panel` frame is as tall as its content, which the host bridge measures and reports, so a compact header control takes only the space it draws.
 `main-pane`, `dialog`, and `session.panel` contributions may declare an optional portable `Mod+[Shift+][Alt+]A-Z` shortcut, and `main-pane` and `dialog` contributions are discoverable in Cmd+K while running.

@@ -44,7 +44,7 @@ export function resolvePluginOpen(
 }
 
 const HOST_API_PREFIX = "planeai.plugin-host.v";
-/** A meta slot's tooltip and click-through came with this host API; older plugins keep a visual-only slot. */
+/** A meta slot's tooltip and click-through came with this host API (`SESSION_META_HOST_API_VERSION` in the plugin contract, which validates the version string); older plugins keep a visual-only slot. */
 const SESSION_META_PANEL_HOST_API = 5;
 
 function hostApiNumber(version: string): number {

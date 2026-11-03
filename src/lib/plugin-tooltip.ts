@@ -1,14 +1,13 @@
-export const PLUGIN_TOOLTIP_TONES = ["success", "warning", "danger", "info", "muted"] as const;
-export type PluginTooltipTone = (typeof PLUGIN_TOOLTIP_TONES)[number];
-
 /** Host color of each tone; the status tones also back the plugin's `--planeai-<tone>` token, so both always agree. */
-export const PLUGIN_TONE_COLORS: Record<PluginTooltipTone, string> = {
+export const PLUGIN_TONE_COLORS = {
   success: "--color-status-running",
   warning: "--color-status-review",
   danger: "--color-status-exited",
   info: "--color-status-working",
   muted: "--color-t3",
-};
+} as const;
+export type PluginTooltipTone = keyof typeof PLUGIN_TONE_COLORS;
+export const PLUGIN_TOOLTIP_TONES = Object.keys(PLUGIN_TONE_COLORS) as PluginTooltipTone[];
 
 export interface PluginTooltipLine {
   text: string;
