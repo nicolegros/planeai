@@ -174,16 +174,34 @@ fn read_visit(conn: &Connection, prefix: &str, key: &str) -> Result<Visit, Error
     })
 }
 
+#[derive(Clone, Copy)]
+enum VisitColumn {
+    Visited,
+    Activity,
+}
+
+impl VisitColumn {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Visited => "last_visited_at",
+            Self::Activity => "last_activity_at",
+        }
+    }
+}
+
 fn set_time(
     conn: &Connection,
-    column: &str,
+    column: VisitColumn,
     prefix: &str,
     key: &str,
     at: DateTime<Utc>,
 ) -> Result<Visit, Error> {
     let updated = conn
         .execute(
-            &format!("UPDATE tasks SET {column} = ?1 WHERE key = ?2 AND project_prefix = ?3"),
+            &format!(
+                "UPDATE tasks SET {} = ?1 WHERE key = ?2 AND project_prefix = ?3",
+                column.as_str()
+            ),
             params![format_time(at.trunc_subsecs(3)), key, prefix],
         )
         .map_err(|e| Error::Storage(e.to_string()))?;
@@ -200,7 +218,7 @@ pub fn record_activity(
     key: &str,
     at: DateTime<Utc>,
 ) -> Result<Visit, Error> {
-    set_time(conn, "last_activity_at", prefix, key, at)
+    set_time(conn, VisitColumn::Activity, prefix, key, at)
 }
 
 pub fn mark_visited(
@@ -209,7 +227,7 @@ pub fn mark_visited(
     key: &str,
     at: DateTime<Utc>,
 ) -> Result<Visit, Error> {
-    set_time(conn, "last_visited_at", prefix, key, at)
+    set_time(conn, VisitColumn::Visited, prefix, key, at)
 }
 
 /// Moves the visit to just before the last activity; a task without activity stays as it is.
@@ -218,7 +236,7 @@ pub fn mark_unread(conn: &Connection, prefix: &str, key: &str) -> Result<Visit, 
     match visit.last_activity_at {
         Some(activity) => set_time(
             conn,
-            "last_visited_at",
+            VisitColumn::Visited,
             prefix,
             key,
             activity - chrono::Duration::milliseconds(1),

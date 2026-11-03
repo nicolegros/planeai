@@ -232,12 +232,8 @@ pub async fn mark_task_visited(
     project_id: String,
     key: String,
 ) -> Result<Visit, String> {
-    let db = db_state.0.clone();
-    super::blocking(move || {
-        let conn = db.lock().map_err(|e| e.to_string())?;
-        let prefix = crate::task_activity::project_prefix(&conn, &project_id)?;
-        planeai_tasks::sqlite::mark_visited(&conn, &prefix, &key, chrono::Utc::now())
-            .map_err(|e| e.to_string())
+    write_visit(db_state, project_id, key, |conn, prefix, key| {
+        planeai_tasks::sqlite::mark_visited(conn, prefix, key, chrono::Utc::now())
     })
     .await
 }
@@ -249,11 +245,28 @@ pub async fn mark_task_unread(
     project_id: String,
     key: String,
 ) -> Result<Visit, String> {
+    write_visit(
+        db_state,
+        project_id,
+        key,
+        planeai_tasks::sqlite::mark_unread,
+    )
+    .await
+}
+
+async fn write_visit(
+    db_state: State<'_, DbState>,
+    project_id: String,
+    key: String,
+    write: impl FnOnce(&rusqlite::Connection, &str, &str) -> Result<Visit, planeai_tasks::provider::Error>
+        + Send
+        + 'static,
+) -> Result<Visit, String> {
     let db = db_state.0.clone();
     super::blocking(move || {
         let conn = db.lock().map_err(|e| e.to_string())?;
         let prefix = crate::task_activity::project_prefix(&conn, &project_id)?;
-        planeai_tasks::sqlite::mark_unread(&conn, &prefix, &key).map_err(|e| e.to_string())
+        write(&conn, &prefix, &key).map_err(|e| e.to_string())
     })
     .await
 }
