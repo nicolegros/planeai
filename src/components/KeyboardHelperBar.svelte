@@ -11,7 +11,6 @@
     { k: "⌃⇥", l: "Switch" },
     { k: `${MOD_LABEL}1–9`, l: "Jump" },
     { k: `${MOD_LABEL}\\`, l: "Diff" },
-    { k: `${MOD_LABEL}⇧P`, l: "PR" },
   ];
 
   let explorerHints = $derived(TERMINAL_HINTS.map((hint) =>
