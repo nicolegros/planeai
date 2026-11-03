@@ -41,6 +41,25 @@ describe("ContextMenu keyboard", () => {
     vi.clearAllMocks();
   });
 
+  it("picks an item by its shortcut key, shown on its row, and leaves modified keys alone", () => {
+    const later = vi.fn();
+    render([
+      { label: "In 1 hour", shortcut: "1", onSelect: vi.fn() },
+      { label: "Custom…", shortcut: "C", onSelect: later },
+    ]);
+    const menu = document.querySelector("[role='menu']")!;
+    expect([...menu.querySelectorAll("button")].map((b) => b.textContent!.trim())).toEqual([
+      "In 1 hour 1",
+      "Custom… C",
+    ]);
+
+    key(document.activeElement!, "c", { metaKey: true });
+    expect(later).not.toHaveBeenCalled();
+    key(document.activeElement!, "c");
+    expect(later).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it("focuses the first item and keeps Tab and arrows inside the menu, skipping disabled items", () => {
     render(items);
     expect(focusedLabel()).toBe("Edit task");

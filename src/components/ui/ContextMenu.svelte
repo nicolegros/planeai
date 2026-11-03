@@ -8,6 +8,8 @@
         radio?: boolean;
         disabled?: boolean;
         title?: string;
+        /** A single key that picks the item while its menu is open, shown at the end of the row. */
+        shortcut?: string;
         onSelect: () => void;
       }
     | { label: string; children: MenuItem[] }
@@ -128,6 +130,15 @@
       openSubmenuAndFocus(Number(trigger.dataset.submenuIndex), trigger);
       return;
     }
+    const shortcut = (inSubmenu ? submenuItems : items).find(
+      (item): item is LeafItem => "shortcut" in item && !item.disabled && item.shortcut?.toLowerCase() === e.key.toLowerCase(),
+    );
+    if (shortcut && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      shortcut.onSelect();
+      onClose();
+      return;
+    }
     // Tab cycles like the arrows so focus never leaves the open menu.
     const forward = e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey);
     const backward = e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey);
@@ -157,6 +168,7 @@
       <span class="size-3.5 shrink-0 flex items-center justify-center">{#if item.checked}<Check class="size-3.5" />{/if}</span>
     {/if}
     {item.label}
+    {#if item.shortcut}<span class="ml-auto pl-4 font-mono text-[10px] text-t3">{item.shortcut}</span>{/if}
   </button>
 {/snippet}
 

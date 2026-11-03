@@ -16,7 +16,10 @@
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { sidebarNavigationOrder } from "./lib/sidebar-model";
-  import { applyDoneNow, applyInterruptedDone, canUndoTaskChange, commitPendingDone, completeTask, undoLastTaskChange } from "./lib/task-moves";
+  import { applyDoneNow, applyInterruptedDone, canUndoTaskChange, commitPendingDone, completeTask, snoozeTask, undoLastTaskChange } from "./lib/task-moves";
+  import { closeCustomSnooze, closeSnoozeMenu, getCustomSnooze, getSnoozeMenu, snoozeMenuItems, snoozeOrWake } from "./lib/snooze-picker.svelte";
+  import SnoozeCustomDialog from "./components/SnoozeCustomDialog.svelte";
+  import ContextMenu from "./components/ui/ContextMenu.svelte";
   import { getSidebarModel, getVisibleNavigationOrder } from "./lib/sidebar-model-store.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
@@ -124,6 +127,12 @@
     const task = project ? taskStore.findTask(project.path, activeSession.task_key) : undefined;
     return task && project ? { task, project } : null;
   });
+  const snoozeMenu = $derived(getSnoozeMenu());
+  // The picker took focus from the zone it opened over; the terminal wants it back, the sidebar reads keys from the window.
+  function refocusAfterSnooze() {
+    void tick().then(() => { if (!getCustomSnooze() && getActiveZone() === "terminal") refocusTerminal(); });
+  }
+  const customSnooze = $derived(getCustomSnooze());
   const activeTaskSessions = $derived(
     activeTaskWorkspace
       ? sessions.filter((session) => workspaceOf(session).key === toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key))
@@ -1030,6 +1039,7 @@
         else if (action.type === "save_file") { saveActiveEditorResource(); }
         else if (action.type === "complete_task") { void completeTask(activeTaskWorkspace, () => orchestrator.loadSessions()); }
         else if (action.type === "undo") { void undoLastTaskChange(() => orchestrator.loadSessions()); }
+        else if (action.type === "snooze_task") { snoozeOrWake(activeTaskWorkspace); }
         else if (action.type === "focus_toast") { if (!toggleToastFocus()) focusPluginInteraction(); }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
@@ -1589,6 +1599,17 @@
       <PluginContributionHost {plugin} {contribution} onNavigate={navigatePlugin} onClose={leavePluginWorkspace} onOpenPreferences={() => openPreferences(pluginPreferencesLocation(plugin))} />
     </div>
   {/each}
+{/if}
+{#if snoozeMenu}
+  <ContextMenu x={snoozeMenu.x} y={snoozeMenu.y} items={snoozeMenuItems(snoozeMenu.target, true)} onClose={() => { closeSnoozeMenu(); refocusAfterSnooze(); }} />
+{/if}
+{#if customSnooze}
+  {@const { task, project } = customSnooze}
+  <SnoozeCustomDialog
+    title={`Snooze ${task.key}`}
+    onSnooze={(at) => snoozeTask(taskStore.findTask(project.path, task.key) ?? task, project, at)}
+    onCancel={() => { closeCustomSnooze(); refocusAfterSnooze(); }}
+  />
 {/if}
 <!-- Merge prompts stay visible during setup: their countdown keeps running and acts when it ends. -->
 <ToastHost onboarding={showOnboarding} />

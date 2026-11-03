@@ -189,6 +189,7 @@
     <div class="group relative" onclick={() => onSelectRow(row)} oncontextmenu={(e) => onRowContextMenu(e, row)}>
       <button
         data-nav-index={navIdx}
+        data-snooze-anchor={row.kind === "task" ? `${row.project.id}:${row.task.key}` : undefined}
         class="absolute inset-0 rounded-md transition-colors {rowStateClass(active, selected, selected || isPreviewing(row))}"
         aria-labelledby={labelId}
       ></button>
@@ -238,6 +239,7 @@
   <div class="group relative">
     <button
       data-nav-index={navIdx}
+      data-snooze-anchor={row.kind === "task" ? `${row.project.id}:${row.task.key}` : undefined}
       class="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left transition-colors {rowStateClass(active, selected, selected || isPreviewing(row))}"
       title={rowTitle(row, activity)}
       onclick={() => onSelectRow(row)}

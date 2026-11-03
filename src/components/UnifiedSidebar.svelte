@@ -27,6 +27,7 @@
   import * as taskStore from "../lib/task-store.svelte";
   import { changeTaskStatus, wakeTask } from "../lib/task-moves";
   import { getNow, startSnoozeClock } from "../lib/snooze-clock.svelte";
+  import { snoozeMenuEntry, snoozeOrWake } from "../lib/snooze-picker.svelte";
   import { snoozeCountdown, wakeTimeLabel } from "../lib/task-snooze";
   import { isTaskUnread } from "../lib/task-unread";
   import { getPluginSidebarRows, type PluginSidebarNavRow } from "../lib/plugin-sidebar-navigation.svelte";
@@ -480,6 +481,7 @@
       else if (action.type === "delete") { if (linked) onDeleteSession(linked); }
       else if (action.type === "restart") { if (linked) onRestartSession(linked); }
       else if (action.type === "toggle_unread") toggleUnread(current.row);
+      else if (action.type === "snooze") snoozeOrWake({ task, project });
     } else if (current.type === "plugin" && action.type === "select") {
       current.row.onSelect?.();
     }
@@ -611,6 +613,7 @@
           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
           <button
             data-nav-index={taskNavIdx}
+            data-snooze-anchor={`${project.id}:${task.key}`}
             class="flex-1 min-w-0 text-left py-[6px] pl-4 pr-2 flex items-center gap-1.5 transition-colors rounded-lg
               {isActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
               {isPreviewing ? 'ring-2 ring-accent' : isSelected ? 'ring-2 ring-accent' : ''}"
@@ -876,6 +879,7 @@
     .filter(s => s.value !== menuTask.status)
     .map(s => ({ label: s.label, onSelect: () => moveTask(menuRow, s.value) }))}
   {@const readToggle = unreadToggle(menuRow)}
+  {@const snoozeEntry = snoozeMenuEntry({ task: menuTask, project: menuRow.project })}
   <ContextMenu
     x={taskContextMenu.x}
     y={taskContextMenu.y}
@@ -887,6 +891,7 @@
       ...(readToggle ? [readToggle] : []),
       { label: "Edit task", onSelect: () => onEditTask(menuTask, menuRow.project) },
       { label: "Change status", children: statusChildren },
+      ...(snoozeEntry ? [snoozeEntry] : []),
       ...(linkedSession
         ? [
             ...(linkedSession.status === 'exited' ? [{ label: "Restart session", onSelect: () => onRestartSession(linkedSession) }] : []),

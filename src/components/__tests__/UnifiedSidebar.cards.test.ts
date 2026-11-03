@@ -406,6 +406,45 @@ describe("UnifiedSidebar in the Cards layout", () => {
     expect(taskWake.mock.calls).toEqual([["alpha", "A-2"]]);
   });
 
+  it("offers Snooze or Wake in the task menu, and z wakes a snoozed row", async () => {
+    tasksByPath[alpha.path] = [
+      task("A-1", "in_progress", 1),
+      {
+        ...task("A-2", "todo"),
+        snoozed_until: new Date(Date.now() + 3_600_000).toISOString(),
+        snoozed_at: new Date(Date.now() - 60_000).toISOString(),
+      },
+    ];
+    tasksByPath[beta.path] = [];
+    taskWake.mockResolvedValue({ snoozed_until: null, snoozed_at: null, woke_at: null });
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const root = mounted.target;
+    root.querySelector<HTMLButtonElement>("button[aria-expanded='false']")!.click();
+    flushSync();
+    const menuOf = (title: string) => {
+      navButtons(root)
+        .find((button) => labelOf(button) === title)!
+        .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      flushSync();
+      const labels = [...document.querySelectorAll<HTMLElement>("[role='menuitem']")].map((el) =>
+        el.textContent!.replace("›", "").trim(),
+      );
+      document
+        .querySelector("[role='menu']")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      flushSync();
+      return labels.filter((label) => label === "Snooze" || label === "Wake");
+    };
+
+    expect([menuOf("Title A-1"), menuOf("Title A-2")]).toEqual([["Snooze"], ["Wake"]]);
+
+    focusSidebar();
+    setSelectedIndex(navLabels(root).indexOf("Title A-2"));
+    press("z");
+
+    await vi.waitFor(() => expect(taskWake.mock.calls).toEqual([["alpha", "A-2"]]));
+  });
+
   it("is the default, with sessions and review tasks on top and shelves in status order", async () => {
     mounted = await mountSidebar({ sidebar_group_by: "status" });
 

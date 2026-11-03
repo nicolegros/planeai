@@ -93,6 +93,10 @@ describe("sidebar-nav", () => {
       expect(handleSidebarKey(key({ key: "u" }), 5)).toEqual({ type: "toggle_unread" });
     });
 
+    it("z snoozes or wakes", () => {
+      expect(handleSidebarKey(key({ key: "z" }), 5)).toEqual({ type: "snooze" });
+    });
+
     it("a returns archive", () => {
       const action = handleSidebarKey(key({ key: "a" }), 5);
       expect(action).toEqual({ type: "archive" });

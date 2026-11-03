@@ -164,6 +164,29 @@ describe("matchChord", () => {
     expect(matchChord(key({ key: "z", [modKey]: true, altKey: true }))).toBeNull();
   });
 
+  it("returns snooze_task on platform mod+Option+Z, whatever character Option types", () => {
+    for (const typed of ["z", "Ω"]) {
+      expect(matchChord(key({ key: typed, code: "KeyZ", [modKey]: true, altKey: true }))).toEqual({
+        type: "snooze_task",
+      });
+    }
+  });
+
+  it("keeps platform mod+Z as undo and leaves AltGr+Z and mod+Shift+Option+Z alone", () => {
+    expect(matchChord(key({ key: "z", code: "KeyZ", [modKey]: true }))).toEqual({ type: "undo" });
+    const altGr = key({
+      key: "ż",
+      code: "KeyZ",
+      [modKey]: true,
+      altKey: true,
+      getModifierState: (modifier: string) => modifier === "AltGraph",
+    });
+    expect(matchChord(altGr)).toBeNull();
+    expect(
+      matchChord(key({ key: "Z", code: "KeyZ", [modKey]: true, altKey: true, shiftKey: true })),
+    ).toBeNull();
+  });
+
   it("leaves AltGr+S, which Windows reports as Ctrl+Alt, to type its character", () => {
     const altGr = key({
       key: "ś",
