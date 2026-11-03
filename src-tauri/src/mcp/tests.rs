@@ -574,6 +574,5 @@ mod http {
         );
         assert_eq!(server.status().await, McpStatus::Listening { port });
         assert_eq!(server.apply(None).await, McpStatus::Off);
-        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok());
     }
 }

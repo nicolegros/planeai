@@ -169,7 +169,8 @@ mod data_tests {
 
         // Read frames until we find "hello"
         let mut collected = Vec::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        // Under a loaded test run the shell can take longer than one read window to print.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(Duration::from_millis(500), read_frame(&mut data)).await {
                 Ok(Ok((ft, payload))) => {
@@ -179,7 +180,8 @@ mod data_tests {
                         break;
                     }
                 }
-                _ => break,
+                Ok(Err(_)) => break,
+                Err(_) => continue,
             }
         }
         assert!(
@@ -386,7 +388,7 @@ mod data_tests {
 
         // Read frames until EOF (session already exited)
         let mut got_eof = false;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(Duration::from_millis(500), read_frame(&mut data)).await {
                 Ok(Ok(_)) => continue, // consume replay frames
@@ -394,7 +396,8 @@ mod data_tests {
                     got_eof = true;
                     break;
                 }
-                Err(_) => break, // timeout
+                // Under load the exit can land after one read window.
+                Err(_) => continue,
             }
         }
         assert!(got_eof, "data connection should close after session exits");
