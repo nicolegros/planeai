@@ -495,7 +495,7 @@ fn main() {
                     parent_session_id,
                 };
 
-                match planeai::cli::create_session(&conn, opts) {
+                match planeai::cli::create_session(&conn, opts, configured_mcp_url()) {
                     Ok(session) => {
                         let output = serde_json::to_string(&session).unwrap();
                         if pretty {
@@ -534,7 +534,12 @@ fn main() {
                     provider,
                     prompt,
                 };
-                match planeai::cli::create_workspace_sibling(&conn, &parent_session_id, opts) {
+                match planeai::cli::create_workspace_sibling(
+                    &conn,
+                    &parent_session_id,
+                    opts,
+                    configured_mcp_url(),
+                ) {
                     Ok(session) => {
                         let output = serde_json::to_string(&session).unwrap();
                         if pretty {
@@ -1079,7 +1084,7 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                 parent_session_id,
             };
 
-            match planeai::cli::create_session(conn, opts) {
+            match planeai::cli::create_session(conn, opts, configured_mcp_url()) {
                 Ok(session) => planeai::axi::session_create_output(&session),
                 Err(e) => return emit_axi_error(&e),
             }
@@ -1104,7 +1109,12 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                 provider,
                 prompt,
             };
-            match planeai::cli::create_workspace_sibling(conn, &parent_session_id, opts) {
+            match planeai::cli::create_workspace_sibling(
+                conn,
+                &parent_session_id,
+                opts,
+                configured_mcp_url(),
+            ) {
                 Ok(session) => planeai::axi::session_create_output(&session),
                 Err(error) => return emit_axi_error(&error),
             }
@@ -1139,6 +1149,15 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
     };
     print!("{output}");
     code
+}
+
+/// Agents the CLI launches connect to the configured server; while the app is not running
+/// their MCP connection fails and they work without PlaneAI tools.
+fn configured_mcp_url() -> Option<String> {
+    planeai::config::load(&planeai::config::config_dir("planeai"))
+        .0
+        .mcp_listen_port()
+        .map(planeai_core::mcp::server_url)
 }
 
 fn emit_axi_error(msg: &str) -> i32 {

@@ -18,15 +18,12 @@ Claude Code and Codex both speak MCP natively, show its tools by name, and let a
 - The port is stable and configurable (`mcp_port`, default 47437), and `mcp_enabled` turns the server off.
   Agents outlive app restarts and keep the URL they were launched with, so the server never moves to another port.
   A taken port is reported as a failed status in **Preferences → Agents → PlaneAI tools**, and the next config save or reload retries it.
-- A launch connects its agent only while the server is listening: a launch inside the app reads the server's live state, and while it is off or failed the agent gets neither `mcp_args` nor a token, so it never trusts a port another process may hold.
-  The CLI runs outside the app, so the app publishes `mcp-server.json` (the port and a random nonce, mode 0600) in the app data folder while it listens, and removes it when the server stops, fails or the app exits.
-  The server answers `GET /planeai/identity` with its nonce, without authentication, since the nonce grants nothing.
-  The CLI connects its agents only when the recorded port answers with the recorded nonce within 500 ms.
-  A file left by a crashed app, or a port another process took since, fails that check and is ignored, so a stale file needs no cleanup and the app does not remove one at startup.
-  A pid check was rejected: a pid is reused, and a process of another user looks alive.
-  An app only removes the file when it holds its own nonce, so a second instance that could not take the port leaves the first instance's record.
-  A file was chosen over asking the app on the notify socket: it needs no protocol, and the nonce check makes it safe when stale.
+- A launch inside the app reads the server's live state: while it listens the agent gets `mcp_args` and a token, and while it is off or failed it gets neither, so it never connects to a port the app could not bind.
+  A launch from `planeai-cli` uses the configured URL (`http://127.0.0.1:<mcp_port>/mcp` while `mcp_enabled`); when the app is not running, the agent's MCP connection fails and it runs without PlaneAI tools.
   The server starts before startup revives tmux sessions, so revived agents reconnect.
+- The threat model is one trusted user on their own machine.
+  The bearer token tells sessions apart and keeps out browsers and other local apps that do not have the agent's environment.
+  Other OS users on the same machine and a process squatting the port while the app is closed are out of scope.
 - Every agent launch mints a bearer token for its session.
   Only its SHA-256 hash is stored, in the `mcp_tokens` table, so tokens survive app restarts without the database holding a usable credential.
   Triggers revoke the token when the session is archived, destroyed or deleted.
@@ -47,9 +44,9 @@ Claude Code and Codex both speak MCP natively, show its tools by name, and let a
 - A session never reaches more permissions through the tools than it has.
   `session_create` defaults `yolo` to the caller's own setting and refuses `yolo: true` from a session that asks before running tools, and `session_prompt` refuses to prompt a yolo session from such a session.
   The check runs in the server, so it holds although the templates pre-approve both tools.
-- `task_update` checks its status, parent and blockers before writing, and drops repeated tags and blockers, so a refused update changes nothing.
-  The task store refuses a parent that is missing, the task itself or one of its subtasks, for every caller, and writes each edit in one transaction.
-  The edit and the status move stay two transactions: the move cascades through the lifecycle code, which works on any task provider.
+- `task_update` checks its status, parent and blockers before writing, so a refused update changes nothing.
+  The task store refuses a parent that is missing, the task itself or one of its subtasks, drops repeated tags and blockers, and writes each field edit in one transaction.
+  The field edit, the parent change and the status move are three transactions: the parent change and the move report lifecycle events through task provider methods that work on any provider.
   Every call of a task-writing tool refreshes the GUI once, from the tool registry, even a failed one.
 - Tools are thin adapters over the AXI domain functions and return the same TOON text the CLI prints, without its CLI-specific help hints.
   `planeai-cli axi` stays for agents outside PlaneAI sessions; there is one implementation behind both.

@@ -102,11 +102,10 @@ impl TokenLookup {
     }
 }
 
-/// The HTTP app: `/mcp` behind bearer-token authentication, and the identity the CLI checks.
+/// The HTTP app: `/mcp` behind bearer-token authentication.
 fn router(
     registry: Arc<Registry>,
     context: ToolContext,
-    nonce: String,
     cancel: CancellationToken,
 ) -> axum::Router {
     let lookup = Arc::new(TokenLookup {
@@ -128,10 +127,6 @@ fn router(
     axum::Router::new()
         .nest_service("/mcp", service)
         .layer(middleware::from_fn_with_state(lookup, authenticate))
-        .route(
-            planeai_core::mcp::IDENTITY_PATH,
-            axum::routing::get(move || async move { nonce }),
-        )
 }
 
 async fn authenticate(
@@ -201,10 +196,14 @@ fn serve(
     port: u16,
     registry: Arc<Registry>,
     context: ToolContext,
-    nonce: String,
 ) -> RunningServer {
     let cancel = CancellationToken::new();
-    let app = router(registry, context, nonce, cancel.child_token());
+    // Sessions a tool starts connect to the server that received the call.
+    let context = ToolContext {
+        mcp_url: Some(planeai_core::mcp::server_url(port)),
+        ..context
+    };
+    let app = router(registry, context, cancel.child_token());
     let shutdown = cancel.clone();
     let task = tokio::spawn(async move {
         if let Err(error) = axum::serve(listener, app)
@@ -249,26 +248,19 @@ impl ServerState {
     }
 }
 
-/// The app's one MCP server, converging on the configured port. While it listens, the
-/// server file tells processes outside the app (the CLI) where it is.
+/// The app's one MCP server, converging on the configured port.
 pub struct McpServer {
     registry: Arc<Registry>,
     context: ToolContext,
-    server_file: PathBuf,
-    /// Identifies this server in the server file, so the CLI and other app instances can
-    /// tell its record from a stale or foreign one.
-    nonce: String,
     state: std::sync::Mutex<ServerState>,
     applying: tokio::sync::Mutex<()>,
 }
 
 impl McpServer {
-    pub fn new(registry: Registry, context: ToolContext, server_file: PathBuf) -> Self {
+    pub fn new(registry: Registry, context: ToolContext) -> Self {
         Self {
             registry: Arc::new(registry),
             context,
-            server_file,
-            nonce: planeai_core::mcp::random_secret(),
             state: std::sync::Mutex::new(ServerState::Off),
             applying: tokio::sync::Mutex::new(()),
         }
@@ -288,7 +280,6 @@ impl McpServer {
             std::mem::replace(&mut *state, ServerState::Off)
         };
         if let ServerState::Listening(running) = previous {
-            self.withdraw();
             running.stop().await;
         }
         let next = match port {
@@ -296,19 +287,11 @@ impl McpServer {
             Some(port) => match bind(port).await {
                 Ok(listener) => {
                     let port = listener.local_addr().map_or(port, |address| address.port());
-                    // Published before serving, so no tool call runs while the CLI is told
-                    // the server is off.
-                    if let Err(error) =
-                        planeai_core::mcp::publish_server(&self.server_file, port, &self.nonce)
-                    {
-                        tracing::warn!(%error, "could not publish the MCP server file");
-                    }
                     ServerState::Listening(serve(
                         listener,
                         port,
                         self.registry.clone(),
                         self.context.clone(),
-                        self.nonce.clone(),
                     ))
                 }
                 Err(reason) => {
@@ -332,11 +315,6 @@ impl McpServer {
             ServerState::Listening(running) => Some(planeai_core::mcp::server_url(running.port)),
             _ => None,
         }
-    }
-
-    /// Tell the CLI the server is gone, as the app exits. Only this server's record goes.
-    pub fn withdraw(&self) {
-        planeai_core::mcp::withdraw_server(&self.server_file, &self.nonce);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ServerState> {

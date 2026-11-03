@@ -182,8 +182,8 @@ fn main() {
                 planeai::mcp::tools::ToolContext {
                     db_path: app_dir.join("planeai.db"),
                     events: Arc::new(notify::McpAppEvents(app.handle().clone())),
+                    mcp_url: None,
                 },
-                planeai_core::mcp::server_file(&app_dir),
             );
             tauri::async_runtime::block_on(mcp_server.apply(cfg.mcp_listen_port()));
             let mcp_url = mcp_server.url();
@@ -519,9 +519,6 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                app.state::<McpServerState>().0.withdraw();
-            }
             if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
                 if code == Some(tauri::RESTART_EXIT_CODE) {
                     tracing::warn!(

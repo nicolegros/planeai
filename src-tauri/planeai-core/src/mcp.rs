@@ -3,8 +3,8 @@
 //! Every agent launch mints a bearer token for its session. Only the token's SHA-256
 //! hash is stored, so the database never holds a usable credential; the agent gets the
 //! token through its environment. Tokens outlive app restarts and end with the session.
-//! A launch connects its agent only while the server is listening: the app knows that
-//! directly, and publishes it in the server file for the CLI.
+//! An app launch connects its agent only while the server is listening; a CLI launch
+//! uses the configured URL.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -220,84 +220,11 @@ pub fn launch_endpoint(
     endpoint(conn, url.filter(|_| backend != "local"), session_id)
 }
 
-/// The file in the app data folder where a running app says its server is listening.
-pub fn server_file(app_data_dir: &Path) -> PathBuf {
-    app_data_dir.join("mcp-server.json")
-}
-
-/// The path where the server answers, without authentication, with its record's nonce.
-pub const IDENTITY_PATH: &str = "/planeai/identity";
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ServerRecord {
-    port: u16,
-    /// Proves the server on `port` is the one that wrote this record, not a later process
-    /// that took the port, or an earlier app's record left by a crash.
-    nonce: String,
-}
-
-/// A fresh random value, URL-safe: a token or a server's nonce.
-pub fn random_secret() -> String {
+/// A fresh random token, URL-safe.
+fn random_secret() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
-}
-
-/// Record that the server answering with `nonce` serves on `port`. Private to the user,
-/// replaced atomically.
-pub fn publish_server(file: &Path, port: u16, nonce: &str) -> std::io::Result<()> {
-    let record = serde_json::to_vec(&ServerRecord {
-        port,
-        nonce: nonce.to_string(),
-    })?;
-    let temporary = file.with_extension(format!("{}.tmp", std::process::id()));
-    write_private(&temporary, &record)?;
-    std::fs::rename(&temporary, file)
-}
-
-/// Remove the record if the server answering with `nonce` wrote it; another app's stays.
-pub fn withdraw_server(file: &Path, nonce: &str) {
-    if read_record(file).is_none_or(|record| record.nonce != nonce) {
-        return;
-    }
-    if let Err(error) = std::fs::remove_file(file) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(%error, "could not remove the MCP server file");
-        }
-    }
-}
-
-/// The URL of the server the app publishes, or `None` unless the server on the recorded
-/// port answers with the record's nonce right now.
-pub fn published_url(file: &Path) -> Option<String> {
-    let record = read_record(file)?;
-    answers_with(record.port, &record.nonce).then(|| server_url(record.port))
-}
-
-fn read_record(file: &Path) -> Option<ServerRecord> {
-    serde_json::from_slice(&std::fs::read(file).ok()?).ok()
-}
-
-fn answers_with(port: u16, nonce: &str) -> bool {
-    use std::io::{Read, Write};
-    let timeout = std::time::Duration::from_millis(500);
-    let address = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
-    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&address, timeout) else {
-        return false;
-    };
-    let request = format!(
-        "GET {IDENTITY_PATH} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-    );
-    if stream.set_read_timeout(Some(timeout)).is_err()
-        || stream.set_write_timeout(Some(timeout)).is_err()
-        || stream.write_all(request.as_bytes()).is_err()
-    {
-        return false;
-    }
-    let mut response = Vec::new();
-    let _ = stream.take(4096).read_to_end(&mut response);
-    let response = String::from_utf8_lossy(&response);
-    response.starts_with("HTTP/1.1 200") && response.ends_with(&format!("\r\n\r\n{nonce}"))
 }
 
 fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
@@ -474,69 +401,6 @@ mod tests {
 
         assert_eq!(resolve(&conn, &first).unwrap(), None);
         assert_eq!(resolve(&conn, &second).unwrap().unwrap().session_id, id);
-    }
-
-    /// A loopback HTTP server answering every request with `body`, as the app's would.
-    fn answering(body: &'static str) -> u16 {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        std::thread::spawn(move || {
-            for mut stream in listener.incoming().flatten() {
-                let mut request = [0u8; 1024];
-                let _ = stream.read(&mut request);
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{body}",
-                    body.len()
-                );
-            }
-        });
-        port
-    }
-
-    #[test]
-    fn the_server_file_names_a_server_that_proves_it_wrote_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = server_file(dir.path());
-        assert_eq!(published_url(&file), None);
-        let port = answering("nonce-1");
-
-        publish_server(&file, port, "nonce-1").unwrap();
-        assert_eq!(published_url(&file), Some(server_url(port)));
-        #[cfg(unix)]
-        assert_eq!(
-            std::os::unix::fs::PermissionsExt::mode(
-                &std::fs::metadata(&file).unwrap().permissions()
-            ) & 0o777,
-            0o600
-        );
-
-        withdraw_server(&file, "nonce-2");
-        assert_eq!(published_url(&file), Some(server_url(port)));
-        withdraw_server(&file, "nonce-1");
-        assert_eq!(published_url(&file), None);
-        withdraw_server(&file, "nonce-1");
-    }
-
-    #[test]
-    fn a_server_file_whose_port_another_process_now_holds_is_ignored() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = server_file(dir.path());
-        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let silent_port = silent.local_addr().unwrap().port();
-        let closed_port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-
-        for port in [answering("someone-else"), silent_port, closed_port] {
-            publish_server(&file, port, "nonce-1").unwrap();
-            assert_eq!(published_url(&file), None, "port {port}");
-        }
-        std::fs::write(&file, "not json").unwrap();
-        assert_eq!(published_url(&file), None);
     }
 
     #[test]

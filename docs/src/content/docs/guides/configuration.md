@@ -83,7 +83,8 @@ Agents outside PlaneAI keep using `planeai-cli axi`, which prints the same outpu
 The server listens on `http://127.0.0.1:<port>/mcp` while the app runs.
 If the port is taken, **Preferences → Agents → PlaneAI tools** shows the error; free the port or pick another.
 Agents keep the URL they were started with, so restart running agents after changing the port.
-Sessions started while the server is off or failed, including from `planeai-cli` while the app is closed, run without the tools.
+Sessions the app starts while the server is off or failed run without the tools.
+Sessions `planeai-cli` starts always point at the configured port, so while the app is closed their agents fail to connect and run without the tools.
 
 Each launch gets a session token in `PLANEAI_MCP_TOKEN` and the URL in `PLANEAI_MCP_URL`.
 A provider's `mcp_args` is appended to its command, with `{mcp_url}` replaced by the URL.

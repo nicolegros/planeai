@@ -31,7 +31,7 @@ pub struct Env {
     pub backend: String,
     pub socket_path: std::path::PathBuf,
     pub config: config::Config,
-    /// The MCP server's URL while the app publishes it as listening.
+    /// The MCP server URL the agent connects to.
     pub mcp_url: Option<String>,
 }
 
@@ -315,7 +315,11 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
 /// Shared session creation orchestration used by both the JSON CLI and the AXI
 /// interface. Loads config, resolves the project, builds a plan, and executes it.
 /// Returns the created `Session` on success.
-pub fn create_session(conn: &Connection, opts: SessionCreateOpts) -> Result<db::Session, String> {
+pub fn create_session(
+    conn: &Connection,
+    opts: SessionCreateOpts,
+    mcp_url: Option<String>,
+) -> Result<db::Session, String> {
     let cfg_dir = config::config_dir("planeai");
     let (cfg, _) = config::load(&cfg_dir);
     let backend = config::resolve_backend(&cfg).to_string();
@@ -324,9 +328,7 @@ pub fn create_session(conn: &Connection, opts: SessionCreateOpts) -> Result<db::
         backend,
         socket_path: planeai_paths::notify_socket_path(),
         config: cfg,
-        mcp_url: planeai_core::mcp::published_url(&planeai_core::mcp::server_file(
-            &planeai_paths::app_data_dir(),
-        )),
+        mcp_url,
     };
 
     let project_name = opts.project.clone();
@@ -384,6 +386,7 @@ pub fn create_workspace_sibling(
     conn: &Connection,
     parent_session_id: &str,
     opts: WorkspaceSiblingOpts,
+    mcp_url: Option<String>,
 ) -> Result<db::Session, String> {
     let parent = parent_session(conn, parent_session_id)?;
     let task_key = parent
@@ -407,6 +410,7 @@ pub fn create_workspace_sibling(
             prompt: opts.prompt,
             parent_session_id: Some(parent.id),
         },
+        mcp_url,
     )
 }
 
@@ -430,6 +434,7 @@ pub fn create_child_session(
     conn: &Connection,
     parent_session_id: &str,
     opts: ChildSessionOpts,
+    mcp_url: Option<String>,
 ) -> Result<db::Session, String> {
     let parent = parent_session(conn, parent_session_id)?;
     let project = match opts.project {
@@ -453,6 +458,7 @@ pub fn create_child_session(
             prompt: opts.prompt,
             parent_session_id: Some(parent.id),
         },
+        mcp_url,
     )
 }
 
@@ -702,7 +708,7 @@ mod tests {
     }
 
     #[test]
-    fn a_planned_agent_is_pointed_at_the_mcp_server_only_while_it_listens() {
+    fn a_planned_agent_is_pointed_at_the_mcp_server_only_while_mcp_is_on() {
         let mut env = test_env("daemon");
         let mut opts = task_opts(None, None);
         opts.provider = Some("codex".into());

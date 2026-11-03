@@ -25,6 +25,8 @@ pub trait AppEvents: Send + Sync {
 pub struct ToolContext {
     pub db_path: PathBuf,
     pub events: Arc<dyn AppEvents>,
+    /// The serving server's URL, set when it starts listening; sessions tools start connect to it.
+    pub mcp_url: Option<String>,
 }
 
 use planeai_core::mcp::Effect;
@@ -581,6 +583,7 @@ fn session_create(
                     provider: input.provider,
                     prompt: input.prompt,
                 },
+                context.mcp_url.clone(),
             )?
         }
         SessionMode::Child => crate::cli::create_child_session(
@@ -598,6 +601,7 @@ fn session_create(
                 task_project: input.task_project,
                 prompt: input.prompt,
             },
+            context.mcp_url.clone(),
         )?,
     };
     Ok(axi::session_create_output(&session).into())

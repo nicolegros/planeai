@@ -3,7 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import { preferences, type McpStatus } from "../../lib/api";
-  import { getSettings, type AppConfig } from "../../lib/settings.svelte";
+  import { getSettings } from "../../lib/settings.svelte";
   import { saveSettings } from "../../lib/save-settings";
   import { parseMcpPort } from "../../lib/mcp-settings";
   import { Switch } from "../ui";
@@ -34,17 +34,13 @@
     return () => void unlisten.then((stop) => stop());
   });
 
-  function save(patch: Partial<AppConfig>) {
-    void saveSettings(patch);
-  }
-
   function setPort(input: HTMLInputElement) {
     const parsed = parseMcpPort(input.value);
     if (parsed === null) {
       input.value = port === null ? "" : String(port);
       return;
     }
-    void save({ mcp_port: parsed === status?.default_port ? null : parsed });
+    void saveSettings({ mcp_port: parsed === status?.default_port ? null : parsed });
   }
 </script>
 
@@ -63,7 +59,7 @@
         </p>
       {/if}
     {/snippet}
-    <Switch label="Give agents PlaneAI tools" checked={enabled} onCheckedChange={(on) => save({ mcp_enabled: on ? null : false })} />
+    <Switch label="Give agents PlaneAI tools" checked={enabled} onCheckedChange={(on) => void saveSettings({ mcp_enabled: on ? null : false })} />
   </SettingRow>
   {#if enabled}
     <SettingRow id="mcp-port">
