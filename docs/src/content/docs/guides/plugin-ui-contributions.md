@@ -25,6 +25,13 @@ my-plugin/
 
 Every backend and UI path must be a package-relative file path: no absolute paths and no `..`. The active platform's backend must exist and be executable. On Unix, its executable mode is preserved in the imported copy.
 
+### Background service
+
+An optional `background_service` object makes PlaneAI call one sidecar method on a timer: `{ "method": "my-plugin.refresh", "interval_setting": "my_refresh_interval_ms", "default_interval_ms": 120000 }`.
+PlaneAI calls `method` with no params, waits for it to answer, then waits the interval before the next call.
+The interval is the positive integer stored under `interval_setting` in the plugin's settings, or `default_interval_ms` when that key is missing.
+After each successful call, PlaneAI tells the plugin's UI its data changed, unless the method's JSON-RPC result is an object with `"changed": false`.
+
 ```json title="planeai-plugin.json" showLineNumbers
 {
   "schema": "planeai.plugin.v1",
@@ -326,8 +333,8 @@ For example, local UI CSS can adopt or intentionally customize the host theme:
 
 - `call(method, params?)` — RPC scoped to the owning sidecar. Lifecycle methods are reserved.
 - `settings.get<T extends Record<string, unknown>>()` and `settings.replace<T>(settings)` — typed public JSON-object settings. These are the UI counterpart to the capability-gated sidecar settings callbacks; they never expose secrets.
-- `data.changed()` — tells PlaneAI the plugin's data changed. A running `sidebar.section` remounts after this event.
-- `data.onChanged(listener)` returns an unsubscribe function and calls `listener` when the plugin's data changed. A local `session.indicator`, `session.meta`, `sidebar.header`, `main-pane`, `dialog`, `titlebar`, or `session.panel` frame receives it in place and keeps its state, so subscribe to refresh what it shows. Each run of the manifest's `background_service` counts as a data change, unless its result includes `"changed": false`.
+- `data.changed()` - tells PlaneAI the plugin's data changed, as does each run of the [background service](#background-service). A running `sidebar.section` remounts after this event.
+- `data.onChanged(listener)` returns an unsubscribe function and calls `listener` when the plugin's data changed. A local `session.indicator`, `session.meta`, `sidebar.header`, `main-pane`, `dialog`, `titlebar`, or `session.panel` frame receives it in place and keeps its state, so subscribe to refresh what it shows. Other local frames never call it.
 - `navigation.open(pluginId, contributionId)`, `navigation.close()`, and `navigation.openPreferences()`.
 - `sidebar.register(rows)`, `sidebar.select(rowId)`, and `sidebar.handleKeydown(event)` for sidebar navigation contributions. Always call the returned unregister function from your mount disposer.
 
