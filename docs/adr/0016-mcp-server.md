@@ -19,9 +19,13 @@ Claude Code and Codex both speak MCP natively, show its tools by name, and let a
   Agents outlive app restarts and keep the URL they were launched with, so the server never moves to another port.
   A taken port is reported as a failed status in **Preferences → Agents → PlaneAI tools**, and the next config save or reload retries it.
 - A launch connects its agent only while the server is listening: a launch inside the app reads the server's live state, and while it is off or failed the agent gets neither `mcp_args` nor a token, so it never trusts a port another process may hold.
-  The CLI runs outside the app, so the app publishes `mcp-server.json` (its pid and port, mode 0600) in the app data folder while it listens, and removes it when the server stops, fails or the app exits.
-  The CLI connects its agents only when that file names a live process; a file left by a crashed app names a dead pid and is ignored.
-  A file was chosen over asking the app on the notify socket: it needs no protocol, and the pid check makes it safe when stale.
+  The CLI runs outside the app, so the app publishes `mcp-server.json` (the port and a random nonce, mode 0600) in the app data folder while it listens, and removes it when the server stops, fails or the app exits.
+  The server answers `GET /planeai/identity` with its nonce, without authentication, since the nonce grants nothing.
+  The CLI connects its agents only when the recorded port answers with the recorded nonce within 500 ms.
+  A file left by a crashed app, or a port another process took since, fails that check and is ignored, so a stale file needs no cleanup and the app does not remove one at startup.
+  A pid check was rejected: a pid is reused, and a process of another user looks alive.
+  An app only removes the file when it holds its own nonce, so a second instance that could not take the port leaves the first instance's record.
+  A file was chosen over asking the app on the notify socket: it needs no protocol, and the nonce check makes it safe when stale.
   The server starts before startup revives tmux sessions, so revived agents reconnect.
 - Every agent launch mints a bearer token for its session.
   Only its SHA-256 hash is stored, in the `mcp_tokens` table, so tokens survive app restarts without the database holding a usable credential.

@@ -711,7 +711,29 @@ mod http {
         assert_eq!(rebound.status, 403, "{}", rebound.body);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_second_app_that_could_not_listen_leaves_the_first_apps_record() {
+        let f = Fixture::new();
+        let first = McpServer::new(Registry::core(), f.context.clone(), f.server_file());
+        let McpStatus::Listening { port, url } = first.apply(Some(0)).await else {
+            panic!("server did not start");
+        };
+        let second = McpServer::new(Registry::core(), f.context.clone(), f.server_file());
+
+        assert!(matches!(
+            second.apply(Some(port)).await,
+            McpStatus::Failed { .. }
+        ));
+        second.withdraw();
+        assert_eq!(second.apply(None).await, McpStatus::Off);
+
+        assert_eq!(
+            planeai_core::mcp::published_url(&f.server_file()),
+            Some(url)
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn the_cli_sees_the_server_only_while_it_listens() {
         let f = Fixture::new();
         let published = || planeai_core::mcp::published_url(&f.server_file());

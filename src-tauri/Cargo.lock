@@ -3402,7 +3402,6 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "jsonc-parser",
- "libc",
  "planeai-tasks",
  "rand 0.10.3",
  "regex",

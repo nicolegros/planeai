@@ -185,9 +185,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 /// Mint a token for the session's next agent process, replacing any earlier one.
 /// The token table exists: only a listening app hands out a URL, and it migrated first.
 pub fn issue(conn: &Connection, session_id: &str, url: &str) -> rusqlite::Result<McpEndpoint> {
-    let mut bytes = [0u8; 32];
-    rand::rng().fill(&mut bytes);
-    let token = URL_SAFE_NO_PAD.encode(bytes);
+    let token = random_secret();
     conn.execute(
         "INSERT INTO mcp_tokens (session_id, token_hash, created_at) VALUES (?1, ?2, ?3)
          ON CONFLICT(session_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at",
@@ -227,24 +225,41 @@ pub fn server_file(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("mcp-server.json")
 }
 
+/// The path where the server answers, without authentication, with its record's nonce.
+pub const IDENTITY_PATH: &str = "/planeai/identity";
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ServerRecord {
-    pid: u32,
     port: u16,
+    /// Proves the server on `port` is the one that wrote this record, not a later process
+    /// that took the port, or an earlier app's record left by a crash.
+    nonce: String,
 }
 
-/// Record that this process serves on `port`. Private to the user, replaced atomically.
-pub fn publish_server(file: &Path, port: u16) -> std::io::Result<()> {
+/// A fresh random value, URL-safe: a token or a server's nonce.
+pub fn random_secret() -> String {
+    let mut bytes = [0u8; 32];
+    rand::rng().fill(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// Record that the server answering with `nonce` serves on `port`. Private to the user,
+/// replaced atomically.
+pub fn publish_server(file: &Path, port: u16, nonce: &str) -> std::io::Result<()> {
     let record = serde_json::to_vec(&ServerRecord {
-        pid: std::process::id(),
         port,
+        nonce: nonce.to_string(),
     })?;
     let temporary = file.with_extension(format!("{}.tmp", std::process::id()));
     write_private(&temporary, &record)?;
     std::fs::rename(&temporary, file)
 }
 
-pub fn withdraw_server(file: &Path) {
+/// Remove the record if the server answering with `nonce` wrote it; another app's stays.
+pub fn withdraw_server(file: &Path, nonce: &str) {
+    if read_record(file).is_none_or(|record| record.nonce != nonce) {
+        return;
+    }
     if let Err(error) = std::fs::remove_file(file) {
         if error.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!(%error, "could not remove the MCP server file");
@@ -252,52 +267,46 @@ pub fn withdraw_server(file: &Path) {
     }
 }
 
-/// The URL of the server the app publishes, or `None` when no live app is listening: a
-/// file left by a crashed app names a dead process, and its port may belong to anyone.
+/// The URL of the server the app publishes, or `None` unless the server on the recorded
+/// port answers with the record's nonce right now.
 pub fn published_url(file: &Path) -> Option<String> {
-    let record: ServerRecord = serde_json::from_slice(&std::fs::read(file).ok()?).ok()?;
-    process_alive(record.pid).then(|| server_url(record.port))
+    let record = read_record(file)?;
+    answers_with(record.port, &record.nonce).then(|| server_url(record.port))
 }
 
-pub(crate) fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+fn read_record(file: &Path) -> Option<ServerRecord> {
+    serde_json::from_slice(&std::fs::read(file).ok()?).ok()
+}
+
+fn answers_with(port: u16, nonce: &str) -> bool {
+    use std::io::{Read, Write};
+    let timeout = std::time::Duration::from_millis(500);
+    let address = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&address, timeout) else {
+        return false;
+    };
+    let request = format!(
+        "GET {IDENTITY_PATH} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    if stream.set_read_timeout(Some(timeout)).is_err()
+        || stream.set_write_timeout(Some(timeout)).is_err()
+        || stream.write_all(request.as_bytes()).is_err()
+    {
+        return false;
+    }
+    let mut response = Vec::new();
+    let _ = stream.take(4096).read_to_end(&mut response);
+    let response = String::from_utf8_lossy(&response);
+    response.starts_with("HTTP/1.1 200") && response.ends_with(&format!("\r\n\r\n{nonce}"))
+}
+
+fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     options.open(path)?.write_all(contents)
-}
-
-#[cfg(unix)]
-fn process_alive(pid: u32) -> bool {
-    let Ok(pid) = libc::pid_t::try_from(pid) else {
-        return false;
-    };
-    // Signal 0 only checks; EPERM means the process exists under another user.
-    let signalled = unsafe { libc::kill(pid, 0) } == 0;
-    signalled || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-#[cfg(windows)]
-fn process_alive(pid: u32) -> bool {
-    #[link(name = "Kernel32")]
-    extern "system" {
-        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
-        fn GetExitCodeProcess(process: *mut std::ffi::c_void, code: *mut u32) -> i32;
-        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
-    }
-    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
-    const STILL_ACTIVE: u32 = 259;
-    unsafe {
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if process.is_null() {
-            return false;
-        }
-        let mut code = 0;
-        let running = GetExitCodeProcess(process, &mut code) != 0 && code == STILL_ACTIVE;
-        CloseHandle(process);
-        running
-    }
 }
 
 /// The live session a presented token belongs to, or `None` for an unknown or revoked token.
@@ -467,17 +476,34 @@ mod tests {
         assert_eq!(resolve(&conn, &second).unwrap().unwrap().session_id, id);
     }
 
+    /// A loopback HTTP server answering every request with `body`, as the app's would.
+    fn answering(body: &'static str) -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        port
+    }
+
     #[test]
-    fn the_server_file_names_the_url_of_a_live_app_only() {
+    fn the_server_file_names_a_server_that_proves_it_wrote_it() {
         let dir = tempfile::tempdir().unwrap();
         let file = server_file(dir.path());
         assert_eq!(published_url(&file), None);
+        let port = answering("nonce-1");
 
-        publish_server(&file, 51234).unwrap();
-        assert_eq!(
-            published_url(&file).as_deref(),
-            Some("http://127.0.0.1:51234/mcp")
-        );
+        publish_server(&file, port, "nonce-1").unwrap();
+        assert_eq!(published_url(&file), Some(server_url(port)));
         #[cfg(unix)]
         assert_eq!(
             std::os::unix::fs::PermissionsExt::mode(
@@ -486,28 +512,29 @@ mod tests {
             0o600
         );
 
-        withdraw_server(&file);
+        withdraw_server(&file, "nonce-2");
+        assert_eq!(published_url(&file), Some(server_url(port)));
+        withdraw_server(&file, "nonce-1");
         assert_eq!(published_url(&file), None);
-        withdraw_server(&file);
+        withdraw_server(&file, "nonce-1");
     }
 
     #[test]
-    fn a_server_file_left_by_a_dead_app_is_ignored() {
+    fn a_server_file_whose_port_another_process_now_holds_is_ignored() {
         let dir = tempfile::tempdir().unwrap();
         let file = server_file(dir.path());
-        let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" })
-            .args(if cfg!(windows) {
-                &["/C", "exit"][..]
-            } else {
-                &[][..]
-            })
-            .spawn()
-            .unwrap();
-        let dead = child.id();
-        child.wait().unwrap();
-        std::fs::write(&file, format!(r#"{{"pid":{dead},"port":51234}}"#)).unwrap();
-        assert_eq!(published_url(&file), None);
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let silent_port = silent.local_addr().unwrap().port();
+        let closed_port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
 
+        for port in [answering("someone-else"), silent_port, closed_port] {
+            publish_server(&file, port, "nonce-1").unwrap();
+            assert_eq!(published_url(&file), None, "port {port}");
+        }
         std::fs::write(&file, "not json").unwrap();
         assert_eq!(published_url(&file), None);
     }
