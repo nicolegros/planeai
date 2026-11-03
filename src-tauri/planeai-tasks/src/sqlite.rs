@@ -64,14 +64,14 @@ pub fn insert_task(
     if inserted {
         for blocker in &params.blocked_by {
             tx.execute(
-                "INSERT INTO task_blockers (task_key, blocked_by_key) VALUES (?1, ?2)",
+                "INSERT OR IGNORE INTO task_blockers (task_key, blocked_by_key) VALUES (?1, ?2)",
                 params![key, blocker],
             )
             .map_err(storage)?;
         }
         for tag in &params.tags {
             tx.execute(
-                "INSERT INTO task_tags (task_key, tag) VALUES (?1, ?2)",
+                "INSERT OR IGNORE INTO task_tags (task_key, tag) VALUES (?1, ?2)",
                 params![key, tag],
             )
             .map_err(storage)?;
@@ -804,7 +804,7 @@ impl TaskProvider for SqliteRepository {
 
         for bk in &params.blocked_by {
             conn.execute(
-                "INSERT INTO task_blockers (task_key, blocked_by_key) VALUES (?1, ?2)",
+                "INSERT OR IGNORE INTO task_blockers (task_key, blocked_by_key) VALUES (?1, ?2)",
                 params![key, bk],
             )
             .map_err(|e| Error::Storage(e.to_string()))?;
@@ -812,7 +812,7 @@ impl TaskProvider for SqliteRepository {
 
         for tag in &params.tags {
             conn.execute(
-                "INSERT INTO task_tags (task_key, tag) VALUES (?1, ?2)",
+                "INSERT OR IGNORE INTO task_tags (task_key, tag) VALUES (?1, ?2)",
                 params![key, tag],
             )
             .map_err(|e| Error::Storage(e.to_string()))?;

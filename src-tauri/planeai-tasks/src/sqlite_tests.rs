@@ -1199,6 +1199,39 @@ fn a_task_is_snoozed_until_the_instant_it_wakes() {
 }
 
 #[test]
+fn create_drops_repeated_tags_and_blockers() {
+    let r = repo();
+    for title in ["first", "second"] {
+        r.create(CreateParams {
+            title: title.into(),
+            ..Default::default()
+        })
+        .unwrap();
+    }
+
+    let params = || CreateParams {
+        title: "task".into(),
+        tags: vec!["b".into(), "a".into(), "b".into()],
+        blocked_by: vec!["TEST-1".into(), "TEST-2".into(), "TEST-1".into()],
+        ..Default::default()
+    };
+    let created = [
+        r.create(params()).unwrap(),
+        r.create_with_first_child_assignment(params()).unwrap().0,
+    ];
+
+    for task in created {
+        assert_eq!(
+            (task.tags, task.blocked_by),
+            (
+                vec!["a".to_string(), "b".to_string()],
+                vec!["TEST-1".to_string(), "TEST-2".to_string()]
+            )
+        );
+    }
+}
+
+#[test]
 fn a_task_cannot_become_its_own_ancestor() {
     let r = repo();
     for title in ["root", "child", "grandchild"] {
