@@ -272,12 +272,24 @@ fn read_status_and_snooze(
         .map_err(|e| Error::Storage(e.to_string()))?
         .ok_or(Error::NotFound)?;
     let status = Status::parse(&status).ok_or(Error::InvalidStatus(status))?;
-    let snooze = Snooze {
+    Ok((status, snooze_from_columns(until, at, woke)))
+}
+
+fn snooze_from_columns(until: Option<String>, at: Option<String>, woke: Option<String>) -> Snooze {
+    Snooze {
         snoozed_until: until.as_deref().and_then(parse_time),
         snoozed_at: at.as_deref().and_then(parse_time),
         woke_at: woke.as_deref().and_then(parse_time),
-    };
-    Ok((status, snooze))
+    }
+}
+
+/// A Done task is finished business, so it can never sleep.
+fn ensure_not_done(conn: &Connection, prefix: &str, key: &str) -> Result<(), Error> {
+    let (status, _) = read_status_and_snooze(conn, prefix, key)?;
+    if status == Status::Done {
+        return Err(Error::Rejected("a done task cannot be snoozed".into()));
+    }
+    Ok(())
 }
 
 fn write_snooze(
@@ -301,10 +313,6 @@ fn write_snooze(
     Ok(read_status_and_snooze(conn, prefix, key)?.1)
 }
 
-pub fn read_snooze(conn: &Connection, prefix: &str, key: &str) -> Result<Snooze, Error> {
-    Ok(read_status_and_snooze(conn, prefix, key)?.1)
-}
-
 /// Hides the task until `until`; its status and agents are left alone.
 pub fn snooze(
     conn: &Connection,
@@ -313,10 +321,7 @@ pub fn snooze(
     until: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<Snooze, Error> {
-    let (status, _) = read_status_and_snooze(conn, prefix, key)?;
-    if status == Status::Done {
-        return Err(Error::Rejected("a done task cannot be snoozed".into()));
-    }
+    ensure_not_done(conn, prefix, key)?;
     if until <= now {
         return Err(Error::Rejected("the snooze time has passed".into()));
     }
@@ -344,9 +349,8 @@ pub fn restore_snooze(
     key: &str,
     snooze: Snooze,
 ) -> Result<Snooze, Error> {
-    let (status, _) = read_status_and_snooze(conn, prefix, key)?;
-    if status == Status::Done && snooze != Snooze::default() {
-        return Err(Error::Rejected("a done task cannot be snoozed".into()));
+    if snooze != Snooze::default() {
+        ensure_not_done(conn, prefix, key)?;
     }
     write_snooze(conn, prefix, key, snooze)
 }
@@ -625,11 +629,7 @@ impl SqliteRepository {
             updated_at: parse_time(&row.updated_at).unwrap_or_else(Utc::now),
             last_visited_at: row.last_visited_at.as_deref().and_then(parse_time),
             last_activity_at: row.last_activity_at.as_deref().and_then(parse_time),
-            snooze: Snooze {
-                snoozed_until: row.snoozed_until.as_deref().and_then(parse_time),
-                snoozed_at: row.snoozed_at.as_deref().and_then(parse_time),
-                woke_at: row.woke_at.as_deref().and_then(parse_time),
-            },
+            snooze: snooze_from_columns(row.snoozed_until, row.snoozed_at, row.woke_at),
         })
     }
 

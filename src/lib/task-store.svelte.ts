@@ -5,6 +5,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { tasks as tasksApi } from "./api";
 import { isTaskUnread } from "./task-unread";
+import { snoozeOf } from "./task-snooze";
 import type { TaskItem, TaskSnooze, TaskVisit } from "./types";
 
 let tasksByProject = $state<Record<string, TaskItem[]>>({});
@@ -117,7 +118,7 @@ export async function loadTasks(projectPaths: string[]): Promise<void> {
   }
 }
 
-/** Refreshes on `tasks-changed`, emitted for status moves made outside the UI (lifecycle hooks, CLI); bursts are coalesced. */
+/** Refreshes on `tasks-changed`, emitted for task changes made outside the UI (lifecycle hooks, CLI); bursts are coalesced. */
 export function startTaskEventListener(getProjectPaths: () => string[]): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const unlisten = listen("tasks-changed", () => {
@@ -179,11 +180,6 @@ const visitOf = ({ last_visited_at, last_activity_at }: TaskVisit): TaskVisit =>
   last_visited_at,
   last_activity_at,
 });
-const snoozeOf = ({ snoozed_until, snoozed_at, woke_at }: TaskSnooze): TaskSnooze => ({
-  snoozed_until,
-  snoozed_at,
-  woke_at,
-});
 
 export async function markTaskVisited(projectId: string, key: string): Promise<void> {
   applyFields(key, visitOf(await tasksApi.markVisited(projectId, key)));
@@ -240,20 +236,19 @@ export function createReturnVisit(viewed: () => { projectId: string; task: TaskI
 export function startTaskActivityListener(
   isViewing: (projectId: string, key: string) => boolean,
 ): () => void {
-  const unlisten = listen<TaskVisit & TaskSnooze & { project_id: string; task_key: string }>(
-    "task-activity",
-    ({ payload }) => {
-      // An early wake arrives with the activity that caused it.
-      applyFields(payload.task_key, snoozeOf(payload));
-      if (!isViewing(payload.project_id, payload.task_key)) {
-        applyFields(payload.task_key, visitOf(payload));
-        return;
-      }
-      markTaskVisited(payload.project_id, payload.task_key).catch((error) =>
-        console.warn("Failed to mark a task visited:", error),
-      );
-    },
-  );
+  const unlisten = listen<
+    TaskVisit & { project_id: string; task_key: string; woke: TaskSnooze | null }
+  >("task-activity", ({ payload }) => {
+    const woke = payload.woke ? snoozeOf(payload.woke) : {};
+    if (!isViewing(payload.project_id, payload.task_key)) {
+      applyFields(payload.task_key, { ...visitOf(payload), ...woke });
+      return;
+    }
+    if (payload.woke) applyFields(payload.task_key, woke);
+    markTaskVisited(payload.project_id, payload.task_key).catch((error) =>
+      console.warn("Failed to mark a task visited:", error),
+    );
+  });
   return () => void unlisten.then((fn) => fn());
 }
 

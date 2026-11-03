@@ -34,6 +34,8 @@ export function rowActivity(
   return null;
 }
 
+export const WOKE_TITLE = "Woke: back from snooze since you last opened it";
+
 /** Nothing in the row needs the user, so it recedes. */
 export function isQuiet(activity: RowActivity | null): boolean {
   return activity === null || activity === "exited" || activity === "snoozed";

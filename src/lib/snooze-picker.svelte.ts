@@ -12,7 +12,8 @@ import {
   refocusTerminal,
   type FocusZone,
 } from "./focus.svelte";
-import { snoozeTask, wakeTask } from "./task-moves";
+import { DONE_CANNOT_SNOOZE, snoozeTask, wakeTask } from "./task-moves";
+import { getLaneNow } from "./snooze-clock.svelte";
 import { isTaskSnoozed, snoozeOptions } from "./task-snooze";
 import * as taskStore from "./task-store.svelte";
 import { showToast } from "./toasts.svelte";
@@ -88,6 +89,12 @@ function current(target: SnoozeTarget): SnoozeTarget {
   };
 }
 
+/** Snoozes from the Custom dialog, on the task as the store has it now. */
+export function snoozeCustom(target: SnoozeTarget, at: Date): Promise<boolean> {
+  const { task, project } = current(target);
+  return snoozeTask(task, project, at);
+}
+
 /** Snoozes at the preset's time as of the click; a time that passed meanwhile is refused. */
 function pick(target: SnoozeTarget, resolve: (now: Date) => Date): void {
   const { task, project } = current(target);
@@ -115,15 +122,20 @@ export function snoozeMenuItems(target: SnoozeTarget, numbered: boolean): MenuIt
 /** The task menu's entry: Wake on a snoozed task, a Snooze submenu otherwise; none on a Done task. */
 export function snoozeMenuEntry(target: SnoozeTarget): MenuItem | null {
   if (target.task.status === "done") return null;
-  if (isTaskSnoozed(target.task, Date.now()))
+  if (isTaskSnoozed(target.task, getLaneNow()))
     return { label: "Wake", onSelect: () => void wakeTask(target.task, target.project) };
   return { label: "Snooze", children: snoozeMenuItems(target, false) };
+}
+
+/** The `data-snooze-anchor` of a task's sidebar row, which the menu opens under. */
+export function snoozeAnchor(projectId: string, key: string): string {
+  return `${projectId}:${key}`;
 }
 
 /** Where the menu opens for a task: under its sidebar row, or near the top of the window without one. */
 function anchorOf(target: SnoozeTarget): { x: number; y: number } {
   const row = document.querySelector(
-    `[data-snooze-anchor="${CSS.escape(`${target.project.id}:${target.task.key}`)}"]`,
+    `[data-snooze-anchor="${CSS.escape(snoozeAnchor(target.project.id, target.task.key))}"]`,
   );
   const rect = row?.getBoundingClientRect();
   if (rect && rect.width > 0) return { x: rect.left + 8, y: rect.bottom };
@@ -137,10 +149,10 @@ export function snoozeOrWake(target: SnoozeTarget | null): void {
     return;
   }
   if (target.task.status === "done") {
-    showToast({ kind: "info", message: "Done tasks cannot be snoozed.", autoDismissMs: 3000 });
+    showToast({ kind: "info", message: DONE_CANNOT_SNOOZE, autoDismissMs: 3000 });
     return;
   }
-  if (isTaskSnoozed(target.task, Date.now())) {
+  if (isTaskSnoozed(target.task, getLaneNow())) {
     void wakeTask(target.task, target.project);
     return;
   }

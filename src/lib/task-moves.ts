@@ -1,12 +1,14 @@
 import { tasks as tasksApi } from "./api";
 import { TASK_STATUS_LABELS, type TaskStatus } from "./sidebar-model";
-import { isTaskSnoozed, wakeTimeLabel } from "./task-snooze";
+import { isSnoozeActive, isTaskSnoozed, snoozeOf, wakeTimeLabel } from "./task-snooze";
+import { getLaneNow } from "./snooze-clock.svelte";
 import * as taskStore from "./task-store.svelte";
 import { dismissToast, showToast } from "./toasts.svelte";
 import type { Project, TaskItem, TaskSnooze } from "./types";
 
 /** Done archives the task's sessions and stops their agents, so it waits this long for an undo. */
 export const DONE_UNDO_SECONDS = 5;
+export const DONE_CANNOT_SNOOZE = "Done tasks cannot be snoozed.";
 /** Pending Done moves, so a quit that skips the close handlers (macOS Cmd+Q) or a crash still applies them. */
 const PENDING_DONE_STORAGE_KEY = "planeai.pending-done";
 
@@ -186,12 +188,6 @@ export async function applyDoneNow(key: string, repoPath: string): Promise<void>
   await taskStore.moveTask(key, "done", repoPath);
 }
 
-const snoozeOf = (task: TaskSnooze): TaskSnooze => ({
-  snoozed_until: task.snoozed_until,
-  snoozed_at: task.snoozed_at,
-  woke_at: task.woke_at,
-});
-
 const instant = (at: string | null) => (at === null ? null : Date.parse(at));
 
 const sameSnooze = (a: TaskSnooze, b: TaskSnooze) =>
@@ -235,7 +231,7 @@ async function applyRevert(change: TaskChange, onMoved: () => void): Promise<boo
         return false;
       }
       const { snoozed_until } = change.before;
-      const message = isTaskSnoozed({ status: "todo", ...change.before }, Date.now())
+      const message = isSnoozeActive(change.before, Date.now())
         ? `${change.key} snoozed until ${wakeTimeLabel(Date.parse(snoozed_until!))}`
         : `${change.key} is no longer snoozed`;
       showToast({ kind: "info", message, autoDismissMs: 3000 });
@@ -303,7 +299,7 @@ async function changeSnooze(
 /** Snoozes the task until `until`, which the picker resolved at the moment of the click. */
 export async function snoozeTask(task: TaskItem, project: Project, until: Date): Promise<boolean> {
   if (task.status === "done") {
-    showToast({ kind: "info", message: "Done tasks cannot be snoozed.", autoDismissMs: 3000 });
+    showToast({ kind: "info", message: DONE_CANNOT_SNOOZE, autoDismissMs: 3000 });
     return false;
   }
   if (until.getTime() <= Date.now()) {
@@ -321,7 +317,7 @@ export async function snoozeTask(task: TaskItem, project: Project, until: Date):
 
 /** Wakes the task now; the user acted, so it leaves no Woke marker. */
 export async function wakeTask(task: TaskItem, project: Project): Promise<boolean> {
-  if (!isTaskSnoozed(task, Date.now())) return false;
+  if (!isTaskSnoozed(task, getLaneNow())) return false;
   return changeSnooze(
     task,
     project,

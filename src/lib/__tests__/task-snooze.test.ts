@@ -4,7 +4,6 @@ import {
   soonestWake,
   isTaskSnoozed,
   isTaskWoke,
-  nextClockTick,
   snoozeCountdown,
   snoozeOptions,
   taskWokeAt,
@@ -192,16 +191,5 @@ describe("soonestWake", () => {
     expect(soonestWake(tasks, Date.parse("2026-11-03T10:00:00Z"))).toBe(until);
     expect(soonestWake(tasks, until + 1)).toBe(Date.parse("2026-11-05T09:00:00Z"));
     expect(soonestWake([], until)).toBe(null);
-  });
-});
-
-describe("nextClockTick", () => {
-  const now = Date.parse("2026-11-03T10:00:00Z");
-  it("wakes at the soonest wake, and every minute while a countdown shows", () => {
-    expect(nextClockTick(now, now + 30_000, false)).toBe(now + 30_000);
-    expect(nextClockTick(now, now + 600_000, true)).toBe(now + 60_000);
-    expect(nextClockTick(now, now + 30_000, true)).toBe(now + 30_000);
-    expect(nextClockTick(now, null, true)).toBe(now + 60_000);
-    expect(nextClockTick(now, null, false)).toBe(null);
   });
 });

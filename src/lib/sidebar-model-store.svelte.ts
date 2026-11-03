@@ -10,7 +10,7 @@ import { getSettings } from "./settings.svelte";
 import * as projectStore from "./project-store.svelte";
 import * as orchestrator from "./session-orchestrator.svelte";
 import * as taskStore from "./task-store.svelte";
-import { getNow } from "./snooze-clock.svelte";
+import { getLaneNow } from "./snooze-clock.svelte";
 
 // Built once and shared by every reader (App session cycling, UnifiedSidebar).
 const model = $derived.by((): SidebarSection[] => {
@@ -23,7 +23,7 @@ const model = $derived.by((): SidebarSection[] => {
     tasksByProject: taskStore.getTasksByProject(),
     hideDoneTasks: !!settings.hide_done_tasks,
     hideEmptyProjects: !!settings.hide_empty_projects,
-    now: getNow(),
+    now: getLaneNow(),
   });
 });
 

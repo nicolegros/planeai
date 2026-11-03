@@ -12,9 +12,10 @@
   import { locateProjectFolder } from "../../lib/locate-project";
   import * as orchestrator from "../../lib/session-orchestrator.svelte";
   import { LANES, SHELVES, navKey, shelfPage, sidebarRowNavKey, type IsCollapsed, type ShelfLane, type ShownPages, type SidebarFolderSection, type SidebarRow, type SidebarSection, type SidebarShelfSection } from "../../lib/sidebar-model";
-  import { folderUrgency, isQuiet, rowActions, rowActivity, rowSession, splitBranch, type FolderUrgency, type RowAction, type RowActivity } from "../../lib/sidebar-cards";
-  import { getNow } from "../../lib/snooze-clock.svelte";
-  import { snoozeCountdown, wakeTimeLabel } from "../../lib/task-snooze";
+  import { folderUrgency, isQuiet, rowActions, rowActivity, rowSession, splitBranch, WOKE_TITLE, type FolderUrgency, type RowAction, type RowActivity } from "../../lib/sidebar-cards";
+  import { snoozeAnchor } from "../../lib/snooze-picker.svelte";
+  import { getLaneNow } from "../../lib/snooze-clock.svelte";
+  import SnoozeCountdown from "./SnoozeCountdown.svelte";
   import type { PluginSessionContext } from "../../lib/plugin-sdk";
   import type { PluginSlot, Project, Session } from "../../lib/types";
 
@@ -89,14 +90,14 @@
   const agentStates = $derived(orchestrator.getAgentStates());
   const unreadSessions = $derived(orchestrator.getUnreadSessions());
 
-  const now = $derived(getNow());
+  const now = $derived(getLaneNow());
   const activityOf = (row: SidebarRow) => rowActivity(row, agentStates, unreadSessions, now);
   // The status slot gives way to hover actions, so the row itself explains an unread.
   function rowTitle(row: SidebarRow, activity: RowActivity | null): string | undefined {
     const lines = [
       row.kind === "task" && !showTaskKeys ? row.task.key : null,
       activity === "unread" ? `Unread: the agent finished since you last opened this ${row.kind}` : null,
-      activity === "woke" ? "Woke: back from snooze since you last opened it" : null,
+      activity === "woke" ? WOKE_TITLE : null,
     ].filter((line) => line !== null);
     return lines.length > 0 ? lines.join("\n") : undefined;
   }
@@ -136,8 +137,7 @@
     {/each}
   {/if}
   {#if activity === "snoozed" && row.kind === "task" && row.task.snoozed_until}
-    {@const until = Date.parse(row.task.snoozed_until)}
-    <span class="shrink-0 text-xs tabular-nums text-t3 transition-opacity group-focus-within:opacity-0 group-hover:opacity-0" title={`Wakes ${wakeTimeLabel(until)}`}>{snoozeCountdown(until, now)}</span>
+    <SnoozeCountdown snoozedUntil={row.task.snoozed_until} class="shrink-0 text-xs transition-opacity group-focus-within:opacity-0 group-hover:opacity-0" />
   {:else if activity && activity !== "snoozed"}
     {@const slot = ACTIVITY_SLOTS[activity]}
     <span class="flex shrink-0 items-center gap-1 text-xs tabular-nums transition-opacity group-focus-within:opacity-0 group-hover:opacity-0 {slot.class}">
@@ -189,7 +189,7 @@
     <div class="group relative" onclick={() => onSelectRow(row)} oncontextmenu={(e) => onRowContextMenu(e, row)}>
       <button
         data-nav-index={navIdx}
-        data-snooze-anchor={row.kind === "task" ? `${row.project.id}:${row.task.key}` : undefined}
+        data-snooze-anchor={row.kind === "task" ? snoozeAnchor(row.project.id, row.task.key) : undefined}
         class="absolute inset-0 rounded-md transition-colors {rowStateClass(active, selected, selected || isPreviewing(row))}"
         aria-labelledby={labelId}
       ></button>
@@ -239,7 +239,7 @@
   <div class="group relative">
     <button
       data-nav-index={navIdx}
-      data-snooze-anchor={row.kind === "task" ? `${row.project.id}:${row.task.key}` : undefined}
+      data-snooze-anchor={row.kind === "task" ? snoozeAnchor(row.project.id, row.task.key) : undefined}
       class="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left transition-colors {rowStateClass(active, selected, selected || isPreviewing(row))}"
       title={rowTitle(row, activity)}
       onclick={() => onSelectRow(row)}

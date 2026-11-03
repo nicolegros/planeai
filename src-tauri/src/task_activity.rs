@@ -19,8 +19,9 @@ pub struct TaskActivity {
     pub task_key: String,
     #[serde(flatten)]
     pub visit: Visit,
-    #[serde(flatten)]
-    pub snooze: Snooze,
+    /// Set only when this activity woke the task: a snooze read alongside other activity could
+    /// overwrite a newer one the user set meanwhile.
+    pub woke: Option<Snooze>,
 }
 
 /// What an agent did; only the ones that need the user wake a snoozed task.
@@ -72,20 +73,19 @@ pub fn stamp(
     };
     let recorded =
         planeai_tasks::sqlite::record_activity(conn, &prefix, &task_key, at).and_then(|visit| {
-            if activity.wakes() {
-                planeai_tasks::sqlite::wake_early(conn, &prefix, &task_key, at)?;
-            }
-            Ok((
-                visit,
-                planeai_tasks::sqlite::read_snooze(conn, &prefix, &task_key)?,
-            ))
+            let woke = if activity.wakes() {
+                planeai_tasks::sqlite::wake_early(conn, &prefix, &task_key, at)?
+            } else {
+                None
+            };
+            Ok((visit, woke))
         });
     match recorded {
-        Ok((visit, snooze)) => Ok(Some(TaskActivity {
+        Ok((visit, woke)) => Ok(Some(TaskActivity {
             project_id,
             task_key,
             visit,
-            snooze,
+            woke,
         })),
         Err(TaskError::NotFound) => Ok(None),
         Err(error) => Err(error.to_string()),
@@ -197,7 +197,7 @@ mod tests {
                     last_visited_at: None,
                     last_activity_at: Some(at("2026-11-03T10:00:00Z")),
                 },
-                snooze: Snooze::default(),
+                woke: None,
             })
         );
         assert_eq!(
@@ -280,11 +280,11 @@ mod tests {
                 last_visited_at: None,
                 last_activity_at: Some(at("2026-11-03T10:00:00.250Z")),
             },
-            snooze: Snooze {
+            woke: Some(Snooze {
                 snoozed_until: Some(at("2026-11-04T09:00:00Z")),
                 snoozed_at: Some(at("2026-11-03T09:00:00Z")),
                 woke_at: Some(at("2026-11-03T10:00:00.250Z")),
-            },
+            }),
         };
         assert_eq!(
             serde_json::to_value(activity).unwrap(),
@@ -293,9 +293,11 @@ mod tests {
                 "task_key": "PLA-1",
                 "last_visited_at": null,
                 "last_activity_at": "2026-11-03T10:00:00.250Z",
-                "snoozed_until": "2026-11-04T09:00:00Z",
-                "snoozed_at": "2026-11-03T09:00:00Z",
-                "woke_at": "2026-11-03T10:00:00.250Z",
+                "woke": {
+                    "snoozed_until": "2026-11-04T09:00:00Z",
+                    "snoozed_at": "2026-11-03T09:00:00Z",
+                    "woke_at": "2026-11-03T10:00:00.250Z",
+                },
             })
         );
     }
@@ -331,7 +333,7 @@ mod tests {
             let stamped = stamp(&conn, "s1", activity, at("2026-11-03T12:00:00Z")).unwrap();
 
             assert_eq!(
-                stamped.map(|a| a.snooze.woke_at),
+                stamped.and_then(|a| a.woke).map(|woke| woke.woke_at),
                 Some(Some(at("2026-11-03T12:00:00Z"))),
                 "{activity:?}"
             );
@@ -344,20 +346,13 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_turn_leaves_a_snoozed_task_asleep() {
+    fn a_finished_turn_leaves_a_snoozed_task_asleep_and_says_nothing_of_its_snooze() {
         let mut conn = setup();
         let (_, key) = snoozed_task(&mut conn);
 
         let stamped = stamp(&conn, "s1", Activity::Finished, at("2026-11-03T12:00:00Z")).unwrap();
 
-        assert_eq!(
-            stamped.map(|a| a.snooze),
-            Some(Snooze {
-                snoozed_until: Some(at("2026-11-04T09:00:00Z")),
-                snoozed_at: Some(at("2026-11-03T10:00:00Z")),
-                woke_at: None,
-            })
-        );
+        assert_eq!(stamped.map(|a| a.woke), Some(None));
         assert_eq!(woke_at(&conn, &key), None);
     }
 

@@ -161,6 +161,7 @@
     aria-checked={"checked" in item ? !!item.checked : undefined}
     disabled={item.disabled}
     title={item.title}
+    aria-keyshortcuts={"shortcut" in item ? item.shortcut : undefined}
     onclick={() => { item.onSelect(); onClose(); }}
     onmouseenter={(e) => { if (item.disabled) return; e.currentTarget.focus(); onHover?.(); }}
   >

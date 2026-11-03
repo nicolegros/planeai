@@ -333,6 +333,7 @@ export function buildSidebarModel(input: SidebarModelInput): SidebarSection[] {
       projectOrder,
       hideDoneTasks,
       now,
+      // The prefix predates lanes; saved collapse state is keyed by it.
       (lane) => `status:${lane}`,
     );
     for (const group of groups) {

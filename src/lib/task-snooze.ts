@@ -6,19 +6,31 @@
 import type { TaskItem } from "./types";
 
 type SnoozeFields = Pick<TaskItem, "status" | "snoozed_until" | "woke_at">;
+type Snooze = Pick<TaskItem, "snoozed_until" | "snoozed_at" | "woke_at">;
 type WokeFields = SnoozeFields & Pick<TaskItem, "snoozed_at" | "last_visited_at">;
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-export function isTaskSnoozed(task: SnoozeFields, now: number): boolean {
+/** A snooze still running at `now`, whatever the task's status. */
+export function isSnoozeActive(
+  snooze: Pick<Snooze, "snoozed_until" | "woke_at">,
+  now: number,
+): boolean {
   return (
-    task.status !== "done" &&
-    task.woke_at === null &&
-    task.snoozed_until !== null &&
-    now < Date.parse(task.snoozed_until)
+    snooze.woke_at === null &&
+    snooze.snoozed_until !== null &&
+    now < Date.parse(snooze.snoozed_until)
   );
+}
+
+export function isTaskSnoozed(task: SnoozeFields, now: number): boolean {
+  return task.status !== "done" && isSnoozeActive(task, now);
+}
+
+export function snoozeOf({ snoozed_until, snoozed_at, woke_at }: Snooze): Snooze {
+  return { snoozed_until, snoozed_at, woke_at };
 }
 
 /** When a snoozed task woke, early or at its time; null while it sleeps or was never snoozed. */
@@ -79,23 +91,14 @@ type SnoozePreset =
       day: { daysAhead: number } | { weekday: number };
       hour: number;
       minute: number;
-      /** Shows the weekday with the time. */
-      withWeekday: boolean;
     };
 
 const SNOOZE_PRESETS: SnoozePreset[] = [
   { label: "In 1 hour", kind: "after", minutes: 60 },
   { label: "In 3 hours", kind: "after", minutes: 180 },
-  {
-    label: "This evening",
-    kind: "at",
-    day: { daysAhead: 0 },
-    hour: 18,
-    minute: 0,
-    withWeekday: false,
-  },
-  { label: "Tomorrow", kind: "at", day: { daysAhead: 1 }, hour: 9, minute: 0, withWeekday: false },
-  { label: "Next week", kind: "at", day: { weekday: 1 }, hour: 9, minute: 0, withWeekday: true },
+  { label: "This evening", kind: "at", day: { daysAhead: 0 }, hour: 18, minute: 0 },
+  { label: "Tomorrow", kind: "at", day: { daysAhead: 1 }, hour: 9, minute: 0 },
+  { label: "Next week", kind: "at", day: { weekday: 1 }, hour: 9, minute: 0 },
 ];
 
 function presetTime(preset: SnoozePreset, now: Date): Date {
@@ -115,15 +118,14 @@ function presetTime(preset: SnoozePreset, now: Date): Date {
 
 function presetLabel(preset: SnoozePreset, at: Date, locale?: string): string {
   if (preset.kind === "after") return preset.label;
-  const time = preset.withWeekday
-    ? wakeTimeLabel(at.getTime(), locale)
-    : timeLabel(at.getTime(), locale);
+  const time =
+    "weekday" in preset.day ? wakeTimeLabel(at.getTime(), locale) : timeLabel(at.getTime(), locale);
   return `${preset.label} (${time})`;
 }
 
 export interface SnoozeOption {
   label: string;
-  /** Resolves the time at the moment of the click, which may be later than when the menu opened. */
+  /** The time to snooze to when clicked: "In N hours" counts from the click, a clock time is the one shown. */
   resolve: (now: Date) => Date;
   /** The time as of when the options were listed. */
   at: Date;
@@ -135,7 +137,7 @@ export function snoozeOptions(now: Date, locale?: string): SnoozeOption[] {
     const at = presetTime(preset, now);
     return {
       label: presetLabel(preset, at, locale),
-      resolve: (clicked: Date) => presetTime(preset, clicked),
+      resolve: (clicked: Date) => (preset.kind === "after" ? presetTime(preset, clicked) : at),
       at,
     };
   })
@@ -180,17 +182,4 @@ export function customSnoozeTime(input: CustomSnooze, now: Date): { at: Date } |
   }
   if (at.getTime() <= now.getTime()) return { error: "That time has passed." };
   return { at };
-}
-
-/**
- * When the sidebar must next re-read the clock: the soonest wake, and once a minute while a
- * countdown shows; null when nothing changes with time.
- */
-export function nextClockTick(
-  now: number,
-  soonestWake: number | null,
-  countdownShown: boolean,
-): number | null {
-  const ticks = [soonestWake, countdownShown ? now + MINUTE : null].filter((t) => t !== null);
-  return ticks.length === 0 ? null : Math.min(...ticks);
 }

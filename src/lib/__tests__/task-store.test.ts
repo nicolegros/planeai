@@ -233,7 +233,7 @@ describe("task visits", () => {
         task_key: "PLA-1",
         last_visited_at: null,
         last_activity_at: "2026-11-03T10:00:00.000Z",
-        ...snooze,
+        woke: snooze,
       },
     });
     await Promise.resolve();
@@ -241,6 +241,32 @@ describe("task visits", () => {
     const { snoozed_until, snoozed_at, woke_at } = taskStore.findTask("/repo", "PLA-1")!;
     expect({ snoozed_until, snoozed_at, woke_at }).toEqual(snooze);
     expect(listAll).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("leaves the snooze alone on activity that woke nothing, so it cannot undo a newer snooze", async () => {
+    const stop = taskStore.startTaskActivityListener(() => false);
+    const snooze = {
+      snoozed_until: "2026-11-04T09:00:00.000Z",
+      snoozed_at: "2026-11-03T10:00:00.000Z",
+      woke_at: null,
+    };
+    const activity = (woke: typeof snooze | null) =>
+      listeners.get("task-activity")?.({
+        payload: {
+          project_id: "p1",
+          task_key: "PLA-1",
+          last_visited_at: null,
+          last_activity_at: "2026-11-03T10:00:01.000Z",
+          woke,
+        },
+      });
+    activity({ ...snooze, woke_at: null });
+    activity(null);
+    await Promise.resolve();
+
+    const { snoozed_until, snoozed_at, woke_at } = taskStore.findTask("/repo", "PLA-1")!;
+    expect({ snoozed_until, snoozed_at, woke_at }).toEqual(snooze);
     stop();
   });
 

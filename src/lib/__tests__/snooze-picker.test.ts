@@ -5,7 +5,11 @@ const { snoozeTask, wakeTask } = vi.hoisted(() => ({
   snoozeTask: vi.fn().mockResolvedValue(true),
   wakeTask: vi.fn().mockResolvedValue(true),
 }));
-vi.mock("../task-moves", () => ({ snoozeTask, wakeTask }));
+vi.mock("../task-moves", () => ({
+  snoozeTask,
+  wakeTask,
+  DONE_CANNOT_SNOOZE: "Done tasks cannot be snoozed.",
+}));
 vi.mock("../toasts.svelte", () => ({ showToast: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
@@ -85,6 +89,18 @@ describe("snooze picker", () => {
     inOneHour.onSelect();
 
     expect(snoozeTask.mock.calls).toEqual([[task(), project, new Date(2026, 10, 3, 11, 30)]]);
+  });
+
+  it("keeps the time a clock-time preset showed when the click lands after midnight", () => {
+    vi.setSystemTime(new Date(2026, 10, 3, 23, 59, 50));
+    const tomorrow = leaves(snoozeMenuItems({ task: task(), project }, false)).find((item) =>
+      item.label.startsWith("Tomorrow"),
+    )!;
+    vi.setSystemTime(new Date(2026, 10, 4, 0, 0, 5));
+
+    tomorrow.onSelect();
+
+    expect(snoozeTask.mock.calls).toEqual([[task(), project, new Date(2026, 10, 4, 9, 0)]]);
   });
 
   it("opens Custom in place of the menu", () => {

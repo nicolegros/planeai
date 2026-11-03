@@ -1,36 +1,56 @@
 /**
- * The one clock snoozes are read against. It ticks only when the sidebar would change: at the soonest
- * wake, and once a minute while a countdown is on screen.
+ * The clocks snoozes are read against. The lane clock moves only when a snooze runs out, so the
+ * sidebar model rebuilds at wakes alone; the minute clock moves every minute, for countdown labels.
+ * Timers stall while the computer sleeps, so the clock never waits more than a minute and re-reads
+ * the time when the window comes back.
  */
-import { nextClockTick, soonestWake } from "./task-snooze";
+import { soonestWake } from "./task-snooze";
 import * as taskStore from "./task-store.svelte";
 
-// setTimeout fires at once past this delay.
-const MAX_TIMEOUT_MS = 2_147_483_647;
+const MINUTE = 60_000;
 
-let now = $state(Date.now());
+let laneNow = $state(Date.now());
+let minuteNow = $state(Date.now());
 
-export function getNow(): number {
-  return now;
+/** The time lanes are decided at: whether a task is snoozed or woke. */
+export function getLaneNow(): number {
+  return laneNow;
 }
 
-/** Keeps the clock ticking while it runs; `countdownShown` tells whether a countdown is visible. */
-export function startSnoozeClock(countdownShown: () => boolean): () => void {
-  return $effect.root(() => {
+/** The time countdown labels are written at. */
+export function getMinuteNow(): number {
+  return minuteNow;
+}
+
+/** Moves both clocks to `real`; the lane clock only when a snooze ran out since it last moved. */
+export function syncSnoozeClock(real = Date.now()): void {
+  minuteNow = real;
+  const wake = soonestWake(taskStore.getAllTasks(), laneNow);
+  if (wake !== null && wake <= real) laneNow = real;
+}
+
+/** Runs the clock until the returned stop is called. */
+export function startSnoozeClock(): () => void {
+  const sync = () => syncSnoozeClock();
+  const syncWhenVisible = () => {
+    if (document.visibilityState === "visible") sync();
+  };
+  window.addEventListener("focus", sync);
+  document.addEventListener("visibilitychange", syncWhenVisible);
+  sync();
+  const stopTimer = $effect.root(() => {
     $effect(() => {
-      void now;
+      void minuteNow;
       const real = Date.now();
-      const next = nextClockTick(
-        real,
-        soonestWake(taskStore.getAllTasks(), real),
-        countdownShown(),
-      );
-      if (next === null) return;
-      const timer = setTimeout(
-        () => (now = Date.now()),
-        Math.min(Math.max(0, next - real), MAX_TIMEOUT_MS),
-      );
+      const wake = soonestWake(taskStore.getAllTasks(), real);
+      const delay = wake === null ? MINUTE : Math.min(MINUTE, Math.max(0, wake - real));
+      const timer = setTimeout(sync, delay);
       return () => clearTimeout(timer);
     });
   });
+  return () => {
+    stopTimer();
+    window.removeEventListener("focus", sync);
+    document.removeEventListener("visibilitychange", syncWhenVisible);
+  };
 }

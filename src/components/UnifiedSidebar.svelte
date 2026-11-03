@@ -8,7 +8,7 @@
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
   import { LANES, navKey, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarRow, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
-  import { rowActivity, rowSession, type RowAction, type RowActivity } from "../lib/sidebar-cards";
+  import { rowActivity, rowSession, WOKE_TITLE, type RowAction, type RowActivity } from "../lib/sidebar-cards";
   import { getSidebarModel, isCollapsed, setCollapsed, shownPages, showMore } from "../lib/sidebar-model-store.svelte";
   import { sidebarViewMenuItems } from "../lib/sidebar-view-menu";
   import { projectContextMenuItems } from "../lib/project-context-menu";
@@ -26,9 +26,9 @@
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import { changeTaskStatus, wakeTask } from "../lib/task-moves";
-  import { getNow, startSnoozeClock } from "../lib/snooze-clock.svelte";
-  import { snoozeMenuEntry, snoozeOrWake } from "../lib/snooze-picker.svelte";
-  import { snoozeCountdown, wakeTimeLabel } from "../lib/task-snooze";
+  import { getLaneNow } from "../lib/snooze-clock.svelte";
+  import SnoozeCountdown from "./sidebar/SnoozeCountdown.svelte";
+  import { snoozeAnchor, snoozeMenuEntry, snoozeOrWake } from "../lib/snooze-picker.svelte";
   import { isTaskUnread } from "../lib/task-unread";
   import { getPluginSidebarRows, type PluginSidebarNavRow } from "../lib/plugin-sidebar-navigation.svelte";
   import { pluginPreferencesLocation, type SettingsLocation } from "../lib/settings-registry";
@@ -99,7 +99,7 @@
   const activeSessionId = $derived(orchestrator.getActiveSessionId());
   const agentStates = $derived(orchestrator.getAgentStates());
   const unreadSessions = $derived(orchestrator.getUnreadSessions());
-  const now = $derived(getNow());
+  const now = $derived(getLaneNow());
   const zone = $derived(getActiveZone());
   const sections = $derived(getSidebarModel());
   const groupBy = $derived(resolveSidebarGroupBy(getSettings()));
@@ -329,9 +329,6 @@
 
   $effect(() => { clampIndex(flatNav.length); });
 
-  // Visible rows are the nav rows, so a countdown shows exactly when a snoozed one is among them.
-  const countdownShown = $derived(flatNav.some((item) => item.type === "task" && rowActivity(item.row, agentStates, unreadSessions, now) === "snoozed"));
-  $effect(() => startSnoozeClock(() => countdownShown));
 
   // Scroll selected item into view on keyboard navigation
   $effect(() => {
@@ -544,10 +541,9 @@
 
 {#snippet activityIndicator(activity: RowActivity | null, row: SidebarRow)}
   {#if activity === "snoozed" && row.kind === "task" && row.task.snoozed_until}
-    {@const until = Date.parse(row.task.snoozed_until)}
-    <span class="font-mono text-[10px] tabular-nums text-t3" title={`Wakes ${wakeTimeLabel(until)}`}>{snoozeCountdown(until, now)}</span>
+    <SnoozeCountdown snoozedUntil={row.task.snoozed_until} class="font-mono text-[10px]" />
   {:else if activity === "woke"}
-    <span class="flex" title="Woke: back from snooze since you last opened it"><AlarmClock class="size-3.5 text-status-review" /></span>
+    <span class="flex" role="img" aria-label="Woke" title={WOKE_TITLE}><AlarmClock class="size-3.5 text-status-review" /></span>
   {:else if activity === "working"}
     <LoaderCircle class="size-3 animate-spin text-t2" />
   {:else if activity === "unread"}
@@ -613,7 +609,7 @@
           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
           <button
             data-nav-index={taskNavIdx}
-            data-snooze-anchor={`${project.id}:${task.key}`}
+            data-snooze-anchor={snoozeAnchor(project.id, task.key)}
             class="flex-1 min-w-0 text-left py-[6px] pl-4 pr-2 flex items-center gap-1.5 transition-colors rounded-lg
               {isActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
               {isPreviewing ? 'ring-2 ring-accent' : isSelected ? 'ring-2 ring-accent' : ''}"
