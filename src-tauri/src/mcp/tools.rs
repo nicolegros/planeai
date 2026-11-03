@@ -25,8 +25,18 @@ pub trait AppEvents: Send + Sync {
 pub struct ToolContext {
     pub db_path: PathBuf,
     pub events: Arc<dyn AppEvents>,
-    /// The serving server's URL, set when it starts listening; sessions tools start connect to it.
-    pub mcp_url: Option<String>,
+    /// The URL of the server running the tools; sessions they start connect to it.
+    pub(super) mcp_url: Option<String>,
+}
+
+impl ToolContext {
+    pub fn new(db_path: PathBuf, events: Arc<dyn AppEvents>) -> Self {
+        Self {
+            db_path,
+            events,
+            mcp_url: None,
+        }
+    }
 }
 
 use planeai_core::mcp::Effect;

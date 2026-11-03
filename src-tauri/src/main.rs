@@ -179,11 +179,10 @@ fn main() {
             // Listening before any agent is revived, so revived agents reconnect to it.
             let mcp_server = planeai::mcp::server::McpServer::new(
                 planeai::mcp::tools::Registry::core(),
-                planeai::mcp::tools::ToolContext {
-                    db_path: app_dir.join("planeai.db"),
-                    events: Arc::new(notify::McpAppEvents(app.handle().clone())),
-                    mcp_url: None,
-                },
+                planeai::mcp::tools::ToolContext::new(
+                    app_dir.join("planeai.db"),
+                    Arc::new(notify::McpAppEvents(app.handle().clone())),
+                ),
             );
             tauri::async_runtime::block_on(mcp_server.apply(cfg.mcp_listen_port()));
             let mcp_url = mcp_server.url();

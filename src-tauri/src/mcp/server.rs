@@ -198,7 +198,6 @@ fn serve(
     context: ToolContext,
 ) -> RunningServer {
     let cancel = CancellationToken::new();
-    // Sessions a tool starts connect to the server that received the call.
     let context = ToolContext {
         mcp_url: Some(planeai_core::mcp::server_url(port)),
         ..context

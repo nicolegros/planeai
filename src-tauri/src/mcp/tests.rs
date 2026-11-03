@@ -82,11 +82,7 @@ impl Fixture {
         let events = Arc::new(RecordedEvents::default());
         Self {
             _dir: dir,
-            context: ToolContext {
-                db_path,
-                events: events.clone(),
-                mcp_url: None,
-            },
+            context: ToolContext::new(db_path, events.clone()),
             events,
             caller,
             token,
