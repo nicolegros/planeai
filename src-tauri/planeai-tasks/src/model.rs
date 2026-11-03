@@ -58,6 +58,9 @@ pub struct Task {
     pub last_activity_at: Option<DateTime<Utc>>,
     #[serde(flatten, default)]
     pub snooze: Snooze,
+    /// Bumped by every write to `snooze`; see `StoredSnooze`.
+    #[serde(default)]
+    pub snooze_rev: i64,
 }
 
 impl Task {
@@ -77,6 +80,15 @@ pub struct Snooze {
     pub snoozed_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub woke_at: Option<DateTime<Utc>>,
+}
+
+/// A snooze as stored, with its revision: every write to the snooze bumps `snooze_rev`, so a reader
+/// holding two copies of a task's snooze keeps the one with the higher revision.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct StoredSnooze {
+    #[serde(flatten)]
+    pub snooze: Snooze,
+    pub snooze_rev: i64,
 }
 
 impl Snooze {

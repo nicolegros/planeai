@@ -54,10 +54,14 @@ export interface TaskItem {
   snoozed_until: string | null;
   snoozed_at: string | null;
   woke_at: string | null;
+  /** Bumped by every write to the snooze; orders the copies of it the store receives. */
+  snooze_rev: number;
 }
 
 export type TaskVisit = Pick<TaskItem, "last_visited_at" | "last_activity_at">;
 export type TaskSnooze = Pick<TaskItem, "snoozed_until" | "snoozed_at" | "woke_at">;
+/** A snooze as the backend wrote it, with its revision. */
+export type StoredSnooze = TaskSnooze & Pick<TaskItem, "snooze_rev">;
 
 import type { ReviewFileDiff } from "./review-diff";
 

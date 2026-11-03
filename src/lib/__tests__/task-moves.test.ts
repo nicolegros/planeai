@@ -1,15 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Project, TaskItem, TaskSnooze } from "../types";
+import type { Project, StoredSnooze, TaskItem, TaskSnooze } from "../types";
 
 const { statuses, snoozes, move, snooze, listAllFails } = vi.hoisted(() => ({
   statuses: {} as Record<string, string>,
-  snoozes: {} as Record<string, TaskSnooze>,
+  snoozes: {} as Record<string, StoredSnooze>,
   move: vi.fn(),
   snooze: vi.fn(),
   listAllFails: { value: false },
 }));
 
 const AWAKE: TaskSnooze = { snoozed_until: null, snoozed_at: null, woke_at: null };
+
+function writeSnooze(key: string, written: TaskSnooze): Promise<StoredSnooze> {
+  snoozes[key] = { ...written, snooze_rev: (snoozes[key]?.snooze_rev ?? 0) + 1 };
+  return Promise.resolve(snoozes[key]);
+}
 
 vi.mock("../api", () => ({
   tasks: {
@@ -26,16 +31,15 @@ vi.mock("../api", () => ({
     move,
     snooze: (_projectId: string, key: string, until: Date) => {
       snooze(key, until.toISOString());
-      snoozes[key] = {
+      return writeSnooze(key, {
         snoozed_until: until.toISOString(),
         snoozed_at: new Date().toISOString(),
         woke_at: null,
-      };
-      return Promise.resolve(snoozes[key]);
+      });
     },
-    wake: (_projectId: string, key: string) => Promise.resolve((snoozes[key] = AWAKE)),
+    wake: (_projectId: string, key: string) => writeSnooze(key, AWAKE),
     restoreSnooze: (_projectId: string, key: string, restored: TaskSnooze) =>
-      Promise.resolve((snoozes[key] = restored)),
+      writeSnooze(key, restored),
   },
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
@@ -64,6 +68,7 @@ function task(key: string, status = "in_progress"): TaskItem {
     snoozed_until: null,
     snoozed_at: null,
     woke_at: null,
+    snooze_rev: 0,
   };
 }
 
@@ -448,7 +453,7 @@ describe("task moves", () => {
 
     it("does not undo a snooze that changed since, such as an early wake", async () => {
       await moves.snoozeTask(current("PLA-1"), project, tomorrow);
-      snoozes["PLA-1"] = { ...snoozes["PLA-1"], woke_at: new Date().toISOString() };
+      void writeSnooze("PLA-1", { ...snoozes["PLA-1"], woke_at: new Date().toISOString() });
       await taskStore.refresh(["/repo"]);
 
       expect(moves.canUndoTaskChange()).toBe(false);

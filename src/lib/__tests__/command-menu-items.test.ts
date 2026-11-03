@@ -35,6 +35,7 @@ function makeTask(overrides: Partial<TaskItem> = {}): TaskItem {
     snoozed_until: null,
     snoozed_at: null,
     woke_at: null,
+    snooze_rev: 0,
     ...overrides,
   };
 }

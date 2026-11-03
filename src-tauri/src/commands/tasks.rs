@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
-use planeai_tasks::model::Snooze;
 use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
+use planeai_tasks::model::{Snooze, StoredSnooze};
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::{SqliteRepository, Visit};
 
@@ -35,6 +35,8 @@ pub struct TaskItem {
     pub last_activity_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(flatten, default)]
     pub snooze: Snooze,
+    #[serde(default)]
+    pub snooze_rev: i64,
 }
 
 impl From<planeai_tasks::model::Task> for TaskItem {
@@ -53,6 +55,7 @@ impl From<planeai_tasks::model::Task> for TaskItem {
             last_visited_at: t.last_visited_at,
             last_activity_at: t.last_activity_at,
             snooze: t.snooze,
+            snooze_rev: t.snooze_rev,
         }
     }
 }
@@ -265,7 +268,7 @@ pub async fn snooze_task(
     project_id: String,
     key: String,
     until: chrono::DateTime<chrono::Utc>,
-) -> Result<Snooze, String> {
+) -> Result<StoredSnooze, String> {
     with_task_conn(db_state, project_id, key, move |conn, prefix, key| {
         planeai_tasks::sqlite::snooze(conn, prefix, key, until, chrono::Utc::now())
     })
@@ -277,24 +280,8 @@ pub async fn wake_task(
     db_state: State<'_, DbState>,
     project_id: String,
     key: String,
-) -> Result<Snooze, String> {
+) -> Result<StoredSnooze, String> {
     with_task_conn(db_state, project_id, key, planeai_tasks::sqlite::wake).await
-}
-
-/// The task's snooze as stored, for the frontend to re-read after an early wake.
-#[tauri::command]
-pub async fn read_task_snooze(
-    db_state: State<'_, DbState>,
-    project_id: String,
-    key: String,
-) -> Result<Snooze, String> {
-    with_task_conn(
-        db_state,
-        project_id,
-        key,
-        planeai_tasks::sqlite::read_snooze,
-    )
-    .await
 }
 
 /// Puts a snooze back as it was, to undo a snooze or a wake.
@@ -304,7 +291,7 @@ pub async fn restore_task_snooze(
     project_id: String,
     key: String,
     snooze: Snooze,
-) -> Result<Snooze, String> {
+) -> Result<StoredSnooze, String> {
     with_task_conn(db_state, project_id, key, move |conn, prefix, key| {
         planeai_tasks::sqlite::restore_snooze(conn, prefix, key, snooze)
     })

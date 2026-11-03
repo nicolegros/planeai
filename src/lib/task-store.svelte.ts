@@ -5,8 +5,8 @@
 import { listen } from "@tauri-apps/api/event";
 import { tasks as tasksApi } from "./api";
 import { isTaskUnread } from "./task-unread";
-import { snoozeOf } from "./task-snooze";
-import type { TaskItem, TaskSnooze, TaskVisit } from "./types";
+import { snoozeOf, withNewerSnooze } from "./task-snooze";
+import type { StoredSnooze, TaskItem, TaskSnooze, TaskVisit } from "./types";
 
 let tasksByProject = $state<Record<string, TaskItem[]>>({});
 let loading = $state(false);
@@ -18,13 +18,17 @@ let lastHoldToken = 0;
 /** A task's identity across projects, which can reuse keys. */
 export const taskRef = (repoPath: string, key: string) => `${repoPath}\u0000${key}`;
 
-/** Applied when a snapshot is assigned, so a hold that starts or ends mid-reload still counts. */
-function withHeldStatuses(byProject: Record<string, TaskItem[]>): Record<string, TaskItem[]> {
-  if (heldStatuses.size === 0) return byProject;
+/**
+ * A reloaded snapshot as it should show, applied when it is assigned so that what changed mid-reload
+ * still counts: held statuses, and snoozes written after the reload read them.
+ */
+function settleReload(byProject: Record<string, TaskItem[]>): Record<string, TaskItem[]> {
   return Object.fromEntries(
     Object.entries(byProject).map(([repoPath, items]) => [
       repoPath,
-      items.map((task) => {
+      items.map((loaded) => {
+        const shown = tasksByKey.get(loaded.key);
+        const task = shown === undefined ? loaded : withNewerSnooze(loaded, shown);
         const held = heldStatuses.get(taskRef(repoPath, task.key));
         return held === undefined ? task : { ...task, status: held.status };
       }),
@@ -112,7 +116,7 @@ export async function loadTasks(projectPaths: string[]): Promise<void> {
         }
       }),
     );
-    if (requestGeneration === taskRequestGeneration) tasksByProject = withHeldStatuses(results);
+    if (requestGeneration === taskRequestGeneration) tasksByProject = settleReload(results);
   } finally {
     if (requestGeneration === taskRequestGeneration) loading = false;
   }
@@ -154,7 +158,7 @@ export async function refresh(projectPaths: string[]): Promise<void> {
       }),
     );
     if (requestGeneration === taskRequestGeneration) {
-      tasksByProject = withHeldStatuses({ ...tasksByProject, ...results });
+      tasksByProject = settleReload({ ...tasksByProject, ...results });
     }
   } finally {
     if (requestGeneration === taskRequestGeneration) loading = false;
@@ -162,18 +166,22 @@ export async function refresh(projectPaths: string[]): Promise<void> {
 }
 
 /**
- * Updates the columns a backend write returned in place, without a reload. Task keys are unique in
- * the database, so every project listing the key shows the same task.
+ * Updates a task in place, without a reload. Task keys are unique in the database, so every project
+ * listing the key shows the same task.
  */
-function applyFields(key: string, fields: Partial<TaskVisit & TaskSnooze>): void {
+function updateTask(key: string, update: (task: TaskItem) => TaskItem): void {
   tasksByProject = Object.fromEntries(
     Object.entries(tasksByProject).map(([repoPath, items]) => [
       repoPath,
       items.some((task) => task.key === key)
-        ? items.map((task) => (task.key === key ? { ...task, ...fields } : task))
+        ? items.map((task) => (task.key === key ? update(task) : task))
         : items,
     ]),
   );
+}
+
+function applyVisit(key: string, visit: TaskVisit): void {
+  updateTask(key, (task) => ({ ...task, ...visitOf(visit) }));
 }
 
 const visitOf = ({ last_visited_at, last_activity_at }: TaskVisit): TaskVisit => ({
@@ -182,25 +190,22 @@ const visitOf = ({ last_visited_at, last_activity_at }: TaskVisit): TaskVisit =>
 });
 
 export async function markTaskVisited(projectId: string, key: string): Promise<void> {
-  applyFields(key, visitOf(await tasksApi.markVisited(projectId, key)));
+  applyVisit(key, await tasksApi.markVisited(projectId, key));
 }
 
 export async function markTaskUnread(projectId: string, key: string): Promise<void> {
-  applyFields(key, visitOf(await tasksApi.markUnread(projectId, key)));
+  applyVisit(key, await tasksApi.markUnread(projectId, key));
 }
 
-/** The latest snooze write per task: an early wake re-reads the snooze only once it settles. */
-const snoozeWrites = new Map<string, Promise<unknown>>();
+function showSnooze(key: string, snooze: StoredSnooze): void {
+  updateTask(key, (task) => withNewerSnooze(task, snooze));
+}
 
-/** Shows the snooze the backend wrote. */
-async function applySnooze(key: string, written: Promise<TaskSnooze>): Promise<TaskSnooze> {
-  snoozeWrites.set(
-    key,
-    written.catch(() => {}),
-  );
-  const snooze = snoozeOf(await written);
-  applyFields(key, snooze);
-  return snooze;
+/** Shows the snooze the backend wrote, unless a newer one is already shown; returns the one written. */
+async function applySnooze(key: string, written: Promise<StoredSnooze>): Promise<TaskSnooze> {
+  const snooze = await written;
+  showSnooze(key, snooze);
+  return snoozeOf(snooze);
 }
 
 export function snoozeTask(projectId: string, key: string, until: Date): Promise<TaskSnooze> {
@@ -242,40 +247,22 @@ export function createReturnVisit(viewed: () => { projectId: string; task: TaskI
   };
 }
 
-/**
- * Shows an early wake as the database has it. The event is not ordered with the replies to the
- * user's snooze writes, so the read waits for the last one to settle, and gives way to any write
- * that starts meanwhile: that write's reply is newer.
- */
-async function rereadSnooze(projectId: string, key: string): Promise<void> {
-  const settled = snoozeWrites.get(key);
-  await settled;
-  const latest = snoozeWrites.get(key);
-  const snooze = snoozeOf(await tasksApi.readSnooze(projectId, key));
-  if (snoozeWrites.get(key) === latest) applyFields(key, snooze);
-}
-
 /** Shows agent activity on tasks as it happens; a task the user `isViewing` is visited instead of turning unread. */
 export function startTaskActivityListener(
   isViewing: (projectId: string, key: string) => boolean,
 ): () => void {
-  const unlisten = listen<TaskVisit & { project_id: string; task_key: string; woke: boolean }>(
-    "task-activity",
-    ({ payload }) => {
-      if (payload.woke) {
-        rereadSnooze(payload.project_id, payload.task_key).catch((error) =>
-          console.warn("Failed to read a woken task's snooze:", error),
-        );
-      }
-      if (!isViewing(payload.project_id, payload.task_key)) {
-        applyFields(payload.task_key, visitOf(payload));
-        return;
-      }
-      markTaskVisited(payload.project_id, payload.task_key).catch((error) =>
-        console.warn("Failed to mark a task visited:", error),
-      );
-    },
-  );
+  const unlisten = listen<
+    TaskVisit & { project_id: string; task_key: string; woke: StoredSnooze | null }
+  >("task-activity", ({ payload }) => {
+    if (payload.woke) showSnooze(payload.task_key, payload.woke);
+    if (!isViewing(payload.project_id, payload.task_key)) {
+      applyVisit(payload.task_key, payload);
+      return;
+    }
+    markTaskVisited(payload.project_id, payload.task_key).catch((error) =>
+      console.warn("Failed to mark a task visited:", error),
+    );
+  });
   return () => void unlisten.then((fn) => fn());
 }
 

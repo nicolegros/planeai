@@ -501,6 +501,7 @@ fn task_detail_shows_visit_and_activity_once_set() {
         last_visited_at: None,
         last_activity_at: None,
         snooze: Default::default(),
+        snooze_rev: 0,
     };
     let render_task = |task: &planeai_tasks::model::Task| {
         planeai_toon::render(&[planeai_toon::field(
@@ -551,6 +552,7 @@ fn task_detail_shows_snoozed_until_only_while_snoozed() {
             snoozed_at: Some(at("2026-11-03T10:00:00Z")),
             woke_at: None,
         },
+        snooze_rev: 1,
     };
     let render_task = |task: &planeai_tasks::model::Task| {
         planeai_toon::render(&[planeai_toon::field(

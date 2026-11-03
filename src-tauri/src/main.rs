@@ -444,7 +444,6 @@ fn main() {
             snooze_task,
             wake_task,
             restore_task_snooze,
-            read_task_snooze,
             fire_task_notify_hook,
             fire_task_resume_hook,
             fe_list_directory,

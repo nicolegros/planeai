@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager};
 
+use planeai_tasks::model::StoredSnooze;
 use planeai_tasks::provider::Error as TaskError;
 use planeai_tasks::sqlite::Visit;
 
@@ -18,9 +19,8 @@ pub struct TaskActivity {
     pub task_key: String,
     #[serde(flatten)]
     pub visit: Visit,
-    /// This activity woke the task early. The frontend re-reads the snooze rather than trusting one
-    /// sent here, since this event is not ordered with the replies to the user's snooze writes.
-    pub woke: bool,
+    /// The snooze this activity woke early, if it did.
+    pub woke: Option<StoredSnooze>,
 }
 
 /// What an agent did; only the ones that need the user wake a snoozed task.
@@ -72,8 +72,11 @@ pub fn stamp(
     };
     let recorded =
         planeai_tasks::sqlite::record_activity(conn, &prefix, &task_key, at).and_then(|visit| {
-            let woke = activity.wakes()
-                && planeai_tasks::sqlite::wake_early(conn, &prefix, &task_key, at)?.is_some();
+            let woke = if activity.wakes() {
+                planeai_tasks::sqlite::wake_early(conn, &prefix, &task_key, at)?
+            } else {
+                None
+            };
             Ok((visit, woke))
         });
     match recorded {
@@ -193,7 +196,7 @@ mod tests {
                     last_visited_at: None,
                     last_activity_at: Some(at("2026-11-03T10:00:00Z")),
                 },
-                woke: false,
+                woke: None,
             })
         );
         assert_eq!(
@@ -268,7 +271,7 @@ mod tests {
     }
 
     #[test]
-    fn the_event_carries_the_task_and_its_visit() {
+    fn the_event_carries_the_task_its_visit_and_the_snooze_it_woke() {
         let activity = TaskActivity {
             project_id: "p1".into(),
             task_key: "PLA-1".into(),
@@ -276,7 +279,14 @@ mod tests {
                 last_visited_at: None,
                 last_activity_at: Some(at("2026-11-03T10:00:00.250Z")),
             },
-            woke: true,
+            woke: Some(StoredSnooze {
+                snooze: planeai_tasks::model::Snooze {
+                    snoozed_until: Some(at("2026-11-04T09:00:00Z")),
+                    snoozed_at: Some(at("2026-11-03T09:00:00Z")),
+                    woke_at: Some(at("2026-11-03T10:00:00.250Z")),
+                },
+                snooze_rev: 2,
+            }),
         };
         assert_eq!(
             serde_json::to_value(activity).unwrap(),
@@ -285,7 +295,12 @@ mod tests {
                 "task_key": "PLA-1",
                 "last_visited_at": null,
                 "last_activity_at": "2026-11-03T10:00:00.250Z",
-                "woke": true,
+                "woke": {
+                    "snoozed_until": "2026-11-04T09:00:00Z",
+                    "snoozed_at": "2026-11-03T09:00:00Z",
+                    "woke_at": "2026-11-03T10:00:00.250Z",
+                    "snooze_rev": 2,
+                },
             })
         );
     }
@@ -320,7 +335,18 @@ mod tests {
 
             let stamped = stamp(&conn, "s1", activity, at("2026-11-03T12:00:00Z")).unwrap();
 
-            assert_eq!(stamped.map(|a| a.woke), Some(true), "{activity:?}");
+            assert_eq!(
+                stamped.and_then(|a| a.woke),
+                Some(StoredSnooze {
+                    snooze: planeai_tasks::model::Snooze {
+                        snoozed_until: Some(at("2026-11-04T09:00:00Z")),
+                        snoozed_at: Some(at("2026-11-03T10:00:00Z")),
+                        woke_at: Some(at("2026-11-03T12:00:00Z")),
+                    },
+                    snooze_rev: 2,
+                }),
+                "{activity:?}"
+            );
             assert_eq!(
                 woke_at(&conn, &key).as_deref(),
                 Some("2026-11-03T12:00:00.000+00:00"),
@@ -336,7 +362,7 @@ mod tests {
 
         let stamped = stamp(&conn, "s1", Activity::Finished, at("2026-11-03T12:00:00Z")).unwrap();
 
-        assert_eq!(stamped.map(|a| a.woke), Some(false));
+        assert_eq!(stamped.map(|a| a.woke), Some(None));
         assert_eq!(woke_at(&conn, &key), None);
     }
 

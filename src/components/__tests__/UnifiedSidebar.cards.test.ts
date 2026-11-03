@@ -114,6 +114,7 @@ function task(key: string, status: string, priority = 0): TaskItem {
     snoozed_until: null,
     snoozed_at: null,
     woke_at: null,
+    snooze_rev: 0,
   };
 }
 
@@ -398,7 +399,12 @@ describe("UnifiedSidebar in the Cards layout", () => {
     };
     tasksByPath[alpha.path] = [{ ...task("A-2", "todo"), ...snooze }];
     tasksByPath[beta.path] = [];
-    taskWake.mockResolvedValue({ snoozed_until: null, snoozed_at: null, woke_at: null });
+    taskWake.mockResolvedValue({
+      snoozed_until: null,
+      snoozed_at: null,
+      woke_at: null,
+      snooze_rev: 1,
+    });
     mounted = await mountSidebar({ sidebar_group_by: "status" });
     const root = mounted.target;
     root.querySelector<HTMLButtonElement>("button[aria-expanded='false']")!.click();
@@ -419,7 +425,12 @@ describe("UnifiedSidebar in the Cards layout", () => {
       },
     ];
     tasksByPath[beta.path] = [];
-    taskWake.mockResolvedValue({ snoozed_until: null, snoozed_at: null, woke_at: null });
+    taskWake.mockResolvedValue({
+      snoozed_until: null,
+      snoozed_at: null,
+      woke_at: null,
+      snooze_rev: 1,
+    });
     mounted = await mountSidebar({ sidebar_group_by: "status" });
     const root = mounted.target;
     root.querySelector<HTMLButtonElement>("button[aria-expanded='false']")!.click();

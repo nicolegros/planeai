@@ -20,6 +20,7 @@ const task: TaskItem = {
   snoozed_until: null,
   snoozed_at: null,
   woke_at: null,
+  snooze_rev: 0,
 };
 
 const archived = {

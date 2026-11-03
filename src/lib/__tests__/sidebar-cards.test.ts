@@ -57,6 +57,7 @@ function taskRow(
     snoozed_until: null,
     snoozed_at: null,
     woke_at: null,
+    snooze_rev: 0,
     ...visit,
   };
   return { kind: "task", task, project, linkedSession };

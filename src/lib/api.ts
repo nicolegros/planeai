@@ -5,6 +5,7 @@ import type {
   Session,
   LaunchResult,
   Project,
+  StoredSnooze,
   TaskItem,
   TaskSnooze,
   TaskVisit,
@@ -206,12 +207,10 @@ export const tasks = {
   markUnread: (projectId: string, key: string) =>
     invoke<TaskVisit>("mark_task_unread", { projectId, key }),
   snooze: (projectId: string, key: string, until: Date) =>
-    invoke<TaskSnooze>("snooze_task", { projectId, key, until: until.toISOString() }),
-  wake: (projectId: string, key: string) => invoke<TaskSnooze>("wake_task", { projectId, key }),
-  readSnooze: (projectId: string, key: string) =>
-    invoke<TaskSnooze>("read_task_snooze", { projectId, key }),
+    invoke<StoredSnooze>("snooze_task", { projectId, key, until: until.toISOString() }),
+  wake: (projectId: string, key: string) => invoke<StoredSnooze>("wake_task", { projectId, key }),
   restoreSnooze: (projectId: string, key: string, snooze: TaskSnooze) =>
-    invoke<TaskSnooze>("restore_task_snooze", { projectId, key, snooze }),
+    invoke<StoredSnooze>("restore_task_snooze", { projectId, key, snooze }),
   fireNotifyHook: (sessionId: string) => invoke("fire_task_notify_hook", { sessionId }),
   fireResumeHook: (sessionId: string) => invoke("fire_task_resume_hook", { sessionId }),
 };

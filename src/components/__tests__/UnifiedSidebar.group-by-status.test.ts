@@ -85,6 +85,7 @@ function task(key: string, status: string, priority = 0): TaskItem {
     snoozed_until: null,
     snoozed_at: null,
     woke_at: null,
+    snooze_rev: 0,
   };
 }
 

@@ -8,6 +8,7 @@ import {
   snoozeOptions,
   taskWokeAt,
   wakeTimeLabel,
+  withNewerSnooze,
 } from "../task-snooze";
 
 const UNTIL = "2026-11-04T09:00:00.000+00:00";
@@ -197,5 +198,38 @@ describe("soonestWake", () => {
     expect(soonestWake(tasks, Date.parse("2026-11-03T10:00:00Z"))).toBe(until);
     expect(soonestWake(tasks, until + 1)).toBe(Date.parse("2026-11-05T09:00:00Z"));
     expect(soonestWake([], until)).toBe(null);
+  });
+});
+
+describe("withNewerSnooze", () => {
+  const shown = {
+    key: "PLA-1",
+    snoozed_until: "2026-11-04T09:00:00.000Z",
+    snoozed_at: "2026-11-03T09:00:00.000Z",
+    woke_at: null,
+    snooze_rev: 2,
+  };
+  const write = (snooze_rev: number) => ({
+    snoozed_until: null,
+    snoozed_at: null,
+    woke_at: null,
+    snooze_rev,
+  });
+
+  it("takes a snooze written after the one shown", () => {
+    expect(withNewerSnooze(shown, write(3))).toEqual({
+      key: "PLA-1",
+      snoozed_until: null,
+      snoozed_at: null,
+      woke_at: null,
+      snooze_rev: 3,
+    });
+  });
+
+  it("keeps the snooze shown over an older or the same write", () => {
+    expect([withNewerSnooze(shown, write(1)), withNewerSnooze(shown, write(2))]).toEqual([
+      shown,
+      shown,
+    ]);
   });
 });

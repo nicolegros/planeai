@@ -304,6 +304,10 @@ mod tests {
         assert!(snoozed["snoozed_at"].is_string(), "{snoozed}");
         assert_eq!(snoozed["woke_at"], serde_json::Value::Null);
         assert_eq!(
+            (&snoozed["snooze_rev"], &woken["snooze_rev"]),
+            (&1.into(), &2.into())
+        );
+        assert_eq!(
             (
                 &woken["snoozed_until"],
                 &woken["snoozed_at"],

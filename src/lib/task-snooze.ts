@@ -3,7 +3,7 @@
  * `snoozed_at`; the backend writes `woke_at` when an agent asks for attention or exits meanwhile;
  * a manual wake or Done clears all three. A natural wake writes nothing: it is derived from the clock.
  */
-import type { TaskItem, TaskSnooze } from "./types";
+import type { StoredSnooze, TaskItem, TaskSnooze } from "./types";
 
 type SnoozeFields = Pick<TaskItem, "status" | "snoozed_until" | "woke_at">;
 type WokeFields = SnoozeFields & Pick<TaskItem, "snoozed_at" | "last_visited_at">;
@@ -30,6 +30,15 @@ export function isTaskSnoozed(task: SnoozeFields, now: number): boolean {
 
 export function snoozeOf({ snoozed_until, snoozed_at, woke_at }: TaskSnooze): TaskSnooze {
   return { snoozed_until, snoozed_at, woke_at };
+}
+
+/**
+ * `task` showing `snooze` if it was written after the snooze `task` shows. The replies to the user's
+ * writes, an early wake's event and reloads arrive in any order; the revision says which is newest.
+ */
+export function withNewerSnooze<T extends StoredSnooze>(task: T, snooze: StoredSnooze): T {
+  if (snooze.snooze_rev <= task.snooze_rev) return task;
+  return { ...task, ...snoozeOf(snooze), snooze_rev: snooze.snooze_rev };
 }
 
 /** When a snoozed task woke, early or at its time; null while it sleeps or was never snoozed. */

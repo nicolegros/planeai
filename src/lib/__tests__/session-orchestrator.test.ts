@@ -753,6 +753,7 @@ describe("session-orchestrator", () => {
           snoozed_until: null,
           snoozed_at: null,
           woke_at: null,
+          snooze_rev: 0,
         },
       ]);
       await taskStore.loadTasks(["/repo"]);
