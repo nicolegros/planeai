@@ -37,6 +37,11 @@ pub fn stamp(
     let Some(session) = db::get_session(conn, session_id).map_err(|e| e.to_string())? else {
         return Ok(None);
     };
+    // Done archives the task's sessions while their notify state lives on, so a turn cut short by the
+    // archive still settles afterwards; it is not news on a finished task.
+    if session.status == "archived" {
+        return Ok(None);
+    }
     let Some(task_key) = session.task_key.clone() else {
         return Ok(None);
     };
@@ -198,6 +203,20 @@ mod tests {
         let unknown = stamp(&conn, "missing", at("2026-11-03T10:00:00Z")).unwrap();
 
         assert_eq!((unlinked, dangling, unknown), (None, None, None));
+        assert_eq!(activity_of(&conn, &key), None);
+    }
+
+    #[test]
+    fn ignores_an_archived_session_settling_after_its_task_is_done() {
+        let mut conn = setup();
+        let project = db::create_project(&conn, "planeai", "/tmp/planeai").unwrap();
+        let key = add_task(&mut conn, &project.prefix);
+        add_session(&conn, "s1", &project.id, Some(&key), None);
+        db::archive_session(&conn, "s1").unwrap();
+
+        let activity = stamp(&conn, "s1", at("2026-11-03T10:00:00Z")).unwrap();
+
+        assert_eq!(activity, None);
         assert_eq!(activity_of(&conn, &key), None);
     }
 
