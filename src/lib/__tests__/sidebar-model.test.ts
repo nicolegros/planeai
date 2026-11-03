@@ -310,6 +310,27 @@ describe("buildSidebarModel - status mode", () => {
 });
 
 describe("sidebarNavigationOrder", () => {
+  it("counts the open task a collapsed Snoozed shelf keeps listed, as the sidebar shows it", () => {
+    const sections = buildSidebarModel(
+      input({
+        layout: "cards",
+        projects: [alpha],
+        tasksByProject: {
+          [alpha.path]: [
+            task("A-1", "todo"),
+            snoozedTask("A-2", "in_progress", 1),
+            snoozedTask("A-3", "in_progress", 2),
+          ],
+        },
+      }),
+    );
+    const asShown = (_key: string, fallback: boolean) => fallback;
+
+    expect(
+      sidebarNavigationOrder(sections, asShown, undefined, (row) => row.task.key === "A-3"),
+    ).toEqual(["task:alpha:A-1", "task:alpha:A-3"]);
+  });
+
   it("excludes hidden projects", () => {
     const sections = buildSidebarModel(
       input({

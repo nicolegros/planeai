@@ -15,7 +15,7 @@
   import { resolvePluginOpen, type PluginOpenOrigin } from "./lib/plugin-navigation";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
-  import { sidebarNavigationOrder } from "./lib/sidebar-model";
+  import { sidebarNavigationOrder, type SidebarTaskRow } from "./lib/sidebar-model";
   import { applyDoneNow, applyInterruptedDone, canUndoTaskChange, commitPendingDone, completeTask, undoLastTaskChange } from "./lib/task-moves";
   import { closeCustomSnooze, closeSnoozeMenu, getCustomSnooze, getSnoozeMenu, snoozeCustom, snoozeMenuItems, snoozeOrWake } from "./lib/snooze-picker.svelte";
   import SnoozeCustomDialog from "./components/SnoozeCustomDialog.svelte";
@@ -822,9 +822,14 @@
     }
   }
 
+  /** The task open in the main pane, which the sidebar keeps listed even in a collapsed shelf. */
+  function isOpenTaskRow(row: SidebarTaskRow): boolean {
+    return (activeTaskWorkspace?.project.id === row.project.id && activeTaskWorkspace.task.key === row.task.key) || row.linkedSession?.id === activeSessionId;
+  }
+
   /** Open the sidebar row at this position, counting only the rows the sidebar shows. */
   function jumpToSidebarRow(index: number): void {
-    const target = getVisibleNavigationOrder()[index];
+    const target = getVisibleNavigationOrder(isOpenTaskRow)[index];
     if (!target) return;
     leavePluginWorkspace();
     routeNavTarget(target);
@@ -1012,11 +1017,11 @@
         else if (action.type === "prev_tab") { cycleTab(-1); }
         else if (action.type === "next_session") {
           const currentId = activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
-          if (!navCycle.isCycling()) navCycle.startPreview(getVisibleNavigationOrder(), currentId, 1);
+          if (!navCycle.isCycling()) navCycle.startPreview(getVisibleNavigationOrder(isOpenTaskRow), currentId, 1);
           else navCycle.advance(1);
         } else if (action.type === "prev_session") {
           const currentId = activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
-          if (!navCycle.isCycling()) navCycle.startPreview(getVisibleNavigationOrder(), currentId, -1);
+          if (!navCycle.isCycling()) navCycle.startPreview(getVisibleNavigationOrder(isOpenTaskRow), currentId, -1);
           else navCycle.advance(-1);
         }
         else if (action.type === "toggle_diff") { toggleDiff(); }

@@ -3,6 +3,7 @@ import {
   resolveSidebarGroupBy,
   resolveSidebarLayout,
   sidebarNavigationOrder,
+  type IsOpenTask,
   type SidebarSection,
 } from "./sidebar-model";
 import { getCollapsedSections, setCollapsedSections } from "./layout-state";
@@ -56,11 +57,9 @@ export function showMore(shelfKey: string): void {
   shelfPages = { ...shelfPages, [shelfKey]: shownPages(shelfKey) + 1 };
 }
 
-const visibleNavigationOrder = $derived(sidebarNavigationOrder(model, isCollapsed, shownPages));
-
 /** Task workspace and session IDs of the rows the sidebar shows, top to bottom. */
-export function getVisibleNavigationOrder(): string[] {
-  return visibleNavigationOrder;
+export function getVisibleNavigationOrder(isOpen: IsOpenTask): string[] {
+  return sidebarNavigationOrder(model, isCollapsed, shownPages, isOpen);
 }
 
 /** Reload collapse state from storage and close every shelf page. */

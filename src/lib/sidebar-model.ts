@@ -553,8 +553,9 @@ export function sidebarNavigationOrder(
   sections: SidebarSection[],
   isCollapsed?: IsCollapsed,
   shownPages?: ShownPages,
+  isOpen?: IsOpenTask,
 ): string[] {
-  return sidebarNavItems(sections, isCollapsed, shownPages).flatMap((item) => {
+  return sidebarNavItems(sections, isCollapsed, shownPages, isOpen).flatMap((item) => {
     if (item.type === "orphan") return [item.session.id];
     if (item.type === "task") return [toTaskWorkspaceId(item.row.project.id, item.row.task.key)];
     return [];

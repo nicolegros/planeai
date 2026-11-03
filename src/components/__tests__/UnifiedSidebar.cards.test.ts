@@ -792,8 +792,9 @@ describe("UnifiedSidebar in the Cards layout", () => {
       navButtons(mounted!.target).find((b) => labelOf(b).startsWith(`[${prefix}`))!;
     const done = (from: number, to: number) =>
       Array.from({ length: to - from + 1 }, (_, i) => `task:alpha:D-${from + i}`);
+    const noTaskOpen = () => false;
 
-    expect(getVisibleNavigationOrder()).toEqual([
+    expect(getVisibleNavigationOrder(noTaskOpen)).toEqual([
       "task:beta:B-1",
       "task:alpha:A-1",
       "task:alpha:A-2",
@@ -801,7 +802,7 @@ describe("UnifiedSidebar in the Cards layout", () => {
 
     header("Done").click();
     flushSync();
-    expect(getVisibleNavigationOrder()).toEqual([
+    expect(getVisibleNavigationOrder(noTaskOpen)).toEqual([
       "task:beta:B-1",
       "task:alpha:A-1",
       "task:alpha:A-2",
@@ -811,7 +812,7 @@ describe("UnifiedSidebar in the Cards layout", () => {
     navButtons(mounted.target).at(-1)!.click();
     header("To do").click();
     flushSync();
-    expect(getVisibleNavigationOrder()).toEqual([
+    expect(getVisibleNavigationOrder(noTaskOpen)).toEqual([
       "task:beta:B-1",
       "task:alpha:A-1",
       ...done(1, 26),
