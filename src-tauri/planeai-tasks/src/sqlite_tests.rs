@@ -825,7 +825,7 @@ fn migration_adds_snooze_columns_to_a_database_with_visits() {
     let task = repo.get("OLD-1").unwrap();
 
     assert_eq!(task.last_visited_at, Some(at("2026-11-03T10:00:00Z")));
-    assert_eq!(task.snooze, Snooze::default());
+    assert_eq!(task.snooze.times, Snooze::default());
 }
 
 #[test]
@@ -864,7 +864,7 @@ fn migration_starts_the_snooze_revision_of_an_existing_snooze_at_zero() {
     let task = repo.get("OLD-1").unwrap();
 
     assert_eq!(
-        (task.snooze, task.snooze_rev),
+        (task.snooze.times, task.snooze.snooze_rev),
         (
             Snooze {
                 snoozed_until: Some(at("2026-11-04T09:00:00Z")),
@@ -878,10 +878,7 @@ fn migration_starts_the_snooze_revision_of_an_existing_snooze_at_zero() {
 
 fn stored_snooze_of(repo: &SqliteRepository) -> StoredSnooze {
     let task = repo.get("TEST-1").unwrap();
-    StoredSnooze {
-        snooze: task.snooze,
-        snooze_rev: task.snooze_rev,
-    }
+    task.snooze
 }
 
 fn snooze_tomorrow(conn: &Connection) {
@@ -924,7 +921,7 @@ fn snoozing_records_when_and_until_and_bumps_the_revision() {
     .unwrap();
 
     let expected = StoredSnooze {
-        snooze: Snooze {
+        times: Snooze {
             snoozed_until: Some(at("2026-11-04T09:00:00Z")),
             snoozed_at: Some(at("2026-11-03T10:00:00.123Z")),
             woke_at: None,
@@ -968,7 +965,7 @@ fn snoozing_into_the_past_or_a_done_task_is_rejected() {
         done.unwrap_err().to_string(),
         "a done task cannot be snoozed"
     );
-    assert_eq!(repo.get("TEST-1").unwrap().snooze, Snooze::default());
+    assert_eq!(repo.get("TEST-1").unwrap().snooze.times, Snooze::default());
 }
 
 #[test]
@@ -1012,7 +1009,7 @@ fn a_snooze_in_the_year_9999_is_kept() {
     .unwrap();
 
     assert_eq!(
-        repo.get("TEST-1").unwrap().snooze.snoozed_until,
+        repo.get("TEST-1").unwrap().snooze.times.snoozed_until,
         Some(at("9999-12-31T23:59:59Z"))
     );
 }
@@ -1023,7 +1020,7 @@ fn waking_by_hand_clears_the_snooze_and_bumps_the_revision() {
     snooze_tomorrow(&conn);
 
     let expected = StoredSnooze {
-        snooze: Snooze::default(),
+        times: Snooze::default(),
         snooze_rev: 2,
     };
     assert_eq!(wake(&conn, "TEST", "TEST-1").unwrap(), expected);
@@ -1040,7 +1037,7 @@ fn restoring_puts_back_the_exact_snooze_and_bumps_the_revision() {
     };
 
     let expected = StoredSnooze {
-        snooze: previous,
+        times: previous,
         snooze_rev: 2,
     };
     assert_eq!(
@@ -1064,7 +1061,7 @@ fn moving_to_done_ends_the_snooze_and_bumps_the_revision_and_other_moves_keep_bo
                 },
             )
             .unwrap();
-        (task.snooze, task.snooze_rev)
+        (task.snooze.times, task.snooze.snooze_rev)
     };
 
     assert_eq!(move_to(Status::InReview), (tomorrow(), 1));
@@ -1083,7 +1080,7 @@ fn an_agent_wakes_a_snoozed_task_early_only_while_it_sleeps() {
 
     assert_eq!((before_snooze, after_wake_time), (None, None));
     let expected = StoredSnooze {
-        snooze: Snooze {
+        times: Snooze {
             woke_at: Some(at("2026-11-03T12:00:00Z")),
             ..tomorrow()
         },

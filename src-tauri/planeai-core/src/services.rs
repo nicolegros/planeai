@@ -1140,7 +1140,6 @@ impl TaskService {
             last_visited_at: None,
             last_activity_at: None,
             snooze: Default::default(),
-            snooze_rev: 0,
         };
 
         let prompt = Self::resolve_task_prompt(&task, prompt_template);

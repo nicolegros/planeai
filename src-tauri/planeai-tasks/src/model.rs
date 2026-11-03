@@ -57,16 +57,13 @@ pub struct Task {
     #[serde(default)]
     pub last_activity_at: Option<DateTime<Utc>>,
     #[serde(flatten, default)]
-    pub snooze: Snooze,
-    /// Bumped by every write to `snooze`; see `StoredSnooze`.
-    #[serde(default)]
-    pub snooze_rev: i64,
+    pub snooze: StoredSnooze,
 }
 
 impl Task {
     /// Hidden from the active lists until it wakes; a Done task is never snoozed.
     pub fn is_snoozed(&self, now: DateTime<Utc>) -> bool {
-        self.status != Status::Done && self.snooze.is_snoozed(now)
+        self.status != Status::Done && self.snooze.times.is_snoozed(now)
     }
 }
 
@@ -84,10 +81,11 @@ pub struct Snooze {
 
 /// A snooze as stored, with its revision: every write to the snooze bumps `snooze_rev`, so a reader
 /// holding two copies of a task's snooze keeps the one with the higher revision.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredSnooze {
     #[serde(flatten)]
-    pub snooze: Snooze,
+    pub times: Snooze,
+    #[serde(default)]
     pub snooze_rev: i64,
 }
 

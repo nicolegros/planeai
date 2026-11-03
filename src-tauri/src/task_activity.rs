@@ -280,7 +280,7 @@ mod tests {
                 last_activity_at: Some(at("2026-11-03T10:00:00.250Z")),
             },
             woke: Some(StoredSnooze {
-                snooze: planeai_tasks::model::Snooze {
+                times: planeai_tasks::model::Snooze {
                     snoozed_until: Some(at("2026-11-04T09:00:00Z")),
                     snoozed_at: Some(at("2026-11-03T09:00:00Z")),
                     woke_at: Some(at("2026-11-03T10:00:00.250Z")),
@@ -338,7 +338,7 @@ mod tests {
             assert_eq!(
                 stamped.and_then(|a| a.woke),
                 Some(StoredSnooze {
-                    snooze: planeai_tasks::model::Snooze {
+                    times: planeai_tasks::model::Snooze {
                         snoozed_until: Some(at("2026-11-04T09:00:00Z")),
                         snoozed_at: Some(at("2026-11-03T10:00:00Z")),
                         woke_at: Some(at("2026-11-03T12:00:00Z")),

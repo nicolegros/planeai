@@ -34,9 +34,7 @@ pub struct TaskItem {
     pub last_visited_at: Option<chrono::DateTime<chrono::Utc>>,
     pub last_activity_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(flatten, default)]
-    pub snooze: Snooze,
-    #[serde(default)]
-    pub snooze_rev: i64,
+    pub snooze: StoredSnooze,
     /// Tells a task apart from an earlier one created under the same key.
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -57,7 +55,6 @@ impl From<planeai_tasks::model::Task> for TaskItem {
             last_visited_at: t.last_visited_at,
             last_activity_at: t.last_activity_at,
             snooze: t.snooze,
-            snooze_rev: t.snooze_rev,
             created_at: t.created_at,
         }
     }

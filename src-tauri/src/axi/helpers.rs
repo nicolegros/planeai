@@ -43,6 +43,7 @@ pub(crate) fn task_detail_object(task: &Task) -> Value {
     }
     if let Some(until) = task
         .snooze
+        .times
         .snoozed_until
         .filter(|_| task.is_snoozed(chrono::Utc::now()))
     {

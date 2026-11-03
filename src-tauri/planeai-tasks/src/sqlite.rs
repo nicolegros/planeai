@@ -262,7 +262,7 @@ fn read_stored_snooze(conn: &Connection, prefix: &str, key: &str) -> Result<Stor
         .map_err(|e| Error::Storage(e.to_string()))?
         .ok_or(Error::NotFound)?;
     Ok(StoredSnooze {
-        snooze: snooze_from_columns(until, at, woke),
+        times: snooze_from_columns(until, at, woke),
         snooze_rev: rev,
     })
 }
@@ -639,8 +639,10 @@ impl SqliteRepository {
             updated_at: parse_time(&row.updated_at).unwrap_or_else(Utc::now),
             last_visited_at: row.last_visited_at.as_deref().and_then(parse_time),
             last_activity_at: row.last_activity_at.as_deref().and_then(parse_time),
-            snooze: snooze_from_columns(row.snoozed_until, row.snoozed_at, row.woke_at),
-            snooze_rev: row.snooze_rev,
+            snooze: StoredSnooze {
+                times: snooze_from_columns(row.snoozed_until, row.snoozed_at, row.woke_at),
+                snooze_rev: row.snooze_rev,
+            },
         })
     }
 
