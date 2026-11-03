@@ -4,6 +4,7 @@
  */
 import { sessionTaskProjectId, type Project, type Session, type TaskItem } from "./types";
 import { shouldHideProject, toTaskWorkspaceId } from "./sidebar-session-order";
+import { isTaskSnoozed } from "./task-snooze";
 
 export type SidebarGroupBy = "project" | "status";
 export type SidebarLayout = "classic" | "cards";
@@ -38,12 +39,53 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   done: "Done",
 };
 
-export const TASK_STATUS_DOT_CLASSES: Record<TaskStatus, string> = {
-  in_progress: "bg-status-running",
-  in_review: "bg-status-review",
-  todo: "bg-t3",
-  done: "bg-status-running",
+/** Where a task sits in the sidebar: with its status, or set aside until it wakes. */
+export type TaskLane = TaskStatus | "snoozed";
+
+type RowOrder = "priority" | "wake";
+
+interface Lane {
+  label: string;
+  dotClass: string;
+  defaultCollapsed: boolean;
+  order: RowOrder;
+}
+
+export const LANES: Record<TaskLane, Lane> = {
+  in_progress: {
+    label: TASK_STATUS_LABELS.in_progress,
+    dotClass: "bg-status-running",
+    defaultCollapsed: false,
+    order: "priority",
+  },
+  in_review: {
+    label: TASK_STATUS_LABELS.in_review,
+    dotClass: "bg-status-review",
+    defaultCollapsed: false,
+    order: "priority",
+  },
+  todo: {
+    label: TASK_STATUS_LABELS.todo,
+    dotClass: "bg-t3",
+    defaultCollapsed: false,
+    order: "priority",
+  },
+  snoozed: { label: "Snoozed", dotClass: "bg-t3", defaultCollapsed: true, order: "wake" },
+  done: {
+    label: TASK_STATUS_LABELS.done,
+    dotClass: "bg-status-running",
+    defaultCollapsed: true,
+    order: "priority",
+  },
 };
+
+/** Classic group order: per project the snoozed group follows every status group; across projects it precedes Done. */
+const PROJECT_GROUP_LANES: TaskLane[] = ["in_progress", "in_review", "todo", "done", "snoozed"];
+const STATUS_SECTION_LANES: TaskLane[] = ["in_progress", "in_review", "todo", "snoozed", "done"];
+
+export function taskLane(task: TaskItem, now: number): TaskLane {
+  return isTaskSnoozed(task, now) ? "snoozed" : normalizeTaskStatus(task.status);
+}
 
 export interface SidebarTaskRow {
   kind: "task";
@@ -61,26 +103,28 @@ export interface SidebarSessionRow {
 
 export type SidebarRow = SidebarTaskRow | SidebarSessionRow;
 
-/** Cards keeps `in_review` tasks on top with unlinked sessions; every other status gets a shelf. */
-export type ShelfStatus = Exclude<TaskStatus, "in_review">;
+/** Cards keeps `in_review` tasks on top with unlinked sessions; every other lane gets a shelf. */
+export type ShelfLane = Exclude<TaskLane, "in_review">;
 
 export interface Shelf {
   variant: "card" | "slim";
-  defaultCollapsed: boolean;
   /** Rows shown per "Show more" step; null shows every row. */
   pageSize: number | null;
+  /** The task open in the main pane stays listed while the shelf is collapsed. */
+  keepsOpenTaskVisible: boolean;
 }
 
-/** Cards shelves in display order. Their labels are TASK_STATUS_LABELS. */
-export const SHELVES: Record<ShelfStatus, Shelf> = {
-  in_progress: { variant: "card", defaultCollapsed: false, pageSize: null },
-  todo: { variant: "slim", defaultCollapsed: false, pageSize: null },
-  done: { variant: "slim", defaultCollapsed: true, pageSize: 25 },
+/** Cards shelves in display order. Their labels and collapse defaults are in LANES. */
+export const SHELVES: Record<ShelfLane, Shelf> = {
+  in_progress: { variant: "card", pageSize: null, keepsOpenTaskVisible: false },
+  todo: { variant: "slim", pageSize: null, keepsOpenTaskVisible: false },
+  snoozed: { variant: "slim", pageSize: null, keepsOpenTaskVisible: true },
+  done: { variant: "slim", pageSize: 25, keepsOpenTaskVisible: false },
 };
 
-export interface SidebarStatusGroup {
+export interface SidebarLaneGroup {
   key: string;
-  status: TaskStatus;
+  lane: TaskLane;
   rows: SidebarTaskRow[];
   defaultCollapsed: boolean;
 }
@@ -90,7 +134,7 @@ export interface SidebarProjectSection {
   key: string;
   project: Project;
   orphans: SidebarSessionRow[];
-  groups: SidebarStatusGroup[];
+  groups: SidebarLaneGroup[];
   /** All of the project's tasks, including ones hidden by hideDoneTasks. */
   taskCount: number;
   defaultCollapsed: boolean;
@@ -108,7 +152,7 @@ export interface SidebarFolderSection {
 export interface SidebarShelfSection {
   kind: "shelf";
   key: string;
-  status: ShelfStatus;
+  lane: ShelfLane;
   rows: SidebarTaskRow[];
   defaultCollapsed: boolean;
 }
@@ -122,7 +166,7 @@ export type SidebarSection =
       orphans: SidebarSessionRow[];
       defaultCollapsed: boolean;
     }
-  | { kind: "status"; key: string; group: SidebarStatusGroup; defaultCollapsed: boolean }
+  | { kind: "status"; key: string; group: SidebarLaneGroup; defaultCollapsed: boolean }
   // Cards
   | { kind: "attention"; key: string; rows: SidebarRow[] }
   | SidebarFolderSection
@@ -136,6 +180,8 @@ export interface SidebarModelInput {
   tasksByProject: Record<string, TaskItem[]>;
   hideDoneTasks: boolean;
   hideEmptyProjects: boolean;
+  /** The clock snoozes are read against. */
+  now: number;
 }
 
 function normalizeTaskStatus(status: string): TaskStatus {
@@ -144,17 +190,25 @@ function normalizeTaskStatus(status: string): TaskStatus {
 
 const keyCollator = new Intl.Collator(undefined, { numeric: true });
 
-/** Rows of one status in sidebar order. */
-function rowsWithStatus(
+const ROW_ORDERS: Record<RowOrder, (a: SidebarTaskRow, b: SidebarTaskRow) => number> = {
+  priority: (a, b) => b.task.priority - a.task.priority,
+  // Snoozed rows always have a wake time.
+  wake: (a, b) => Date.parse(a.task.snoozed_until!) - Date.parse(b.task.snoozed_until!),
+};
+
+/** Rows of one lane in sidebar order. */
+function rowsInLane(
   rows: SidebarTaskRow[],
-  status: TaskStatus,
+  lane: TaskLane,
   projectOrder: Map<string, number>,
+  now: number,
 ): SidebarTaskRow[] {
+  const order = ROW_ORDERS[LANES[lane].order];
   return rows
-    .filter((row) => normalizeTaskStatus(row.task.status) === status)
+    .filter((row) => taskLane(row.task, now) === lane)
     .sort(
       (a, b) =>
-        b.task.priority - a.task.priority ||
+        order(a, b) ||
         (projectOrder.get(a.project.id) ?? 0) - (projectOrder.get(b.project.id) ?? 0) ||
         keyCollator.compare(a.task.key, b.task.key),
     );
@@ -162,27 +216,30 @@ function rowsWithStatus(
 
 function groupRows(
   rows: SidebarTaskRow[],
+  lanes: TaskLane[],
   projectOrder: Map<string, number>,
   hideDoneTasks: boolean,
-  keyFor: (status: TaskStatus) => string,
-): SidebarStatusGroup[] {
-  const groups: SidebarStatusGroup[] = [];
-  for (const status of TASK_STATUSES) {
-    if (status === "done" && hideDoneTasks) continue;
-    const statusRows = rowsWithStatus(rows, status, projectOrder);
-    if (statusRows.length === 0) continue;
+  now: number,
+  keyFor: (lane: TaskLane) => string,
+): SidebarLaneGroup[] {
+  const groups: SidebarLaneGroup[] = [];
+  for (const lane of lanes) {
+    if (lane === "done" && hideDoneTasks) continue;
+    const laneRows = rowsInLane(rows, lane, projectOrder, now);
+    if (laneRows.length === 0) continue;
     groups.push({
-      key: keyFor(status),
-      status,
-      rows: statusRows,
-      defaultCollapsed: status === "done",
+      key: keyFor(lane),
+      lane,
+      rows: laneRows,
+      defaultCollapsed: LANES[lane].defaultCollapsed,
     });
   }
   return groups;
 }
 
 export function buildSidebarModel(input: SidebarModelInput): SidebarSection[] {
-  const { layout, groupBy, sessions, tasksByProject, hideDoneTasks, hideEmptyProjects } = input;
+  const { layout, groupBy, sessions, tasksByProject, hideDoneTasks, hideEmptyProjects, now } =
+    input;
   const projects = input.projects.filter((p) => !p.hidden);
   const projectOrder = new Map(projects.map((p, i) => [p.id, i]));
 
@@ -220,14 +277,14 @@ export function buildSidebarModel(input: SidebarModelInput): SidebarSection[] {
         project,
         orphans: orphansFor(project),
         tasks: tasksFor(project).filter(
-          (row) => !(hideDoneTasks && normalizeTaskStatus(row.task.status) === "done"),
+          (row) => !(hideDoneTasks && taskLane(row.task, now) === "done"),
         ),
       }))
       .filter((p) => !shouldHideProject(p.orphans.length, p.tasks.length, hideEmptyProjects));
     // Unlinked sessions keep their order and come before the tasks waiting for review.
     const topRows = (orphans: SidebarSessionRow[], tasks: SidebarTaskRow[]): SidebarRow[] => [
       ...orphans,
-      ...rowsWithStatus(tasks, "in_review", projectOrder),
+      ...rowsInLane(tasks, "in_review", projectOrder, now),
     ];
 
     const sections: SidebarSection[] = [];
@@ -250,15 +307,15 @@ export function buildSidebarModel(input: SidebarModelInput): SidebarSection[] {
       if (rows.length > 0) sections.push({ kind: "attention", key: "attention", rows });
     }
     const allTasks = shown.flatMap((p) => p.tasks);
-    for (const status of Object.keys(SHELVES) as ShelfStatus[]) {
-      const rows = rowsWithStatus(allTasks, status, projectOrder);
+    for (const lane of Object.keys(SHELVES) as ShelfLane[]) {
+      const rows = rowsInLane(allTasks, lane, projectOrder, now);
       if (rows.length === 0) continue;
       sections.push({
         kind: "shelf",
-        key: `shelf:${status}`,
-        status,
+        key: `shelf:${lane}`,
+        lane,
         rows,
-        defaultCollapsed: SHELVES[status].defaultCollapsed,
+        defaultCollapsed: LANES[lane].defaultCollapsed,
       });
     }
     return sections;
@@ -272,9 +329,11 @@ export function buildSidebarModel(input: SidebarModelInput): SidebarSection[] {
     }
     const groups = groupRows(
       projects.flatMap(tasksFor),
+      STATUS_SECTION_LANES,
       projectOrder,
       hideDoneTasks,
-      (s) => `status:${s}`,
+      now,
+      (lane) => `status:${lane}`,
     );
     for (const group of groups) {
       sections.push({
@@ -293,9 +352,11 @@ export function buildSidebarModel(input: SidebarModelInput): SidebarSection[] {
     const rows = tasksFor(project);
     const groups = groupRows(
       rows,
+      PROJECT_GROUP_LANES,
       projectOrder,
       hideDoneTasks,
-      (status) => `project-status:${project.id}:${status}`,
+      now,
+      (lane) => `project-status:${project.id}:${lane}`,
     );
     const visibleTaskCount = groups.reduce((n, g) => n + g.rows.length, 0);
     if (shouldHideProject(orphans.length, visibleTaskCount, hideEmptyProjects)) continue;
@@ -326,12 +387,21 @@ export type IsCollapsed = (key: string, fallback: boolean) => boolean;
 /** How many pages of a shelf are open. */
 export type ShownPages = (shelfKey: string) => number;
 
-/** The rows a paged shelf shows, and how many the next "Show more" adds. */
+/** Whether a row is the task open in the main pane. */
+export type IsOpenTask = (row: SidebarTaskRow) => boolean;
+
+/**
+ * The rows a shelf shows, and how many the next "Show more" adds. A collapsed shelf shows none, or
+ * only the open task where the shelf keeps it visible.
+ */
 export function shelfPage(
   shelf: SidebarShelfSection,
   pages: number,
+  collapsed = false,
+  isOpen: IsOpenTask = () => false,
 ): { rows: SidebarTaskRow[]; more: number } {
-  const { pageSize } = SHELVES[shelf.status];
+  const { pageSize, keepsOpenTaskVisible } = SHELVES[shelf.lane];
+  if (collapsed) return { rows: keepsOpenTaskVisible ? shelf.rows.filter(isOpen) : [], more: 0 };
   if (pageSize === null) return { rows: shelf.rows, more: 0 };
   const rows = shelf.rows.slice(0, pageSize * pages);
   return { rows, more: Math.min(pageSize, shelf.rows.length - rows.length) };
@@ -361,6 +431,7 @@ export function sidebarNavItems(
   sections: SidebarSection[],
   isCollapsed: IsCollapsed = () => false,
   shownPages: ShownPages = () => Infinity,
+  isOpen: IsOpenTask = () => false,
 ): SidebarNavItem[] {
   const items: SidebarNavItem[] = [];
   const pushRows = (rows: SidebarRow[]) => {
@@ -370,7 +441,7 @@ export function sidebarNavItems(
       );
     }
   };
-  const pushGroup = (group: SidebarStatusGroup, parentKey: string | null) => {
+  const pushGroup = (group: SidebarLaneGroup, parentKey: string | null) => {
     items.push({
       type: "group_header",
       key: group.key,
@@ -417,8 +488,8 @@ export function sidebarNavItems(
           parentKey: null,
           defaultCollapsed: section.defaultCollapsed,
         });
-        if (isCollapsed(section.key, section.defaultCollapsed)) break;
-        const page = shelfPage(section, shownPages(section.key));
+        const collapsed = isCollapsed(section.key, section.defaultCollapsed);
+        const page = shelfPage(section, shownPages(section.key), collapsed, isOpen);
         pushRows(page.rows);
         if (page.more > 0) items.push({ type: "show_more", shelfKey: section.key });
         break;

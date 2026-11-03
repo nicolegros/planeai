@@ -17,6 +17,7 @@ const {
   taskMove,
   taskMarkVisited,
   taskMarkUnread,
+  taskWake,
 } = vi.hoisted(() => ({
   configGet: vi.fn(),
   configUpdate: vi.fn(),
@@ -26,6 +27,7 @@ const {
   taskMove: vi.fn(),
   taskMarkVisited: vi.fn(),
   taskMarkUnread: vi.fn(),
+  taskWake: vi.fn(),
 }));
 
 vi.mock("../../lib/api", () => ({
@@ -50,6 +52,7 @@ vi.mock("../../lib/api", () => ({
     move: taskMove,
     markVisited: taskMarkVisited,
     markUnread: taskMarkUnread,
+    wake: taskWake,
   },
 }));
 
@@ -350,6 +353,57 @@ describe("UnifiedSidebar in the Cards layout", () => {
       [["alpha", "A-2"]],
       [["alpha", "A-1"]],
     ]);
+  });
+
+  it("sets snoozed tasks aside in a collapsed shelf, counting down, and keeps the open one listed", async () => {
+    const snoozedUntil = (ms: number) => ({
+      snoozed_until: new Date(Date.now() + ms).toISOString(),
+      snoozed_at: new Date(Date.now() - 60_000).toISOString(),
+    });
+    tasksByPath[alpha.path] = [
+      { ...task("A-1", "in_progress", 1), ...snoozedUntil(3 * 3_600_000 + 30_000) },
+      { ...task("A-2", "todo"), ...snoozedUntil(45 * 60_000 + 30_000) },
+      task("A-3", "done"),
+    ];
+    tasksByPath[beta.path] = [{ ...task("B-2", "in_review"), ...snoozedUntil(3_600_000) }];
+    mounted = await mountSidebar(
+      { sidebar_group_by: "status" },
+      { selectedTaskWorkspace: { projectId: "alpha", taskKey: "A-1" } },
+    );
+    const root = mounted.target;
+
+    expect(navLabels(root)).toEqual(["scratch", "[Snoozed 3]", "Title A-1", "[Done 1]"]);
+    expect(rowOf(root, "Title A-1").textContent).toContain("3h");
+
+    root.querySelector<HTMLButtonElement>("button[aria-expanded='false']")!.click();
+    flushSync();
+
+    expect(navLabels(root).slice(1, 5)).toEqual([
+      "[Snoozed 3]",
+      "Title A-2",
+      "Title B-2",
+      "Title A-1",
+    ]);
+    const countdown = rowOf(root, "Title A-2").querySelector("[title^='Wakes ']")!;
+    expect(countdown.textContent).toBe("45m");
+  });
+
+  it("wakes a snoozed task from its hover action, back to its status", async () => {
+    const snooze = {
+      snoozed_until: new Date(Date.now() + 3_600_000).toISOString(),
+      snoozed_at: new Date(Date.now() - 60_000).toISOString(),
+    };
+    tasksByPath[alpha.path] = [{ ...task("A-2", "todo"), ...snooze }];
+    tasksByPath[beta.path] = [];
+    taskWake.mockResolvedValue({ snoozed_until: null, snoozed_at: null, woke_at: null });
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const root = mounted.target;
+    root.querySelector<HTMLButtonElement>("button[aria-expanded='false']")!.click();
+    flushSync();
+
+    clickAction(root, "Title A-2", "Wake now");
+    await vi.waitFor(() => expect(navLabels(root)).toEqual(["scratch", "[To do 1]", "Title A-2"]));
+    expect(taskWake.mock.calls).toEqual([["alpha", "A-2"]]);
   });
 
   it("is the default, with sessions and review tasks on top and shelves in status order", async () => {

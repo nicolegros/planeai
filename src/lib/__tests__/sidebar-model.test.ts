@@ -10,6 +10,7 @@ import {
   type SidebarModelInput,
   type SidebarRow,
   type SidebarSection,
+  type SidebarTaskRow,
 } from "../sidebar-model";
 import type { Project, Session, TaskItem } from "../types";
 
@@ -75,12 +76,23 @@ function input(overrides: Partial<SidebarModelInput> = {}): SidebarModelInput {
     tasksByProject: {},
     hideDoneTasks: false,
     hideEmptyProjects: false,
+    now: NOW,
     ...overrides,
   };
 }
 
 function keysOf(sections: SidebarSection[]): string[] {
   return sections.map((s) => s.key);
+}
+
+const NOW = Date.parse("2026-11-03T10:00:00Z");
+
+/** Snoozed until `hours` after NOW. */
+function snoozedTask(key: string, status: string, hours: number): TaskItem {
+  return task(key, status, 0, {
+    snoozed_until: new Date(NOW + hours * 3_600_000).toISOString(),
+    snoozed_at: "2026-11-03T09:00:00.000Z",
+  });
 }
 
 const alpha = project("alpha");
@@ -105,12 +117,7 @@ describe("buildSidebarModel - project mode", () => {
     expect(keysOf(sections)).toEqual(["project:alpha"]);
     const section = sections[0];
     if (section.kind !== "project") throw new Error("expected project section");
-    expect(section.groups.map((g) => g.status)).toEqual([
-      "in_progress",
-      "in_review",
-      "todo",
-      "done",
-    ]);
+    expect(section.groups.map((g) => g.lane)).toEqual(["in_progress", "in_review", "todo", "done"]);
     expect(section.groups.map((g) => g.key)).toEqual([
       "project-status:alpha:in_progress",
       "project-status:alpha:in_review",
@@ -125,7 +132,7 @@ describe("buildSidebarModel - project mode", () => {
     );
     const section = sections[0];
     if (section.kind !== "project") throw new Error("expected project section");
-    expect(section.groups.map((g) => [g.status, g.rows.map((r) => r.task.key)])).toEqual([
+    expect(section.groups.map((g) => [g.lane, g.rows.map((r) => r.task.key)])).toEqual([
       ["todo", ["A-1"]],
     ]);
   });
@@ -187,7 +194,7 @@ describe("buildSidebarModel - project mode", () => {
     const [a, b] = sections;
     if (a.kind !== "project" || b.kind !== "project") throw new Error("expected project sections");
     expect([a.defaultCollapsed, b.defaultCollapsed]).toEqual([false, true]);
-    expect(a.groups.map((g) => [g.status, g.defaultCollapsed])).toEqual([
+    expect(a.groups.map((g) => [g.lane, g.defaultCollapsed])).toEqual([
       ["todo", false],
       ["done", true],
     ]);
@@ -203,7 +210,7 @@ describe("buildSidebarModel - project mode", () => {
     );
     const section = sections[0];
     if (section.kind !== "project") throw new Error("expected project section");
-    expect(section.groups.map((g) => g.status)).toEqual(["todo"]);
+    expect(section.groups.map((g) => g.lane)).toEqual(["todo"]);
   });
 
   it("skips hidden projects and, with hideEmptyProjects, projects with nothing visible", () => {
@@ -610,5 +617,104 @@ describe("taskHeaderNavKeys", () => {
       taskHeaderNavKeys(sections, "alpha", "A-2"),
       taskHeaderNavKeys(sections, "alpha", "A-9"),
     ]).toEqual([["folder:alpha"], ["group:shelf:todo"], []]);
+  });
+});
+
+describe("buildSidebarModel - snoozed tasks", () => {
+  const tasksByProject = {
+    [alpha.path]: [
+      task("A-1", "in_review"),
+      snoozedTask("A-2", "in_review", 3),
+      snoozedTask("A-3", "todo", 1),
+      task("A-4", "done"),
+    ],
+    [beta.path]: [snoozedTask("B-1", "in_progress", 2), task("B-2", "todo")],
+  };
+
+  it("in Cards, leave the top rows and folders for a collapsed Snoozed shelf before Done, soonest first", () => {
+    for (const groupBy of ["status", "project"] as const) {
+      const sections = buildSidebarModel(
+        input({ layout: "cards", groupBy, projects: [alpha, beta], tasksByProject }),
+      );
+      expect(cardsShape(sections).slice(-3), groupBy).toEqual([
+        ["shelf:todo", false, ["B-2"]],
+        ["shelf:snoozed", true, ["A-3", "B-1", "A-2"]],
+        ["shelf:done", true, ["A-4"]],
+      ]);
+      expect(cardsShape(sections)[0], groupBy).toEqual(
+        groupBy === "status" ? ["attention", ["A-1"]] : ["folder:alpha", false, ["A-1"]],
+      );
+    }
+  });
+
+  it("return to their status once the snooze time comes", () => {
+    const sections = buildSidebarModel(
+      input({
+        layout: "cards",
+        groupBy: "status",
+        projects: [alpha, beta],
+        tasksByProject,
+        now: NOW + 2 * 3_600_000,
+      }),
+    );
+    expect(cardsShape(sections)).toEqual([
+      ["attention", ["A-1"]],
+      ["shelf:in_progress", false, ["B-1"]],
+      ["shelf:todo", false, ["A-3", "B-2"]],
+      ["shelf:snoozed", true, ["A-2"]],
+      ["shelf:done", true, ["A-4"]],
+    ]);
+  });
+
+  it("in Classic by project, get a collapsed Snoozed group after the status groups", () => {
+    const sections = buildSidebarModel(input({ projects: [alpha], tasksByProject }));
+    const section = sections[0];
+    if (section.kind !== "project") throw new Error("expected project section");
+    expect(
+      section.groups.map((g) => [g.lane, g.defaultCollapsed, g.rows.map((r) => r.task.key)]),
+    ).toEqual([
+      ["in_review", false, ["A-1"]],
+      ["done", true, ["A-4"]],
+      ["snoozed", true, ["A-3", "A-2"]],
+    ]);
+  });
+
+  it("in Classic by status, get one cross-project Snoozed section before Done", () => {
+    const sections = buildSidebarModel(
+      input({ groupBy: "status", projects: [alpha, beta], tasksByProject }),
+    );
+    expect(
+      sections.map((s) =>
+        s.kind === "status"
+          ? [s.key, s.defaultCollapsed, s.group.rows.map((r) => r.task.key)]
+          : s.key,
+      ),
+    ).toEqual([
+      ["status:in_review", false, ["A-1"]],
+      ["status:todo", false, ["B-2"]],
+      ["status:snoozed", true, ["A-3", "B-1", "A-2"]],
+      ["status:done", true, ["A-4"]],
+    ]);
+  });
+
+  it("keeps the open task listed in the collapsed Snoozed shelf, and only that one", () => {
+    const sections = buildSidebarModel(
+      input({ layout: "cards", groupBy: "status", projects: [alpha, beta], tasksByProject }),
+    );
+    const isOpen = (row: SidebarTaskRow) => row.task.key === "B-1";
+    const keys = sidebarNavItems(
+      sections,
+      (_, fallback) => fallback,
+      () => 1,
+      isOpen,
+    ).map(sidebarNavItemKey);
+    expect(keys).toEqual([
+      "task:alpha:A-1",
+      "group:shelf:todo",
+      "task:beta:B-2",
+      "group:shelf:snoozed",
+      "task:beta:B-1",
+      "group:shelf:done",
+    ]);
   });
 });
