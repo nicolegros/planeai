@@ -34,7 +34,7 @@
   let contentEl = $state<HTMLElement | null>(null);
   let heldTop = $state<number | null>(null);
   let height = $state(0);
-  let viewportHeight = $state(0);
+  let viewportHeight = $state(window.innerHeight);
 
   const heldStyle = $derived.by(() => {
     if (heldTop === null) return undefined;
@@ -50,11 +50,15 @@
     };
     const observer = new ResizeObserver(() => (height = el.offsetHeight));
     observer.observe(el);
+    const resize = () => (viewportHeight = window.innerHeight);
+    window.addEventListener("resize", resize);
     const events = ["pointerdown", "keydown", FRAME_INTERACTION_EVENT];
     for (const type of events) el.addEventListener(type, hold, true);
     return () => {
       observer.disconnect();
+      window.removeEventListener("resize", resize);
       for (const type of events) el.removeEventListener(type, hold, true);
+      heldTop = null;
     };
   });
 
@@ -79,8 +83,6 @@
     e.preventDefault();
   }
 </script>
-
-<svelte:window bind:innerHeight={viewportHeight} />
 
 <Dialog.Root {open} {onOpenChange}>
   <Dialog.Portal>

@@ -107,9 +107,9 @@ describe("TaskWorkspace session selection", () => {
     expect(appSource).not.toContain("showPrPanel");
   });
 
-  it("shows a dialog contribution without a session and a session panel only with one", () => {
+  it("shows a dialog contribution without a session and a session panel only with one, fresh per contribution", () => {
     expect(appSource).toMatch(
-      /\{#if modalPlugin && modalContribution && \(modalContribution\.placement === "dialog" \|\| activePluginSessionContext\)\}\s*<PluginDialog[\s\S]*?session=\{activePluginSessionContext\}[\s\S]*?getFocusedAgentSession=\{\(\) => activePluginSessionContext\}[\s\S]*?onNavigate=\{navigatePlugin\}[\s\S]*?onClose=\{closePluginContributionModal\}/,
+      /\{#if modalPlugin && modalContribution && \(modalContribution\.placement === "dialog" \|\| activePluginSessionContext\)\}\s*\{#key `\$\{modalPlugin\.id\}:\$\{modalContribution\.id\}`\}\s*<PluginDialog[\s\S]*?session=\{activePluginSessionContext\}[\s\S]*?getFocusedAgentSession=\{\(\) => activePluginSessionContext\}[\s\S]*?onNavigate=\{navigatePlugin\}[\s\S]*?onClose=\{closePluginContributionModal\}/,
     );
   });
 

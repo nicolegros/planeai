@@ -1529,15 +1529,17 @@
 </main>
 
 {#if modalPlugin && modalContribution && (modalContribution.placement === "dialog" || activePluginSessionContext)}
-  <PluginDialog
-    plugin={modalPlugin}
-    contribution={modalContribution}
-    session={activePluginSessionContext}
-    getFocusedAgentSession={() => activePluginSessionContext}
-    onNavigate={navigatePlugin}
-    onClose={closePluginContributionModal}
-    onOpenPreferences={() => openPreferences(pluginPreferencesLocation(modalPlugin))}
-  />
+  {#key `${modalPlugin.id}:${modalContribution.id}`}
+    <PluginDialog
+      plugin={modalPlugin}
+      contribution={modalContribution}
+      session={activePluginSessionContext}
+      getFocusedAgentSession={() => activePluginSessionContext}
+      onNavigate={navigatePlugin}
+      onClose={closePluginContributionModal}
+      onOpenPreferences={() => openPreferences(pluginPreferencesLocation(modalPlugin))}
+    />
+  {/key}
 {/if}
 
 <!-- Workspace prompts would sit on top of setup and act on the hidden workspace; they return after it. -->
