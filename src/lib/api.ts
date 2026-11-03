@@ -208,6 +208,8 @@ export const tasks = {
   snooze: (projectId: string, key: string, until: Date) =>
     invoke<TaskSnooze>("snooze_task", { projectId, key, until: until.toISOString() }),
   wake: (projectId: string, key: string) => invoke<TaskSnooze>("wake_task", { projectId, key }),
+  readSnooze: (projectId: string, key: string) =>
+    invoke<TaskSnooze>("read_task_snooze", { projectId, key }),
   restoreSnooze: (projectId: string, key: string, snooze: TaskSnooze) =>
     invoke<TaskSnooze>("restore_task_snooze", { projectId, key, snooze }),
   fireNotifyHook: (sessionId: string) => invoke("fire_task_notify_hook", { sessionId }),

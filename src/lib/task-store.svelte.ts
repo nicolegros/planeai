@@ -189,8 +189,15 @@ export async function markTaskUnread(projectId: string, key: string): Promise<vo
   applyFields(key, visitOf(await tasksApi.markUnread(projectId, key)));
 }
 
+/** The latest snooze write per task: an early wake re-reads the snooze only once it settles. */
+const snoozeWrites = new Map<string, Promise<unknown>>();
+
 /** Shows the snooze the backend wrote. */
 async function applySnooze(key: string, written: Promise<TaskSnooze>): Promise<TaskSnooze> {
+  snoozeWrites.set(
+    key,
+    written.catch(() => {}),
+  );
   const snooze = snoozeOf(await written);
   applyFields(key, snooze);
   return snooze;
@@ -236,32 +243,39 @@ export function createReturnVisit(viewed: () => { projectId: string; task: TaskI
 }
 
 /**
- * The early wake to show, if the task still has the snooze it woke: the event is not ordered with
- * the user's own snooze replies, and must not replace a newer snooze with an older one.
+ * Shows an early wake as the database has it. The event is not ordered with the replies to the
+ * user's snooze writes, so the read waits for the last one to settle, and gives way to any write
+ * that starts meanwhile: that write's reply is newer.
  */
-function wokeSnoozeStillShown(key: string, woke: TaskSnooze | null): TaskSnooze | null {
-  const snoozedAt = findTaskByKey(key)?.snoozed_at ?? null;
-  if (!woke || snoozedAt === null || woke.snoozed_at === null) return null;
-  return Date.parse(snoozedAt) === Date.parse(woke.snoozed_at) ? snoozeOf(woke) : null;
+async function rereadSnooze(projectId: string, key: string): Promise<void> {
+  const settled = snoozeWrites.get(key);
+  await settled;
+  const latest = snoozeWrites.get(key);
+  const snooze = snoozeOf(await tasksApi.readSnooze(projectId, key));
+  if (snoozeWrites.get(key) === latest) applyFields(key, snooze);
 }
 
 /** Shows agent activity on tasks as it happens; a task the user `isViewing` is visited instead of turning unread. */
 export function startTaskActivityListener(
   isViewing: (projectId: string, key: string) => boolean,
 ): () => void {
-  const unlisten = listen<
-    TaskVisit & { project_id: string; task_key: string; woke: TaskSnooze | null }
-  >("task-activity", ({ payload }) => {
-    const woke = wokeSnoozeStillShown(payload.task_key, payload.woke);
-    if (!isViewing(payload.project_id, payload.task_key)) {
-      applyFields(payload.task_key, { ...visitOf(payload), ...woke });
-      return;
-    }
-    if (woke) applyFields(payload.task_key, woke);
-    markTaskVisited(payload.project_id, payload.task_key).catch((error) =>
-      console.warn("Failed to mark a task visited:", error),
-    );
-  });
+  const unlisten = listen<TaskVisit & { project_id: string; task_key: string; woke: boolean }>(
+    "task-activity",
+    ({ payload }) => {
+      if (payload.woke) {
+        rereadSnooze(payload.project_id, payload.task_key).catch((error) =>
+          console.warn("Failed to read a woken task's snooze:", error),
+        );
+      }
+      if (!isViewing(payload.project_id, payload.task_key)) {
+        applyFields(payload.task_key, visitOf(payload));
+        return;
+      }
+      markTaskVisited(payload.project_id, payload.task_key).catch((error) =>
+        console.warn("Failed to mark a task visited:", error),
+      );
+    },
+  );
   return () => void unlisten.then((fn) => fn());
 }
 

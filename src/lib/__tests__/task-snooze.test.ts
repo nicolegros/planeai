@@ -151,6 +151,12 @@ describe("snoozeOptions", () => {
 describe("customSnoozeTime", () => {
   const now = new Date(2026, 10, 3, 10, 0);
 
+  it("refuses an amount too far ahead to be a date", () => {
+    expect(customSnoozeTime({ mode: "after", amount: "100000000", unit: "days" }, now)).toEqual({
+      error: "That is too far ahead.",
+    });
+  });
+
   it("takes a local date and time, or an amount from now", () => {
     expect(customSnoozeTime({ mode: "at", date: "2026-11-04", time: "09:30" }, now)).toEqual({
       at: new Date(2026, 10, 4, 9, 30),

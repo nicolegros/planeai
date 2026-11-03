@@ -15,5 +15,5 @@
 
 {#if until !== null}
   {@const wakeTime = wakeTimeLabel(until)}
-  <span class="tabular-nums text-t3 {className}" title={`Wakes ${wakeTime}`} aria-label={`Snoozed, wakes ${wakeTime}`}>{snoozeCountdown(until, getMinuteNow())}</span>
+  <span class="tabular-nums text-t3 {className}" role="img" title={`Wakes ${wakeTime}`} aria-label={`Snoozed, wakes ${wakeTime}`}>{snoozeCountdown(until, getMinuteNow())}</span>
 {/if}

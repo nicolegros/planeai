@@ -83,7 +83,7 @@ export const LANES: Record<TaskLane, Lane> = {
 const PROJECT_GROUP_LANES: TaskLane[] = ["in_progress", "in_review", "todo", "done", "snoozed"];
 const STATUS_SECTION_LANES: TaskLane[] = ["in_progress", "in_review", "todo", "snoozed", "done"];
 
-export function taskLane(task: TaskItem, now: number): TaskLane {
+function taskLane(task: TaskItem, now: number): TaskLane {
   return isTaskSnoozed(task, now) ? "snoozed" : normalizeTaskStatus(task.status);
 }
 

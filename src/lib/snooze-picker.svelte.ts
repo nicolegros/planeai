@@ -75,7 +75,7 @@ export function closeCustomSnooze(): void {
   giveFocusBack();
 }
 
-export function openCustomSnooze(target: SnoozeTarget): void {
+function openCustomSnooze(target: SnoozeTarget): void {
   rememberFocus();
   menu = null;
   custom = target;

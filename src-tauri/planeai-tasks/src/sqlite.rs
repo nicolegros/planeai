@@ -313,6 +313,10 @@ fn write_snooze(
     Ok(read_status_and_snooze(conn, prefix, key)?.1)
 }
 
+pub fn read_snooze(conn: &Connection, prefix: &str, key: &str) -> Result<Snooze, Error> {
+    Ok(read_status_and_snooze(conn, prefix, key)?.1)
+}
+
 /// Hides the task until `until`; its status and agents are left alone.
 pub fn snooze(
     conn: &Connection,

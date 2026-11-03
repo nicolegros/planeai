@@ -236,7 +236,7 @@ pub async fn mark_task_visited(
     project_id: String,
     key: String,
 ) -> Result<Visit, String> {
-    write_task_fields(db_state, project_id, key, |conn, prefix, key| {
+    with_task_conn(db_state, project_id, key, |conn, prefix, key| {
         planeai_tasks::sqlite::mark_visited(conn, prefix, key, chrono::Utc::now())
     })
     .await
@@ -249,7 +249,7 @@ pub async fn mark_task_unread(
     project_id: String,
     key: String,
 ) -> Result<Visit, String> {
-    write_task_fields(
+    with_task_conn(
         db_state,
         project_id,
         key,
@@ -266,7 +266,7 @@ pub async fn snooze_task(
     key: String,
     until: chrono::DateTime<chrono::Utc>,
 ) -> Result<Snooze, String> {
-    write_task_fields(db_state, project_id, key, move |conn, prefix, key| {
+    with_task_conn(db_state, project_id, key, move |conn, prefix, key| {
         planeai_tasks::sqlite::snooze(conn, prefix, key, until, chrono::Utc::now())
     })
     .await
@@ -278,7 +278,23 @@ pub async fn wake_task(
     project_id: String,
     key: String,
 ) -> Result<Snooze, String> {
-    write_task_fields(db_state, project_id, key, planeai_tasks::sqlite::wake).await
+    with_task_conn(db_state, project_id, key, planeai_tasks::sqlite::wake).await
+}
+
+/// The task's snooze as stored, for the frontend to re-read after an early wake.
+#[tauri::command]
+pub async fn read_task_snooze(
+    db_state: State<'_, DbState>,
+    project_id: String,
+    key: String,
+) -> Result<Snooze, String> {
+    with_task_conn(
+        db_state,
+        project_id,
+        key,
+        planeai_tasks::sqlite::read_snooze,
+    )
+    .await
 }
 
 /// Puts a snooze back as it was, to undo a snooze or a wake.
@@ -289,17 +305,17 @@ pub async fn restore_task_snooze(
     key: String,
     snooze: Snooze,
 ) -> Result<Snooze, String> {
-    write_task_fields(db_state, project_id, key, move |conn, prefix, key| {
+    with_task_conn(db_state, project_id, key, move |conn, prefix, key| {
         planeai_tasks::sqlite::restore_snooze(conn, prefix, key, snooze)
     })
     .await
 }
 
-async fn write_task_fields<T: Send + 'static>(
+async fn with_task_conn<T: Send + 'static>(
     db_state: State<'_, DbState>,
     project_id: String,
     key: String,
-    write: impl FnOnce(&rusqlite::Connection, &str, &str) -> Result<T, planeai_tasks::provider::Error>
+    run: impl FnOnce(&rusqlite::Connection, &str, &str) -> Result<T, planeai_tasks::provider::Error>
         + Send
         + 'static,
 ) -> Result<T, String> {
@@ -307,7 +323,7 @@ async fn write_task_fields<T: Send + 'static>(
     super::blocking(move || {
         let conn = db.lock().map_err(|e| e.to_string())?;
         let prefix = crate::task_activity::project_prefix(&conn, &project_id)?;
-        write(&conn, &prefix, &key).map_err(|e| e.to_string())
+        run(&conn, &prefix, &key).map_err(|e| e.to_string())
     })
     .await
 }
