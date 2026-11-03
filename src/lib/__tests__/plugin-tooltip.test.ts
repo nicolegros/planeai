@@ -8,11 +8,13 @@ describe("parseTooltipLines", () => {
         { text: "#12 Fix login", tone: "success" },
         { text: "  #13 Stack base  " },
         { text: "#14 Draft", tone: "rainbow" },
+        { text: "#15 Inherited", tone: "toString" },
       ]),
     ).toEqual([
       { text: "#12 Fix login", tone: "success" },
       { text: "#13 Stack base" },
       { text: "#14 Draft" },
+      { text: "#15 Inherited" },
     ]);
   });
 

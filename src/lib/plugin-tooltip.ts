@@ -7,7 +7,6 @@ export const PLUGIN_TONE_COLORS = {
   muted: "--color-t3",
 } as const;
 export type PluginTooltipTone = keyof typeof PLUGIN_TONE_COLORS;
-export const PLUGIN_TOOLTIP_TONES = Object.keys(PLUGIN_TONE_COLORS) as PluginTooltipTone[];
 
 export interface PluginTooltipLine {
   text: string;
@@ -18,7 +17,7 @@ export const PLUGIN_TOOLTIP_MAX_LINES = 12;
 export const PLUGIN_TOOLTIP_MAX_TEXT = 200;
 
 const isTone = (value: unknown): value is PluginTooltipTone =>
-  (PLUGIN_TOOLTIP_TONES as readonly unknown[]).includes(value);
+  typeof value === "string" && Object.hasOwn(PLUGIN_TONE_COLORS, value);
 
 /** The lines of a frame's `{ type: "tooltip", lines }` message, or null when it is malformed. */
 export function parseTooltipLines(value: unknown): PluginTooltipLine[] | null {
