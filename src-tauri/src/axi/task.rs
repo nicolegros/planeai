@@ -318,10 +318,10 @@ pub struct TaskUpdate<'a> {
     pub status: Option<&'a str>,
 }
 
-/// Apply the edits, then the move, each through its lifecycle-producing path. Everything
-/// that can be refused is checked first, so a refused update writes nothing. The two writes
-/// are separate transactions because the move cascades through `move_task_with_lifecycle`,
-/// which works on any `TaskProvider`.
+/// Apply the field edits, the parent change, then the move, each through its
+/// lifecycle-producing path. Everything that can be refused is checked first, so a refused
+/// update writes nothing. They are three transactions because the parent change and the move
+/// report lifecycle events through `TaskProvider` methods that work on any provider.
 pub fn task_update(scope: &TaskScope, update: TaskUpdate) -> (String, i32) {
     let key = update.edit.key;
     if let Some(status) = update.status {
@@ -346,8 +346,7 @@ pub fn task_update(scope: &TaskScope, update: TaskUpdate) -> (String, i32) {
             return (emit_error(&error.to_string(), &[]), 1);
         }
     }
-    let blocked_by = update.edit.blocked_by.map(distinct);
-    for blocker in blocked_by.iter().flatten() {
+    for blocker in update.edit.blocked_by.into_iter().flatten() {
         if scope.repo.get(blocker).is_err() {
             return (
                 emit_error(&format!("blocking task not found: {blocker}"), &[]),
@@ -355,16 +354,12 @@ pub fn task_update(scope: &TaskScope, update: TaskUpdate) -> (String, i32) {
             );
         }
     }
-    let tags = update.edit.tags.map(distinct);
-    let edit = crate::task_cli::EditParams {
-        tags: tags.as_deref(),
-        blocked_by: blocked_by.as_deref(),
-        ..update.edit
-    };
-    if !edit.is_empty() {
-        if let Err(error) =
-            crate::task_cli::run_task_edit_with_lifecycle(&scope.repo, edit, &scope.lifecycle)
-        {
+    if !update.edit.is_empty() {
+        if let Err(error) = crate::task_cli::run_task_edit_with_lifecycle(
+            &scope.repo,
+            update.edit,
+            &scope.lifecycle,
+        ) {
             return (emit_error(&error, &[]), 1);
         }
     }
@@ -382,16 +377,6 @@ pub fn task_update(scope: &TaskScope, update: TaskUpdate) -> (String, i32) {
         Ok(task) => (render(&[field("task", task_detail_object(&task))]), 0),
         Err(error) => (emit_error(&error.to_string(), &[]), 1),
     }
-}
-
-/// `values` without repeats, in first-seen order.
-fn distinct(values: &[String]) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    values
-        .iter()
-        .filter(|value| seen.insert(value.as_str()))
-        .cloned()
-        .collect()
 }
 
 /// Delete a task and the task workspace it owned.

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Datelike, SecondsFormat, SubsecRound, Utc};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row, TransactionBehavior};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -85,7 +85,7 @@ pub fn insert_task(
 }
 
 /// Refuse a `parent` that is missing, is `key` itself, or is one of `key`'s subtasks.
-pub fn check_parent(conn: &Connection, key: &str, parent: &str) -> Result<(), Error> {
+fn check_parent(conn: &Connection, key: &str, parent: &str) -> Result<(), Error> {
     let cycle = || Error::ParentCycle {
         key: key.to_string(),
         parent: parent.to_string(),
@@ -593,8 +593,9 @@ impl SqliteRepository {
             .conn
             .lock()
             .map_err(|error| Error::Storage(error.to_string()))?;
+        // Immediate: a deferred read-then-write fails with SQLITE_BUSY_SNAPSHOT under WAL.
         let tx = conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| Error::Storage(error.to_string()))?;
         let existing_parent: Option<String> = tx
             .query_row(
@@ -908,7 +909,10 @@ impl TaskProvider for SqliteRepository {
             .conn
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
-        let tx = conn.transaction().map_err(storage)?;
+        // Immediate: a deferred read-then-write fails with SQLITE_BUSY_SNAPSHOT under WAL.
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
 
         let existing = tx
             .query_row(
@@ -969,7 +973,7 @@ impl TaskProvider for SqliteRepository {
             .map_err(storage)?;
             for bk in blockers {
                 tx.execute(
-                    "INSERT INTO task_blockers (task_key, blocked_by_key) VALUES (?1, ?2)",
+                    "INSERT OR IGNORE INTO task_blockers (task_key, blocked_by_key) VALUES (?1, ?2)",
                     rusqlite::params![key, bk],
                 )
                 .map_err(storage)?;
@@ -984,7 +988,7 @@ impl TaskProvider for SqliteRepository {
             .map_err(storage)?;
             for tag in tags {
                 tx.execute(
-                    "INSERT INTO task_tags (task_key, tag) VALUES (?1, ?2)",
+                    "INSERT OR IGNORE INTO task_tags (task_key, tag) VALUES (?1, ?2)",
                     rusqlite::params![key, tag],
                 )
                 .map_err(storage)?;

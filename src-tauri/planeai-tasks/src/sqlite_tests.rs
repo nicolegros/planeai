@@ -918,33 +918,66 @@ fn update_that_fails_midway_leaves_the_task_unchanged() {
             ..Default::default()
         })
         .unwrap();
+    r.conn
+        .lock()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER refuse_tag BEFORE INSERT ON task_tags WHEN NEW.tag = 'refused'
+             BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        )
+        .unwrap();
 
-    for params in [
+    let failed = r.update(
+        &task.key,
         UpdateParams {
             title: Some("Renamed".into()),
-            blocked_by: Some(vec!["TEST-2".into(), "TEST-2".into()]),
+            blocked_by: Some(vec!["TEST-2".into()]),
+            tags: Some(vec!["new".into(), "refused".into()]),
             ..Default::default()
         },
-        UpdateParams {
-            title: Some("Renamed".into()),
-            tags: Some(vec!["dup".into(), "dup".into()]),
+    );
+
+    assert!(matches!(failed, Err(Error::Storage(_))));
+    let after = r.get(&task.key).unwrap();
+    assert_eq!(
+        (after.title.as_str(), after.tags, after.blocked_by),
+        (
+            "Original",
+            vec!["keep".to_string()],
+            vec!["TEST-1".to_string()]
+        )
+    );
+}
+
+#[test]
+fn update_drops_repeated_tags_and_blockers() {
+    let r = repo();
+    for title in ["first", "second", "task"] {
+        r.create(CreateParams {
+            title: title.into(),
             ..Default::default()
-        },
-    ] {
-        assert!(matches!(
-            r.update(&task.key, params),
-            Err(Error::Storage(_))
-        ));
-        let after = r.get(&task.key).unwrap();
-        assert_eq!(
-            (after.title.as_str(), after.tags, after.blocked_by),
-            (
-                "Original",
-                vec!["keep".to_string()],
-                vec!["TEST-1".to_string()]
-            )
-        );
+        })
+        .unwrap();
     }
+
+    let task = r
+        .update(
+            "TEST-3",
+            UpdateParams {
+                tags: Some(vec!["b".into(), "a".into(), "b".into()]),
+                blocked_by: Some(vec!["TEST-1".into(), "TEST-2".into(), "TEST-1".into()]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        (task.tags, task.blocked_by),
+        (
+            vec!["a".to_string(), "b".to_string()],
+            vec!["TEST-1".to_string(), "TEST-2".to_string()]
+        )
+    );
 }
 
 #[test]
