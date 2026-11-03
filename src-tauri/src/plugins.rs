@@ -1698,6 +1698,12 @@ impl RuntimeProcess {
     }
 }
 
+/// A background run refreshes the plugin's UI unless its result says `"changed": false`, so an
+/// idle refresh does not remount open session panels.
+fn background_run_changed_data(totals: &Value) -> bool {
+    totals.get("changed") != Some(&Value::Bool(false))
+}
+
 fn read_plugin_settings(data_dir: &Path) -> Result<Value, String> {
     let path = data_dir.join("settings.json");
     if !path.exists() {
@@ -3841,6 +3847,7 @@ impl PluginRuntimeSupervisor {
                     outcome = process.request(&service.method, Value::Null) => match outcome {
                         Ok(totals) => {
                             tracing::info!(plugin_id = %plugin_id, generation, method = %service.method, totals = ?totals, "plugin background service complete");
+                            let changed_data = background_run_changed_data(&totals);
                             let event = serde_json::json!({
                                 "plugin_id": plugin_id,
                                 "generation": generation,
@@ -3855,8 +3862,10 @@ impl PluginRuntimeSupervisor {
                                     tracing::warn!(plugin_id = %plugin_id, %error, "failed to emit plugin departure event");
                                 }
                             }
-                            if let Err(error) = app.emit("plugin-data-changed", plugin_id.clone()) {
-                                tracing::warn!(plugin_id = %plugin_id, %error, "failed to emit plugin refresh event");
+                            if changed_data {
+                                if let Err(error) = app.emit("plugin-data-changed", plugin_id.clone()) {
+                                    tracing::warn!(plugin_id = %plugin_id, %error, "failed to emit plugin refresh event");
+                                }
                             }
                         }
                         Err(error) => tracing::warn!(plugin_id = %plugin_id, generation, method = %service.method, %error, "plugin background service failed"),
@@ -4315,6 +4324,20 @@ impl<T> OptionalRow<T> for rusqlite::Result<T> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_background_run_refreshes_the_ui_unless_it_reports_no_change() {
+        assert!(background_run_changed_data(
+            &serde_json::json!({ "checked": 3 })
+        ));
+        assert!(background_run_changed_data(
+            &serde_json::json!({ "changed": true })
+        ));
+        assert!(background_run_changed_data(&Value::Null));
+        assert!(!background_run_changed_data(
+            &serde_json::json!({ "checked": 3, "changed": false })
+        ));
+    }
+
     #[test]
     fn concurrent_settings_patches_keep_every_update() {
         let directory = tempfile::TempDir::new().unwrap();
