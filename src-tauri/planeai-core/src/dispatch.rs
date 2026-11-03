@@ -41,7 +41,7 @@ impl TaskDispatcher {
             if claimed.contains(&task.key) {
                 continue;
             }
-            if self.source.is_terminal(&task.status) {
+            if task.snoozed || self.source.is_terminal(&task.status) {
                 continue;
             }
             if !task.subtasks.is_empty() {
