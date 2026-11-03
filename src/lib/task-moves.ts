@@ -4,7 +4,7 @@ import { isSnoozeActive, isTaskSnoozed, snoozeOf, wakeTimeLabel } from "./task-s
 import { getLaneNow } from "./snooze-clock.svelte";
 import * as taskStore from "./task-store.svelte";
 import { dismissToast, showToast } from "./toasts.svelte";
-import type { Project, TaskItem, TaskSnooze } from "./types";
+import type { Project, StoredSnooze, TaskItem, TaskSnooze } from "./types";
 
 /** Done archives the task's sessions and stops their agents, so it waits this long for an undo. */
 export const DONE_UNDO_SECONDS = 5;
@@ -27,7 +27,8 @@ interface SnoozeChange {
   repoPath: string;
   projectId: string;
   before: TaskSnooze;
-  after: TaskSnooze;
+  /** The write as stored; its revision tells whether the task still shows it. */
+  after: StoredSnooze;
 }
 
 /** A task change made in the UI that Mod+Z can revert. */
@@ -188,13 +189,6 @@ export async function applyDoneNow(key: string, repoPath: string): Promise<void>
   await taskStore.moveTask(key, "done", repoPath);
 }
 
-const instant = (at: string | null) => (at === null ? null : Date.parse(at));
-
-const sameSnooze = (a: TaskSnooze, b: TaskSnooze) =>
-  instant(a.snoozed_until) === instant(b.snoozed_until) &&
-  instant(a.snoozed_at) === instant(b.snoozed_at) &&
-  instant(a.woke_at) === instant(b.woke_at);
-
 /** The task still shows the change, so reverting it undoes what the user did. */
 function stands(change: TaskChange): boolean {
   const task = taskStore.findTask(change.repoPath, change.key);
@@ -205,7 +199,7 @@ function stands(change: TaskChange): boolean {
         task?.status === change.to
       );
     case "snooze":
-      return task !== undefined && sameSnooze(snoozeOf(task), change.after);
+      return task?.snooze_rev === change.after.snooze_rev;
   }
 }
 
@@ -265,12 +259,12 @@ const SNOOZE_TOAST_MS = 5000;
 async function changeSnooze(
   task: TaskItem,
   project: Project,
-  write: () => Promise<TaskSnooze>,
+  write: () => Promise<StoredSnooze>,
   message: string,
   detail?: string,
 ): Promise<boolean> {
   const before = snoozeOf(task);
-  let after: TaskSnooze;
+  let after: StoredSnooze;
   try {
     after = await write();
   } catch (error) {

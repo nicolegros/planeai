@@ -251,36 +251,33 @@ pub fn mark_unread(conn: &Connection, prefix: &str, key: &str) -> Result<Visit, 
     }
 }
 
-fn read_status_and_snooze(
-    conn: &Connection,
-    prefix: &str,
-    key: &str,
-) -> Result<(Status, StoredSnooze), Error> {
-    let (status, until, at, woke, rev) = conn
+fn read_stored_snooze(conn: &Connection, prefix: &str, key: &str) -> Result<StoredSnooze, Error> {
+    let (until, at, woke, rev) = conn
         .query_row(
-            "SELECT status, snoozed_until, snoozed_at, woke_at, snooze_rev FROM tasks WHERE key = ?1 AND project_prefix = ?2",
+            "SELECT snoozed_until, snoozed_at, woke_at, snooze_rev FROM tasks WHERE key = ?1 AND project_prefix = ?2",
             params![key, prefix],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, i64>(4)?,
-                ))
-            },
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get::<_, i64>(3)?)),
         )
         .optional()
         .map_err(|e| Error::Storage(e.to_string()))?
         .ok_or(Error::NotFound)?;
-    let status = Status::parse(&status).ok_or(Error::InvalidStatus(status))?;
-    Ok((
-        status,
-        StoredSnooze {
-            snooze: snooze_from_columns(until, at, woke),
-            snooze_rev: rev,
-        },
-    ))
+    Ok(StoredSnooze {
+        snooze: snooze_from_columns(until, at, woke),
+        snooze_rev: rev,
+    })
+}
+
+fn read_status(conn: &Connection, prefix: &str, key: &str) -> Result<Status, Error> {
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM tasks WHERE key = ?1 AND project_prefix = ?2",
+            params![key, prefix],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| Error::Storage(e.to_string()))?
+        .ok_or(Error::NotFound)?;
+    Status::parse(&status).ok_or(Error::InvalidStatus(status))
 }
 
 fn snooze_from_columns(until: Option<String>, at: Option<String>, woke: Option<String>) -> Snooze {
@@ -289,15 +286,6 @@ fn snooze_from_columns(until: Option<String>, at: Option<String>, woke: Option<S
         snoozed_at: at.as_deref().and_then(parse_time),
         woke_at: woke.as_deref().and_then(parse_time),
     }
-}
-
-/// A Done task is finished business, so it can never sleep.
-fn ensure_not_done(conn: &Connection, prefix: &str, key: &str) -> Result<(), Error> {
-    let (status, _) = read_status_and_snooze(conn, prefix, key)?;
-    if status == Status::Done {
-        return Err(Error::Rejected("a done task cannot be snoozed".into()));
-    }
-    Ok(())
 }
 
 fn write_snooze(
@@ -312,19 +300,29 @@ fn write_snooze(
         return Err(Error::Rejected("the snooze time is too far ahead".into()));
     }
     let format = |at: Option<DateTime<Utc>>| at.map(|at| format_time(at.trunc_subsecs(3)));
-    conn.execute(
-        "UPDATE tasks SET snoozed_until = ?1, snoozed_at = ?2, woke_at = ?3, snooze_rev = snooze_rev + 1
-         WHERE key = ?4 AND project_prefix = ?5",
-        params![
-            format(snooze.snoozed_until),
-            format(snooze.snoozed_at),
-            format(snooze.woke_at),
-            key,
-            prefix
-        ],
-    )
-    .map_err(|e| Error::Storage(e.to_string()))?;
-    Ok(read_status_and_snooze(conn, prefix, key)?.1)
+    // A Done task is finished business and never sleeps. The check sits in the UPDATE because a
+    // move to Done can come from another connection between a separate check and this write.
+    let written = conn
+        .execute(
+            "UPDATE tasks SET snoozed_until = ?1, snoozed_at = ?2, woke_at = ?3, snooze_rev = snooze_rev + 1
+             WHERE key = ?4 AND project_prefix = ?5 AND (?6 OR status != 'done')",
+            params![
+                format(snooze.snoozed_until),
+                format(snooze.snoozed_at),
+                format(snooze.woke_at),
+                key,
+                prefix,
+                snooze == Snooze::default()
+            ],
+        )
+        .map_err(|e| Error::Storage(e.to_string()))?;
+    if written == 0 {
+        return Err(match read_status(conn, prefix, key)? {
+            Status::Done => Error::Rejected("a done task cannot be snoozed".into()),
+            _ => Error::NotFound,
+        });
+    }
+    read_stored_snooze(conn, prefix, key)
 }
 
 /// Hides the task until `until`; its status and agents are left alone.
@@ -335,7 +333,6 @@ pub fn snooze(
     until: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<StoredSnooze, Error> {
-    ensure_not_done(conn, prefix, key)?;
     if until <= now {
         return Err(Error::Rejected("the snooze time has passed".into()));
     }
@@ -364,9 +361,6 @@ pub fn restore_snooze(
     key: &str,
     snooze: Snooze,
 ) -> Result<StoredSnooze, Error> {
-    if snooze != Snooze::default() {
-        ensure_not_done(conn, prefix, key)?;
-    }
     write_snooze(conn, prefix, key, snooze)
 }
 
@@ -391,7 +385,7 @@ pub fn wake_early(
     if woke == 0 {
         return Ok(None);
     }
-    Ok(Some(read_status_and_snooze(conn, prefix, key)?.1))
+    read_stored_snooze(conn, prefix, key).map(Some)
 }
 
 /// Derive a project prefix from a project name.

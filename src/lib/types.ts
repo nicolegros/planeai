@@ -56,6 +56,8 @@ export interface TaskItem {
   woke_at: string | null;
   /** Bumped by every write to the snooze; orders the copies of it the store receives. */
   snooze_rev: number;
+  /** Tells a task apart from an earlier one created under the same key. */
+  created_at: string;
 }
 
 export type TaskVisit = Pick<TaskItem, "last_visited_at" | "last_activity_at">;

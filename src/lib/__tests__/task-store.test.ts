@@ -43,6 +43,7 @@ const task = (key: string, parentKey: string | null = null): TaskItem => ({
   snoozed_at: null,
   woke_at: null,
   snooze_rev: 0,
+  created_at: "2026-11-01T09:00:00.000Z",
 });
 
 describe("task store", () => {
@@ -293,11 +294,7 @@ describe("task visits", () => {
     activity(woken);
     reply.resolve(snoozed);
 
-    await expect(snoozing).resolves.toEqual({
-      snoozed_until: snoozed.snoozed_until,
-      snoozed_at: snoozed.snoozed_at,
-      woke_at: null,
-    });
+    await expect(snoozing).resolves.toEqual(snoozed);
     expect(snoozeInStore()).toEqual(woken);
     stop();
   });
@@ -338,6 +335,21 @@ describe("task visits", () => {
     await taskStore.loadTasks(["/repo"]);
 
     expect(snoozeInStore()).toEqual(wokenFromCli);
+  });
+
+  it("shows a task recreated under the same key as the new row, not the old row's snooze", async () => {
+    await snoozeTomorrow(Promise.resolve(snoozed));
+    const recreated = { ...task("PLA-1"), created_at: "2026-11-03T12:00:00.000Z" };
+    listAll.mockResolvedValueOnce([recreated, task("PLA-2")]);
+
+    await taskStore.loadTasks(["/repo"]);
+
+    expect(snoozeInStore()).toEqual({
+      snoozed_until: null,
+      snoozed_at: null,
+      woke_at: null,
+      snooze_rev: 0,
+    });
   });
 
   it("stays on the newest snooze it saw when a write fails", async () => {

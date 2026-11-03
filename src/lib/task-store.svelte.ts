@@ -28,7 +28,8 @@ function settleReload(byProject: Record<string, TaskItem[]>): Record<string, Tas
       repoPath,
       items.map((loaded) => {
         const shown = tasksByKey.get(loaded.key);
-        const task = shown === undefined ? loaded : withNewerSnooze(loaded, shown);
+        const sameRow = shown !== undefined && shown.created_at === loaded.created_at;
+        const task = sameRow ? withNewerSnooze(loaded, shown) : loaded;
         const held = heldStatuses.get(taskRef(repoPath, task.key));
         return held === undefined ? task : { ...task, status: held.status };
       }),
@@ -202,17 +203,17 @@ function showSnooze(key: string, snooze: StoredSnooze): void {
 }
 
 /** Shows the snooze the backend wrote, unless a newer one is already shown; returns the one written. */
-async function applySnooze(key: string, written: Promise<StoredSnooze>): Promise<TaskSnooze> {
+async function applySnooze(key: string, written: Promise<StoredSnooze>): Promise<StoredSnooze> {
   const snooze = await written;
   showSnooze(key, snooze);
-  return snoozeOf(snooze);
+  return snooze;
 }
 
-export function snoozeTask(projectId: string, key: string, until: Date): Promise<TaskSnooze> {
+export function snoozeTask(projectId: string, key: string, until: Date): Promise<StoredSnooze> {
   return applySnooze(key, tasksApi.snooze(projectId, key, until));
 }
 
-export function wakeTask(projectId: string, key: string): Promise<TaskSnooze> {
+export function wakeTask(projectId: string, key: string): Promise<StoredSnooze> {
   return applySnooze(key, tasksApi.wake(projectId, key));
 }
 
@@ -220,7 +221,7 @@ export function restoreTaskSnooze(
   projectId: string,
   key: string,
   snooze: TaskSnooze,
-): Promise<TaskSnooze> {
+): Promise<StoredSnooze> {
   return applySnooze(key, tasksApi.restoreSnooze(projectId, key, snooze));
 }
 
