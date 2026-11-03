@@ -115,6 +115,7 @@ fn dispatch_logs_the_prompt_size_but_never_its_text() {
         blocked_by: vec![],
         subtasks: vec![],
         base_branch: "main".to_string(),
+        snoozed: false,
     };
 
     dispatcher.dispatch(&task, &AcceptingBackend).unwrap();

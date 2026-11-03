@@ -177,6 +177,7 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
         blocked_by: vec![],
         subtasks: vec![],
         base_branch: "main".to_string(),
+        snoozed: false,
     };
 
     let session = dispatcher.dispatch(&task, &backend).unwrap();
@@ -251,6 +252,7 @@ fn dispatch_uses_task_base_branch_when_present() {
         blocked_by: vec![],
         subtasks: vec![],
         base_branch: "develop".to_string(),
+        snoozed: false,
     };
 
     let session = dispatcher.dispatch(&task, &backend).unwrap();
@@ -295,6 +297,7 @@ fn dispatch_fetches_base_before_worktree_creation() {
         blocked_by: vec![],
         subtasks: vec![],
         base_branch: "develop".to_string(),
+        snoozed: false,
     };
 
     dispatcher.dispatch(&task, &backend).unwrap();
@@ -396,6 +399,7 @@ fn make_task() -> Task {
         blocked_by: vec![],
         subtasks: vec![],
         base_branch: "main".to_string(),
+        snoozed: false,
     }
 }
 
@@ -498,6 +502,7 @@ fn dispatch_uses_parent_key_for_branch_name() {
         blocked_by: vec![],
         subtasks: vec![],
         base_branch: "main".to_string(),
+        snoozed: false,
     };
 
     let session = dispatcher.dispatch(&task, &backend).unwrap();
@@ -524,6 +529,7 @@ fn dispatch_without_parent_key_uses_task_key() {
         blocked_by: vec![],
         subtasks: vec![],
         base_branch: "main".to_string(),
+        snoozed: false,
     };
 
     let session = dispatcher.dispatch(&task, &backend).unwrap();
