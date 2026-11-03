@@ -187,9 +187,20 @@ pub async fn spawn_shell_tab(
         args,
         cwd,
         env,
-        CONTROL_TIMEOUT,
+        SpawnTimeouts {
+            spawn: CONTROL_TIMEOUT,
+            control: CONTROL_TIMEOUT,
+        },
     )
     .await
+}
+
+/// `spawn` bounds the daemon's spawn response; `control` bounds the lookup before it and the
+/// cancellation after a timeout, which must outlast a slow spawn to avoid orphaning it.
+#[derive(Clone, Copy)]
+struct SpawnTimeouts {
+    spawn: std::time::Duration,
+    control: std::time::Duration,
 }
 
 /// Whether the daemon runs this shell tab.
@@ -207,9 +218,9 @@ async fn spawn_shell_tab_with_timeout(
     args: &[String],
     cwd: &str,
     env: &HashMap<String, String>,
-    control_timeout: std::time::Duration,
+    timeouts: SpawnTimeouts,
 ) -> Result<(), String> {
-    let daemon = tokio::time::timeout(control_timeout, list_daemon_sessions(socket_path))
+    let daemon = tokio::time::timeout(timeouts.control, list_daemon_sessions(socket_path))
         .await
         .map_err(|_| "daemon shell-tab lookup timed out".to_string())??;
     if daemon.running.contains(session_id) {
@@ -224,7 +235,7 @@ async fn spawn_shell_tab_with_timeout(
             args,
             cwd,
             env,
-            control_timeout,
+            timeouts,
         )
         .await;
     }
@@ -238,7 +249,7 @@ async fn spawn_shell_tab_with_timeout(
         args,
         cwd,
         env,
-        control_timeout,
+        timeouts.spawn,
     )
     .await
 }
@@ -265,7 +276,7 @@ async fn spawn_shell_tab_correlated(
     args: &[String],
     cwd: &str,
     env: &HashMap<String, String>,
-    control_timeout: std::time::Duration,
+    timeouts: SpawnTimeouts,
 ) -> Result<(), String> {
     let request_id = Uuid::new_v4().to_string();
     let request = serde_json::json!({
@@ -280,7 +291,7 @@ async fn spawn_shell_tab_correlated(
     });
 
     let spawn_error =
-        match tokio::time::timeout(control_timeout, send_control_request(socket_path, &request))
+        match tokio::time::timeout(timeouts.spawn, send_control_request(socket_path, &request))
             .await
         {
             Ok(Ok(_)) => return Ok(()),
@@ -293,7 +304,7 @@ async fn spawn_shell_tab_correlated(
         "cmd": "cancel_spawn",
         "request_id": request_id,
     });
-    tokio::time::timeout(control_timeout, send_control_request(socket_path, &cancel))
+    tokio::time::timeout(timeouts.control, send_control_request(socket_path, &cancel))
         .await
         .map_err(|_| "daemon shell-tab spawn cancellation was not acknowledged".to_string())??;
     Err(format!("{spawn_error}; daemon spawn was cancelled"))
@@ -627,10 +638,12 @@ mod tests {
                 &["999".to_string()],
                 "/",
                 &HashMap::new(),
-                // The same bound covers the lookup and the cancel acknowledgement,
-                // which must not time out on a loaded machine. Only the withheld
-                // spawn response is meant to.
-                std::time::Duration::from_secs(2),
+                // Only the withheld spawn response is meant to time out; the lookup and the
+                // cancel acknowledgement get room to answer on a loaded machine.
+                SpawnTimeouts {
+                    spawn: std::time::Duration::from_secs(1),
+                    control: std::time::Duration::from_secs(10),
+                },
             )
             .await
         });
@@ -713,7 +726,10 @@ mod tests {
             &["999".to_string()],
             "/",
             &HashMap::new(),
-            std::time::Duration::from_secs(1),
+            SpawnTimeouts {
+                spawn: std::time::Duration::from_secs(1),
+                control: std::time::Duration::from_secs(10),
+            },
         )
         .await
         .unwrap();
@@ -769,7 +785,10 @@ mod tests {
             &["999".to_string()],
             "/",
             &HashMap::new(),
-            std::time::Duration::from_millis(50),
+            SpawnTimeouts {
+                spawn: std::time::Duration::from_millis(50),
+                control: std::time::Duration::from_secs(10),
+            },
         )
         .await;
         assert!(
