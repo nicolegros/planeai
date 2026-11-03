@@ -418,9 +418,14 @@ export function countSessionsLostOnQuit(
   ).length;
 }
 
-export function setupQuitGuard(onShowConfirm: (count: number) => void): Promise<() => void> {
+/** `beforeClose` finishes work that must not be lost, such as a Done waiting out its undo window. */
+export function setupQuitGuard(
+  onShowConfirm: (count: number) => void,
+  beforeClose: () => Promise<void> = async () => {},
+): Promise<() => void> {
   return getCurrentWindow().onCloseRequested(async (event) => {
     flushMru().catch(() => {});
+    await beforeClose().catch(() => {});
     const count = countSessionsLostOnQuit(sessions, turns);
     if (count > 0) {
       event.preventDefault();

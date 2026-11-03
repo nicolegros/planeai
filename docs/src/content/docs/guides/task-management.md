@@ -139,6 +139,17 @@ skl install nicolegros/planeai --all
 
 Once installed, agents that support skill/tool loading (like Kiro or Claude) can use them automatically.
 
+## Changing status from the keyboard
+
+Press **⌘⌥S** (macOS) or **Ctrl+Alt+S** (Linux/Windows) to move the open task to done.
+Moving a task to done archives its sessions and stops their agents, so it waits 5 seconds first.
+The toast counts down, and **Undo** (or **⌘Z** / **Ctrl+Z**) during that time leaves everything as it was.
+Dismissing the toast applies the move right away.
+Press **⌘Z** / **Ctrl+Z** to revert the last status change you made, from the shortcut, the sidebar, or a menu.
+Undo applies once, and only while the task still has the status it was moved to.
+A move to done can't be undone once it has applied.
+Text fields and the editor keep **⌘Z** for their own undo.
+
 ## Task fields in detail
 
 | Field           | Purpose                                                                         |
@@ -236,7 +247,7 @@ You don't have to enable auto-dispatch to use tasks. The manual workflow is:
 1. Create tasks on the board
 2. Click a task to start a session for it
 3. The agent receives the task description and works on it
-4. You review the diff (**⌘\\** / **Ctrl+\\**) and move the task to done
+4. You review the diff (**⌘\\** / **Ctrl+\\**) and move the task to done (**⌘⌥S** / **Ctrl+Alt+S**)
 
 This gives you full control over when and how agents pick up work.
 

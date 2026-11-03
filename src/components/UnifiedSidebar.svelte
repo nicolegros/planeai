@@ -25,6 +25,7 @@
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
+  import { changeTaskStatus } from "../lib/task-moves";
   import { getPluginSidebarRows, type PluginSidebarNavRow } from "../lib/plugin-sidebar-navigation.svelte";
   import { pluginPreferencesLocation, type SettingsLocation } from "../lib/settings-registry";
 
@@ -266,14 +267,7 @@
   async function moveTask(row: SidebarTaskRow, status: string, followSelection = false) {
     const { task, project } = row;
     const selectedBefore = getSelectedIndex();
-    try {
-      await taskStore.moveTask(task.key, status, project.path);
-    } catch (error) {
-      console.error("Failed to move task:", error);
-      showToast("Failed to move task.");
-      return;
-    }
-    onSessionsChanged?.();
+    if (!(await changeTaskStatus(task.key, status, project.path, () => onSessionsChanged?.()))) return;
     // Only follow when the user has not moved the selection while the move was in flight.
     if (followSelection && getSelectedIndex() === selectedBefore) selectTaskOrItsGroup(project.id, task.key);
   }

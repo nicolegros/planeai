@@ -15,7 +15,8 @@
   import { resolvePluginOpen, type PluginOpenOrigin } from "./lib/plugin-navigation";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
-  import { sidebarNavigationOrder, TASK_STATUS_LABELS, type TaskStatus } from "./lib/sidebar-model";
+  import { sidebarNavigationOrder } from "./lib/sidebar-model";
+  import { changeTaskStatus, commitPendingDone, completeTask, undoLastTaskMove } from "./lib/task-moves";
   import { getSidebarModel } from "./lib/sidebar-model-store.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
@@ -26,7 +27,7 @@
   import { openFileWithConfiguredEditor } from "./lib/file-editor";
   import { loadTheme } from "./lib/theme-loader";
   import { errorMessage } from "./lib/errors";
-  import { dismissToast, showToast } from "./lib/toasts.svelte";
+  import { showToast } from "./lib/toasts.svelte";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
   import KeyboardHelperBar from "./components/KeyboardHelperBar.svelte";
@@ -692,61 +693,10 @@
             const found = sessions.find((candidate) => candidate.id === id);
             if (!found?.task_key) return;
             const project = projects.find((candidate) => candidate.id === sessionTaskProjectId(found));
-            if (project) await taskStore.moveTask(found.task_key, "done", project.path);
+            if (project) await changeTaskStatus(found.task_key, "done", project.path, () => orchestrator.loadSessions());
           }
         : undefined,
     });
-  }
-
-  async function moveActiveTask(task: TaskItem, project: Project, status: string): Promise<boolean> {
-    try {
-      await taskStore.moveTask(task.key, status, project.path);
-    } catch (error) {
-      console.error("Failed to move task:", error);
-      showToast("Failed to move task.");
-      return false;
-    }
-    orchestrator.loadSessions();
-    return true;
-  }
-
-  const COMPLETION_TOAST_ID = "task-completion";
-
-  async function completeActiveTask(): Promise<void> {
-    if (!activeTaskWorkspace) {
-      showToast({ kind: "info", message: "No task is open.", autoDismissMs: 3000 });
-      return;
-    }
-    const { task, project } = activeTaskWorkspace;
-    if (task.status === "done") {
-      showToast({ kind: "info", message: `${task.key} is already Done`, autoDismissMs: 3000 });
-      return;
-    }
-    if (!(await moveActiveTask(task, project, "done"))) return;
-    showToast({
-      id: COMPLETION_TOAST_ID,
-      kind: "success",
-      message: `${task.key} moved to Done`,
-      detail: task.title,
-      autoDismissMs: 5000,
-      actions: [{ key: "z", label: "Undo", run: () => undoLastTaskMove(task.key) }],
-    });
-  }
-
-  async function undoLastTaskMove(key?: string): Promise<void> {
-    dismissToast(COMPLETION_TOAST_ID);
-    let move: taskStore.TaskMove | null;
-    try {
-      move = await taskStore.undoLastMove(key);
-    } catch (error) {
-      console.error("Failed to undo the task move:", error);
-      showToast("Failed to move task.");
-      return;
-    }
-    if (!move) return;
-    orchestrator.loadSessions();
-    const label = TASK_STATUS_LABELS[move.from as TaskStatus] ?? move.from;
-    showToast({ kind: "info", message: `${move.key} moved back to ${label}`, autoDismissMs: 3000 });
   }
 
   /**
@@ -982,7 +932,7 @@
 
     notify.isInstalled().then((installed) => { if (!installed) showHookPrompt = true; });
     sessionLogs.isEnabled().then((enabled) => { logViewerEnabled = enabled; });
-    const unlistenClose = orchestrator.setupQuitGuard((count) => { quitDirectCount = count; showQuitConfirm = true; });
+    const unlistenClose = orchestrator.setupQuitGuard((count) => { quitDirectCount = count; showQuitConfirm = true; }, commitPendingDone);
 
     const cleanup = installKeyboardRouter(
       (action) => {
@@ -1037,8 +987,8 @@
         else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskStore.refresh(projects.map((p) => p.path)); }
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { saveActiveEditorResource(); }
-        else if (action.type === "complete_task") { void completeActiveTask(); }
-        else if (action.type === "undo") { void undoLastTaskMove(); }
+        else if (action.type === "complete_task") { void completeTask(activeTaskWorkspace, () => orchestrator.loadSessions()); }
+        else if (action.type === "undo") { void undoLastTaskMove(() => orchestrator.loadSessions()); }
         else if (action.type === "focus_toast") { if (!toggleToastFocus()) focusPluginInteraction(); }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },

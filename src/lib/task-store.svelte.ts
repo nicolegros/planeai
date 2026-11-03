@@ -10,6 +10,39 @@ let tasksByProject = $state<Record<string, TaskItem[]>>({});
 let loading = $state(false);
 let taskRequestGeneration = 0;
 
+/** Statuses shown ahead of the backend, such as a Done move waiting out its undo window. */
+const heldStatuses = new Map<string, string>();
+const heldKey = (repoPath: string, key: string) => `${repoPath}\u0000${key}`;
+
+function withHeldStatuses(repoPath: string, items: TaskItem[]): TaskItem[] {
+  if (heldStatuses.size === 0) return items;
+  return items.map((task) => {
+    const status = heldStatuses.get(heldKey(repoPath, task.key));
+    return status === undefined ? task : { ...task, status };
+  });
+}
+
+function setLocalStatus(key: string, repoPath: string, status: string): void {
+  const items = tasksByProject[repoPath];
+  if (!items?.some((task) => task.key === key)) return;
+  tasksByProject = {
+    ...tasksByProject,
+    [repoPath]: items.map((task) => (task.key === key ? { ...task, status } : task)),
+  };
+}
+
+/** Shows `status` for the task until `releaseStatus`, surviving reloads. */
+export function holdStatus(key: string, repoPath: string, status: string): void {
+  heldStatuses.set(heldKey(repoPath, key), status);
+  setLocalStatus(key, repoPath, status);
+}
+
+/** Ends a hold, showing `status` until the next reload brings the backend's. */
+export function releaseStatus(key: string, repoPath: string, status: string): void {
+  heldStatuses.delete(heldKey(repoPath, key));
+  setLocalStatus(key, repoPath, status);
+}
+
 export function getTasksByProject(): Record<string, TaskItem[]> {
   return tasksByProject;
 }
@@ -48,7 +81,7 @@ export async function loadTasks(projectPaths: string[]): Promise<void> {
     await Promise.all(
       projectPaths.map(async (path) => {
         try {
-          results[path] = await tasksApi.listAll(path);
+          results[path] = withHeldStatuses(path, await tasksApi.listAll(path));
         } catch {
           results[path] = previous[path] ?? [];
         }
@@ -89,7 +122,7 @@ export async function refresh(projectPaths: string[]): Promise<void> {
     await Promise.all(
       projectPaths.map(async (path) => {
         try {
-          results[path] = await tasksApi.listAll(path);
+          results[path] = withHeldStatuses(path, await tasksApi.listAll(path));
         } catch {
           // Keep the last successful snapshot for this project on refresh failure.
         }
@@ -103,44 +136,11 @@ export async function refresh(projectPaths: string[]): Promise<void> {
   }
 }
 
-export interface TaskMove {
-  key: string;
-  repoPath: string;
-  from: string;
-  to: string;
-}
-
-/** The last status change made through `moveTask`, which `undoLastMove` reverts. */
-let lastMove: TaskMove | null = null;
-
-function statusOf(key: string, repoPath: string): string | undefined {
-  return getTasksForProject(repoPath).find((task) => task.key === key)?.status;
-}
-
 export async function moveTask(key: string, status: string, repoPath: string): Promise<void> {
-  const from = statusOf(key, repoPath);
   await tasksApi.move(key, status, repoPath);
-  if (from !== undefined && from !== status) lastMove = { key, repoPath, from, to: status };
+  // Show the move before the reload lands, so an immediate undo sees it.
+  setLocalStatus(key, repoPath, status);
   await loadTasks(Object.keys(tasksByProject));
-}
-
-/**
- * Reverts the last move while the task still has the status it was moved to, and only when
- * it moved `key` if one is given. Returns the reverted move, or null when there was none.
- */
-export async function undoLastMove(key?: string): Promise<TaskMove | null> {
-  const move = lastMove;
-  if (!move || (key !== undefined && move.key !== key)) return null;
-  lastMove = null;
-  if (statusOf(move.key, move.repoPath) !== move.to) return null;
-  try {
-    await tasksApi.move(move.key, move.from, move.repoPath);
-  } catch (error) {
-    lastMove = move;
-    throw error;
-  }
-  await loadTasks(Object.keys(tasksByProject));
-  return move;
 }
 
 export async function createTask(params: {

@@ -9,6 +9,7 @@
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { getSettings } from "../lib/settings.svelte";
   import { getActiveZone } from "../lib/focus.svelte";
+  import { isTextEntryElement } from "../lib/keyboard";
 
   interface Props {
     rootPath: string;
@@ -189,16 +190,9 @@
     handleTreeNavigation(e, false);
   }
 
-  function isEditableElement(target: EventTarget | null) {
-    return target instanceof HTMLInputElement ||
-      target instanceof HTMLTextAreaElement ||
-      target instanceof HTMLSelectElement ||
-      target instanceof HTMLElement && target.isContentEditable;
-  }
-
   function isEditableKeyboardTarget(e: KeyboardEvent) {
-    if (e.composedPath().some(isEditableElement)) return true;
-    return isEditableElement(fileTree?.getFileTreeContainer()?.shadowRoot?.activeElement ?? null);
+    if (e.composedPath().some(isTextEntryElement)) return true;
+    return isTextEntryElement(fileTree?.getFileTreeContainer()?.shadowRoot?.activeElement ?? null);
   }
 
   function handleWindowKeydown(e: KeyboardEvent) {

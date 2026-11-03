@@ -162,8 +162,16 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "open_file" };
   }
 
-  // Mod+Option+S - move the current task to done. Option changes e.key on macOS, so match the physical key.
-  if (mod && e.altKey && !e.shiftKey && !otherMod && e.code === "KeyS") {
+  // Mod+Option+S - move the current task to done. Option changes e.key on macOS, so match the
+  // physical key; Windows reports AltGr as Ctrl+Alt, and AltGr+S types a character on some layouts.
+  if (
+    mod &&
+    e.altKey &&
+    !e.shiftKey &&
+    !otherMod &&
+    e.code === "KeyS" &&
+    !e.getModifierState?.("AltGraph")
+  ) {
     return { type: "complete_task" };
   }
 
@@ -243,17 +251,16 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
 
 export type ActionHandler = (action: KeyboardAction) => void;
 
-/** Text fields keep Mod+Z for their own undo; xterm's hidden input is not one. */
-function isTextFieldEvent(e: KeyboardEvent): boolean {
-  return e
-    .composedPath()
-    .some(
-      (target) =>
-        target instanceof HTMLElement &&
-        (target.matches('[contenteditable]:not([contenteditable="false"])') ||
-          ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
-            !target.classList.contains("xterm-helper-textarea"))),
-    );
+/** Inputs, selects and editable content, which own their typing keys; xterm's hidden input is not one. */
+export function isTextEntryElement(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLTextAreaElement)
+    return !target.classList.contains("xterm-helper-textarea");
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLSelectElement ||
+    target.matches('[contenteditable]:not([contenteditable="false"])')
+  );
 }
 
 function isExplorerSearchEvent(e: KeyboardEvent): boolean {
@@ -322,7 +329,8 @@ export function installKeyboardRouter(
       return;
     }
 
-    if (action.type === "undo" && isTextFieldEvent(e)) return;
+    // Text fields keep Mod+Z for their own undo.
+    if (action.type === "undo" && e.composedPath().some(isTextEntryElement)) return;
 
     // Explorer owns Escape while its shadow-DOM search input is focused;
     // let its capture handler close search and return focus to the tree row.

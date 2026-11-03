@@ -158,6 +158,23 @@ describe("matchChord", () => {
     }
   });
 
+  it("returns undo on platform mod+Z only, leaving redo and other modifiers alone", () => {
+    expect(matchChord(key({ key: "z", [modKey]: true }))).toEqual({ type: "undo" });
+    expect(matchChord(key({ key: "z", [modKey]: true, shiftKey: true }))).toBeNull();
+    expect(matchChord(key({ key: "z", [modKey]: true, altKey: true }))).toBeNull();
+  });
+
+  it("leaves AltGr+S, which Windows reports as Ctrl+Alt, to type its character", () => {
+    const altGr = key({
+      key: "ś",
+      code: "KeyS",
+      [modKey]: true,
+      altKey: true,
+      getModifierState: (modifier: string) => modifier === "AltGraph",
+    });
+    expect(matchChord(altGr)).toBeNull();
+  });
+
   it("keeps platform mod+S as save_file", () => {
     expect(matchChord(key({ key: "s", code: "KeyS", [modKey]: true }))).toEqual({
       type: "save_file",
