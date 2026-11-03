@@ -16,6 +16,79 @@ use sha2::{Digest, Sha256};
 
 pub const URL_ENV: &str = "PLANEAI_MCP_URL";
 pub const TOKEN_ENV: &str = "PLANEAI_MCP_TOKEN";
+/// The name agents know the server by, which prefixes its tools in their settings.
+pub const SERVER_NAME: &str = "planeai";
+
+/// What a tool call does to PlaneAI state, which decides its MCP annotations and whether
+/// agents may run it without asking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    Read,
+    Write { idempotent: bool },
+    Delete,
+}
+
+impl Effect {
+    /// Launch templates pre-approve every tool but deletes.
+    pub fn pre_approved(self) -> bool {
+        self != Effect::Delete
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolSpec {
+    pub name: &'static str,
+    pub effect: Effect,
+}
+
+/// PlaneAI's own tools, in the order the server lists them. The app's registry serves
+/// exactly these, and launch templates derive tool approval from them.
+pub const TOOLS: [ToolSpec; 11] = [
+    ToolSpec {
+        name: "task_list",
+        effect: Effect::Read,
+    },
+    ToolSpec {
+        name: "task_show",
+        effect: Effect::Read,
+    },
+    ToolSpec {
+        name: "task_create",
+        effect: Effect::Write { idempotent: false },
+    },
+    ToolSpec {
+        name: "task_update",
+        effect: Effect::Write { idempotent: true },
+    },
+    ToolSpec {
+        name: "task_delete",
+        effect: Effect::Delete,
+    },
+    ToolSpec {
+        name: "session_list",
+        effect: Effect::Read,
+    },
+    ToolSpec {
+        name: "session_tree",
+        effect: Effect::Read,
+    },
+    ToolSpec {
+        name: "session_read",
+        effect: Effect::Read,
+    },
+    ToolSpec {
+        name: "session_create",
+        effect: Effect::Write { idempotent: false },
+    },
+    ToolSpec {
+        name: "session_prompt",
+        effect: Effect::Write { idempotent: false },
+    },
+    ToolSpec {
+        name: "project_list",
+        effect: Effect::Read,
+    },
+];
 
 /// What an agent process needs to reach the MCP server as its session.
 #[derive(Clone, PartialEq, Eq)]

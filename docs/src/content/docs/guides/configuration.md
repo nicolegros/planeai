@@ -87,6 +87,7 @@ Sessions started while the server is off or failed, including from `planeai-cli`
 
 Each launch gets a session token in `PLANEAI_MCP_TOKEN` and the URL in `PLANEAI_MCP_URL`.
 A provider's `mcp_args` is appended to its command, with `{mcp_url}` replaced by the URL.
+`{mcp_allowed_tools}` becomes Claude Code's comma-separated names of the tools that run without asking, and `{mcp_codex_prompted_tools}` the Codex `-c` overrides that keep the other tools asking.
 Claude Code and Codex come with templates that pre-approve every tool except `task_delete`, which still asks.
 Kiro and Copilot come with none.
 Set `mcp_args` to `""` to keep an agent off the tools, or edit it under **Preferences → Agents** with the pencil button.

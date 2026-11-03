@@ -27,28 +27,19 @@ pub struct ToolContext {
     pub events: Arc<dyn AppEvents>,
 }
 
-/// What a call does to PlaneAI state, which decides its MCP annotations and whether
-/// agents may run it without asking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Effect {
-    Read,
-    Write { idempotent: bool },
-    Delete,
-}
+pub use planeai_core::mcp::Effect;
 
-impl Effect {
-    fn annotations(self) -> ToolAnnotations {
-        let (read_only, destructive, idempotent) = match self {
-            Effect::Read => (true, false, true),
-            Effect::Write { idempotent } => (false, false, idempotent),
-            Effect::Delete => (false, true, true),
-        };
-        ToolAnnotations::new()
-            .read_only(read_only)
-            .destructive(destructive)
-            .idempotent(idempotent)
-            .open_world(false)
-    }
+fn annotations(effect: Effect) -> ToolAnnotations {
+    let (read_only, destructive, idempotent) = match effect {
+        Effect::Read => (true, false, true),
+        Effect::Write { idempotent } => (false, false, idempotent),
+        Effect::Delete => (false, true, true),
+    };
+    ToolAnnotations::new()
+        .read_only(read_only)
+        .destructive(destructive)
+        .idempotent(idempotent)
+        .open_world(false)
 }
 
 /// A tool's TOON reply; errors are reported to the agent, not as protocol failures.
@@ -93,15 +84,20 @@ pub struct ToolDef {
 }
 
 impl ToolDef {
-    fn new<I>(
+    /// One of PlaneAI's own tools; its effect comes from `planeai_core::mcp::TOOLS`.
+    fn core<I>(
         name: &'static str,
         description: &'static str,
-        effect: Effect,
         run: fn(&ToolContext, &McpCaller, I) -> Result<ToolOutput, String>,
     ) -> Self
     where
         I: DeserializeOwned + JsonSchema + 'static,
     {
+        let effect = planeai_core::mcp::TOOLS
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("{name} is missing from planeai_core::mcp::TOOLS"))
+            .effect;
         Self {
             name,
             description,
@@ -127,7 +123,7 @@ impl ToolDef {
 
     pub fn tool(&self) -> Tool {
         Tool::new(self.name, self.description, self.input_schema.clone())
-            .with_annotations(self.effect.annotations())
+            .with_annotations(annotations(self.effect))
     }
 
     pub fn call(
@@ -159,73 +155,62 @@ impl Registry {
     pub fn core() -> Self {
         Self(
             [
-            ToolDef::new(
+            ToolDef::core(
                 "task_list",
                 "List tasks of a project (default: the project of this session's task).",
-                Effect::Read,
                 task_list,
             ),
-            ToolDef::new(
+            ToolDef::core(
                 "task_show",
                 "Show one task in full (default: this session's task).",
-                Effect::Read,
                 task_show,
             ),
-            ToolDef::new(
+            ToolDef::core(
                 "task_create",
                 "Create a task, optionally as a subtask of `parent`.",
-                Effect::Write { idempotent: false },
                 task_create,
             )
             .refreshing_tasks(),
-            ToolDef::new(
+            ToolDef::core(
                 "task_update",
                 "Edit a task's fields and/or move it to another status (default: this session's task). An empty `parent` clears it. A refused update changes nothing.",
-                Effect::Write { idempotent: true },
                 task_update,
             )
             .refreshing_tasks(),
-            ToolDef::new(
+            ToolDef::core(
                 "task_delete",
                 "Delete a task permanently, with its task workspace.",
-                Effect::Delete,
                 task_delete,
             )
             .refreshing_tasks(),
-            ToolDef::new(
+            ToolDef::core(
                 "session_list",
                 "List agent sessions with their status, task and branch.",
-                Effect::Read,
                 session_list,
             ),
-            ToolDef::new(
+            ToolDef::core(
                 "session_tree",
                 "Show the parent/child tree a session belongs to (default: this session).",
-                Effect::Read,
                 session_tree,
             ),
-            ToolDef::new(
+            ToolDef::core(
                 "session_read",
                 "Read a session's terminal output: the last `lines`, or only what came after `after`, a cursor from a previous read.",
-                Effect::Read,
                 session_read,
             ),
-            ToolDef::new(
+            ToolDef::core(
                 "session_create",
                 "Start an agent session. `child` starts one under this session in any project; `sibling` starts one on this session's task in an isolated worktree. It runs without permission prompts (`yolo`) only if this session does.",
-                Effect::Write { idempotent: false },
                 session_create,
             ),
-            ToolDef::new(
+            ToolDef::core(
                 "session_prompt",
                 "Send a prompt to a running session. A session that asks before running tools cannot prompt one that does not.",
-                Effect::Write { idempotent: false },
                 session_prompt,
             ),
-            ToolDef::new(
+            ToolDef::core(
                 "project_list",
                 "List the projects PlaneAI knows.",
-                Effect::Read,
                 project_list,
             ),
         ]

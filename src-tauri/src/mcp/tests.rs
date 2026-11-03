@@ -183,6 +183,23 @@ fn the_core_registry_annotates_every_tool_by_its_effect() {
 }
 
 #[test]
+fn the_registry_serves_exactly_the_tools_the_launch_templates_approve() {
+    let registry: Vec<_> = Registry::core()
+        .tools()
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect();
+    let table: Vec<_> = planeai_core::mcp::TOOLS
+        .iter()
+        .map(|tool| tool.name.to_string())
+        .collect();
+    assert_eq!(registry, table);
+    for tool in planeai_core::mcp::TOOLS {
+        assert_eq!(Registry::core().get(tool.name).unwrap().effect, tool.effect);
+    }
+}
+
+#[test]
 fn task_list_defaults_to_the_project_of_the_callers_task() {
     let f = Fixture::new();
     assert_eq!(

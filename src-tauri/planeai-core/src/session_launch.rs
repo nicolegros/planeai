@@ -62,31 +62,18 @@ pub struct BuiltinProvider {
     pub mcp_args: &'static str,
 }
 
-/// MCP tools Claude may call without asking: everything but deletes (ADR-0016).
-macro_rules! claude_allowed_mcp_tools {
-    () => {
-        "mcp__planeai__task_list,mcp__planeai__task_show,mcp__planeai__task_create,mcp__planeai__task_update,mcp__planeai__session_list,mcp__planeai__session_tree,mcp__planeai__session_read,mcp__planeai__session_create,mcp__planeai__session_prompt,mcp__planeai__project_list"
-    };
-}
-
 // `/bin/sh -c` keeps the single-quoted JSON intact; `cmd /C` has no single quotes, so on
 // Windows the JSON is one double-quoted argument with escaped inner quotes. Claude itself
 // expands `${PLANEAI_MCP_TOKEN}`, so the token never reaches a command line.
 const CLAUDE_MCP_ARGS: &str = if cfg!(windows) {
-    concat!(
-        r#"--mcp-config "{\"mcpServers\":{\"planeai\":{\"type\":\"http\",\"url\":\"{mcp_url}\",\"headers\":{\"Authorization\":\"Bearer ${PLANEAI_MCP_TOKEN}\"}}}}" --allowedTools "#,
-        claude_allowed_mcp_tools!()
-    )
+    r#"--mcp-config "{\"mcpServers\":{\"planeai\":{\"type\":\"http\",\"url\":\"{mcp_url}\",\"headers\":{\"Authorization\":\"Bearer ${PLANEAI_MCP_TOKEN}\"}}}}" --allowedTools {mcp_allowed_tools}"#
 } else {
-    concat!(
-        r#"--mcp-config '{"mcpServers":{"planeai":{"type":"http","url":"{mcp_url}","headers":{"Authorization":"Bearer ${PLANEAI_MCP_TOKEN}"}}}}' --allowedTools "#,
-        claude_allowed_mcp_tools!()
-    )
+    r#"--mcp-config '{"mcpServers":{"planeai":{"type":"http","url":"{mcp_url}","headers":{"Authorization":"Bearer ${PLANEAI_MCP_TOKEN}"}}}}' --allowedTools {mcp_allowed_tools}"#
 };
 
 // Codex reads `-c` values as TOML and falls back to a plain string, so the quotes are
 // optional for both shells.
-const CODEX_MCP_ARGS: &str = r#"-c mcp_servers.planeai.url="{mcp_url}" -c mcp_servers.planeai.bearer_token_env_var="PLANEAI_MCP_TOKEN" -c mcp_servers.planeai.default_tools_approval_mode="approve" -c mcp_servers.planeai.tools.task_delete.approval_mode="prompt""#;
+const CODEX_MCP_ARGS: &str = r#"-c mcp_servers.planeai.url="{mcp_url}" -c mcp_servers.planeai.bearer_token_env_var="PLANEAI_MCP_TOKEN" -c mcp_servers.planeai.default_tools_approval_mode="approve" {mcp_codex_prompted_tools}"#;
 
 pub const BUILTIN_PROVIDERS: [BuiltinProvider; 4] = [
     BuiltinProvider {
@@ -333,12 +320,40 @@ pub fn build_provider_launch_command(
     }
 }
 
-/// A provider's `mcp_args` with the server URL filled in, or `None` when the server is
-/// disabled or the provider has no arguments for it.
+/// A provider's `mcp_args` with its placeholders filled in, or `None` when the server is
+/// not listening or the provider has no arguments for it. `{mcp_url}` is the server URL,
+/// `{mcp_allowed_tools}` Claude Code's names of the pre-approved tools, and
+/// `{mcp_codex_prompted_tools}` the Codex overrides that keep the others prompting.
 pub fn mcp_launch_args(template: Option<&str>, mcp_url: Option<&str>) -> Option<String> {
+    use crate::mcp::{SERVER_NAME, TOOLS};
     let (template, mcp_url) = (template?.trim(), mcp_url?);
+    if template.is_empty() {
+        return None;
+    }
+    let allowed: Vec<String> = TOOLS
+        .iter()
+        .filter(|tool| tool.effect.pre_approved())
+        .map(|tool| format!("mcp__{SERVER_NAME}__{}", tool.name))
+        .collect();
+    let prompted: Vec<String> = TOOLS
+        .iter()
+        .filter(|tool| !tool.effect.pre_approved())
+        .map(|tool| {
+            format!(
+                r#"-c mcp_servers.{SERVER_NAME}.tools.{}.approval_mode="prompt""#,
+                tool.name
+            )
+        })
+        .collect();
     // Not `template::render`: it would also blank `${PLANEAI_MCP_TOKEN}`.
-    (!template.is_empty()).then(|| template.replace("{mcp_url}", mcp_url))
+    Some(
+        template
+            .replace("{mcp_url}", mcp_url)
+            .replace("{mcp_allowed_tools}", &allowed.join(","))
+            .replace("{mcp_codex_prompted_tools}", &prompted.join(" "))
+            .trim()
+            .to_string(),
+    )
 }
 
 /// Resolve a CreateSessionRequest from config + overrides.
@@ -673,6 +688,30 @@ mod tests {
         );
         let off = build_provider_launch_command(&provider, true, Some("hi"), false, None, None);
         assert_eq!(off.command, "agent --yolo -- 'hi'");
+    }
+
+    #[test]
+    fn the_approval_placeholders_follow_each_tools_effect() {
+        assert_eq!(
+            mcp_launch_args(
+                Some("--allow {mcp_allowed_tools} {mcp_codex_prompted_tools}"),
+                Some(MCP_URL)
+            )
+            .unwrap(),
+            "--allow mcp__planeai__task_list,mcp__planeai__task_show,mcp__planeai__task_create,mcp__planeai__task_update,mcp__planeai__session_list,mcp__planeai__session_tree,mcp__planeai__session_read,mcp__planeai__session_create,mcp__planeai__session_prompt,mcp__planeai__project_list -c mcp_servers.planeai.tools.task_delete.approval_mode=\"prompt\""
+        );
+    }
+
+    #[test]
+    fn the_built_in_templates_leave_tool_approval_to_the_placeholders() {
+        assert!(builtin("claude")
+            .mcp_args
+            .unwrap()
+            .ends_with("--allowedTools {mcp_allowed_tools}"));
+        assert!(builtin("codex")
+            .mcp_args
+            .unwrap()
+            .ends_with(" {mcp_codex_prompted_tools}"));
     }
 
     #[test]
