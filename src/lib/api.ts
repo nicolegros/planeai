@@ -360,7 +360,14 @@ export interface ThemeCss {
   dark: string;
 }
 
+/** The in-app MCP server agents reach PlaneAI's tools through. */
+export type McpStatus =
+  | { state: "off" }
+  | { state: "listening"; port: number }
+  | { state: "failed"; port: number; reason: string };
+
 export const preferences = {
+  getMcpStatus: () => invoke<McpStatus>("get_mcp_status"),
   listMonospaceFonts: () => invoke<string[]>("list_monospace_fonts"),
   listThemes: () => invoke<string[]>("list_themes"),
   listTerminalSchemes: () => invoke<TerminalSchemeSummary[]>("list_terminal_schemes"),

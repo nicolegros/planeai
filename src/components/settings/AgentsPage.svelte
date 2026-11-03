@@ -7,6 +7,7 @@
   import { addCustomAgentPatch, agentRows, disableAgentPatch, enableAgentPatch, setDefaultAgentPatch, type AgentRow } from "../../lib/agent-settings";
   import { Button, Select, Switch } from "../ui";
   import AgentDialog, { type AgentDialogResult } from "./AgentDialog.svelte";
+  import McpServerSettings from "./McpServerSettings.svelte";
   import SettingRow from "./SettingRow.svelte";
   import SettingAnchor from "./SettingAnchor.svelte";
   import SettingsSection from "./SettingsSection.svelte";
@@ -169,6 +170,8 @@
     <Button type="button" size="sm" onclick={addSearchPath}>Add folder…</Button>
   </SettingRow>
 </SettingsSection>
+
+<McpServerSettings />
 
 {#if dialog}
   <AgentDialog

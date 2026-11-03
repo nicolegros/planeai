@@ -103,6 +103,10 @@ export interface AppConfig {
   extra_path_dirs?: string[];
   /** `false` until first-run setup is finished or skipped; existing configs load as `true`. */
   onboarding_completed?: boolean | null;
+  /** Serve PlaneAI's tools to agents over MCP; unset means on. */
+  mcp_enabled?: boolean | null;
+  /** Loopback port of the MCP server; unset means `DEFAULT_MCP_PORT`. */
+  mcp_port?: number | null;
 }
 
 const INITIAL_THEME: ThemeChoice = "default";
