@@ -19,12 +19,13 @@
   import SidebarCardsList from "./sidebar/SidebarCardsList.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getCollapsedSections, getLayoutWidth, setCollapsedSections, setLayoutWidth } from "../lib/layout-state";
-  import { MOD_LABEL } from "../lib/keyboard";
+  import { isTextEntryElement, MOD_LABEL } from "../lib/keyboard";
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
   import { showToast } from "../lib/toasts.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
+  import { changeTaskStatus } from "../lib/task-moves";
   import { getPluginSidebarRows, type PluginSidebarNavRow } from "../lib/plugin-sidebar-navigation.svelte";
   import { pluginPreferencesLocation, type SettingsLocation } from "../lib/settings-registry";
 
@@ -190,7 +191,7 @@
   // Empty space and group headers open view options. Rows, inputs, project headers and plugin slots keep their own menus.
   function onNavContextMenu(e: MouseEvent) {
     if (e.defaultPrevented) return;
-    if (e.composedPath().some((node) => node instanceof HTMLElement && (node.tagName === "LI" || node.tagName === "INPUT" || node.isContentEditable || node.dataset.pluginSidebarSlot !== undefined))) return;
+    if (e.composedPath().some((node) => node instanceof HTMLElement && (node.tagName === "LI" || isTextEntryElement(node) || node.dataset.pluginSidebarSlot !== undefined))) return;
     e.preventDefault();
     viewMenu = { x: e.clientX, y: e.clientY };
   }
@@ -266,14 +267,7 @@
   async function moveTask(row: SidebarTaskRow, status: string, followSelection = false) {
     const { task, project } = row;
     const selectedBefore = getSelectedIndex();
-    try {
-      await taskStore.moveTask(task.key, status, project.path);
-    } catch (error) {
-      console.error("Failed to move task:", error);
-      showToast("Failed to move task.");
-      return;
-    }
-    onSessionsChanged?.();
+    if (!(await changeTaskStatus(task.key, status, project.path, () => onSessionsChanged?.()))) return;
     // Only follow when the user has not moved the selection while the move was in flight.
     if (followSelection && getSelectedIndex() === selectedBefore) selectTaskOrItsGroup(project.id, task.key);
   }

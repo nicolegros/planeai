@@ -44,7 +44,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../lib/toasts.svelte", () => ({ showToast: vi.fn() }));
+vi.mock("../../lib/toasts.svelte", () => ({ showToast: vi.fn(), dismissToast: vi.fn() }));
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: vi.fn(() => ({ onCloseRequested: vi.fn().mockResolvedValue(() => {}) })),
@@ -56,6 +56,7 @@ import { loadProjects } from "../../lib/project-store.svelte";
 import { _resetForTests, loadSessions } from "../../lib/session-orchestrator.svelte";
 import { getSelectedIndex, setSelectedIndex } from "../../lib/sidebar-nav.svelte";
 import { loadTasks } from "../../lib/task-store.svelte";
+import { commitPendingDone } from "../../lib/task-moves";
 import { loadSettings } from "../../lib/settings.svelte";
 import { setLayoutWidth } from "../../lib/layout-state";
 
@@ -226,6 +227,7 @@ describe("UnifiedSidebar in the Cards layout", () => {
   });
 
   afterEach(async () => {
+    await commitPendingDone();
     if (mounted) {
       unmount(mounted.component);
       mounted.target.remove();
@@ -432,8 +434,10 @@ describe("UnifiedSidebar in the Cards layout", () => {
 
     clickAction(mounted.target, "Title B-2", "Mark done");
 
-    expect(taskMove).toHaveBeenCalledWith("B-2", "done", beta.path);
     await vi.waitFor(() => expect(navLabels(mounted!.target).at(-1)).toBe("[Done 2]"));
+    expect(taskMove).not.toHaveBeenCalled();
+    await commitPendingDone();
+    expect(taskMove).toHaveBeenCalledWith("B-2", "done", beta.path);
   });
 
   it("animates a row leaving its list, unless the user prefers reduced motion", async () => {
@@ -444,6 +448,7 @@ describe("UnifiedSidebar in the Cards layout", () => {
       animate.mockClear();
       clickAction(mounted.target, title, "Mark done");
       await vi.waitFor(() => expect(navLabels(mounted!.target).at(-1)).toBe(`[Done ${doneCount}]`));
+      await commitPendingDone();
       unmount(mounted.component);
       mounted.target.remove();
       mounted = undefined;

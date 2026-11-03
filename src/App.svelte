@@ -16,6 +16,7 @@
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { sidebarNavigationOrder } from "./lib/sidebar-model";
+  import { applyDoneNow, applyInterruptedDone, canUndoTaskMove, commitPendingDone, completeTask, undoLastTaskMove } from "./lib/task-moves";
   import { getSidebarModel } from "./lib/sidebar-model-store.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
@@ -113,10 +114,14 @@
   const zone = $derived(getActiveZone());
   const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
   const activeTaskWorkspace = $derived.by(() => {
-    if (selectedTaskWorkspace) return selectedTaskWorkspace;
+    // The selection holds a snapshot; read the store so status and title changes show.
+    if (selectedTaskWorkspace) {
+      const { task, project } = selectedTaskWorkspace;
+      return { task: taskStore.findTask(project.path, task.key) ?? task, project };
+    }
     if (!activeSession?.task_key) return null;
     const project = projects.find((candidate) => candidate.id === sessionTaskProjectId(activeSession));
-    const task = project ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === activeSession.task_key) : undefined;
+    const task = project ? taskStore.findTask(project.path, activeSession.task_key) : undefined;
     return task && project ? { task, project } : null;
   });
   const activeTaskSessions = $derived(
@@ -687,10 +692,16 @@
             const found = sessions.find((candidate) => candidate.id === id);
             if (!found?.task_key) return;
             const project = projects.find((candidate) => candidate.id === sessionTaskProjectId(found));
-            if (project) await taskStore.moveTask(found.task_key, "done", project.path);
+            if (project) await applyDoneNow(found.task_key, project.path);
           }
         : undefined,
     });
+  }
+
+  async function quitConfirmed(): Promise<void> {
+    showQuitConfirm = false;
+    await commitPendingDone();
+    await getCurrentWindow().destroy();
   }
 
   /**
@@ -830,7 +841,7 @@
 
   onMount(() => {
     projectStore.loadProjects().then(() => {
-      taskStore.loadTasks(projectStore.getProjects().map((p) => p.path));
+      taskStore.loadTasks(projectStore.getProjects().map((p) => p.path)).then(() => applyInterruptedDone(() => orchestrator.loadSessions()));
     });
     orchestrator.loadSessions();
     loadSettings().then(() => loadTheme());
@@ -926,7 +937,7 @@
 
     notify.isInstalled().then((installed) => { if (!installed) showHookPrompt = true; });
     sessionLogs.isEnabled().then((enabled) => { logViewerEnabled = enabled; });
-    const unlistenClose = orchestrator.setupQuitGuard((count) => { quitDirectCount = count; showQuitConfirm = true; });
+    const unlistenClose = orchestrator.setupQuitGuard((count) => { quitDirectCount = count; showQuitConfirm = true; }, commitPendingDone);
 
     const cleanup = installKeyboardRouter(
       (action) => {
@@ -981,6 +992,8 @@
         else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskStore.refresh(projects.map((p) => p.path)); }
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { saveActiveEditorResource(); }
+        else if (action.type === "complete_task") { void completeTask(activeTaskWorkspace, () => orchestrator.loadSessions()); }
+        else if (action.type === "undo") { void undoLastTaskMove(() => orchestrator.loadSessions()); }
         else if (action.type === "focus_toast") { if (!toggleToastFocus()) focusPluginInteraction(); }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
@@ -988,6 +1001,7 @@
       () => getActiveZone() === "editor" && workspaceLayout.focusedTab()?.type === "editor",
       () => !!document.activeElement?.closest('[data-form-keyboard]'),
       () => showOnboarding,
+      canUndoTaskMove,
     );
 
     function onModalKeydown(e: KeyboardEvent) {
@@ -1012,7 +1026,7 @@
         e.preventDefault();
         e.stopImmediatePropagation();
         if (e.key === 'Escape' || e.key === 'n') showQuitConfirm = false;
-        else if (e.key === 'q' || e.key === 'y') { showQuitConfirm = false; getCurrentWindow().destroy(); }
+        else if (e.key === 'q' || e.key === 'y') { void quitConfirmed(); }
       }
     }
     window.addEventListener("keydown", onModalKeydown, true);
@@ -1466,7 +1480,7 @@
               <span class="flex-1 text-[13.5px] text-t1">Cancel</span>
               <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">n</span>
             </button>
-            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-red-500/10 transition-colors text-red-400" onclick={() => { showQuitConfirm = false; getCurrentWindow().destroy(); }}>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-red-500/10 transition-colors text-red-400" onclick={quitConfirmed}>
               <span class="flex-1 text-[13.5px]">Quit</span>
               <span class="font-mono text-[10px] text-red-400/70 border border-red-500/30 rounded-[5px] px-1.5 py-[2px]">q</span>
             </button>

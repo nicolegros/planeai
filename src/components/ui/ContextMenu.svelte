@@ -15,7 +15,7 @@
 </script>
 
 <script lang="ts">
-  import { flushSync } from "svelte";
+  import { flushSync, untrack } from "svelte";
   import { Check } from "@lucide/svelte";
 
   interface Props {
@@ -28,7 +28,9 @@
   let { x, y, items, onClose }: Props = $props();
 
   let openSubmenuIndex = $state<number | null>(null);
+  let menuPosition = $state<{ x: number; y: number }>(untrack(() => ({ x, y })));
   let submenuPosition = $state<{ x: number; y: number }>({ x: 0, y: 0 });
+  let submenuTrigger = $state<DOMRect | null>(null);
   let menuEl = $state<HTMLElement | undefined>(undefined);
   let submenuEl = $state<HTMLElement | undefined>(undefined);
 
@@ -61,6 +63,33 @@
     if (menuEl) focusableItems(menuEl)[0]?.focus();
   });
 
+  const VIEWPORT_MARGIN = 8;
+
+  /** Keeps a menu inside the window, placing it at `fallback` on an axis where `preferred` overflows. */
+  function fitInViewport(el: HTMLElement, preferred: { x: number; y: number }, fallback: { x: number; y: number }) {
+    const { width, height } = el.getBoundingClientRect();
+    const fit = (start: number, other: number, size: number, viewport: number) => {
+      const max = viewport - VIEWPORT_MARGIN - size;
+      return Math.max(VIEWPORT_MARGIN, start > max ? Math.min(other, max) : start);
+    };
+    return {
+      x: fit(preferred.x, fallback.x - width, width, window.innerWidth),
+      y: fit(preferred.y, fallback.y - height, height, window.innerHeight),
+    };
+  }
+
+  // Opens down and right of the pointer, flipping up or left when that would leave the window.
+  $effect(() => {
+    if (menuEl) menuPosition = fitInViewport(menuEl, { x, y }, { x, y });
+  });
+
+  // Overlaps its trigger by 4px so there is no dead zone, opening left or shifting up near an edge.
+  $effect(() => {
+    if (!submenuEl || !submenuTrigger) return;
+    const { left, right, top, bottom } = submenuTrigger;
+    submenuPosition = fitInViewport(submenuEl, { x: right - 4, y: top }, { x: left + 4, y: bottom });
+  });
+
   function openSubmenu(index: number, trigger: HTMLElement) {
     const item = items[index];
     if (!isParent(item) || item.children.length === 0) {
@@ -68,9 +97,7 @@
       return;
     }
     openSubmenuIndex = index;
-    const rect = trigger.getBoundingClientRect();
-    // Overlap parent by 4px to prevent dead zone between menus
-    submenuPosition = { x: rect.right - 4, y: rect.top };
+    submenuTrigger = trigger.getBoundingClientRect();
   }
 
   function openSubmenuAndFocus(index: number, trigger: HTMLElement) {
@@ -139,7 +166,7 @@
   <div
     bind:this={menuEl}
     class="absolute rounded border border-border bg-panel shadow-lg py-1 text-sm min-w-40 w-max"
-    style="left: {x}px; top: {y}px;"
+    style="left: {menuPosition.x}px; top: {menuPosition.y}px;"
     role="menu"
     tabindex="-1"
   >
@@ -165,7 +192,6 @@
     {/each}
   </div>
 
-  <!-- Submenu (overlaps parent by 4px to prevent gap) -->
   {#if submenuItems.length > 0}
     <div
       bind:this={submenuEl}

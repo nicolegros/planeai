@@ -50,6 +50,8 @@ export type KeyboardAction =
   | { type: "toggle_task_panel" }
   | { type: "focus_toast" }
   | { type: "refresh_tasks" }
+  | { type: "complete_task" }
+  | { type: "undo" }
   | { type: "open_file" }
   | { type: "save_file" }
   | { type: "show_shortcuts" }
@@ -160,6 +162,24 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "open_file" };
   }
 
+  // Mod+Option+S - move the current task to done. Option changes e.key on macOS, so match the
+  // physical key; Windows reports AltGr as Ctrl+Alt, and AltGr+S types a character on some layouts.
+  if (
+    mod &&
+    e.altKey &&
+    !e.shiftKey &&
+    !otherMod &&
+    e.code === "KeyS" &&
+    !e.getModifierState?.("AltGraph")
+  ) {
+    return { type: "complete_task" };
+  }
+
+  // Mod+Z - revert the last task move, outside text fields
+  if (mod && !e.shiftKey && !e.altKey && !otherMod && key === "z") {
+    return { type: "undo" };
+  }
+
   // Mod+Shift+S — toggle sessions panel
   if (mod && e.shiftKey && key === "s") {
     return { type: "toggle_sessions_panel" };
@@ -231,6 +251,18 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
 
 export type ActionHandler = (action: KeyboardAction) => void;
 
+/** Inputs, selects and editable content, which own their typing keys; xterm's hidden input is not one. */
+export function isTextEntryElement(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLTextAreaElement)
+    return !target.classList.contains("xterm-helper-textarea");
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLSelectElement ||
+    target.matches('[contenteditable]:not([contenteditable="false"])')
+  );
+}
+
 function isExplorerSearchEvent(e: KeyboardEvent): boolean {
   if (getActiveZone() !== "explorer") return false;
 
@@ -253,6 +285,8 @@ export function installKeyboardRouter(
   shouldYieldEscape?: () => boolean,
   /** True while a full-window takeover such as onboarding owns the keyboard. */
   isSuspended?: () => boolean,
+  /** False leaves Mod+Z to the focused content, such as a shell's Ctrl+Z off macOS. */
+  canUndo?: () => boolean,
 ): () => void {
   const editorAllowedActions = new Set<KeyboardAction["type"]>([
     "open_file",
@@ -263,6 +297,7 @@ export function installKeyboardRouter(
     "tab_switch",
     "tab_switch_reverse",
     "save_file",
+    "complete_task",
     "close_tab",
     "new_tab",
     "next_tab",
@@ -293,6 +328,11 @@ export function installKeyboardRouter(
       isEditorFocused?.() &&
       !editorAllowedActions.has(action.type)
     ) {
+      return;
+    }
+
+    // Text fields keep Mod+Z for their own undo.
+    if (action.type === "undo" && (!canUndo?.() || e.composedPath().some(isTextEntryElement))) {
       return;
     }
 
