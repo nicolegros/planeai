@@ -131,3 +131,47 @@ describe("ContextMenu keyboard", () => {
     window.removeEventListener("keydown", windowKeydown);
   });
 });
+
+describe("ContextMenu placement", () => {
+  let component: ReturnType<typeof mount> | undefined;
+
+  afterEach(() => {
+    if (component) unmount(component);
+    component = undefined;
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+  });
+
+  function placement(x: number, y: number): { menu: string; submenu: string } {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.getAttribute("role") === "menu"
+        ? new DOMRect(0, 0, 160, 100)
+        : new DOMRect(this.closest("[role='menu']") ? 600 : 0, 700, 160, 28);
+    });
+    component = mount(ContextMenu, {
+      target: document.body,
+      props: {
+        x,
+        y,
+        items: [{ label: "Change status", children: [{ label: "Done", onSelect: vi.fn() }] }],
+        onClose: vi.fn(),
+      },
+    });
+    flushSync();
+    key(document.activeElement!, "ArrowRight");
+    const [menu, submenu] = [...document.querySelectorAll<HTMLElement>("[role='menu']")];
+    const at = (el: HTMLElement) => `${el.style.left} ${el.style.top}`;
+    return { menu: at(menu), submenu: at(submenu) };
+  }
+
+  it("opens at the pointer when the menu fits", () => {
+    expect(placement(100, 50).menu).toBe("100px 50px");
+  });
+
+  it("flips up and left of the pointer near the bottom-right corner, and keeps the submenu inside the window", () => {
+    // jsdom's window is 1024x768; the menu is 160x100 and its trigger spans x 600-760, y 700-728.
+    expect(placement(1000, 750)).toEqual({ menu: "840px 650px", submenu: "756px 628px" });
+  });
+});
