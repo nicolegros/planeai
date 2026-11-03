@@ -30,7 +30,7 @@ Cards is the default.
 
 In **Cards**, what needs you sits at the top: sessions that are not linked to a task, and tasks waiting for review.
 Each is a card showing its project, its task key and title, and, when it has a session, the session's branch and agent.
-The other tasks sit in shelves at the bottom of the list: **Running** as cards, **To do** and **Done** as slim rows.
+The other tasks sit in shelves at the bottom of the list: **Running** as cards, **To do**, **Snoozed** and **Done** as slim rows.
 Done starts collapsed and shows 25 tasks at a time; **Show 25 more** (also reachable from the keyboard) reveals the next ones.
 A shelf with no tasks is not shown, and **Hide done tasks** removes the Done shelf.
 
@@ -45,6 +45,7 @@ Hovering a row swaps its status for quick actions:
 | Card without a session      | Done                            |
 | To do row                   | Start (starts a session)        |
 | Done row                    | Reopen (moves it back to To do) |
+| Snoozed row                 | Wake                            |
 
 **Done** moves a task to Done, or archives a session that has no task.
 
@@ -60,6 +61,25 @@ Right-click a task and choose **Mark as unread** to keep it in view for later, o
 With the sidebar focused, **u** does the same for the highlighted task.
 Sessions that are not linked to a task show **Unread** too, until you open or type into them; that state lasts until PlaneAI quits.
 
+### Snoozing tasks
+
+Snooze a task to set it aside until later, without changing its status or stopping its agent.
+Right-click a task and choose **Snooze**, then a time: **In 1 hour**, **In 3 hours**, **This evening** (18:00), **Tomorrow** (09:00) or **Next week** (Monday 09:00), soonest first.
+Times that already passed today are left out, and the clock times follow your system's 12 or 24-hour format.
+**Custom…** asks for a date and time, or an amount of minutes, hours or days from now.
+Press **⌘⌥Z** (macOS) or **Ctrl+Alt+Z** (Linux/Windows) to open the same choices for the open task, or **z** with the sidebar focused for the highlighted one; **1** to **5** pick a time, **C** opens Custom, and **Esc** closes the menu.
+
+A snoozed task leaves its place, including the top of the list and its project folder, for the **Snoozed** shelf between To do and Done.
+The shelf starts collapsed and lists every project's snoozed tasks, the soonest to wake first, each with the time left ("45m", "3h", "2d"); hover it to see when it wakes.
+The task you have open stays listed even while the shelf is collapsed.
+In Classic, each project gets a **Snoozed** group after its status groups, or, grouped by status, one Snoozed section before Done.
+
+A snoozed task wakes on its own at its time, without a notification, and goes back to where its status puts it.
+It also wakes early when one of its agents asks for your attention or exits, but not when an agent just finishes a turn.
+A woken task shows **Woke** until you open it; click the pill to clear it without opening the task.
+To wake a task yourself, use **Wake** on its row or in its menu, press **z** or **⌘⌥Z** again, or run `planeai-cli task wake`.
+Moving a task to Done ends its snooze, and auto-dispatch leaves snoozed tasks alone until they wake.
+
 **Classic** shows compact rows in collapsible status groups, as described below.
 
 ### Grouping by status
@@ -72,7 +92,7 @@ Grouped by project, the sessions and tasks waiting for review are split into one
 Grouped by status, they form one list.
 The shelves are the same either way and mix every project.
 
-In Classic, the sidebar then shows a **Sessions** section first, holding sessions that are not linked to a task, followed by one section per status: Running, Needs review, To do, and Done.
+In Classic, the sidebar then shows a **Sessions** section first, holding sessions that are not linked to a task, followed by one section per status: Running, Needs review, To do, Snoozed, and Done.
 Each section mixes the tasks of every visible project, sorted by priority, then by project order, then by task key.
 Each row shows its project name before the task key.
 Project actions, such as editing a project or toggling auto-dispatch, are only available when the sidebar is grouped by project.
@@ -80,7 +100,7 @@ Project actions, such as editing a project or toggling auto-dispatch, are only a
 The same places turn off task keys ("Show task keys") and project names ("Show project labels").
 Project names apply when grouping by status or in Cards, where the option drops the project line from cards outside a project folder.
 These choices are saved in `config.json` as `sidebar_layout`, `sidebar_group_by`, `hide_task_keys`, and `hide_project_labels`.
-Done sections start collapsed, and the sidebar remembers which sections you collapse.
+Done and Snoozed sections start collapsed, and the sidebar remembers which sections you collapse.
 
 ### Finding a task from the keyboard
 
@@ -161,8 +181,10 @@ Moving a task to done archives its sessions and stops their agents, so it waits 
 The toast counts down, and its **Undo** during that time leaves everything as it was.
 Dismissing the toast applies the move right away.
 Quitting during the countdown applies it too, at the latest when PlaneAI next starts.
-Press **⌘Z** / **Ctrl+Z** to undo the last status change you made, once, from the shortcut, the sidebar, or a menu.
-If that change is a move to done still counting down, it is cancelled; otherwise it is reverted while the task still has that status.
+Press **⌘Z** / **Ctrl+Z** to undo the last status change, snooze or wake you made, once, from the shortcut, the sidebar, or a menu.
+If that change is a move to done still counting down, it is cancelled; otherwise it is reverted while the task still shows it.
+Undoing a snooze puts back the task's earlier snooze, if it had one; the snooze and wake toasts have their own **Undo** too.
+Changes made outside the app, such as an early wake or the CLI, can't be undone this way.
 A move to done can't be undone once it has applied.
 Text fields and the editor keep **⌘Z** for their own undo.
 

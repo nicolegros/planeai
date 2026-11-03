@@ -29,6 +29,8 @@ The dispatch loop follows four phases:
 3. **Reconcile** — monitors running sessions for completion signals
 4. **Notify** — fires lifecycle hooks and updates task status
 
+Snoozed tasks are not dispatched; once they wake, they are ready again.
+
 ## Configuration Reference
 
 | Field              | Type       | Default    | Description                             |

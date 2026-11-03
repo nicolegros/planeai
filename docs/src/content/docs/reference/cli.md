@@ -166,6 +166,7 @@ planeai-cli task show <key> [--project <name>]
 
 Its JSON, like each task in `task ls`, includes `last_activity_at`, when an agent on the task last finished a turn, asked for attention or exited, and `last_visited_at`, when you last opened the task in the app.
 Both are `null` until it first happens.
+It also includes `snoozed_until` and `snoozed_at`, set while the task is snoozed, and `woke_at`, set when an agent woke it before its time; all three are `null` otherwise.
 
 ### `task ls`
 
@@ -189,6 +190,27 @@ planeai-cli task move <key> <status>
 ```
 
 Valid statuses: `todo`, `in_progress`, `in_review`, `done`.
+Moving a task to `done` ends its snooze.
+
+### `task snooze`
+
+Hide a task from the active lists until a time; its status and agents are left alone.
+
+```bash
+planeai-cli task snooze <key> --until <time> [--project <name>]
+```
+
+`--until` takes an RFC 3339 time, such as `2026-11-04T09:00:00-05:00`, or an amount from now: `90m`, `3h` or `2d`.
+A time that has passed and a Done task are refused.
+The app shows the change right away.
+
+### `task wake`
+
+Wake a snoozed task now.
+
+```bash
+planeai-cli task wake <key> [--project <name>]
+```
 
 ### `task edit`
 
@@ -261,7 +283,7 @@ Show task details.
 planeai-cli axi task show <key> [--project <name>]
 ```
 
-Once set, `last_activity_at` and `last_visited_at` are listed after `created_at`.
+Once set, `last_activity_at` and `last_visited_at` are listed after `created_at`, and `snoozed_until` while the task is snoozed.
 
 ### `axi task add`
 
@@ -280,6 +302,15 @@ planeai-cli axi task move <key> <status> [--project <name>]
 ```
 
 Valid statuses: `todo`, `in_progress`, `in_review`, `done`.
+
+### `axi task snooze` and `axi task wake`
+
+Snooze a task until a time, or wake it, as `task snooze` and `task wake` do, printing the task.
+
+```bash
+planeai-cli axi task snooze <key> --until <time> [--project <name>]
+planeai-cli axi task wake <key> [--project <name>]
+```
 
 ### `axi session ls`
 
