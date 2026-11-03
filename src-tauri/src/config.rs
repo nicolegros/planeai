@@ -158,7 +158,16 @@ pub struct Config {
     /// Configs written before this field existed count as completed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub onboarding_completed: Option<bool>,
+    /// Serve PlaneAI's MCP tools to agents; unset means on (ADR-0016).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_enabled: Option<bool>,
+    /// Loopback port of the MCP server; unset means `DEFAULT_MCP_PORT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_port: Option<u16>,
 }
+
+/// Chosen to be unlikely in use; stable so agents that outlive the app reconnect.
+pub const DEFAULT_MCP_PORT: u16 = 47437;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Appearance {
@@ -239,6 +248,10 @@ pub struct Provider {
     pub resume_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_command: Option<String>,
+    /// Arguments connecting the agent to PlaneAI's MCP server, `{mcp_url}` filled in.
+    /// Empty opts the provider out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_args: Option<String>,
     /// Deprecated: migrated to auto_dispatch.autonomous_prompt_template.
     /// Kept for deserialization of old configs; stripped on save.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -252,17 +265,25 @@ impl Provider {
             command: self.command.clone(),
             yolo_flag: self.yolo_flag.clone(),
             prompt_command: self.prompt_command.clone(),
+            mcp_args: self.mcp_args.clone(),
         }
     }
 
     /// The command a new session's agent starts with, carrying the task prompt if any.
-    pub fn first_launch_command(&self, auto_approve: bool, task_prompt: Option<&str>) -> String {
+    /// `mcp_url` is `Config::mcp_url`.
+    pub fn first_launch_command(
+        &self,
+        auto_approve: bool,
+        task_prompt: Option<&str>,
+        mcp_url: Option<&str>,
+    ) -> String {
         planeai_core::session_launch::build_provider_launch_command(
             &self.launch_config(),
             auto_approve,
             task_prompt,
             false,
             None,
+            mcp_url,
         )
         .command
     }
@@ -375,6 +396,16 @@ pub fn config_dir(app_name: &str) -> PathBuf {
 }
 
 impl Config {
+    /// The MCP server's URL as agents reach it, `None` while the server is off.
+    pub fn mcp_url(&self) -> Option<String> {
+        self.mcp_enabled.unwrap_or(true).then(|| {
+            format!(
+                "http://127.0.0.1:{}/mcp",
+                self.mcp_port.unwrap_or(DEFAULT_MCP_PORT)
+            )
+        })
+    }
+
     /// Return extra_path_dirs with tildes expanded.
     pub fn resolved_extra_path_dirs(&self) -> Vec<String> {
         self.extra_path_dirs
@@ -394,6 +425,7 @@ impl Default for Config {
                     yolo_flag: Some(builtin.yolo_flag.to_string()),
                     resume_command: Some(builtin.resume_command.to_string()),
                     prompt_command: Some(builtin.prompt_command.to_string()),
+                    mcp_args: Some(builtin.mcp_args.to_string()),
                     autonomous_prompt_template: None,
                 };
                 (builtin.key.to_string(), provider)
@@ -437,6 +469,8 @@ impl Default for Config {
             language_servers: None,
             editor: None,
             onboarding_completed: None,
+            mcp_enabled: None,
+            mcp_port: None,
         }
     }
 }
@@ -469,12 +503,17 @@ fn migrate_legacy_task_managers(val: &mut serde_json::Value) {
     obj.remove("default_task_manager");
 }
 
-fn backfill_provider_defaults(config: &mut Config) {
+/// Fill unset fields of the built-in providers, so an agent added from a preset or an older
+/// config still gets the current defaults.
+pub fn backfill_provider_defaults(config: &mut Config) {
     let defaults = Config::default();
     for (key, default_provider) in &defaults.providers {
         if let Some(provider) = config.providers.get_mut(key) {
             if provider.resume_command.is_none() {
                 provider.resume_command = default_provider.resume_command.clone();
+            }
+            if provider.mcp_args.is_none() {
+                provider.mcp_args = default_provider.mcp_args.clone();
             }
         }
     }
@@ -764,11 +803,15 @@ pub fn normalize_base_path(raw: &str) -> String {
 }
 
 /// Build the command for restarting a session: use interactive resume if available, otherwise fresh launch.
-pub fn restart_command_for_provider(provider: &Provider) -> String {
-    if let Some(ref resume_cmd) = provider.resume_command {
-        return resume_cmd.clone();
+pub fn restart_command_for_provider(provider: &Provider, mcp_url: Option<&str>) -> String {
+    let command = provider
+        .resume_command
+        .as_ref()
+        .unwrap_or(&provider.command);
+    match planeai_core::session_launch::mcp_launch_args(provider.mcp_args.as_deref(), mcp_url) {
+        Some(args) => format!("{command} {args}"),
+        None => command.clone(),
     }
-    provider.command.clone()
 }
 
 /// Resolve the effective session backend: use config value if set, otherwise default to local.
@@ -949,6 +992,9 @@ pub fn validate_editor_config(editor: &EditorConfig) -> Result<(), String> {
 pub fn validate(config: &Config) -> Result<(), String> {
     if let Some(editor) = &config.editor {
         validate_editor_config(editor)?;
+    }
+    if config.mcp_port == Some(0) {
+        return Err("MCP server port must be between 1 and 65535".to_string());
     }
     // Sessions using such a key are routed to a plugin, never to this provider.
     if let Some(key) = config

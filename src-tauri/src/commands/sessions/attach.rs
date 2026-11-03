@@ -52,6 +52,8 @@ pub async fn attach_session(
         let guard = config_state.0.lock().map_err(|e| e.to_string())?;
         guard.clone()
     };
+    // A remount rebinds the running local agent, which keeps the token it was spawned with.
+    let agent_running = state.0.is_running(&session_id);
     let AttachPlan {
         session,
         pty_target,
@@ -63,7 +65,7 @@ pub async fn attach_session(
         let session_id = session_id.clone();
         move || {
             let conn = db.lock().map_err(|e| e.to_string())?;
-            claim_attach_plan(&conn, &cfg, &session_id, dark_mode)
+            claim_attach_plan(&conn, &cfg, &session_id, dark_mode, agent_running)
         }
     })
     .await?;
@@ -138,13 +140,24 @@ pub struct AttachPlan {
 /// `resolve_attach_plan`, claiming the prompt its spawn delivers in the same database pass:
 /// the prompt reaches the agent at most once, even if the app quits before the attach is
 /// recorded. A spawn that fails gives it back with `release_first_prompt`.
+/// A local agent this attach starts gets a fresh MCP token in its environment.
 pub fn claim_attach_plan(
     conn: &rusqlite::Connection,
     cfg: &config::Config,
     session_id: &str,
     dark_mode: Option<bool>,
+    agent_running: bool,
 ) -> Result<AttachPlan, String> {
-    let plan = resolve_attach_plan(conn, cfg, session_id, dark_mode)?;
+    let mut plan = resolve_attach_plan(conn, cfg, session_id, dark_mode)?;
+    if !agent_running && matches!(plan.pty_target, pty::PtyTarget::Shell { .. }) {
+        if let Some(endpoint) = crate::mcp::endpoint(conn, cfg, session_id)? {
+            plan.env.extend(
+                endpoint
+                    .env()
+                    .map(|(key, value)| (key.to_string(), value.to_string())),
+            );
+        }
+    }
     if plan.first_prompt.is_some() {
         db::take_pending_prompt(conn, session_id).map_err(|e| e.to_string())?;
     }
@@ -228,12 +241,17 @@ pub fn resolve_attach_plan(
             .unwrap_or(project_path)
             .to_string();
 
+        let mcp_url = cfg.mcp_url();
         let cmd = if session.attached_once {
-            config::restart_command_for_provider(provider_def)
+            config::restart_command_for_provider(provider_def, mcp_url.as_deref())
         } else {
             // This spawn is the launch, so it carries the task prompt `launch` kept for it.
             first_prompt = db::pending_prompt(conn, session_id).map_err(|e| e.to_string())?;
-            provider_def.first_launch_command(session.auto_approve, first_prompt.as_deref())
+            provider_def.first_launch_command(
+                session.auto_approve,
+                first_prompt.as_deref(),
+                mcp_url.as_deref(),
+            )
         };
 
         let target = pty::PtyTarget::Shell {
@@ -272,6 +290,7 @@ pub fn resolve_attach_plan(
             agent_command,
             dark_mode.unwrap_or(true),
             extra_path_dirs,
+            None,
         )?
     } else {
         vec![]
@@ -600,6 +619,74 @@ mod tests {
     }
 
     #[test]
+    fn starting_a_local_agent_gives_it_an_mcp_token_and_a_remount_keeps_it() {
+        let worktree = tempfile::tempdir().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "demo", "/repos/demo").unwrap();
+        db::create_session_with_params(
+            &conn,
+            &planeai_core::services::CreateSessionParams {
+                id: "session-1".into(),
+                project_id: project.id,
+                branch: "feature".into(),
+                worktree_path: Some(worktree.path().display().to_string()),
+                provider: Some("claude".into()),
+                backend: "local".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mcp_env = |plan: &AttachPlan| -> Vec<(String, String)> {
+            plan.env
+                .iter()
+                .filter(|(key, _)| key.starts_with("PLANEAI_MCP_"))
+                .cloned()
+                .collect()
+        };
+
+        let started =
+            claim_attach_plan(&conn, &config_with_provider(), "session-1", None, false).unwrap();
+        let command = match &started.pty_target {
+            pty::PtyTarget::Shell { command, .. } => command.clone(),
+            other => panic!("expected a shell target, got {other:?}"),
+        };
+        assert!(
+            command.starts_with("claude --mcp-config '{"),
+            "the agent is told where the server is: {command}"
+        );
+        let env = mcp_env(&started);
+        assert_eq!(
+            env[0],
+            (
+                "PLANEAI_MCP_URL".into(),
+                "http://127.0.0.1:47437/mcp".into()
+            )
+        );
+        assert_eq!(env[1].0, "PLANEAI_MCP_TOKEN");
+        let token = env[1].1.clone();
+        assert_eq!(
+            planeai_core::mcp::resolve(&conn, &token)
+                .unwrap()
+                .unwrap()
+                .session_id,
+            "session-1"
+        );
+
+        let remount =
+            claim_attach_plan(&conn, &config_with_provider(), "session-1", None, true).unwrap();
+        assert_eq!(mcp_env(&remount), vec![]);
+        assert_eq!(
+            planeai_core::mcp::resolve(&conn, &token)
+                .unwrap()
+                .unwrap()
+                .session_id,
+            "session-1",
+            "the running agent's token stays valid"
+        );
+    }
+
+    #[test]
     fn a_claimed_task_prompt_is_never_spawned_twice_and_returns_if_the_spawn_fails() {
         let worktree = tempfile::tempdir().unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -620,8 +707,8 @@ mod tests {
         )
         .unwrap();
         let claim = || {
-            let plan =
-                claim_attach_plan(&conn, &config_with_provider(), "session-1", None).unwrap();
+            let plan = claim_attach_plan(&conn, &config_with_provider(), "session-1", None, false)
+                .unwrap();
             let command = match plan.pty_target {
                 pty::PtyTarget::Shell { command, .. } => command,
                 other => panic!("expected a shell target, got {other:?}"),

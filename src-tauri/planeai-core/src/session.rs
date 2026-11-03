@@ -81,6 +81,9 @@ pub struct DispatchConfig {
     pub prompt_command: Option<String>,
     pub prompt_wrapper: Option<String>,
     pub name_template: Option<String>,
+    pub mcp_args: Option<String>,
+    /// The MCP server's URL, `None` when it is disabled.
+    pub mcp_url: Option<String>,
 }
 
 /// Lifecycle hook config for on_start.
@@ -140,6 +143,7 @@ impl SessionDispatcher {
             command: self.dispatch_config.provider_command.clone(),
             yolo_flag: self.dispatch_config.yolo_flag.clone(),
             prompt_command: self.dispatch_config.prompt_command.clone(),
+            mcp_args: self.dispatch_config.mcp_args.clone(),
         };
         let launch_result = crate::session_launch::build_provider_launch_command(
             &provider_config,
@@ -147,6 +151,7 @@ impl SessionDispatcher {
             rendered_prompt.as_deref(),
             true, // autonomous: auto-dispatched sessions always use autonomous template
             self.dispatch_config.prompt_wrapper.as_deref(),
+            self.dispatch_config.mcp_url.as_deref(),
         );
         let cmd = launch_result.command;
         // The prompt is task content: log its size, never its text.

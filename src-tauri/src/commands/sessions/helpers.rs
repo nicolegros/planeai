@@ -80,15 +80,21 @@ pub(crate) fn is_hook_installed(kind: AgentKind) -> bool {
 
 /// Build the canonical PTY environment for a local/tmux session via `prepare_session()`.
 ///
-/// Includes augmented PATH, TERM, PLANEAI_SESSION_ID, COLORFGBG, and PLANEAI_SOCKET.
+/// Includes augmented PATH, TERM, PLANEAI_SESSION_ID, COLORFGBG, PLANEAI_SOCKET, and for an
+/// agent the MCP endpoint.
 pub(crate) fn build_local_env(
     session_id: &str,
     cwd: PathBuf,
     agent_command: &str,
     dark_mode: bool,
     extra_path_dirs: Vec<String>,
+    mcp: Option<&planeai_core::mcp::McpEndpoint>,
 ) -> Result<Vec<(String, String)>, String> {
-    let mut pre_env = std::collections::HashMap::new();
+    let mut pre_env: HashMap<String, String> = mcp
+        .into_iter()
+        .flat_map(|endpoint| endpoint.env())
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
     pre_env.insert(
         "COLORFGBG".to_string(),
         if dark_mode { "15;0" } else { "0;15" }.to_string(),

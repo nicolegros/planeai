@@ -58,6 +58,7 @@ pub async fn update_config(
         };
     }
     config::validate(&new_config)?;
+    config::backfill_provider_defaults(&mut new_config);
     let config_dir = config::config_dir(&app.package_info().name);
     // Held across the write so concurrent updates each diff against the config the file holds.
     let mut cfg = state.0.lock().map_err(|e| e.to_string())?;

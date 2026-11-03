@@ -99,7 +99,11 @@ pub fn build_session_plan(
     if let Some(prompt) = &opts.prompt {
         planeai_core::session_launch::check_task_prompt(prompt)?;
     }
-    let cmd = provider_def.first_launch_command(opts.yolo, opts.prompt.as_deref());
+    let cmd = provider_def.first_launch_command(
+        opts.yolo,
+        opts.prompt.as_deref(),
+        env.config.mcp_url().as_deref(),
+    );
 
     let short_id = &session_id.replace('-', "")[..8];
 
@@ -200,6 +204,12 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     }
     let effective_working_dir = checkout.working_dir(repo).to_string();
     let worktree_path = checkout.worktree_path(repo);
+    // A `local` agent spawns on its first attach in the app, which mints its own token.
+    let mcp = if plan.backend == "local" {
+        None
+    } else {
+        crate::mcp::endpoint(conn, &env.config, &plan.session_id)?
+    };
 
     if plan.backend == "daemon" {
         let socket_path = planeai_ipc::daemon_socket_path();
@@ -213,6 +223,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             &extra_path_dirs,
             &plan.session_id,
             &mut path_buf,
+            mcp.as_ref(),
         );
         let (program, args) = planeai_core::command::shell_args(&plan.command);
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -232,6 +243,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             &extra_path_dirs,
             &plan.session_id,
             &mut path_buf,
+            mcp.as_ref(),
         );
         let workspace = planeai_rmux::WorkspaceKey::for_session(
             plan.workspace_project_id(),
@@ -257,6 +269,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
                 &plan.command,
                 &plan.session_id,
                 &extra_path_dirs,
+                mcp.as_ref(),
             )?;
         }
         #[cfg(windows)]
@@ -618,7 +631,7 @@ mod tests {
                 ..task_opts(Some("MYA-1"), None)
             };
             let plan = build_session_plan("session-1", &opts, &env, &test_project()).unwrap();
-            let app = env.config.providers["kiro"].first_launch_command(yolo, prompt);
+            let app = env.config.providers["kiro"].first_launch_command(yolo, prompt, None);
             (plan.command, app)
         };
         for (yolo, prompt) in [(false, None), (true, Some("- Fix it")), (false, Some(""))] {
@@ -626,6 +639,22 @@ mod tests {
             assert_eq!(cli, app, "yolo {yolo}, prompt {prompt:?}");
         }
         assert_eq!(command(false, Some("")).0, "kiro-cli chat");
+    }
+
+    #[test]
+    fn a_planned_agent_is_pointed_at_the_mcp_server_unless_it_is_off() {
+        let mut env = test_env("daemon");
+        let mut opts = task_opts(None, None);
+        opts.provider = Some("codex".into());
+        let plan = build_session_plan("abcd1234-0000", &opts, &env, &test_project()).unwrap();
+        assert_eq!(
+            plan.command,
+            r#"codex -c mcp_servers.planeai.url="http://127.0.0.1:47437/mcp" -c mcp_servers.planeai.bearer_token_env_var="PLANEAI_MCP_TOKEN" -c mcp_servers.planeai.default_tools_approval_mode="approve" -c mcp_servers.planeai.tools.task_delete.approval_mode="prompt""#
+        );
+
+        env.config.mcp_enabled = Some(false);
+        let plan = build_session_plan("abcd1234-0000", &opts, &env, &test_project()).unwrap();
+        assert_eq!(plan.command, "codex");
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub mod db;
 pub mod git;
 pub mod ipc;
 pub mod logging;
+pub mod mcp;
 pub mod paths;
 pub mod rmux_client;
 pub mod rmux_ops;

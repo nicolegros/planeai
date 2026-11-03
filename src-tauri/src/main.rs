@@ -14,6 +14,7 @@ mod github_migration;
 mod jira_migration;
 mod logging;
 mod lsp;
+mod mcp;
 mod notify;
 mod output_observer;
 mod paths;
@@ -189,7 +190,7 @@ fn main() {
                 &conn,
                 &cfg,
                 |_| false,
-                |_, _, _, _, _| Err("tmux not available".to_string()),
+                |_, _, _, _, _, _| Err("tmux not available".to_string()),
             );
 
             // Reconcile daemon sessions (mark dead ones as exited)

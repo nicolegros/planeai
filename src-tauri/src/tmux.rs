@@ -70,7 +70,7 @@ pub fn create_session(
     } else {
         "kiro-cli chat".to_string()
     };
-    create_session_with_cmd_and_path(tmux_name, working_dir, &cmd, session_id, &[])
+    create_session_with_cmd_and_path(tmux_name, working_dir, &cmd, session_id, &[], None)
 }
 
 /// Create a tmux session with a custom command and extra PATH directories.
@@ -80,25 +80,25 @@ pub fn create_session_with_cmd_and_path(
     cmd: &str,
     session_id: &str,
     extra_path_dirs: &[String],
+    mcp: Option<&planeai_core::mcp::McpEndpoint>,
 ) -> Result<(), String> {
-    let env_flag = format!("PLANEAI_SESSION_ID={}", session_id);
-    let path_flag = format!(
-        "PATH={}",
-        planeai_core::command::augmented_path(extra_path_dirs)
-    );
-    let args = vec![
-        "new-session",
-        "-d",
-        "-s",
-        tmux_name,
-        "-c",
-        working_dir,
-        "-e",
-        &env_flag,
-        "-e",
-        &path_flag,
-        cmd,
+    let mut env = vec![
+        format!("PLANEAI_SESSION_ID={}", session_id),
+        format!(
+            "PATH={}",
+            planeai_core::command::augmented_path(extra_path_dirs)
+        ),
     ];
+    env.extend(
+        mcp.into_iter()
+            .flat_map(|endpoint| endpoint.env())
+            .map(|(key, value)| format!("{key}={value}")),
+    );
+    let mut args = vec!["new-session", "-d", "-s", tmux_name, "-c", working_dir];
+    for var in &env {
+        args.extend(["-e", var.as_str()]);
+    }
+    args.push(cmd);
     let output = command(&args)
         .output()
         .map_err(|e| format!("failed to run tmux: {e}"))?;

@@ -83,6 +83,8 @@ fn load_reads_existing_config_file() {
         language_servers: None,
         editor: None,
         onboarding_completed: Some(true),
+        mcp_enabled: None,
+        mcp_port: None,
     };
 
     let json = serde_json::to_string_pretty(&custom).unwrap();
@@ -254,7 +256,10 @@ fn first_launch_command_returns_base_when_yolo_false() {
         yolo_flag: Some("--trust-all-tools".to_string()),
         ..Default::default()
     };
-    assert_eq!(provider.first_launch_command(false, None), "kiro-cli chat");
+    assert_eq!(
+        provider.first_launch_command(false, None, None),
+        "kiro-cli chat"
+    );
 }
 
 #[test]
@@ -265,7 +270,7 @@ fn first_launch_command_appends_yolo_flag_when_yolo_true() {
         ..Default::default()
     };
     assert_eq!(
-        provider.first_launch_command(true, None),
+        provider.first_launch_command(true, None, None),
         "kiro-cli chat --trust-all-tools"
     );
 }
@@ -277,7 +282,7 @@ fn first_launch_command_ignores_yolo_when_no_flag() {
         yolo_flag: None,
         ..Default::default()
     };
-    assert_eq!(provider.first_launch_command(true, None), "aider");
+    assert_eq!(provider.first_launch_command(true, None, None), "aider");
 }
 
 #[test]
@@ -477,7 +482,7 @@ fn default_config_kiro_provider_has_resume_fields() {
 fn every_default_provider_starts_an_interactive_session_on_the_task_prompt() {
     let config = Config::default();
     let first_launch = |key: &str| {
-        config.providers[key].first_launch_command(true, Some("- Fix the user's login"))
+        config.providers[key].first_launch_command(true, Some("- Fix the user's login"), None)
     };
     assert_eq!(
         first_launch("kiro"),
@@ -496,7 +501,7 @@ fn every_default_provider_starts_an_interactive_session_on_the_task_prompt() {
         "codex --dangerously-bypass-approvals-and-sandbox -- '- Fix the user'\\''s login'"
     );
     assert_eq!(
-        config.providers["copilot"].first_launch_command(false, None),
+        config.providers["copilot"].first_launch_command(false, None, None),
         "copilot"
     );
 }
@@ -504,7 +509,7 @@ fn every_default_provider_starts_an_interactive_session_on_the_task_prompt() {
 #[test]
 fn every_default_provider_restarts_by_resuming() {
     let config = Config::default();
-    let restart = |key: &str| restart_command_for_provider(&config.providers[key]);
+    let restart = |key: &str| restart_command_for_provider(&config.providers[key], None);
     assert_eq!(
         ["kiro", "claude", "copilot", "codex"].map(restart),
         [
@@ -534,7 +539,7 @@ fn load_keeps_stored_provider_commands_as_written() {
     let (config, warnings) = load(dir.path());
 
     assert!(warnings.is_empty(), "{warnings:?}");
-    let launch = |key: &str| config.providers[key].first_launch_command(false, Some("Go"));
+    let launch = |key: &str| config.providers[key].first_launch_command(false, Some("Go"), None);
     assert_eq!(launch("claude"), "claude -p 'Go'");
     assert_eq!(launch("copilot"), "copilot --resume 'Go'");
 }
@@ -548,7 +553,7 @@ fn restart_command_uses_resume_command_when_available() {
         ..Default::default()
     };
     // Even with a provider_session_id, uses interactive resume_command
-    let cmd = restart_command_for_provider(&provider);
+    let cmd = restart_command_for_provider(&provider, None);
     assert_eq!(cmd, "kiro-cli chat --resume");
 }
 
@@ -559,7 +564,7 @@ fn restart_command_falls_back_to_fresh_when_no_resume_command() {
         yolo_flag: Some("--trust-all-tools".to_string()),
         ..Default::default()
     };
-    let cmd = restart_command_for_provider(&provider);
+    let cmd = restart_command_for_provider(&provider, None);
     assert_eq!(cmd, "kiro-cli chat");
 }
 
@@ -1094,6 +1099,7 @@ fn detect_provider_binaries_covers_configured_and_preset_agents() {
             yolo_flag: None,
             resume_command: None,
             prompt_command: None,
+            mcp_args: None,
             autonomous_prompt_template: None,
         },
     );
@@ -1509,5 +1515,80 @@ fn validate_explains_that_an_unreadable_config_blocks_saving() {
             "config.json has errors. Fix it, then reload it from Preferences → Advanced."
                 .to_string()
         )
+    );
+}
+
+#[test]
+fn the_mcp_server_is_on_by_default_at_its_fixed_loopback_port() {
+    let mut config = Config::default();
+    assert_eq!(
+        config.mcp_url().as_deref(),
+        Some("http://127.0.0.1:47437/mcp")
+    );
+    config.mcp_port = Some(51234);
+    assert_eq!(
+        config.mcp_url().as_deref(),
+        Some("http://127.0.0.1:51234/mcp")
+    );
+    config.mcp_enabled = Some(false);
+    assert_eq!(config.mcp_url(), None);
+}
+
+#[test]
+fn a_zero_mcp_port_is_rejected() {
+    let config = Config {
+        mcp_port: Some(0),
+        ..Config::default()
+    };
+    assert_eq!(
+        validate(&config),
+        Err("MCP server port must be between 1 and 65535".to_string())
+    );
+}
+
+#[test]
+fn load_backfills_mcp_args_for_built_in_agents_but_keeps_an_explicit_opt_out() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.json"),
+        r#"{
+            "providers": {
+                "claude": { "command": "claude" },
+                "codex": { "command": "codex", "mcp_args": "" }
+            },
+            "default_provider": "claude"
+        }"#,
+    )
+    .unwrap();
+
+    let (config, _) = load(dir.path());
+    let claude = &config.providers["claude"];
+    assert!(claude
+        .mcp_args
+        .as_deref()
+        .unwrap()
+        .starts_with("--mcp-config "));
+    assert_eq!(config.providers["codex"].mcp_args.as_deref(), Some(""));
+    assert_eq!(
+        config.providers["codex"].first_launch_command(false, None, config.mcp_url().as_deref()),
+        "codex"
+    );
+}
+
+#[test]
+fn a_restarted_agent_reconnects_to_the_mcp_server() {
+    let provider = Provider {
+        command: "agent".to_string(),
+        resume_command: Some("agent --resume".to_string()),
+        mcp_args: Some("--mcp {mcp_url}".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        restart_command_for_provider(&provider, Some("http://127.0.0.1:47437/mcp")),
+        "agent --resume --mcp http://127.0.0.1:47437/mcp"
+    );
+    assert_eq!(
+        restart_command_for_provider(&provider, None),
+        "agent --resume"
     );
 }

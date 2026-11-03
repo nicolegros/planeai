@@ -10,6 +10,8 @@ export interface Provider {
   yolo_flag: string | null;
   resume_command?: string | null;
   prompt_command?: string | null;
+  /** Arguments connecting the agent to PlaneAI's MCP server; empty opts out. */
+  mcp_args?: string | null;
 }
 
 export interface LifecycleHook {

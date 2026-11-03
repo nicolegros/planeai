@@ -985,6 +985,8 @@ mod tests {
             language_servers: None,
             editor: None,
             onboarding_completed: None,
+            mcp_enabled: None,
+            mcp_port: None,
         }
     }
 

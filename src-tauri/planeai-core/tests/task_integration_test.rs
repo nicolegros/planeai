@@ -99,6 +99,7 @@ fn resolve_task_launch_produces_worktree_mode() {
                     command: "agent".to_string(),
                     yolo_flag: Some("--yolo".to_string()),
                     prompt_command: Some("{prompt}".to_string()),
+                    mcp_args: None,
                 },
             );
             m
@@ -156,6 +157,7 @@ fn resolve_task_launch_autonomous_false_no_wrapper() {
                     command: "agent".to_string(),
                     yolo_flag: None,
                     prompt_command: Some("-p {prompt}".to_string()),
+                    mcp_args: None,
                 },
             );
             m
@@ -199,6 +201,7 @@ fn resolve_task_launch_autonomous_true_no_wrapper_from_resolve() {
                     command: "agent".to_string(),
                     yolo_flag: None,
                     prompt_command: Some("-p {prompt}".to_string()),
+                    mcp_args: None,
                 },
             );
             m
@@ -235,6 +238,7 @@ fn build_provider_launch_command_autonomous_applies_wrapper() {
         command: "agent".to_string(),
         yolo_flag: None,
         prompt_command: Some("-p {prompt}".to_string()),
+        mcp_args: None,
     };
 
     let result = planeai_core::session_launch::build_provider_launch_command(
@@ -243,6 +247,7 @@ fn build_provider_launch_command_autonomous_applies_wrapper() {
         Some("Task\n\nDesc"),
         true,
         Some("AUTO: {prompt}"),
+        None,
     );
     assert!(result.command.contains("AUTO:"));
     assert!(result.prompt_was_injected);
@@ -254,6 +259,7 @@ fn build_provider_launch_command_autonomous_false_no_wrapper() {
         command: "agent".to_string(),
         yolo_flag: None,
         prompt_command: Some("-p {prompt}".to_string()),
+        mcp_args: None,
     };
 
     let result = planeai_core::session_launch::build_provider_launch_command(
@@ -262,6 +268,7 @@ fn build_provider_launch_command_autonomous_false_no_wrapper() {
         Some("Task\n\nDesc"),
         false,
         Some("AUTO: {prompt}"),
+        None,
     );
     // autonomous=false means wrapper is NOT applied
     assert!(!result.command.contains("AUTO:"));

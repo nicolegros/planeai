@@ -99,6 +99,8 @@ fn dispatch_logs_the_prompt_size_but_never_its_text() {
             prompt_template: Some("Rotate key {title}".to_string()),
             prompt_command: Some("-- {prompt}".to_string()),
             prompt_wrapper: None,
+            mcp_args: None,
+            mcp_url: None,
             name_template: None,
         },
         project_id: "p1".to_string(),

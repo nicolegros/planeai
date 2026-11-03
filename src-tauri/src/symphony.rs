@@ -110,6 +110,23 @@ pub struct TauriBackend {
     pub notify_socket: std::path::PathBuf,
 }
 
+impl TauriBackend {
+    /// Extra PATH folders, and the MCP endpoint minted for the agent about to spawn.
+    fn agent_env(
+        &self,
+        session_id: &str,
+    ) -> Result<(Vec<String>, Option<planeai_core::mcp::McpEndpoint>), String> {
+        let cfg = {
+            let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
+            let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
+            cfg.clone()
+        };
+        let conn = self.db.lock().map_err(|e| e.to_string())?;
+        let mcp = crate::mcp::endpoint(&conn, &cfg, session_id)?;
+        Ok((cfg.resolved_extra_path_dirs(), mcp))
+    }
+}
+
 impl Backend for TauriBackend {
     fn create_worktree(
         &self,
@@ -138,7 +155,8 @@ impl Backend for TauriBackend {
         cmd: &str,
         session_id: &str,
     ) -> Result<(), String> {
-        crate::tmux::create_session_with_cmd_and_path(name, cwd, cmd, session_id, &[])
+        let (_, mcp) = self.agent_env(session_id)?;
+        crate::tmux::create_session_with_cmd_and_path(name, cwd, cmd, session_id, &[], mcp.as_ref())
     }
 
     #[cfg(windows)]
@@ -156,17 +174,17 @@ impl Backend for TauriBackend {
         let socket_path = planeai_ipc::daemon_socket_path();
         let daemon_bin = crate::paths::resolve_daemon_binary(&self.app_handle);
         let scrollback = 1_048_576;
-        let extra_path_dirs = {
-            let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
-            let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
-            cfg.resolved_extra_path_dirs()
-        };
+        let (extra_path_dirs, mcp) = self.agent_env(session_id)?;
 
         crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
         let mut path_buf = String::new();
-        let env =
-            planeai_core::command::build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+        let env = planeai_core::command::build_daemon_env(
+            &extra_path_dirs,
+            session_id,
+            &mut path_buf,
+            mcp.as_ref(),
+        );
         let (program, args) = planeai_core::command::shell_args(cmd);
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         crate::daemon::spawn_session(session_id, program, &args_refs, cwd, Some(&env))
@@ -181,14 +199,14 @@ impl Backend for TauriBackend {
     ) -> Result<(), String> {
         let workspace = planeai_rmux::WorkspaceName::from_stored(workspace)
             .ok_or_else(|| format!("not a PlaneAI rmux workspace: {workspace}"))?;
-        let extra_path_dirs = {
-            let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
-            let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
-            cfg.resolved_extra_path_dirs()
-        };
+        let (extra_path_dirs, mcp) = self.agent_env(session_id)?;
         let mut path_buf = String::new();
-        let env =
-            planeai_core::command::build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+        let env = planeai_core::command::build_daemon_env(
+            &extra_path_dirs,
+            session_id,
+            &mut path_buf,
+            mcp.as_ref(),
+        );
         crate::rmux_ops::spawn_resource_blocking(session_id, session_id, &workspace, cmd, cwd, &env)
             .map(|_| ())
     }
@@ -322,6 +340,8 @@ impl Backend for TauriBackend {
             prompt_command: provider.prompt_command.clone(),
             prompt_wrapper: auto.autonomous_prompt_template.clone(),
             name_template: tm.templates.as_ref().and_then(|t| t.name.clone()),
+            mcp_args: provider.mcp_args.clone(),
+            mcp_url: cfg.mcp_url(),
         })
     }
 
@@ -510,6 +530,8 @@ pub fn build_orchestrator_config(
                 prompt_command: provider.prompt_command.clone(),
                 prompt_wrapper: auto.autonomous_prompt_template.clone(),
                 name_template: tm.templates.as_ref().and_then(|t| t.name.clone()),
+                mcp_args: provider.mcp_args.clone(),
+                mcp_url: config.mcp_url(),
             },
         });
     }
@@ -562,6 +584,7 @@ mod tests {
                 command: "kiro-cli chat".to_string(),
                 yolo_flag: Some("--trust-all-tools".to_string()),
                 prompt_command: None,
+                mcp_args: None,
                 autonomous_prompt_template: None,
                 resume_command: None,
             },
