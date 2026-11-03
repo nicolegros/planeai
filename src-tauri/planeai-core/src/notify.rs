@@ -22,6 +22,8 @@ pub enum NotifyEvent {
     SessionChanged,
     SendPrompt,
     TaskLifecycle,
+    /// A task changed outside the GUI without a status move, e.g. snoozed from the CLI.
+    TaskChanged,
 }
 
 #[derive(Debug, Clone)]
@@ -299,6 +301,7 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
             Some("session_changed") => NotifyEvent::SessionChanged,
             Some("send_prompt") => NotifyEvent::SendPrompt,
             Some("task_lifecycle") => NotifyEvent::TaskLifecycle,
+            Some("task_changed") => NotifyEvent::TaskChanged,
             _ => NotifyEvent::Stop,
         };
         let text = v

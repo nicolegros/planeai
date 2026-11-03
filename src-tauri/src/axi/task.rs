@@ -227,3 +227,32 @@ pub fn task_move_with_lifecycle(
         Err(error) => (emit_error(&error, &[]), 1),
     }
 }
+
+/// AXI adapter for `task snooze`; `prefix` scopes the write to `repo`'s project.
+pub fn task_snooze(
+    conn: &rusqlite::Connection,
+    repo: &dyn TaskProvider,
+    prefix: &str,
+    key: &str,
+    until: &str,
+) -> (String, i32) {
+    task_detail_result(crate::task_cli::run_task_snooze(
+        conn, repo, prefix, key, until,
+    ))
+}
+
+pub fn task_wake(
+    conn: &rusqlite::Connection,
+    repo: &dyn TaskProvider,
+    prefix: &str,
+    key: &str,
+) -> (String, i32) {
+    task_detail_result(crate::task_cli::run_task_wake(conn, repo, prefix, key))
+}
+
+fn task_detail_result(json: Result<String, String>) -> (String, i32) {
+    match json.and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string())) {
+        Ok(task) => (render(&[field("task", task_detail_object(&task))]), 0),
+        Err(error) => (emit_error(&error, &[]), 1),
+    }
+}

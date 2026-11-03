@@ -77,7 +77,12 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
             }
             tracing::debug!(raw_line = %line, "socket message received");
             let msg = parse_notify_message(&line);
-            if msg.session_id.is_empty() && !matches!(msg.event, NotifyEvent::TaskLifecycle) {
+            if msg.session_id.is_empty()
+                && !matches!(
+                    msg.event,
+                    NotifyEvent::TaskLifecycle | NotifyEvent::TaskChanged
+                )
+            {
                 continue;
             }
             dispatch_message(&msg, &state, &app);
@@ -164,6 +169,9 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 .dispatch_task_lifecycle(batch);
             // Completing a task archives its sessions from whichever process moved it.
             reconcile_provider_sessions(app);
+        }
+        NotifyEvent::TaskChanged => {
+            let _ = app.emit("tasks-changed", ());
         }
         NotifyEvent::SendPrompt => {
             let Some(text) = msg.text.clone() else {
@@ -531,6 +539,13 @@ mod tests {
         let msg = parse_notify_message(r#"{"session_id":"abc123","event":"notification"}"#);
         assert_eq!(msg.session_id, "abc123");
         assert_eq!(msg.event, NotifyEvent::Notification);
+    }
+
+    #[test]
+    fn parse_cli_task_changed_event_without_a_session() {
+        let msg = parse_notify_message(r#"{"event":"task_changed","key":"PLA-1"}"#);
+        assert_eq!(msg.session_id, "");
+        assert_eq!(msg.event, NotifyEvent::TaskChanged);
     }
 
     #[test]
