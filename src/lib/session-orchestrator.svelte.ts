@@ -121,12 +121,6 @@ function setActiveSession(id: string | null, opts: { explicit?: boolean } = {}):
 }
 
 export function selectSession(id: string, opts: { explicit?: boolean } = {}): void {
-  console.log(`[DEBUG-lsr1] selectSession called`, {
-    id,
-    foundInSessions: sessions.some((s) => s.id === id),
-    sessionCount: sessions.length,
-    timestamp: Date.now(),
-  });
   setActiveSession(id, opts);
   const session = sessions.find((s) => s.id === id);
   if (session?.status === "exited") {
@@ -364,17 +358,7 @@ export function startEventListeners(): () => void {
   // Refresh sessions when CLI creates a session
   unlisteners.push(
     listen<string>("session-created", async (event) => {
-      console.log(`[DEBUG-lsr1] session-created event received`, {
-        sessionId: event.payload,
-        timestamp: Date.now(),
-      });
       await loadSessions();
-      console.log(`[DEBUG-lsr1] loadSessions() resolved after session-created`, {
-        sessionId: event.payload,
-        sessionCount: sessions.length,
-        found: sessions.some((s) => s.id === event.payload),
-        timestamp: Date.now(),
-      });
       touchMru(event.payload);
     }),
   );

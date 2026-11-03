@@ -90,7 +90,7 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
     }
     match msg.event {
         NotifyEvent::SessionCreated => {
-            tracing::info!(session_id = %msg.session_id, "[DEBUG-lsr1] session created via socket — emitting to webview");
+            tracing::info!(session_id = %msg.session_id, "session created via socket");
             let _ = app.emit("session-created", msg.session_id.clone());
         }
         NotifyEvent::SessionChanged => {
