@@ -594,6 +594,7 @@ fn scope_fixture() -> ScopeFixture {
     let scope = TaskScope::open(
         &db_path,
         &project,
+        planeai_core::task_lifecycle::TaskLifecycleOrigin::Axi,
         crate::task_cli::LifecycleSink::InProcess(std::sync::Arc::new(move |batch| {
             sink_batches.lock().unwrap().push(batch)
         })),

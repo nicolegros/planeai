@@ -213,6 +213,23 @@ fn task_list_defaults_to_the_project_of_the_callers_task() {
 }
 
 #[test]
+fn reading_tasks_sets_nothing_up_in_the_database() {
+    let f = Fixture::new();
+    let conn = rusqlite::Connection::open(&f.context.db_path).unwrap();
+    crate::db::create_project(&conn, "other", "/tmp/other").unwrap();
+    let setup_rows = || -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM task_projects", [], |row| row.get(0))
+            .unwrap()
+    };
+    let before = setup_rows();
+
+    let output = f.call("task_list", json!({ "project": "other" }));
+
+    assert!(!output.is_error, "{}", output.text);
+    assert_eq!(setup_rows(), before);
+}
+
+#[test]
 fn task_show_defaults_to_the_callers_task() {
     let f = Fixture::new();
     assert_eq!(

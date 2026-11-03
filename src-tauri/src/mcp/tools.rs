@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use planeai_core::mcp::McpCaller;
-use planeai_core::task_lifecycle::TaskLifecycleBatch;
+use planeai_core::task_lifecycle::{TaskLifecycleBatch, TaskLifecycleOrigin};
 use rmcp::model::{JsonObject, Tool, ToolAnnotations};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
@@ -240,14 +240,14 @@ fn open(context: &ToolContext) -> Result<rusqlite::Connection, String> {
     rusqlite::Connection::open(&context.db_path).map_err(|error| error.to_string())
 }
 
-/// The tasks of the named project, or of the caller's task workspace.
+/// The tasks of the named project, or of the caller's task workspace, over one connection.
 fn scope(
-    conn: &rusqlite::Connection,
     context: &ToolContext,
     caller: &McpCaller,
     project: Option<&str>,
 ) -> Result<TaskScope, String> {
-    let projects = crate::db::list_projects(conn).map_err(|error| error.to_string())?;
+    let conn = open(context)?;
+    let projects = crate::db::list_projects(&conn).map_err(|error| error.to_string())?;
     let project = match project {
         Some(name) => projects
             .iter()
@@ -259,11 +259,13 @@ fn scope(
             .ok_or("the project of this session no longer exists")?,
     };
     let events = context.events.clone();
-    TaskScope::open(
-        &context.db_path,
+    // `Axi`, not a new origin: plugins built before MCP know only the existing ones.
+    Ok(TaskScope::on_migrated(
+        conn,
         project,
+        TaskLifecycleOrigin::Axi,
         LifecycleSink::InProcess(Arc::new(move |batch| events.task_lifecycle(batch))),
-    )
+    ))
 }
 
 /// An explicit key, else the caller's own task.
@@ -308,8 +310,7 @@ fn task_list(
     caller: &McpCaller,
     input: TaskListInput,
 ) -> Result<ToolOutput, String> {
-    let conn = open(context)?;
-    let scope = scope(&conn, context, caller, input.project.as_deref())?;
+    let scope = scope(context, caller, input.project.as_deref())?;
     Ok(axi::task_ls(
         &scope.repo,
         input.status.map(TaskStatus::as_str),
@@ -332,9 +333,8 @@ fn task_show(
     caller: &McpCaller,
     input: TaskShowInput,
 ) -> Result<ToolOutput, String> {
-    let conn = open(context)?;
     let key = task_key(caller, input.key)?;
-    let scope = scope(&conn, context, caller, input.project.as_deref())?;
+    let scope = scope(context, caller, input.project.as_deref())?;
     Ok(axi::task_show(&scope.repo, &key).into())
 }
 
@@ -364,8 +364,7 @@ fn task_create(
     caller: &McpCaller,
     input: TaskCreateInput,
 ) -> Result<ToolOutput, String> {
-    let conn = open(context)?;
-    let scope = scope(&conn, context, caller, input.project.as_deref())?;
+    let scope = scope(context, caller, input.project.as_deref())?;
     Ok(axi::task_add_with_lifecycle(
         &scope.repo,
         crate::task_cli::AddParams {
@@ -407,9 +406,8 @@ fn task_update(
     caller: &McpCaller,
     input: TaskUpdateInput,
 ) -> Result<ToolOutput, String> {
-    let conn = open(context)?;
     let key = task_key(caller, input.key)?;
-    let scope = scope(&conn, context, caller, input.project.as_deref())?;
+    let scope = scope(context, caller, input.project.as_deref())?;
     Ok(axi::task_update(
         &scope,
         TaskUpdate {
@@ -443,8 +441,7 @@ fn task_delete(
     caller: &McpCaller,
     input: TaskDeleteInput,
 ) -> Result<ToolOutput, String> {
-    let conn = open(context)?;
-    let scope = scope(&conn, context, caller, input.project.as_deref())?;
+    let scope = scope(context, caller, input.project.as_deref())?;
     Ok(axi::task_delete(&scope, &input.key).into())
 }
 

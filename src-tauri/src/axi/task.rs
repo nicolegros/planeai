@@ -18,22 +18,48 @@ pub struct TaskScope {
 }
 
 impl TaskScope {
+    /// Open the database, migrating its task tables first, as a process outside the app must.
     pub fn open(
         db_path: &Path,
         project: &crate::db::Project,
+        origin: TaskLifecycleOrigin,
         sink: LifecycleSink,
     ) -> Result<Self, String> {
         let db_path = db_path.to_str().ok_or("database path is not UTF-8")?;
         let repo = SqliteRepository::open(db_path, &project.prefix).map_err(|e| e.to_string())?;
-        Ok(Self {
+        Ok(Self::new(repo, project, origin, sink))
+    }
+
+    /// Use a connection to the app's database, which it migrated at startup.
+    pub fn on_migrated(
+        conn: rusqlite::Connection,
+        project: &crate::db::Project,
+        origin: TaskLifecycleOrigin,
+        sink: LifecycleSink,
+    ) -> Self {
+        Self::new(
+            SqliteRepository::on_migrated(conn, &project.prefix),
+            project,
+            origin,
+            sink,
+        )
+    }
+
+    fn new(
+        repo: SqliteRepository,
+        project: &crate::db::Project,
+        origin: TaskLifecycleOrigin,
+        sink: LifecycleSink,
+    ) -> Self {
+        Self {
             repo,
             lifecycle: TaskLifecycleContext {
-                origin: TaskLifecycleOrigin::Axi,
+                origin,
                 project_id: project.id.clone(),
                 project_prefix: project.prefix.clone(),
                 sink,
             },
-        })
+        }
     }
 }
 

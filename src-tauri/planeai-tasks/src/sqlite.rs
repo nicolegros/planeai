@@ -431,6 +431,15 @@ impl SqliteRepository {
         })
     }
 
+    /// A repository over a database whose task tables are migrated and whose project row
+    /// exists, as the app's are once it has started; nothing is written to set it up.
+    pub fn on_migrated(conn: Connection, prefix: &str) -> Self {
+        Self {
+            conn: Mutex::new(conn),
+            prefix: prefix.to_string(),
+        }
+    }
+
     /// Convenience: open a file-backed DB.
     pub fn open(db_path: &str, prefix: &str) -> Result<Self, Error> {
         let conn = Connection::open(db_path).map_err(|e| Error::Storage(e.to_string()))?;

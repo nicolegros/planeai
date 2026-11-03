@@ -768,22 +768,20 @@ fn main() {
                 }
             };
 
-            let repo = match planeai_tasks::sqlite::SqliteRepository::open(
-                db_path.to_str().unwrap(),
-                &project.prefix,
+            let planeai::axi::TaskScope {
+                repo,
+                lifecycle: lifecycle_context,
+            } = match planeai::axi::TaskScope::open(
+                &db_path,
+                &project,
+                planeai_core::task_lifecycle::TaskLifecycleOrigin::Cli,
+                Default::default(),
             ) {
-                Ok(r) => r,
+                Ok(scope) => scope,
                 Err(e) => {
                     eprintln!("{{\"error\": \"{e}\"}}");
                     std::process::exit(1);
                 }
-            };
-
-            let lifecycle_context = planeai::task_cli::TaskLifecycleContext {
-                origin: planeai_core::task_lifecycle::TaskLifecycleOrigin::Cli,
-                project_id: project.id.clone(),
-                project_prefix: project.prefix.clone(),
-                sink: Default::default(),
             };
 
             let (result, pretty, key_for_notify) = match action {
@@ -958,8 +956,14 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
         | AxiTaskAction::Wake { project, .. } => project.as_deref(),
     };
 
-    let scope = planeai::task_cli::resolve_project(conn, project_flag, cwd)
-        .and_then(|project| planeai::axi::TaskScope::open(&db_path, &project, Default::default()));
+    let scope = planeai::task_cli::resolve_project(conn, project_flag, cwd).and_then(|project| {
+        planeai::axi::TaskScope::open(
+            &db_path,
+            &project,
+            planeai_core::task_lifecycle::TaskLifecycleOrigin::Axi,
+            Default::default(),
+        )
+    });
     let scope = match scope {
         Ok(scope) => scope,
         Err(e) => {

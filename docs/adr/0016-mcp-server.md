@@ -48,6 +48,7 @@ Claude Code and Codex both speak MCP natively, show its tools by name, and let a
   Every call of a task-writing tool refreshes the GUI once, from the tool registry, even a failed one.
 - Tools are thin adapters over the AXI domain functions and return the same TOON text the CLI prints, without its CLI-specific help hints.
   `planeai-cli axi` stays for agents outside PlaneAI sessions; there is one implementation behind both.
+  A tool call opens one database connection and never migrates: the app migrated at startup. Token lookups share one connection for the server's lifetime.
 - Tools live in a registry of definitions (name, description, effect, input schema, handler), so plugin tools can be appended later through plugin host API v6.
 
 ## Consequences
