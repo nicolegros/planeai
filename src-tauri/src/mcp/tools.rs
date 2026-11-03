@@ -129,20 +129,21 @@ impl ToolDef {
     }
 }
 
-pub struct Registry(Vec<ToolDef>);
+pub struct Registry(Vec<Arc<ToolDef>>);
 
 impl Registry {
-    pub fn get(&self, name: &str) -> Option<&ToolDef> {
-        self.0.iter().find(|tool| tool.name == name)
+    pub fn get(&self, name: &str) -> Option<Arc<ToolDef>> {
+        self.0.iter().find(|tool| tool.name == name).cloned()
     }
 
     pub fn tools(&self) -> Vec<Tool> {
-        self.0.iter().map(ToolDef::tool).collect()
+        self.0.iter().map(|tool| tool.tool()).collect()
     }
 
     /// PlaneAI's own tools.
     pub fn core() -> Self {
-        Self(vec![
+        Self(
+            [
             ToolDef::new(
                 "task_list",
                 "List tasks of a project (default: the project of this session's task).",
@@ -209,7 +210,11 @@ impl Registry {
                 Effect::Read,
                 project_list,
             ),
-        ])
+        ]
+            .into_iter()
+            .map(Arc::new)
+            .collect(),
+        )
     }
 }
 

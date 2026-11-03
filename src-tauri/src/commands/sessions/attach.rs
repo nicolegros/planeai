@@ -6,7 +6,9 @@ use crate::config;
 use crate::db;
 use crate::plugins::PluginRuntimeHandle;
 use crate::pty;
-use crate::state::{ConfigState, DbState, NotifyHandle, ProjectOperationState, PtyState};
+use crate::state::{
+    ConfigState, DbState, McpServerState, NotifyHandle, ProjectOperationState, PtyState,
+};
 
 use super::helpers::{build_local_env, provider_has_hook};
 
@@ -22,6 +24,7 @@ pub async fn attach_session(
     notify: State<'_, NotifyHandle>,
     runtime: State<'_, PluginRuntimeHandle>,
     operations: State<'_, ProjectOperationState>,
+    mcp: State<'_, McpServerState>,
 ) -> Result<(), String> {
     // Every database and config read below runs through `commands::blocking`: on
     // macOS WKWebView dispatches IPC handlers on the main thread, so doing this
@@ -54,6 +57,7 @@ pub async fn attach_session(
     };
     // A remount rebinds the running local agent, which keeps the token it was spawned with.
     let agent_running = state.0.is_running(&session_id);
+    let mcp_url = mcp.0.url();
     let AttachPlan {
         session,
         pty_target,
@@ -65,7 +69,14 @@ pub async fn attach_session(
         let session_id = session_id.clone();
         move || {
             let conn = db.lock().map_err(|e| e.to_string())?;
-            claim_attach_plan(&conn, &cfg, &session_id, dark_mode, agent_running)
+            claim_attach_plan(
+                &conn,
+                &cfg,
+                mcp_url.as_deref(),
+                &session_id,
+                dark_mode,
+                agent_running,
+            )
         }
     })
     .await?;
@@ -140,22 +151,20 @@ pub struct AttachPlan {
 /// `resolve_attach_plan`, claiming the prompt its spawn delivers in the same database pass:
 /// the prompt reaches the agent at most once, even if the app quits before the attach is
 /// recorded. A spawn that fails gives it back with `release_first_prompt`.
-/// A local agent this attach starts gets a fresh MCP token in its environment.
+/// A local agent this attach starts gets a fresh MCP token in its environment while the
+/// server at `mcp_url` is listening.
 pub fn claim_attach_plan(
     conn: &rusqlite::Connection,
     cfg: &config::Config,
+    mcp_url: Option<&str>,
     session_id: &str,
     dark_mode: Option<bool>,
     agent_running: bool,
 ) -> Result<AttachPlan, String> {
-    let mut plan = resolve_attach_plan(conn, cfg, session_id, dark_mode)?;
+    let mut plan = resolve_attach_plan(conn, cfg, mcp_url, session_id, dark_mode)?;
     if !agent_running && matches!(plan.pty_target, pty::PtyTarget::Shell { .. }) {
-        if let Some(endpoint) = planeai_core::mcp::endpoint(conn, cfg.mcp_url(), session_id)? {
-            plan.env.extend(
-                endpoint
-                    .env()
-                    .map(|(key, value)| (key.to_string(), value.to_string())),
-            );
+        if let Some(endpoint) = planeai_core::mcp::endpoint(conn, mcp_url, session_id)? {
+            plan.env.extend(endpoint.owned_env());
         }
     }
     if plan.first_prompt.is_some() {
@@ -179,6 +188,7 @@ pub fn release_first_prompt(
 pub fn resolve_attach_plan(
     conn: &rusqlite::Connection,
     cfg: &config::Config,
+    mcp_url: Option<&str>,
     session_id: &str,
     dark_mode: Option<bool>,
 ) -> Result<AttachPlan, String> {
@@ -241,16 +251,15 @@ pub fn resolve_attach_plan(
             .unwrap_or(project_path)
             .to_string();
 
-        let mcp_url = cfg.mcp_url();
         let cmd = if session.attached_once {
-            config::restart_command_for_provider(provider_def, mcp_url.as_deref())
+            config::restart_command_for_provider(provider_def, mcp_url)
         } else {
             // This spawn is the launch, so it carries the task prompt `launch` kept for it.
             first_prompt = db::pending_prompt(conn, session_id).map_err(|e| e.to_string())?;
             provider_def.first_launch_command(
                 session.auto_approve,
                 first_prompt.as_deref(),
-                mcp_url.as_deref(),
+                mcp_url,
             )
         };
 
@@ -290,7 +299,6 @@ pub fn resolve_attach_plan(
             agent_command,
             dark_mode.unwrap_or(true),
             extra_path_dirs,
-            None,
         )?
     } else {
         vec![]
@@ -408,6 +416,8 @@ mod tests {
         conn
     }
 
+    const MCP_URL: &str = "http://127.0.0.1:47437/mcp";
+
     fn config_with_provider() -> config::Config {
         // `Config::default()` already carries the built-in providers, which is what
         // a local-backend attach resolves its command from.
@@ -418,8 +428,14 @@ mod tests {
     fn a_tmux_session_attaches_to_its_tmux_name() {
         let conn = db_with_session("tmux", Some("planeai-session-1"));
 
-        let plan = resolve_attach_plan(&conn, &config_with_provider(), "session-1", Some(true))
-            .expect("tmux plan");
+        let plan = resolve_attach_plan(
+            &conn,
+            &config_with_provider(),
+            None,
+            "session-1",
+            Some(true),
+        )
+        .expect("tmux plan");
 
         match plan.pty_target {
             pty::PtyTarget::TmuxAttach { tmux_name } => {
@@ -439,7 +455,7 @@ mod tests {
         // Attaching with nothing to attach to would spawn a stray process.
         let conn = db_with_session("tmux", None);
 
-        let error = resolve_attach_plan(&conn, &config_with_provider(), "session-1", None)
+        let error = resolve_attach_plan(&conn, &config_with_provider(), None, "session-1", None)
             .expect_err("a tmux session with no name cannot attach");
 
         assert!(error.contains("tmux_name"), "{error}");
@@ -449,8 +465,8 @@ mod tests {
     fn a_daemon_session_attaches_over_the_daemon_socket_without_env() {
         let conn = db_with_session("daemon", None);
 
-        let plan =
-            resolve_attach_plan(&conn, &config_with_provider(), "session-1", None).expect("plan");
+        let plan = resolve_attach_plan(&conn, &config_with_provider(), None, "session-1", None)
+            .expect("plan");
 
         match plan.pty_target {
             pty::PtyTarget::Daemon { session_id, .. } => assert_eq!(session_id, "session-1"),
@@ -475,8 +491,8 @@ mod tests {
         )
         .unwrap();
 
-        let plan =
-            resolve_attach_plan(&conn, &config_with_provider(), "session-1", None).expect("plan");
+        let plan = resolve_attach_plan(&conn, &config_with_provider(), None, "session-1", None)
+            .expect("plan");
 
         match plan.pty_target {
             pty::PtyTarget::Rmux {
@@ -500,7 +516,7 @@ mod tests {
         // looks alive.
         let conn = db_with_session(planeai_rmux::BACKEND, None);
 
-        let error = resolve_attach_plan(&conn, &config_with_provider(), "session-1", None)
+        let error = resolve_attach_plan(&conn, &config_with_provider(), None, "session-1", None)
             .expect_err("no recorded pane means no attach");
 
         assert!(error.contains("no recorded pane"), "{error}");
@@ -517,7 +533,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = resolve_attach_plan(&conn, &config_with_provider(), "session-1", None)
+        let error = resolve_attach_plan(&conn, &config_with_provider(), None, "session-1", None)
             .expect_err("an unrecognised workspace cannot be attached");
 
         assert!(error.contains("unrecognised workspace"), "{error}");
@@ -549,7 +565,7 @@ mod tests {
         )
         .unwrap();
 
-        let first = resolve_attach_plan(&conn, &config_with_provider(), "session-1", None)
+        let first = resolve_attach_plan(&conn, &config_with_provider(), None, "session-1", None)
             .expect("first attach");
         match &first.pty_target {
             // The worktree, not the project root: that is where the agent works.
@@ -572,6 +588,7 @@ mod tests {
         let command = |conn: &rusqlite::Connection| match resolve_attach_plan(
             conn,
             &config_with_provider(),
+            None,
             "session-1",
             None,
         )
@@ -645,8 +662,15 @@ mod tests {
                 .collect()
         };
 
-        let started =
-            claim_attach_plan(&conn, &config_with_provider(), "session-1", None, false).unwrap();
+        let started = claim_attach_plan(
+            &conn,
+            &config_with_provider(),
+            Some(MCP_URL),
+            "session-1",
+            None,
+            false,
+        )
+        .unwrap();
         let command = match &started.pty_target {
             pty::PtyTarget::Shell { command, .. } => command.clone(),
             other => panic!("expected a shell target, got {other:?}"),
@@ -673,8 +697,15 @@ mod tests {
             "session-1"
         );
 
-        let remount =
-            claim_attach_plan(&conn, &config_with_provider(), "session-1", None, true).unwrap();
+        let remount = claim_attach_plan(
+            &conn,
+            &config_with_provider(),
+            Some(MCP_URL),
+            "session-1",
+            None,
+            true,
+        )
+        .unwrap();
         assert_eq!(mcp_env(&remount), vec![]);
         assert_eq!(
             planeai_core::mcp::resolve(&conn, &token)
@@ -684,6 +715,50 @@ mod tests {
             "session-1",
             "the running agent's token stays valid"
         );
+    }
+
+    #[test]
+    fn a_local_agent_started_while_the_server_is_not_listening_is_not_connected() {
+        let worktree = tempfile::tempdir().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "demo", "/repos/demo").unwrap();
+        db::create_session_with_params(
+            &conn,
+            &planeai_core::services::CreateSessionParams {
+                id: "session-1".into(),
+                project_id: project.id,
+                branch: "feature".into(),
+                worktree_path: Some(worktree.path().display().to_string()),
+                provider: Some("claude".into()),
+                backend: "local".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let plan = claim_attach_plan(
+            &conn,
+            &config_with_provider(),
+            None,
+            "session-1",
+            None,
+            false,
+        )
+        .unwrap();
+
+        match &plan.pty_target {
+            pty::PtyTarget::Shell { command, .. } => assert_eq!(command, "claude"),
+            other => panic!("expected a shell target, got {other:?}"),
+        }
+        assert!(!plan
+            .env
+            .iter()
+            .any(|(key, _)| key.starts_with("PLANEAI_MCP_")));
+        let tokens: i64 = conn
+            .query_row("SELECT COUNT(*) FROM mcp_tokens", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(tokens, 0);
     }
 
     #[test]
@@ -707,8 +782,15 @@ mod tests {
         )
         .unwrap();
         let claim = || {
-            let plan = claim_attach_plan(&conn, &config_with_provider(), "session-1", None, false)
-                .unwrap();
+            let plan = claim_attach_plan(
+                &conn,
+                &config_with_provider(),
+                Some(MCP_URL),
+                "session-1",
+                None,
+                false,
+            )
+            .unwrap();
             let command = match plan.pty_target {
                 pty::PtyTarget::Shell { command, .. } => command,
                 other => panic!("expected a shell target, got {other:?}"),
@@ -753,12 +835,7 @@ mod tests {
                 },
             )
             .unwrap();
-            // MCP arguments are covered by their own test.
-            let config = config::Config {
-                mcp_enabled: Some(false),
-                ..config_with_provider()
-            };
-            match resolve_attach_plan(&conn, &config, provider, None)
+            match resolve_attach_plan(&conn, &config_with_provider(), None, provider, None)
                 .unwrap()
                 .pty_target
             {
@@ -781,8 +858,9 @@ mod tests {
     fn a_missing_session_is_refused_rather_than_attached() {
         let conn = db_with_session("tmux", Some("planeai-session-1"));
 
-        let error = resolve_attach_plan(&conn, &config_with_provider(), "does-not-exist", None)
-            .expect_err("a deleted session cannot be attached");
+        let error =
+            resolve_attach_plan(&conn, &config_with_provider(), None, "does-not-exist", None)
+                .expect_err("a deleted session cannot be attached");
 
         assert!(error.contains("session not found"), "{error}");
     }
@@ -791,8 +869,8 @@ mod tests {
     fn the_notification_carries_the_session_and_project_names() {
         let conn = db_with_session("tmux", Some("planeai-session-1"));
 
-        let plan =
-            resolve_attach_plan(&conn, &config_with_provider(), "session-1", None).expect("plan");
+        let plan = resolve_attach_plan(&conn, &config_with_provider(), None, "session-1", None)
+            .expect("plan");
 
         let (display_name, project_name, _hook_enabled) = plan.notification;
         assert_eq!(display_name, "PLA-1: demo");
@@ -821,8 +899,8 @@ mod tests {
         )
         .unwrap();
 
-        let plan =
-            resolve_attach_plan(&conn, &config_with_provider(), "session-1", None).expect("plan");
+        let plan = resolve_attach_plan(&conn, &config_with_provider(), None, "session-1", None)
+            .expect("plan");
 
         assert_eq!(plan.notification.0, "feature/login");
     }

@@ -108,6 +108,10 @@ impl Fixture {
         self
     }
 
+    fn server_file(&self) -> std::path::PathBuf {
+        planeai_core::mcp::server_file(self._dir.path())
+    }
+
     fn call(&self, tool: &str, arguments: serde_json::Value) -> ToolOutput {
         let serde_json::Value::Object(arguments) = arguments else {
             panic!("arguments must be an object");
@@ -463,8 +467,8 @@ mod http {
     }
 
     async fn serve(f: &Fixture) -> (McpServer, u16) {
-        let server = McpServer::new(Registry::core(), f.context.clone());
-        let McpStatus::Listening { port } = server.apply(Some(0)).await else {
+        let server = McpServer::new(Registry::core(), f.context.clone(), f.server_file());
+        let McpStatus::Listening { port, .. } = server.apply(Some(0)).await else {
             panic!("server did not start");
         };
         (server, port)
@@ -597,11 +601,40 @@ mod http {
     }
 
     #[tokio::test]
+    async fn the_cli_sees_the_server_only_while_it_listens() {
+        let f = Fixture::new();
+        let published = || planeai_core::mcp::published_url(&f.server_file());
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken_port = taken.local_addr().unwrap().port();
+        let server = McpServer::new(Registry::core(), f.context.clone(), f.server_file());
+        assert_eq!(published(), None);
+
+        let McpStatus::Listening { url, .. } = server.apply(Some(0)).await else {
+            panic!("server did not start");
+        };
+        assert_eq!(published(), Some(url.clone()));
+        assert_eq!(server.url(), Some(url));
+
+        assert!(matches!(
+            server.apply(Some(taken_port)).await,
+            McpStatus::Failed { .. }
+        ));
+        assert_eq!((published(), server.url()), (None, None));
+
+        server.apply(Some(0)).await;
+        assert!(published().is_some());
+        server.withdraw();
+        assert_eq!(published(), None);
+        assert_eq!(server.apply(None).await, McpStatus::Off);
+        assert_eq!((published(), server.url()), (None, None));
+    }
+
+    #[tokio::test]
     async fn a_taken_port_fails_visibly_and_is_retried_on_the_next_apply() {
         let f = Fixture::new();
         let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = taken.local_addr().unwrap().port();
-        let server = McpServer::new(Registry::core(), f.context.clone());
+        let server = McpServer::new(Registry::core(), f.context.clone(), f.server_file());
 
         assert_eq!(
             server.apply(Some(port)).await,
@@ -613,13 +646,19 @@ mod http {
         drop(taken);
         assert_eq!(
             server.apply(Some(port)).await,
-            McpStatus::Listening { port }
+            McpStatus::Listening {
+                port,
+                url: format!("http://127.0.0.1:{port}/mcp")
+            }
         );
         assert_eq!(
             server.apply(Some(port)).await,
-            McpStatus::Listening { port }
+            McpStatus::Listening {
+                port,
+                url: format!("http://127.0.0.1:{port}/mcp")
+            }
         );
-        assert_eq!(server.status().await, McpStatus::Listening { port });
+        assert_eq!(server.url(), Some(format!("http://127.0.0.1:{port}/mcp")));
         assert_eq!(server.apply(None).await, McpStatus::Off);
     }
 }

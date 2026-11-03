@@ -1,5 +1,4 @@
 import type { AppConfig } from "./settings.svelte";
-import { DEFAULT_MCP_PORT } from "./mcp-settings";
 import { DEFAULT_SCROLLBACK_LINES } from "./terminal-scrollback";
 
 export type SettingsCategoryId =
@@ -314,7 +313,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
     description: "Loopback port agents connect to. Restart running agents after changing it.",
     keywords: ["mcp", "server", "port", "localhost", "127.0.0.1"],
     available: (config) => config.mcp_enabled !== false,
-    ...optional("mcp_port", DEFAULT_MCP_PORT),
+    ...optional("mcp_port", null),
   },
   // Sessions
   {

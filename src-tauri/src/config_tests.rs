@@ -1523,17 +1523,11 @@ fn validate_explains_that_an_unreadable_config_blocks_saving() {
 #[test]
 fn the_mcp_server_is_on_by_default_at_its_fixed_loopback_port() {
     let mut config = Config::default();
-    assert_eq!(
-        config.mcp_url().as_deref(),
-        Some("http://127.0.0.1:47437/mcp")
-    );
+    assert_eq!(config.mcp_listen_port(), Some(47437));
     config.mcp_port = Some(51234);
-    assert_eq!(
-        config.mcp_url().as_deref(),
-        Some("http://127.0.0.1:51234/mcp")
-    );
+    assert_eq!(config.mcp_listen_port(), Some(51234));
     config.mcp_enabled = Some(false);
-    assert_eq!(config.mcp_url(), None);
+    assert_eq!(config.mcp_listen_port(), None);
 }
 
 #[test]
@@ -1572,7 +1566,11 @@ fn load_backfills_mcp_args_for_built_in_agents_but_keeps_an_explicit_opt_out() {
         .starts_with("--mcp-config "));
     assert_eq!(config.providers["codex"].mcp_args.as_deref(), Some(""));
     assert_eq!(
-        config.providers["codex"].first_launch_command(false, None, config.mcp_url().as_deref()),
+        config.providers["codex"].first_launch_command(
+            false,
+            None,
+            Some("http://127.0.0.1:47437/mcp")
+        ),
         "codex"
     );
 }

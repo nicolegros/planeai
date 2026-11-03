@@ -360,11 +360,12 @@ export interface ThemeCss {
   dark: string;
 }
 
-/** The in-app MCP server agents reach PlaneAI's tools through. */
-export type McpStatus =
+/** The in-app MCP server agents reach PlaneAI's tools through, and the port it uses by default. */
+export type McpStatus = { default_port: number } & (
   | { state: "off" }
-  | { state: "listening"; port: number }
-  | { state: "failed"; port: number; reason: string };
+  | { state: "listening"; port: number; url: string }
+  | { state: "failed"; port: number; reason: string }
+);
 
 export const preferences = {
   getMcpStatus: () => invoke<McpStatus>("get_mcp_status"),

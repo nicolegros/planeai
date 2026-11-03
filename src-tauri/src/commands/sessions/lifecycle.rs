@@ -7,7 +7,7 @@ use crate::cleanup;
 use crate::config::Config;
 use crate::db;
 use crate::plugins::{PluginRuntimeHandle, PluginRuntimeSupervisor};
-use crate::state::{ConfigState, DbState, PtyState};
+use crate::state::{ConfigState, DbState, McpServerState, PtyState};
 
 /// A session status transition, as plugins receive it in `plugin.sessionLifecycle`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -72,6 +72,7 @@ pub fn restart_session(
     db_state: State<DbState>,
     config_state: State<ConfigState>,
     runtime: State<PluginRuntimeHandle>,
+    mcp: State<McpServerState>,
 ) -> Result<db::Session, String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let previous = db::get_session(&conn, &session_id)
@@ -79,7 +80,8 @@ pub fn restart_session(
         .ok_or("session not found")?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     let ops = crate::session_restart::real_restart_ops();
-    let session = crate::session_restart::restart(&conn, &session_id, &cfg, &ops)?;
+    let session =
+        crate::session_restart::restart(&conn, &session_id, &cfg, mcp.0.url().as_deref(), &ops)?;
     runtime
         .0
         .dispatch_session_lifecycle(session_transition(&session, &previous.status, "active"));

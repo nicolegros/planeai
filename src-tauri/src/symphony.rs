@@ -122,7 +122,7 @@ impl TauriBackend {
             cfg.clone()
         };
         let conn = self.db.lock().map_err(|e| e.to_string())?;
-        let mcp = planeai_core::mcp::endpoint(&conn, cfg.mcp_url(), session_id)?;
+        let mcp = planeai_core::mcp::endpoint(&conn, self.mcp_url().as_deref(), session_id)?;
         Ok((cfg.resolved_extra_path_dirs(), mcp))
     }
 }
@@ -341,8 +341,14 @@ impl Backend for TauriBackend {
             prompt_wrapper: auto.autonomous_prompt_template.clone(),
             name_template: tm.templates.as_ref().and_then(|t| t.name.clone()),
             mcp_args: provider.mcp_args.clone(),
-            mcp_url: cfg.mcp_url(),
         })
+    }
+
+    fn mcp_url(&self) -> Option<String> {
+        self.app_handle
+            .state::<crate::state::McpServerState>()
+            .0
+            .url()
     }
 
     fn project_folder(&self, project_id: &str) -> Option<String> {
@@ -532,7 +538,6 @@ pub fn build_orchestrator_config(
                 prompt_wrapper: auto.autonomous_prompt_template.clone(),
                 name_template: tm.templates.as_ref().and_then(|t| t.name.clone()),
                 mcp_args: provider.mcp_args.clone(),
-                mcp_url: config.mcp_url(),
             },
         });
     }

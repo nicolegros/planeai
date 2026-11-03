@@ -270,7 +270,7 @@ impl Provider {
     }
 
     /// The command a new session's agent starts with, carrying the task prompt if any.
-    /// `mcp_url` is `Config::mcp_url`.
+    /// `mcp_url` is the URL of the MCP server while it is listening.
     pub fn first_launch_command(
         &self,
         auto_approve: bool,
@@ -401,12 +401,6 @@ impl Config {
         self.mcp_enabled
             .unwrap_or(true)
             .then(|| self.mcp_port.unwrap_or(DEFAULT_MCP_PORT))
-    }
-
-    /// The MCP server's URL as agents reach it, `None` while the server is off.
-    pub fn mcp_url(&self) -> Option<String> {
-        self.mcp_listen_port()
-            .map(|port| format!("http://127.0.0.1:{port}/mcp"))
     }
 
     /// Return extra_path_dirs with tildes expanded.

@@ -46,6 +46,10 @@ pub trait Backend: Send + Sync {
     /// The project's current folder, read live so a relinked project dispatches into its
     /// new folder. None while the folder is missing on disk.
     fn project_folder(&self, project_id: &str) -> Option<String>;
+    /// The MCP server's URL while it is listening; agents dispatched now connect to it.
+    fn mcp_url(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Data needed to insert a session into the DB.
@@ -82,8 +86,6 @@ pub struct DispatchConfig {
     pub prompt_wrapper: Option<String>,
     pub name_template: Option<String>,
     pub mcp_args: Option<String>,
-    /// The MCP server's URL, `None` when it is disabled.
-    pub mcp_url: Option<String>,
 }
 
 /// Lifecycle hook config for on_start.
@@ -151,7 +153,7 @@ impl SessionDispatcher {
             rendered_prompt.as_deref(),
             true, // autonomous: auto-dispatched sessions always use autonomous template
             self.dispatch_config.prompt_wrapper.as_deref(),
-            self.dispatch_config.mcp_url.as_deref(),
+            backend.mcp_url().as_deref(),
         );
         let cmd = launch_result.command;
         // The prompt is task content: log its size, never its text.

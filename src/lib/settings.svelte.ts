@@ -105,7 +105,7 @@ export interface AppConfig {
   onboarding_completed?: boolean | null;
   /** Serve PlaneAI's tools to agents over MCP; unset means on. */
   mcp_enabled?: boolean | null;
-  /** Loopback port of the MCP server; unset means `DEFAULT_MCP_PORT`. */
+  /** Loopback port of the MCP server; unset means the backend's default. */
   mcp_port?: number | null;
 }
 

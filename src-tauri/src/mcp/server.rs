@@ -64,25 +64,17 @@ impl ServerHandler for Handler {
             .ok_or_else(|| {
                 ErrorData::internal_error("request reached a tool unauthenticated", None)
             })?;
-        let name = request.name.to_string();
-        if self.registry.get(&name).is_none() {
-            return Err(ErrorData::invalid_params(
-                format!("unknown tool: {name}"),
-                None,
-            ));
-        }
-        let (registry, tool_context) = (self.registry.clone(), self.context.clone());
+        let tool = self.registry.get(&request.name).ok_or_else(|| {
+            ErrorData::invalid_params(format!("unknown tool: {}", request.name), None)
+        })?;
+        let tool_context = self.context.clone();
         let arguments = request.arguments.unwrap_or_default();
-        tracing::info!(tool = %name, session_id = %caller.session_id, "mcp tool call");
+        tracing::info!(tool = %tool.name, session_id = %caller.session_id, "mcp tool call");
         // Handlers do SQLite, git and IPC work synchronously.
-        let output = tokio::task::spawn_blocking(move || {
-            registry
-                .get(&name)
-                .map(|tool| tool.call(&tool_context, &caller, arguments))
-        })
-        .await
-        .map_err(|error| ErrorData::internal_error(error.to_string(), None))?
-        .ok_or_else(|| ErrorData::internal_error("tool vanished", None))?;
+        let output =
+            tokio::task::spawn_blocking(move || tool.call(&tool_context, &caller, arguments))
+                .await
+                .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
         let content = vec![ContentBlock::text(output.text)];
         Ok(if output.is_error {
             CallToolResult::error(content)
@@ -93,13 +85,33 @@ impl ServerHandler for Handler {
     }
 }
 
+/// Resolves bearer tokens over one connection kept for the server's lifetime.
+struct TokenLookup {
+    db_path: PathBuf,
+    conn: std::sync::Mutex<Option<rusqlite::Connection>>,
+}
+
+impl TokenLookup {
+    fn resolve(&self, token: &str) -> Result<Option<McpCaller>, String> {
+        let mut conn = self.conn.lock().map_err(|error| error.to_string())?;
+        if conn.is_none() {
+            *conn = Some(rusqlite::Connection::open(&self.db_path).map_err(|e| e.to_string())?);
+        }
+        let conn = conn.as_ref().expect("opened above");
+        planeai_core::mcp::resolve(conn, token).map_err(|error| error.to_string())
+    }
+}
+
 /// The HTTP app: `/mcp` behind bearer-token authentication.
 pub fn router(
     registry: Arc<Registry>,
     context: ToolContext,
     cancel: CancellationToken,
 ) -> axum::Router {
-    let db_path = Arc::new(context.db_path.clone());
+    let lookup = Arc::new(TokenLookup {
+        db_path: context.db_path.clone(),
+        conn: std::sync::Mutex::new(None),
+    });
     let handler = Handler { registry, context };
     let config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)
@@ -114,11 +126,11 @@ pub fn router(
     );
     axum::Router::new()
         .nest_service("/mcp", service)
-        .layer(middleware::from_fn_with_state(db_path, authenticate))
+        .layer(middleware::from_fn_with_state(lookup, authenticate))
 }
 
 async fn authenticate(
-    State(db_path): State<Arc<PathBuf>>,
+    State(lookup): State<Arc<TokenLookup>>,
     mut request: Request,
     next: Next,
 ) -> Response {
@@ -129,18 +141,15 @@ async fn authenticate(
         .and_then(|value| value.strip_prefix("Bearer "))
         .map(str::to_string);
     let caller = match token {
-        Some(token) => tokio::task::spawn_blocking(move || {
-            let conn = rusqlite::Connection::open(db_path.as_path())?;
-            planeai_core::mcp::resolve(&conn, &token)
-        })
-        .await
-        .ok()
-        .and_then(|resolved| {
-            resolved
-                .inspect_err(|error| tracing::warn!(%error, "mcp token lookup failed"))
-                .ok()
-        })
-        .flatten(),
+        Some(token) => tokio::task::spawn_blocking(move || lookup.resolve(&token))
+            .await
+            .ok()
+            .and_then(|resolved| {
+                resolved
+                    .inspect_err(|error| tracing::warn!(%error, "mcp token lookup failed"))
+                    .ok()
+            })
+            .flatten(),
         None => None,
     };
     match caller {
@@ -171,24 +180,23 @@ impl RunningServer {
     }
 }
 
-/// Bind `127.0.0.1:port` and serve until stopped. The port is never changed silently:
-/// agents already running hold its URL.
-pub async fn start(
-    port: u16,
-    registry: Arc<Registry>,
-    context: ToolContext,
-) -> Result<RunningServer, String> {
-    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let listener = tokio::net::TcpListener::bind(address)
+/// Bind `127.0.0.1:port`. The port is never changed silently: agents already running hold
+/// its URL.
+async fn bind(port: u16) -> Result<tokio::net::TcpListener, String> {
+    tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
         .await
         .map_err(|error| match error.kind() {
             std::io::ErrorKind::AddrInUse => format!("Port {port} is already in use."),
             _ => format!("Could not listen on port {port}: {error}"),
-        })?;
-    let port = listener
-        .local_addr()
-        .map_err(|error| error.to_string())?
-        .port();
+        })
+}
+
+fn serve(
+    listener: tokio::net::TcpListener,
+    port: u16,
+    registry: Arc<Registry>,
+    context: ToolContext,
+) -> RunningServer {
     let cancel = CancellationToken::new();
     let app = router(registry, context, cancel.child_token());
     let shutdown = cancel.clone();
@@ -201,7 +209,7 @@ pub async fn start(
         }
     });
     tracing::info!(port, "mcp server listening");
-    Ok(RunningServer { port, cancel, task })
+    RunningServer { port, cancel, task }
 }
 
 /// What the server is doing, as Settings shows it.
@@ -209,56 +217,118 @@ pub async fn start(
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum McpStatus {
     Off,
-    Listening { port: u16 },
+    Listening { port: u16, url: String },
     Failed { port: u16, reason: String },
 }
 
-/// The app's one MCP server, converging on the configured port.
+enum ServerState {
+    Off,
+    Listening(RunningServer),
+    Failed { port: u16, reason: String },
+}
+
+impl ServerState {
+    fn status(&self) -> McpStatus {
+        match self {
+            ServerState::Off => McpStatus::Off,
+            ServerState::Listening(running) => McpStatus::Listening {
+                port: running.port,
+                url: planeai_core::mcp::server_url(running.port),
+            },
+            ServerState::Failed { port, reason } => McpStatus::Failed {
+                port: *port,
+                reason: reason.clone(),
+            },
+        }
+    }
+}
+
+/// The app's one MCP server, converging on the configured port. While it listens, the
+/// server file tells processes outside the app (the CLI) where it is.
 pub struct McpServer {
     registry: Arc<Registry>,
     context: ToolContext,
-    current: tokio::sync::Mutex<(McpStatus, Option<RunningServer>)>,
+    server_file: PathBuf,
+    state: std::sync::Mutex<ServerState>,
+    applying: tokio::sync::Mutex<()>,
 }
 
 impl McpServer {
-    pub fn new(registry: Registry, context: ToolContext) -> Self {
+    pub fn new(registry: Registry, context: ToolContext, server_file: PathBuf) -> Self {
         Self {
             registry: Arc::new(registry),
             context,
-            current: tokio::sync::Mutex::new((McpStatus::Off, None)),
+            server_file,
+            state: std::sync::Mutex::new(ServerState::Off),
+            applying: tokio::sync::Mutex::new(()),
         }
     }
 
     /// Serve on `port`, or stop for `None`. Re-applying the port already served is a no-op;
     /// a failed port is retried.
     pub async fn apply(&self, port: Option<u16>) -> McpStatus {
-        let mut current = self.current.lock().await;
-        if let (Some(port), McpStatus::Listening { port: serving }) = (port, &current.0) {
-            if port == *serving {
-                return current.0.clone();
+        let _applying = self.applying.lock().await;
+        let previous = {
+            let mut state = self.lock();
+            if let (Some(port), ServerState::Listening(running)) = (port, &*state) {
+                if running.port == port {
+                    return state.status();
+                }
             }
-        }
-        if let Some(running) = current.1.take() {
+            std::mem::replace(&mut *state, ServerState::Off)
+        };
+        if let ServerState::Listening(running) = previous {
+            planeai_core::mcp::withdraw_server(&self.server_file);
             running.stop().await;
         }
-        current.0 = match port {
-            None => McpStatus::Off,
-            Some(port) => match start(port, self.registry.clone(), self.context.clone()).await {
-                Ok(running) => {
-                    let status = McpStatus::Listening { port: running.port };
-                    current.1 = Some(running);
-                    status
+        let next = match port {
+            None => ServerState::Off,
+            Some(port) => match bind(port).await {
+                Ok(listener) => {
+                    let port = listener.local_addr().map_or(port, |address| address.port());
+                    // Published before serving, so no tool call runs while the CLI is told
+                    // the server is off.
+                    if let Err(error) = planeai_core::mcp::publish_server(&self.server_file, port) {
+                        tracing::warn!(%error, "could not publish the MCP server file");
+                    }
+                    ServerState::Listening(serve(
+                        listener,
+                        port,
+                        self.registry.clone(),
+                        self.context.clone(),
+                    ))
                 }
                 Err(reason) => {
                     tracing::warn!(port, %reason, "mcp server could not start");
-                    McpStatus::Failed { port, reason }
+                    ServerState::Failed { port, reason }
                 }
             },
         };
-        current.0.clone()
+        let mut state = self.lock();
+        *state = next;
+        state.status()
     }
 
-    pub async fn status(&self) -> McpStatus {
-        self.current.lock().await.0.clone()
+    pub fn status(&self) -> McpStatus {
+        self.lock().status()
+    }
+
+    /// The URL agents launched now connect to; `None` unless the server is listening.
+    pub fn url(&self) -> Option<String> {
+        match &*self.lock() {
+            ServerState::Listening(running) => Some(planeai_core::mcp::server_url(running.port)),
+            _ => None,
+        }
+    }
+
+    /// Tell the CLI the server is gone, as the app exits.
+    pub fn withdraw(&self) {
+        planeai_core::mcp::withdraw_server(&self.server_file);
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, ServerState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }

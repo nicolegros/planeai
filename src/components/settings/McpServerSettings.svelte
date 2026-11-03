@@ -3,7 +3,7 @@
   import { preferences, type McpStatus } from "../../lib/api";
   import { getSettings, type AppConfig } from "../../lib/settings.svelte";
   import { saveSettings } from "../../lib/save-settings";
-  import { DEFAULT_MCP_PORT, parseMcpPort } from "../../lib/mcp-settings";
+  import { parseMcpPort } from "../../lib/mcp-settings";
   import { Switch } from "../ui";
   import SettingRow from "./SettingRow.svelte";
   import SettingsSection from "./SettingsSection.svelte";
@@ -11,8 +11,8 @@
 
   const config = $derived(getSettings());
   const enabled = $derived(config.mcp_enabled !== false);
-  const port = $derived(config.mcp_port ?? DEFAULT_MCP_PORT);
   let status = $state<McpStatus | null>(null);
+  const port = $derived(config.mcp_port ?? status?.default_port ?? null);
 
   async function refreshStatus() {
     try {
@@ -24,7 +24,7 @@
 
   $effect(() => {
     // Re-read whenever the settings change, including a reset or a reload from disk.
-    void [enabled, port];
+    void [enabled, config.mcp_port];
     void refreshStatus();
   });
 
@@ -36,10 +36,10 @@
   function setPort(input: HTMLInputElement) {
     const parsed = parseMcpPort(input.value);
     if (parsed === null) {
-      input.value = String(port);
+      input.value = port === null ? "" : String(port);
       return;
     }
-    void save({ mcp_port: parsed === DEFAULT_MCP_PORT ? null : parsed });
+    void save({ mcp_port: parsed === status?.default_port ? null : parsed });
   }
 </script>
 
@@ -49,7 +49,7 @@
       {#if status?.state === "listening"}
         <p class="mt-1 flex items-center gap-1.5 text-[11px] text-t3" role="status">
           <CircleCheck size={11} class="shrink-0 text-status-running" />
-          <span>Listening on <span class="font-mono">http://127.0.0.1:{status.port}/mcp</span></span>
+          <span>Listening on <span class="font-mono">{status.url}</span></span>
         </p>
       {:else if status?.state === "failed"}
         <p class="mt-1 flex items-start gap-1.5 text-[11px] text-status-review" role="alert">
@@ -69,7 +69,7 @@
         width="w-24"
         mono
         aria-label="MCP server port"
-        value={String(port)}
+        value={port === null ? "" : String(port)}
         onchange={(e) => setPort(e.currentTarget)}
       />
     </SettingRow>

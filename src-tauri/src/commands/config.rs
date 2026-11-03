@@ -73,11 +73,20 @@ pub async fn update_config(
     Ok(())
 }
 
+/// The server's status, with the port it uses when none is configured.
+#[derive(serde::Serialize)]
+pub struct McpServerView {
+    #[serde(flatten)]
+    status: planeai::mcp::server::McpStatus,
+    default_port: u16,
+}
+
 #[tauri::command]
-pub async fn get_mcp_status(
-    mcp: State<'_, McpServerState>,
-) -> Result<planeai::mcp::server::McpStatus, String> {
-    Ok(mcp.0.status().await)
+pub async fn get_mcp_status(mcp: State<'_, McpServerState>) -> Result<McpServerView, String> {
+    Ok(McpServerView {
+        status: mcp.0.status(),
+        default_port: config::DEFAULT_MCP_PORT,
+    })
 }
 
 #[tauri::command]

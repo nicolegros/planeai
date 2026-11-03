@@ -40,11 +40,13 @@ pub trait RestartOps {
     ) -> Result<(), String>;
 }
 
+/// `mcp_url` is the MCP server's URL while it is listening.
 #[tracing::instrument(skip(conn, config, restart_ops), fields(session_id = id))]
 pub fn restart(
     conn: &Connection,
     id: &str,
     config: &Config,
+    mcp_url: Option<&str>,
     restart_ops: &dyn RestartOps,
 ) -> Result<Session, String> {
     let session = db::get_session(conn, id)
@@ -72,18 +74,16 @@ pub fn restart(
         .providers
         .get(provider_key)
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
-    let mcp_url = config.mcp_url();
     let has_resume_command = provider_def.resume_command.is_some();
     let resume_cmd = if has_resume_command {
         Some(crate::config::restart_command_for_provider(
             provider_def,
-            mcp_url.as_deref(),
+            mcp_url,
         ))
     } else {
         None
     };
-    let fresh_cmd =
-        provider_def.first_launch_command(session.auto_approve, None, mcp_url.as_deref());
+    let fresh_cmd = provider_def.first_launch_command(session.auto_approve, None, mcp_url);
 
     tracing::info!(
         backend = %session.backend,
@@ -112,12 +112,7 @@ pub fn restart(
 
     let tmux_name = session.tmux_name.as_deref();
     let rmux_workspace = session.rmux_workspace();
-    // A `local` agent spawns on its next attach, which mints its own token.
-    let mcp = if session.backend == "local" {
-        None
-    } else {
-        planeai_core::mcp::endpoint(conn, config.mcp_url(), id)?
-    };
+    let mcp = planeai_core::mcp::launch_endpoint(conn, mcp_url, id, &session.backend)?;
     let mcp = mcp.as_ref();
     let try_spawn = |cmd: &str| -> Result<(), String> {
         match session.backend.as_str() {
@@ -410,7 +405,7 @@ mod tests {
 
         let cfg = Config::default();
         let ops = MockRestartOps::new();
-        let updated = restart(&conn, id, &cfg, &ops).unwrap();
+        let updated = restart(&conn, id, &cfg, None, &ops).unwrap();
 
         assert_eq!(updated.status, "active");
         assert_eq!(ops.calls.borrow().len(), 1);
@@ -441,7 +436,7 @@ mod tests {
         db::mark_session_exited(&conn, id).unwrap();
         let ops = MockRestartOps::new();
 
-        let err = restart(&conn, id, &Config::default(), &ops).unwrap_err();
+        let err = restart(&conn, id, &Config::default(), None, &ops).unwrap_err();
 
         assert_eq!(err, "Project folder not found. Locate it first.");
         assert_eq!(
@@ -477,7 +472,7 @@ mod tests {
 
         let cfg = Config::default();
         let ops = MockRestartOps::new();
-        let err = restart(&conn, id, &cfg, &ops).unwrap_err();
+        let err = restart(&conn, id, &cfg, None, &ops).unwrap_err();
         assert!(err.contains("can only restart exited or archived sessions"));
     }
 
@@ -509,7 +504,7 @@ mod tests {
 
         let cfg = Config::default();
         let ops = MockRestartOps::new();
-        let updated = restart(&conn, id, &cfg, &ops).unwrap();
+        let updated = restart(&conn, id, &cfg, None, &ops).unwrap();
 
         assert_eq!(updated.status, "active");
         assert_eq!(ops.calls.borrow().len(), 1);
@@ -544,7 +539,7 @@ mod tests {
 
         let cfg = Config::default();
         let ops = MockRestartOps::new();
-        let updated = restart(&conn, id, &cfg, &ops).unwrap();
+        let updated = restart(&conn, id, &cfg, None, &ops).unwrap();
 
         assert_eq!(updated.status, "active");
         // Should use daemon_calls, not tmux calls
@@ -576,7 +571,7 @@ mod tests {
         db::mark_session_exited(&conn, id).unwrap();
 
         let ops = MockRestartOps::new();
-        restart(&conn, id, &Config::default(), &ops).unwrap();
+        restart(&conn, id, &Config::default(), None, &ops).unwrap();
 
         let expected = planeai_rmux::WorkspaceKey::for_session(&owner.id, Some("OWN-1"), id).name();
         assert_eq!(
@@ -613,7 +608,7 @@ mod tests {
 
         let cfg = Config::default();
         let ops = MockRestartOps::new();
-        let updated = restart(&conn, id, &cfg, &ops).unwrap();
+        let updated = restart(&conn, id, &cfg, None, &ops).unwrap();
 
         assert_eq!(updated.status, "active");
         // An rmux restart must not reach the tmux or daemon paths.
@@ -651,7 +646,7 @@ mod tests {
 
         let cfg = Config::default();
         let ops = MockRestartOps::new();
-        let updated = restart(&conn, id, &cfg, &ops).unwrap();
+        let updated = restart(&conn, id, &cfg, None, &ops).unwrap();
 
         assert_eq!(updated.status, "active");
         assert_eq!(ops.calls.borrow().len(), 0);
@@ -685,7 +680,7 @@ mod tests {
         db::mark_session_exited(&conn, id).unwrap();
 
         let ops = MockRestartOps::new();
-        let updated = restart(&conn, id, &Config::default(), &ops).unwrap();
+        let updated = restart(&conn, id, &Config::default(), None, &ops).unwrap();
 
         assert_eq!(updated.status, "active");
         assert_eq!(ops.calls.borrow().len(), 0);
@@ -721,7 +716,7 @@ mod tests {
 
         let cfg = Config::default();
         let ops = MockRestartOps::failing_resume();
-        let updated = restart(&conn, id, &cfg, &ops).unwrap();
+        let updated = restart(&conn, id, &cfg, None, &ops).unwrap();
 
         assert_eq!(updated.status, "active");
         // First call was resume (failed), second was fresh (succeeded)
@@ -765,7 +760,7 @@ mod tests {
 
         let cfg = Config::default();
         let ops = MockRestartOps::new();
-        let updated = restart(&conn, id, &cfg, &ops).unwrap();
+        let updated = restart(&conn, id, &cfg, None, &ops).unwrap();
 
         assert_eq!(updated.status, "active");
         assert_eq!(ops.daemon_calls.borrow().len(), 1);
@@ -803,7 +798,14 @@ mod tests {
         db::mark_session_exited(&conn, id).unwrap();
 
         let ops = MockRestartOps::new();
-        restart(&conn, id, &Config::default(), &ops).unwrap();
+        restart(
+            &conn,
+            id,
+            &Config::default(),
+            Some("http://127.0.0.1:47437/mcp"),
+            &ops,
+        )
+        .unwrap();
 
         let command = ops.daemon_calls.borrow()[0].1.clone();
         assert!(
@@ -823,7 +825,7 @@ mod tests {
     }
 
     #[test]
-    fn a_restart_with_the_mcp_server_off_passes_no_endpoint() {
+    fn a_restart_while_the_mcp_server_is_not_listening_passes_no_endpoint() {
         let conn = setup_db();
         db::create_project(&conn, "myapp", &existing_project_dir()).unwrap();
         let pid = db::list_projects(&conn).unwrap()[0].id.clone();
@@ -845,13 +847,8 @@ mod tests {
         )
         .unwrap();
         db::mark_session_exited(&conn, id).unwrap();
-        let cfg = Config {
-            mcp_enabled: Some(false),
-            ..Config::default()
-        };
-
         let ops = MockRestartOps::new();
-        restart(&conn, id, &cfg, &ops).unwrap();
+        restart(&conn, id, &Config::default(), None, &ops).unwrap();
 
         assert_eq!(ops.daemon_calls.borrow()[0].1, "claude --resume");
         assert_eq!(*ops.daemon_mcp.borrow(), vec![None]);

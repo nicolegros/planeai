@@ -10,9 +10,11 @@ use crate::state::{ConfigState, DbState};
 
 /// Revive sessions on startup: recreate dead tmux sessions.
 /// Daemon sessions are managed by the daemon process and don't need reviving here.
+/// `mcp_url` is the MCP server's URL while it is listening.
 pub fn revive_sessions<F, G>(
     conn: &rusqlite::Connection,
     cfg: &config::Config,
+    mcp_url: Option<&str>,
     has_tmux_session: F,
     create_tmux: G,
 ) -> Vec<String>
@@ -48,9 +50,7 @@ where
         }
         let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
         let cmd = match cfg.providers.get(provider_key) {
-            Some(provider_def) => {
-                config::restart_command_for_provider(provider_def, cfg.mcp_url().as_deref())
-            }
+            Some(provider_def) => config::restart_command_for_provider(provider_def, mcp_url),
             None => continue,
         };
         let project_path = projects
@@ -60,7 +60,7 @@ where
             .unwrap_or("/");
         let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
 
-        let mcp = match planeai_core::mcp::endpoint(conn, cfg.mcp_url(), &session.id) {
+        let mcp = match planeai_core::mcp::endpoint(conn, mcp_url, &session.id) {
             Ok(mcp) => mcp,
             Err(error) => {
                 tracing::warn!(session_id = %session.id, %error, "[revive] reviving without MCP");
@@ -473,6 +473,7 @@ mod tests {
         let failures = revive_sessions(
             &conn,
             &cfg,
+            None,
             |_| false,
             |tmux_name, cwd, cmd, session_id, _extra_path_dirs, _mcp| {
                 created.borrow_mut().push((
@@ -532,6 +533,7 @@ mod tests {
         let failures = revive_sessions(
             &conn,
             &cfg,
+            None,
             |_| false,
             |tmux_name, cwd, cmd, session_id, _extra_path_dirs, _mcp| {
                 created.borrow_mut().push((
@@ -582,6 +584,7 @@ mod tests {
         let failures = revive_sessions(
             &conn,
             &cfg,
+            None,
             |_| false,
             |tmux_name, cwd, cmd, session_id, _extra_path_dirs, _mcp| {
                 created.borrow_mut().push((
@@ -632,6 +635,7 @@ mod tests {
         let failures = revive_sessions(
             &conn,
             &cfg,
+            None,
             |_| false,
             |_, _, _, _, _, _| Err("tmux not found".to_string()),
         );
@@ -672,6 +676,7 @@ mod tests {
         let failures = revive_sessions(
             &conn,
             &cfg,
+            None,
             |_| true,
             |tmux_name, cwd, cmd, session_id, _extra_path_dirs, _mcp| {
                 created.borrow_mut().push((

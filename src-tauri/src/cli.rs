@@ -31,6 +31,8 @@ pub struct Env {
     pub backend: String,
     pub socket_path: std::path::PathBuf,
     pub config: config::Config,
+    /// The MCP server's URL while the app publishes it as listening.
+    pub mcp_url: Option<String>,
 }
 
 // ─── Plan / Execute ───
@@ -102,7 +104,7 @@ pub fn build_session_plan(
     let cmd = provider_def.first_launch_command(
         opts.yolo,
         opts.prompt.as_deref(),
-        env.config.mcp_url().as_deref(),
+        env.mcp_url.as_deref(),
     );
 
     let short_id = &session_id.replace('-', "")[..8];
@@ -204,12 +206,12 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     }
     let effective_working_dir = checkout.working_dir(repo).to_string();
     let worktree_path = checkout.worktree_path(repo);
-    // A `local` agent spawns on its first attach in the app, which mints its own token.
-    let mcp = if plan.backend == "local" {
-        None
-    } else {
-        planeai_core::mcp::endpoint(conn, env.config.mcp_url(), &plan.session_id)?
-    };
+    let mcp = planeai_core::mcp::launch_endpoint(
+        conn,
+        env.mcp_url.as_deref(),
+        &plan.session_id,
+        &plan.backend,
+    )?;
 
     if plan.backend == "daemon" {
         let socket_path = planeai_ipc::daemon_socket_path();
@@ -322,6 +324,9 @@ pub fn create_session(conn: &Connection, opts: SessionCreateOpts) -> Result<db::
         backend,
         socket_path: planeai_paths::notify_socket_path(),
         config: cfg,
+        mcp_url: planeai_core::mcp::published_url(&planeai_core::mcp::server_file(
+            &planeai_paths::app_data_dir(),
+        )),
     };
 
     let project_name = opts.project.clone();
@@ -440,6 +445,7 @@ mod tests {
             backend: backend.to_string(),
             socket_path: std::path::PathBuf::from("/tmp/fake.sock"),
             config: config::Config::default(),
+            mcp_url: Some("http://127.0.0.1:47437/mcp".to_string()),
         }
     }
 
@@ -642,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn a_planned_agent_is_pointed_at_the_mcp_server_unless_it_is_off() {
+    fn a_planned_agent_is_pointed_at_the_mcp_server_only_while_it_listens() {
         let mut env = test_env("daemon");
         let mut opts = task_opts(None, None);
         opts.provider = Some("codex".into());
@@ -652,7 +658,7 @@ mod tests {
             r#"codex -c mcp_servers.planeai.url="http://127.0.0.1:47437/mcp" -c mcp_servers.planeai.bearer_token_env_var="PLANEAI_MCP_TOKEN" -c mcp_servers.planeai.default_tools_approval_mode="approve" -c mcp_servers.planeai.tools.task_delete.approval_mode="prompt""#
         );
 
-        env.config.mcp_enabled = Some(false);
+        env.mcp_url = None;
         let plan = build_session_plan("abcd1234-0000", &opts, &env, &test_project()).unwrap();
         assert_eq!(plan.command, "codex");
     }

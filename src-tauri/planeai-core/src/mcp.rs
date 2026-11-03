@@ -3,8 +3,11 @@
 //! Every agent launch mints a bearer token for its session. Only the token's SHA-256
 //! hash is stored, so the database never holds a usable credential; the agent gets the
 //! token through its environment. Tokens outlive app restarts and end with the session.
+//! A launch connects its agent only while the server is listening: the app knows that
+//! directly, and publishes it in the server file for the CLI.
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::RngExt;
@@ -26,6 +29,17 @@ impl McpEndpoint {
     pub fn env(&self) -> [(&'static str, &str); 2] {
         [(URL_ENV, &self.url), (TOKEN_ENV, &self.token)]
     }
+
+    pub fn owned_env(&self) -> impl Iterator<Item = (String, String)> + '_ {
+        self.env()
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+    }
+}
+
+/// The URL agents reach the server at.
+pub fn server_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/mcp")
 }
 
 impl fmt::Debug for McpEndpoint {
@@ -83,9 +97,8 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 /// Mint a token for the session's next agent process, replacing any earlier one.
+/// The token table exists: only a listening app hands out a URL, and it migrated first.
 pub fn issue(conn: &Connection, session_id: &str, url: &str) -> rusqlite::Result<McpEndpoint> {
-    // The CLI can launch against a database the app has not migrated yet.
-    migrate(conn)?;
     let mut bytes = [0u8; 32];
     rand::rng().fill(&mut bytes);
     let token = URL_SAFE_NO_PAD.encode(bytes);
@@ -100,15 +113,105 @@ pub fn issue(conn: &Connection, session_id: &str, url: &str) -> rusqlite::Result
     })
 }
 
-/// Mint the token the session's next agent process carries; `None` while the server is off.
+/// Mint the token the session's next agent process carries; `None` while the server is
+/// not listening.
 pub fn endpoint(
     conn: &Connection,
-    url: Option<String>,
+    url: Option<&str>,
     session_id: &str,
 ) -> Result<Option<McpEndpoint>, String> {
-    url.map(|url| issue(conn, session_id, &url))
+    url.map(|url| issue(conn, session_id, url))
         .transpose()
         .map_err(|error| format!("failed to mint the session's MCP token: {error}"))
+}
+
+/// `endpoint` for an agent a launch spawns now on `backend`. A `local` agent spawns on its
+/// first attach instead, which mints its own token.
+pub fn launch_endpoint(
+    conn: &Connection,
+    url: Option<&str>,
+    session_id: &str,
+    backend: &str,
+) -> Result<Option<McpEndpoint>, String> {
+    endpoint(conn, url.filter(|_| backend != "local"), session_id)
+}
+
+/// The file in the app data folder where a running app says its server is listening.
+pub fn server_file(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join("mcp-server.json")
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ServerRecord {
+    pid: u32,
+    port: u16,
+}
+
+/// Record that this process serves on `port`. Private to the user, replaced atomically.
+pub fn publish_server(file: &Path, port: u16) -> std::io::Result<()> {
+    let record = serde_json::to_vec(&ServerRecord {
+        pid: std::process::id(),
+        port,
+    })?;
+    let temporary = file.with_extension(format!("{}.tmp", std::process::id()));
+    write_private(&temporary, &record)?;
+    std::fs::rename(&temporary, file)
+}
+
+pub fn withdraw_server(file: &Path) {
+    if let Err(error) = std::fs::remove_file(file) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(%error, "could not remove the MCP server file");
+        }
+    }
+}
+
+/// The URL of the server the app publishes, or `None` when no live app is listening: a
+/// file left by a crashed app names a dead process, and its port may belong to anyone.
+pub fn published_url(file: &Path) -> Option<String> {
+    let record: ServerRecord = serde_json::from_slice(&std::fs::read(file).ok()?).ok()?;
+    process_alive(record.pid).then(|| server_url(record.port))
+}
+
+pub(crate) fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)?.write_all(contents)
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    // Signal 0 only checks; EPERM means the process exists under another user.
+    let signalled = unsafe { libc::kill(pid, 0) } == 0;
+    signalled || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    #[link(name = "Kernel32")]
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
+        fn GetExitCodeProcess(process: *mut std::ffi::c_void, code: *mut u32) -> i32;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+    }
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return false;
+        }
+        let mut code = 0;
+        let running = GetExitCodeProcess(process, &mut code) != 0 && code == STILL_ACTIVE;
+        CloseHandle(process);
+        running
+    }
 }
 
 /// The live session a presented token belongs to, or `None` for an unknown or revoked token.
@@ -276,6 +379,69 @@ mod tests {
 
         assert_eq!(resolve(&conn, &first).unwrap(), None);
         assert_eq!(resolve(&conn, &second).unwrap().unwrap().session_id, id);
+    }
+
+    #[test]
+    fn the_server_file_names_the_url_of_a_live_app_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = server_file(dir.path());
+        assert_eq!(published_url(&file), None);
+
+        publish_server(&file, 51234).unwrap();
+        assert_eq!(
+            published_url(&file).as_deref(),
+            Some("http://127.0.0.1:51234/mcp")
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            std::os::unix::fs::PermissionsExt::mode(
+                &std::fs::metadata(&file).unwrap().permissions()
+            ) & 0o777,
+            0o600
+        );
+
+        withdraw_server(&file);
+        assert_eq!(published_url(&file), None);
+        withdraw_server(&file);
+    }
+
+    #[test]
+    fn a_server_file_left_by_a_dead_app_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = server_file(dir.path());
+        let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" })
+            .args(if cfg!(windows) {
+                &["/C", "exit"][..]
+            } else {
+                &[][..]
+            })
+            .spawn()
+            .unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+        std::fs::write(&file, format!(r#"{{"pid":{dead},"port":51234}}"#)).unwrap();
+        assert_eq!(published_url(&file), None);
+
+        std::fs::write(&file, "not json").unwrap();
+        assert_eq!(published_url(&file), None);
+    }
+
+    #[test]
+    fn a_local_launch_mints_nothing_and_other_backends_mint_while_listening() {
+        let conn = db();
+        let (id, _) = session(&conn, None);
+        assert_eq!(launch_endpoint(&conn, Some(URL), &id, "local"), Ok(None));
+        assert_eq!(launch_endpoint(&conn, None, &id, "daemon"), Ok(None));
+        let endpoint = launch_endpoint(&conn, Some(URL), &id, "daemon")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            resolve(&conn, &token(&endpoint))
+                .unwrap()
+                .unwrap()
+                .session_id,
+            id
+        );
     }
 
     #[test]

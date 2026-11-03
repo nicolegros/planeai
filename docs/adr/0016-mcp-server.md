@@ -18,6 +18,11 @@ Claude Code and Codex both speak MCP natively, show its tools by name, and let a
 - The port is stable and configurable (`mcp_port`, default 47437), and `mcp_enabled` turns the server off.
   Agents outlive app restarts and keep the URL they were launched with, so the server never moves to another port.
   A taken port is reported as a failed status in **Preferences → Agents → PlaneAI tools**, and the next config save or reload retries it.
+- A launch connects its agent only while the server is listening: a launch inside the app reads the server's live state, and while it is off or failed the agent gets neither `mcp_args` nor a token, so it never trusts a port another process may hold.
+  The CLI runs outside the app, so the app publishes `mcp-server.json` (its pid and port, mode 0600) in the app data folder while it listens, and removes it when the server stops, fails or the app exits.
+  The CLI connects its agents only when that file names a live process; a file left by a crashed app names a dead pid and is ignored.
+  A file was chosen over asking the app on the notify socket: it needs no protocol, and the pid check makes it safe when stale.
+  The server starts before startup revives tmux sessions, so revived agents reconnect.
 - Every agent launch mints a bearer token for its session.
   Only its SHA-256 hash is stored, in the `mcp_tokens` table, so tokens survive app restarts without the database holding a usable credential.
   Triggers revoke the token when the session is archived, destroyed or deleted.

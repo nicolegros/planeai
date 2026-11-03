@@ -383,7 +383,6 @@ fn prepare_tab_spawn(
             &shell_cmd,
             dark_mode,
             extra_path_dirs,
-            None,
         )?
     };
 

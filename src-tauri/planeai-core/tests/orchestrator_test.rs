@@ -119,7 +119,6 @@ fn default_dispatch_config(worktree_root: &str) -> DispatchConfig {
         prompt_command: None,
         prompt_wrapper: None,
         mcp_args: None,
-        mcp_url: None,
         name_template: None,
     }
 }
