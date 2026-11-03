@@ -192,8 +192,12 @@ const snoozeOf = (task: TaskSnooze): TaskSnooze => ({
   woke_at: task.woke_at,
 });
 
+const instant = (at: string | null) => (at === null ? null : Date.parse(at));
+
 const sameSnooze = (a: TaskSnooze, b: TaskSnooze) =>
-  a.snoozed_until === b.snoozed_until && a.snoozed_at === b.snoozed_at && a.woke_at === b.woke_at;
+  instant(a.snoozed_until) === instant(b.snoozed_until) &&
+  instant(a.snoozed_at) === instant(b.snoozed_at) &&
+  instant(a.woke_at) === instant(b.woke_at);
 
 /** The task still shows the change, so reverting it undoes what the user did. */
 function stands(change: TaskChange): boolean {
