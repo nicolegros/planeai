@@ -3,7 +3,7 @@ import {
   resolveSidebarGroupBy,
   resolveSidebarLayout,
   sidebarNavigationOrder,
-  type IsOpenTask,
+  type SidebarRow,
   type SidebarSection,
 } from "./sidebar-model";
 import { getCollapsedSections, setCollapsedSections } from "./layout-state";
@@ -57,13 +57,38 @@ export function showMore(shelfKey: string): void {
   shelfPages = { ...shelfPages, [shelfKey]: shownPages(shelfKey) + 1 };
 }
 
+// The task workspace in the main pane; App owns it and sets it here so every reader agrees.
+let openTaskWorkspace = $state<{ projectId: string; taskKey: string } | null>(null);
+
+export function setOpenTaskWorkspace(
+  workspace: { projectId: string; taskKey: string } | null,
+): void {
+  openTaskWorkspace = workspace;
+}
+
+/** The row open in the main pane, which a collapsed shelf keeps listed. */
+export function isOpenRow(row: SidebarRow): boolean {
+  const activeSessionId = orchestrator.getActiveSessionId();
+  if (row.kind === "session") return row.session.id === activeSessionId;
+  return (
+    (openTaskWorkspace?.projectId === row.project.id &&
+      openTaskWorkspace.taskKey === row.task.key) ||
+    row.linkedSession?.id === activeSessionId
+  );
+}
+
+const visibleNavigationOrder = $derived(
+  sidebarNavigationOrder(model, isCollapsed, shownPages, isOpenRow),
+);
+
 /** Task workspace and session IDs of the rows the sidebar shows, top to bottom. */
-export function getVisibleNavigationOrder(isOpen: IsOpenTask): string[] {
-  return sidebarNavigationOrder(model, isCollapsed, shownPages, isOpen);
+export function getVisibleNavigationOrder(): string[] {
+  return visibleNavigationOrder;
 }
 
 /** Reload collapse state from storage and close every shelf page. */
 export function _resetForTests(): void {
   collapsedSections = getCollapsedSections();
   shelfPages = {};
+  openTaskWorkspace = null;
 }

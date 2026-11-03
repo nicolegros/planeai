@@ -9,7 +9,7 @@
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
   import { LANES, navKey, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarRow, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
   import { rowActivity, rowSession, WOKE_TITLE, type RowAction, type RowActivity } from "../lib/sidebar-cards";
-  import { getSidebarModel, isCollapsed, setCollapsed, shownPages, showMore } from "../lib/sidebar-model-store.svelte";
+  import { getSidebarModel, isCollapsed, isOpenRow, setCollapsed, shownPages, showMore } from "../lib/sidebar-model-store.svelte";
   import { sidebarViewMenuItems } from "../lib/sidebar-view-menu";
   import { projectContextMenuItems } from "../lib/project-context-menu";
   import { locateProjectFolder } from "../lib/locate-project";
@@ -51,7 +51,6 @@
     onCreateSession?: () => void;
     onSessionsChanged?: () => void;
     onToggleDiff?: () => void;
-    selectedTaskWorkspace?: { projectId: string; taskKey: string } | null;
     pluginContributions?: PluginSlot[];
     sessionIndicatorContributions?: PluginSlot[];
     /** Rendered on Cards rows only; Classic rows have no room for them. */
@@ -64,7 +63,7 @@
     onOpenPluginSessionPanel?: (sessionId: string, pluginId: string, contributionId: string) => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onToggleDiff, selectedTaskWorkspace = null, pluginContributions = [], sessionIndicatorContributions = [], sessionMetaContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose, onOpenPluginSessionPanel }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onToggleDiff, pluginContributions = [], sessionIndicatorContributions = [], sessionMetaContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose, onOpenPluginSessionPanel }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
   function pluginContributionKey(item: PluginSlot): string {
@@ -215,11 +214,6 @@
     else onContextMenu(e, row.session);
   }
 
-  function isRowActive(row: SidebarRow): boolean {
-    if (row.kind === "session") return row.session.id === activeSessionId;
-    return (selectedTaskWorkspace?.projectId === row.project.id && selectedTaskWorkspace.taskKey === row.task.key) || row.linkedSession?.id === activeSessionId;
-  }
-
   function isRowPreviewing(row: SidebarRow): boolean {
     if (row.kind === "session") return row.session.id === previewSessionId;
     return row.linkedSession?.id === previewSessionId || (previewTaskWorkspace?.projectId === row.project.id && previewTaskWorkspace.taskKey === row.task.key);
@@ -282,7 +276,7 @@
   // Flat nav list for keyboard navigation
   type NavItem = SidebarNavItem | { type: "plugin"; contributionKey: string; row: PluginSidebarNavRow };
   const flatNav = $derived.by(() => {
-    const result: NavItem[] = sidebarNavItems(sections, isCollapsed, shownPages, isRowActive);
+    const result: NavItem[] = sidebarNavItems(sections, isCollapsed, shownPages, isOpenRow);
     for (const contribution of activePluginContributions.filter((item) => item.contribution.placement === "sidebar.section")) {
       const contributionKey = `${contribution.plugin.id}:${contribution.contribution.id}`;
       for (const row of getPluginSidebarRows(contributionKey)) {
@@ -600,7 +594,7 @@
     {#each rows as row (`${row.project.id}:${row.task.key}`)}
       {@const { task, project, linkedSession: linked } = row}
       {@const activity = rowActivity(row, agentStates, unreadSessions, now)}
-      {@const isActive = (selectedTaskWorkspace?.projectId === project.id && selectedTaskWorkspace.taskKey === task.key) || linked?.id === activeSessionId}
+      {@const isActive = isOpenRow(row)}
       {@const taskNavIdx = flatNavIndex.get(navKey.task(project.id, task.key)) ?? -1}
       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
       {@const isPreviewing = (linked?.id === previewSessionId) || (previewTaskWorkspace?.projectId === project.id && previewTaskWorkspace.taskKey === task.key)}
@@ -697,7 +691,7 @@
         onToggle={toggleSection}
         {shownPages}
         onShowMore={showMore}
-        isActive={isRowActive}
+        isActive={isOpenRow}
         isPreviewing={isRowPreviewing}
         isFading={isRowFading}
         rename={{

@@ -75,6 +75,7 @@ import { getSelectedIndex, setSelectedIndex } from "../../lib/sidebar-nav.svelte
 import {
   _resetForTests as resetSidebarView,
   getVisibleNavigationOrder,
+  setOpenTaskWorkspace,
 } from "../../lib/sidebar-model-store.svelte";
 import { loadTasks } from "../../lib/task-store.svelte";
 import { commitPendingDone } from "../../lib/task-moves";
@@ -371,13 +372,12 @@ describe("UnifiedSidebar in the Cards layout", () => {
     tasksByPath[beta.path] = [{ ...task("B-2", "in_review"), ...snoozedUntil(3_600_000) }];
     // App starts the clock at launch, which reads the time.
     syncSnoozeClock();
-    mounted = await mountSidebar(
-      { sidebar_group_by: "status" },
-      { selectedTaskWorkspace: { projectId: "alpha", taskKey: "A-1" } },
-    );
+    setOpenTaskWorkspace({ projectId: "alpha", taskKey: "A-1" });
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
     const root = mounted.target;
 
     expect(navLabels(root)).toEqual(["scratch", "[Snoozed 3]", "Title A-1", "[Done 1]"]);
+    expect(getVisibleNavigationOrder()).toEqual(["scratch", "task:alpha:A-1"]);
     expect(rowOf(root, "Title A-1").textContent).toContain("3h");
 
     root.querySelector<HTMLButtonElement>("button[aria-expanded='false']")!.click();
@@ -792,9 +792,8 @@ describe("UnifiedSidebar in the Cards layout", () => {
       navButtons(mounted!.target).find((b) => labelOf(b).startsWith(`[${prefix}`))!;
     const done = (from: number, to: number) =>
       Array.from({ length: to - from + 1 }, (_, i) => `task:alpha:D-${from + i}`);
-    const noTaskOpen = () => false;
 
-    expect(getVisibleNavigationOrder(noTaskOpen)).toEqual([
+    expect(getVisibleNavigationOrder()).toEqual([
       "task:beta:B-1",
       "task:alpha:A-1",
       "task:alpha:A-2",
@@ -802,7 +801,7 @@ describe("UnifiedSidebar in the Cards layout", () => {
 
     header("Done").click();
     flushSync();
-    expect(getVisibleNavigationOrder(noTaskOpen)).toEqual([
+    expect(getVisibleNavigationOrder()).toEqual([
       "task:beta:B-1",
       "task:alpha:A-1",
       "task:alpha:A-2",
@@ -812,7 +811,7 @@ describe("UnifiedSidebar in the Cards layout", () => {
     navButtons(mounted.target).at(-1)!.click();
     header("To do").click();
     flushSync();
-    expect(getVisibleNavigationOrder(noTaskOpen)).toEqual([
+    expect(getVisibleNavigationOrder()).toEqual([
       "task:beta:B-1",
       "task:alpha:A-1",
       ...done(1, 26),

@@ -15,13 +15,13 @@
   import { resolvePluginOpen, type PluginOpenOrigin } from "./lib/plugin-navigation";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
-  import { sidebarNavigationOrder, type SidebarTaskRow } from "./lib/sidebar-model";
+  import { sidebarNavigationOrder } from "./lib/sidebar-model";
   import { applyDoneNow, applyInterruptedDone, canUndoTaskChange, commitPendingDone, completeTask, undoLastTaskChange } from "./lib/task-moves";
   import { closeCustomSnooze, closeSnoozeMenu, getCustomSnooze, getSnoozeMenu, snoozeCustom, snoozeMenuItems, snoozeOrWake } from "./lib/snooze-picker.svelte";
   import SnoozeCustomDialog from "./components/SnoozeCustomDialog.svelte";
   import { startSnoozeClock } from "./lib/snooze-clock.svelte";
   import ContextMenu from "./components/ui/ContextMenu.svelte";
-  import { getSidebarModel, getVisibleNavigationOrder } from "./lib/sidebar-model-store.svelte";
+  import { getSidebarModel, getVisibleNavigationOrder, setOpenTaskWorkspace } from "./lib/sidebar-model-store.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { taskSessionDefaults } from "./lib/task-session-defaults";
@@ -130,6 +130,9 @@
   });
   const snoozeMenu = $derived(getSnoozeMenu());
   const customSnooze = $derived(getCustomSnooze());
+  $effect(() => {
+    setOpenTaskWorkspace(activeTaskWorkspace ? { projectId: activeTaskWorkspace.project.id, taskKey: activeTaskWorkspace.task.key } : null);
+  });
   const activeTaskSessions = $derived(
     activeTaskWorkspace
       ? sessions.filter((session) => workspaceOf(session).key === toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key))
@@ -822,14 +825,9 @@
     }
   }
 
-  /** The task open in the main pane, which the sidebar keeps listed even in a collapsed shelf. */
-  function isOpenTaskRow(row: SidebarTaskRow): boolean {
-    return (activeTaskWorkspace?.project.id === row.project.id && activeTaskWorkspace.task.key === row.task.key) || row.linkedSession?.id === activeSessionId;
-  }
-
   /** Open the sidebar row at this position, counting only the rows the sidebar shows. */
   function jumpToSidebarRow(index: number): void {
-    const target = getVisibleNavigationOrder(isOpenTaskRow)[index];
+    const target = getVisibleNavigationOrder()[index];
     if (!target) return;
     leavePluginWorkspace();
     routeNavTarget(target);
@@ -1017,11 +1015,11 @@
         else if (action.type === "prev_tab") { cycleTab(-1); }
         else if (action.type === "next_session") {
           const currentId = activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
-          if (!navCycle.isCycling()) navCycle.startPreview(getVisibleNavigationOrder(isOpenTaskRow), currentId, 1);
+          if (!navCycle.isCycling()) navCycle.startPreview(getVisibleNavigationOrder(), currentId, 1);
           else navCycle.advance(1);
         } else if (action.type === "prev_session") {
           const currentId = activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
-          if (!navCycle.isCycling()) navCycle.startPreview(getVisibleNavigationOrder(isOpenTaskRow), currentId, -1);
+          if (!navCycle.isCycling()) navCycle.startPreview(getVisibleNavigationOrder(), currentId, -1);
           else navCycle.advance(-1);
         }
         else if (action.type === "toggle_diff") { toggleDiff(); }
@@ -1149,7 +1147,6 @@
         onOpenPreferences={openPreferences}
         onCreateSession={openNewSessionForm}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
-        selectedTaskWorkspace={activeTaskWorkspace ? { projectId: activeTaskWorkspace.project.id, taskKey: activeTaskWorkspace.task.key } : null}
         onToggleDiff={toggleDiff}
         pluginContributions={sidebarPluginContributions}
         {sessionIndicatorContributions}
