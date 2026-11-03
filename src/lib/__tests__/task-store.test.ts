@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskItem } from "../types";
 
-const { listAll } = vi.hoisted(() => ({ listAll: vi.fn() }));
+const { listAll, move } = vi.hoisted(() => ({ listAll: vi.fn(), move: vi.fn() }));
 
 const { listeners } = vi.hoisted(() => ({ listeners: new Map<string, () => void>() }));
 
-vi.mock("../api", () => ({ tasks: { listAll } }));
+vi.mock("../api", () => ({ tasks: { listAll, move } }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((event: string, handler: () => void) => {
     listeners.set(event, handler);
@@ -31,6 +31,7 @@ const task = (key: string, parentKey: string | null = null): TaskItem => ({
 describe("task store", () => {
   beforeEach(async () => {
     listAll.mockReset();
+    move.mockReset();
     await taskStore.refresh([]);
   });
 
@@ -98,5 +99,66 @@ describe("task store", () => {
     expect(listAll).toHaveBeenCalledWith("/repo");
     stop();
     vi.useRealTimers();
+  });
+
+  describe("undoLastMove", () => {
+    let statuses: Record<string, string>;
+
+    beforeEach(async () => {
+      statuses = { "PLA-1": "in_progress", "PLA-2": "todo" };
+      listAll.mockImplementation(() =>
+        Promise.resolve(
+          Object.entries(statuses).map(([key, status]) => ({ ...task(key), status })),
+        ),
+      );
+      move.mockImplementation((key: string, status: string) => {
+        statuses[key] = status;
+        return Promise.resolve();
+      });
+      await taskStore.loadTasks(["/repo"]);
+      await taskStore.undoLastMove();
+    });
+
+    const statusOf = (key: string) =>
+      taskStore.getTasksForProject("/repo").find((candidate) => candidate.key === key)?.status;
+
+    it("puts the last moved task back in its previous status, once", async () => {
+      await taskStore.moveTask("PLA-2", "done", "/repo");
+      await taskStore.moveTask("PLA-1", "done", "/repo");
+
+      expect(await taskStore.undoLastMove()).toEqual({
+        key: "PLA-1",
+        repoPath: "/repo",
+        from: "in_progress",
+        to: "done",
+      });
+      expect(statusOf("PLA-1")).toBe("in_progress");
+      expect(statusOf("PLA-2")).toBe("done");
+      expect(await taskStore.undoLastMove()).toBeNull();
+    });
+
+    it("leaves a task that changed again since the move", async () => {
+      await taskStore.moveTask("PLA-1", "done", "/repo");
+      statuses["PLA-1"] = "in_review";
+      await taskStore.refresh(["/repo"]);
+
+      expect(await taskStore.undoLastMove()).toBeNull();
+      expect(statusOf("PLA-1")).toBe("in_review");
+    });
+
+    it("only reverts the move of the given task", async () => {
+      await taskStore.moveTask("PLA-1", "done", "/repo");
+
+      expect(await taskStore.undoLastMove("PLA-2")).toBeNull();
+      expect((await taskStore.undoLastMove("PLA-1"))?.key).toBe("PLA-1");
+    });
+
+    it("keeps the move undoable when reverting it fails", async () => {
+      await taskStore.moveTask("PLA-1", "done", "/repo");
+      move.mockRejectedValueOnce(new Error("database unavailable"));
+
+      await expect(taskStore.undoLastMove()).rejects.toThrow("database unavailable");
+      expect((await taskStore.undoLastMove())?.key).toBe("PLA-1");
+    });
   });
 });

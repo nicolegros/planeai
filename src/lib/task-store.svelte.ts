@@ -103,9 +103,44 @@ export async function refresh(projectPaths: string[]): Promise<void> {
   }
 }
 
+export interface TaskMove {
+  key: string;
+  repoPath: string;
+  from: string;
+  to: string;
+}
+
+/** The last status change made through `moveTask`, which `undoLastMove` reverts. */
+let lastMove: TaskMove | null = null;
+
+function statusOf(key: string, repoPath: string): string | undefined {
+  return getTasksForProject(repoPath).find((task) => task.key === key)?.status;
+}
+
 export async function moveTask(key: string, status: string, repoPath: string): Promise<void> {
+  const from = statusOf(key, repoPath);
   await tasksApi.move(key, status, repoPath);
+  if (from !== undefined && from !== status) lastMove = { key, repoPath, from, to: status };
   await loadTasks(Object.keys(tasksByProject));
+}
+
+/**
+ * Reverts the last move while the task still has the status it was moved to, and only when
+ * it moved `key` if one is given. Returns the reverted move, or null when there was none.
+ */
+export async function undoLastMove(key?: string): Promise<TaskMove | null> {
+  const move = lastMove;
+  if (!move || (key !== undefined && move.key !== key)) return null;
+  lastMove = null;
+  if (statusOf(move.key, move.repoPath) !== move.to) return null;
+  try {
+    await tasksApi.move(move.key, move.from, move.repoPath);
+  } catch (error) {
+    lastMove = move;
+    throw error;
+  }
+  await loadTasks(Object.keys(tasksByProject));
+  return move;
 }
 
 export async function createTask(params: {
