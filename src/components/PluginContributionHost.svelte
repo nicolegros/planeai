@@ -141,8 +141,8 @@
   /** Placements whose frame is as tall as the plugin's content, reported from inside the frame. */
   const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "dialog", "sidebar.header"];
 
-  /** Local placements told about their plugin's data changes in place, since remounting them would flash. */
-  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "session.meta", "sidebar.header", "main-pane", "dialog", "titlebar"];
+  /** Local placements told about their plugin's data changes in place, since remounting them would flash and drop their state. */
+  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "session.meta", "sidebar.header", "main-pane", "dialog", "titlebar", "session.panel"];
 
   /** Visual-only placements drawn inside a sidebar row: pointer-inert, unfocusable and 16px tall. */
   function inSessionRow(placement: PluginUiContribution["placement"]): boolean {

@@ -1699,7 +1699,7 @@ impl RuntimeProcess {
 }
 
 /// A background run refreshes the plugin's UI unless its result says `"changed": false`, so an
-/// idle refresh does not remount open session panels.
+/// idle run does not make every open frame reload its data.
 fn background_run_changed_data(totals: &Value) -> bool {
     totals.get("changed") != Some(&Value::Bool(false))
 }
