@@ -94,7 +94,8 @@ describe("rowActivity", () => {
       activityOf(taskRow("A-4", "in_review", undefined, unseen)),
       activityOf(taskRow("A-5", "in_review", session("gone", "exited"), seen)),
       activityOf(taskRow("A-6", "todo")),
-    ]).toEqual(["working", null, "unread", "unread", "exited", null]);
+      activityOf(taskRow("A-7", "done", undefined, unseen)),
+    ]).toEqual(["working", null, "unread", "unread", "exited", null, null]);
   });
 });
 

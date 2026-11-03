@@ -182,12 +182,13 @@ export function startTaskActivityListener(
   const unlisten = listen<TaskVisit & { project_id: string; task_key: string }>(
     "task-activity",
     ({ payload }) => {
-      applyVisit(payload.task_key, payload);
-      if (isViewing(payload.project_id, payload.task_key)) {
-        markTaskVisited(payload.project_id, payload.task_key).catch((error) =>
-          console.warn("Failed to mark a task visited:", error),
-        );
+      if (!isViewing(payload.project_id, payload.task_key)) {
+        applyVisit(payload.task_key, payload);
+        return;
       }
+      markTaskVisited(payload.project_id, payload.task_key).catch((error) =>
+        console.warn("Failed to mark a task visited:", error),
+      );
     },
   );
   return () => void unlisten.then((fn) => fn());

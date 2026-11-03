@@ -276,7 +276,7 @@
 
   /** Read and unread only mean something once an agent has done something on the task. */
   function unreadToggle(row: SidebarTaskRow): { label: string; onSelect: () => void } | null {
-    if (row.task.last_activity_at === null) return null;
+    if (row.task.last_activity_at === null || row.task.status === "done") return null;
     return isTaskUnread(row.task)
       ? { label: "Mark as read", onSelect: () => void taskStore.markTaskVisited(row.project.id, row.task.key).catch(reportUnreadFailure) }
       : { label: "Mark as unread", onSelect: () => void taskStore.markTaskUnread(row.project.id, row.task.key).catch(reportUnreadFailure) };

@@ -54,6 +54,7 @@ A task turns **Unread** when one of its agents finishes a turn, asks for your at
 It works for every task, with or without a worktree, and stays unread across restarts.
 Opening the task, typing into one of its sessions, or coming back to the window while it is open marks it read.
 A task you are looking at does not turn unread when its agent finishes.
+A Done task is never unread.
 
 Right-click a task and choose **Mark as unread** to keep it in view for later, or **Mark as read** to clear it without opening it.
 With the sidebar focused, **u** does the same for the highlighted task.

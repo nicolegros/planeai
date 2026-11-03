@@ -24,6 +24,24 @@ describe("isTaskUnread", () => {
         last_visited_at: "2026-11-03T10:00:00.999Z",
       },
     ];
-    expect(cases.map(isTaskUnread)).toEqual([false, false, true, true, false, false, true]);
+    expect(cases.map((visit) => isTaskUnread({ status: "in_review", ...visit }))).toEqual([
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+    ]);
+  });
+
+  it("is never unread once the task is done", () => {
+    expect(
+      isTaskUnread({
+        status: "done",
+        last_activity_at: "2026-11-03T10:00:00Z",
+        last_visited_at: null,
+      }),
+    ).toBe(false);
   });
 });
