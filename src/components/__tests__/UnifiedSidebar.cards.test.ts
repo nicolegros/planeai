@@ -69,6 +69,7 @@ import { focusSidebar, focusTerminal } from "../../lib/focus.svelte";
 import { loadProjects } from "../../lib/project-store.svelte";
 import { _resetForTests, loadSessions } from "../../lib/session-orchestrator.svelte";
 import { getSelectedIndex, setSelectedIndex } from "../../lib/sidebar-nav.svelte";
+import { getVisibleNavigationOrder } from "../../lib/sidebar-model-store.svelte";
 import { loadTasks } from "../../lib/task-store.svelte";
 import { commitPendingDone } from "../../lib/task-moves";
 import { loadSettings } from "../../lib/settings.svelte";
@@ -627,7 +628,10 @@ describe("UnifiedSidebar in the Cards layout", () => {
     expect(navLabels(mounted.target)).toHaveLength(31);
   });
 
-  it("walks rows and shelf headers from the keyboard and pages Done with Enter", async () => {
+  it.each([
+    { keys: "hjkl", down: "j", left: "h", right: "l" },
+    { keys: "arrows", down: "ArrowDown", left: "ArrowLeft", right: "ArrowRight" },
+  ])("walks rows and shelf headers with $keys and pages Done with Enter", async ({ down, left, right }) => {
     tasksByPath[alpha.path] = [
       task("A-1", "todo"),
       ...Array.from({ length: 26 }, (_, i) => task(`D-${i + 1}`, "done")),
@@ -641,19 +645,50 @@ describe("UnifiedSidebar in the Cards layout", () => {
     flushSync();
     const selected = () => navLabels(mounted!.target)[getSelectedIndex()];
 
-    press("j");
+    press(down);
     expect(selected()).toBe("Title A-1");
-    press("j");
+    press(down);
     expect(selected()).toBe("[Done 26]");
-    press("l");
-    for (let i = 0; i < 26; i++) press("j");
+    press(right);
+    for (let i = 0; i < 26; i++) press(down);
     expect(selected()).toBe("Show 1 more");
 
     press("Enter");
     expect(selected()).toBe("Title D-26");
-    press("h");
+    press(left);
     expect(selected()).toBe("[Done 26]");
-    press("h");
+    press(left);
     expect(navLabels(mounted.target)).toEqual(["[To do 1]", "Title A-1", "[Done 26]"]);
+  });
+
+  it("orders Mod+1-9 and Mod+{/} targets by the rows the sidebar shows, skipping folded shelves", async () => {
+    tasksByPath[alpha.path] = [
+      task("A-1", "in_progress"),
+      task("A-2", "todo"),
+      ...Array.from({ length: 26 }, (_, i) => task(`D-${i + 1}`, "done")),
+    ];
+    tasksByPath[beta.path] = [task("B-1", "in_review")];
+    sessionList.mockResolvedValue([]);
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const header = (prefix: string) =>
+      navButtons(mounted!.target).find((b) => labelOf(b).startsWith(`[${prefix}`))!;
+    const done = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => `task:alpha:D-${from + i}`);
+
+    expect(getVisibleNavigationOrder()).toEqual(["task:beta:B-1", "task:alpha:A-1", "task:alpha:A-2"]);
+
+    header("Done").click();
+    flushSync();
+    expect(getVisibleNavigationOrder()).toEqual([
+      "task:beta:B-1",
+      "task:alpha:A-1",
+      "task:alpha:A-2",
+      ...done(1, 25),
+    ]);
+
+    navButtons(mounted.target).at(-1)!.click();
+    header("To do").click();
+    flushSync();
+    expect(getVisibleNavigationOrder()).toEqual(["task:beta:B-1", "task:alpha:A-1", ...done(1, 26)]);
   });
 });

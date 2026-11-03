@@ -17,7 +17,7 @@
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { sidebarNavigationOrder } from "./lib/sidebar-model";
   import { applyDoneNow, applyInterruptedDone, canUndoTaskMove, commitPendingDone, completeTask, undoLastTaskMove } from "./lib/task-moves";
-  import { getSidebarModel } from "./lib/sidebar-model-store.svelte";
+  import { getSidebarModel, getVisibleNavigationOrder } from "./lib/sidebar-model-store.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { taskSessionDefaults } from "./lib/task-session-defaults";
@@ -990,11 +990,11 @@
         else if (action.type === "prev_tab") { cycleTab(-1); }
         else if (action.type === "next_session") {
           const currentId = activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
-          if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, 1);
+          if (!navCycle.isCycling()) navCycle.startPreview(getVisibleNavigationOrder(), currentId, 1);
           else navCycle.advance(1);
         } else if (action.type === "prev_session") {
           const currentId = activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
-          if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, -1);
+          if (!navCycle.isCycling()) navCycle.startPreview(getVisibleNavigationOrder(), currentId, -1);
           else navCycle.advance(-1);
         }
         else if (action.type === "toggle_diff") { toggleDiff(); }

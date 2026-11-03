@@ -2,6 +2,7 @@ import {
   buildSidebarModel,
   resolveSidebarGroupBy,
   resolveSidebarLayout,
+  sidebarNavigationOrder,
   type SidebarSection,
 } from "./sidebar-model";
 import { getSettings } from "./settings.svelte";
@@ -26,4 +27,11 @@ const model = $derived.by((): SidebarSection[] => {
 /** The sidebar model built from the live stores and settings. Reactive when read inside $derived. */
 export function getSidebarModel(): SidebarSection[] {
   return model;
+}
+
+const visibleNavigationOrder = $derived(sidebarNavigationOrder(model));
+
+/** Task workspace and session IDs of the rows the sidebar shows, top to bottom. */
+export function getVisibleNavigationOrder(): string[] {
+  return visibleNavigationOrder;
 }
