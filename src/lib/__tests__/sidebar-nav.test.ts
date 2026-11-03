@@ -89,6 +89,10 @@ describe("sidebar-nav", () => {
       expect(action).toEqual({ type: "expand" });
     });
 
+    it("u toggles read and unread", () => {
+      expect(handleSidebarKey(key({ key: "u" }), 5)).toEqual({ type: "toggle_unread" });
+    });
+
     it("a returns archive", () => {
       const action = handleSidebarKey(key({ key: "a" }), 5);
       expect(action).toEqual({ type: "archive" });

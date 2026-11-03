@@ -27,6 +27,7 @@
     { k: "a", l: "Archive" },
     { k: "E", l: "Rename" },
     { k: "r", l: "Review" },
+    { k: "u", l: "Unread" },
     { k: `${MOD_LABEL}N`, l: "New" },
     { k: `${MOD_LABEL}B`, l: "Hide" },
   ];

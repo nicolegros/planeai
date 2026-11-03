@@ -26,6 +26,7 @@
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import { changeTaskStatus } from "../lib/task-moves";
+  import { isTaskUnread } from "../lib/task-unread";
   import { getPluginSidebarRows, type PluginSidebarNavRow } from "../lib/plugin-sidebar-navigation.svelte";
   import { pluginPreferencesLocation, type SettingsLocation } from "../lib/settings-registry";
 
@@ -273,6 +274,16 @@
     if (followSelection && getSelectedIndex() === selectedBefore) selectTaskOrItsGroup(project.id, task.key);
   }
 
+  /** Read and unread only mean something once an agent has done something on the task. */
+  function unreadToggle(row: SidebarTaskRow): { label: string; onSelect: () => void } | null {
+    if (row.task.last_activity_at === null) return null;
+    return isTaskUnread(row.task)
+      ? { label: "Mark as read", onSelect: () => void taskStore.markTaskVisited(row.project.id, row.task.key).catch(reportUnreadFailure) }
+      : { label: "Mark as unread", onSelect: () => void taskStore.markTaskUnread(row.project.id, row.task.key).catch(reportUnreadFailure) };
+  }
+  function toggleUnread(row: SidebarTaskRow) { unreadToggle(row)?.onSelect(); }
+  function reportUnreadFailure(error: unknown) { showToast(`Failed to update the task: ${error}`, "error"); }
+
   // After a status change the task lives in another group; keep the keyboard selection on it,
   // or on its group header when that group is collapsed.
   function selectTaskOrItsGroup(projectId: string, taskKey: string) {
@@ -479,6 +490,7 @@
       else if (action.type === "archive") { if (linked) fadeOutThenAct(linked.id, () => onArchiveSession(linked)); }
       else if (action.type === "delete") { if (linked) onDeleteSession(linked); }
       else if (action.type === "restart") { if (linked) onRestartSession(linked); }
+      else if (action.type === "toggle_unread") toggleUnread(current.row);
     } else if (current.type === "plugin" && action.type === "select") {
       current.row.onSelect?.();
     }
@@ -868,6 +880,7 @@
   {@const statusChildren = STATUS_OPTIONS
     .filter(s => s.value !== menuTask.status)
     .map(s => ({ label: s.label, onSelect: () => moveTask(menuRow, s.value) }))}
+  {@const readToggle = unreadToggle(menuRow)}
   <ContextMenu
     x={taskContextMenu.x}
     y={taskContextMenu.y}
@@ -876,6 +889,7 @@
       ...(linkedSession
         ? [{ label: "Review diff", onSelect: () => { onSelectSession(linkedSession.id); onToggleDiff?.(); } }]
         : []),
+      ...(readToggle ? [readToggle] : []),
       { label: "Edit task", onSelect: () => onEditTask(menuTask, menuRow.project) },
       { label: "Change status", children: statusChildren },
       ...(linkedSession

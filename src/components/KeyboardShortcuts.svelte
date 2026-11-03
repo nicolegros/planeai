@@ -78,6 +78,7 @@
     { keys: `E`, description: "Rename" },
     { keys: `e`, description: "Edit task" },
     { keys: `R`, description: "Restart" },
+    { keys: `u`, description: "Mark task as read / unread" },
     { keys: `st`, description: "Status → Todo" },
     { keys: `sp`, description: "Status → In Progress" },
     { keys: `sr`, description: "Status → In Review" },
