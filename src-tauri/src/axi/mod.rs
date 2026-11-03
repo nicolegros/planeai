@@ -10,12 +10,12 @@ mod task;
 pub use home::home;
 pub use project::project_ls;
 pub use session::{
-    session_children, session_create_output, session_ls, session_prompt,
-    session_read_cursor_output, session_read_output, session_tree,
+    session_children, session_create_output, session_ls, session_prompt, session_read,
+    session_read_cursor_output, session_read_output, session_tree, ReadRange,
 };
 pub use task::{
-    task_add, task_add_with_lifecycle, task_ls, task_move, task_move_with_lifecycle, task_show,
-    task_snooze, task_wake,
+    task_add, task_add_with_lifecycle, task_delete, task_ls, task_move, task_move_with_lifecycle,
+    task_show, task_snooze, task_update, task_wake, TaskScope, TaskUpdate,
 };
 
 #[cfg(test)]

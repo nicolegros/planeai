@@ -6,25 +6,24 @@ use planeai_tasks::provider::TaskProvider;
 
 use crate::db;
 
-/// Resolve project prefix from --project name or CWD.
-pub fn resolve_prefix(
+/// Resolve the project from --project name or CWD.
+pub fn resolve_project(
     conn: &Connection,
     project: Option<&str>,
     cwd: &str,
-) -> Result<String, String> {
+) -> Result<db::Project, String> {
     let projects = db::list_projects(conn).map_err(|e| e.to_string())?;
-    let proj = if let Some(name) = project {
+    if let Some(name) = project {
         projects
-            .iter()
+            .into_iter()
             .find(|p| p.name == name)
-            .ok_or_else(|| format!("unknown project: {name}"))?
+            .ok_or_else(|| format!("unknown project: {name}"))
     } else {
         projects
-            .iter()
+            .into_iter()
             .find(|p| crate::util::is_project_path_or_descendant(cwd, &p.path))
-            .ok_or_else(|| "could not resolve project from CWD; use --project".to_string())?
-    };
-    Ok(proj.prefix.clone())
+            .ok_or_else(|| "could not resolve project from CWD; use --project".to_string())
+    }
 }
 
 pub struct AddParams<'a> {
@@ -456,21 +455,21 @@ mod tests {
     #[test]
     fn resolve_prefix_from_project_name() {
         let (conn, _repo) = setup();
-        let prefix = resolve_prefix(&conn, Some("planeai"), "/tmp").unwrap();
-        assert_eq!(prefix, "PLA");
+        let project = resolve_project(&conn, Some("planeai"), "/tmp").unwrap();
+        assert_eq!(project.prefix, "PLA");
     }
 
     #[test]
     fn resolve_prefix_from_cwd() {
         let (conn, _repo) = setup();
-        let prefix = resolve_prefix(&conn, None, "/Users/dev/planeai/src").unwrap();
-        assert_eq!(prefix, "PLA");
+        let project = resolve_project(&conn, None, "/Users/dev/planeai/src").unwrap();
+        assert_eq!(project.prefix, "PLA");
     }
 
     #[test]
     fn resolve_prefix_fails_without_match() {
         let (conn, _repo) = setup();
-        let result = resolve_prefix(&conn, None, "/some/other/path");
+        let result = resolve_project(&conn, None, "/some/other/path");
         assert!(result.is_err());
     }
 
@@ -594,6 +593,26 @@ pub struct TaskLifecycleContext {
     pub origin: TaskLifecycleOrigin,
     pub project_id: String,
     pub project_prefix: String,
+    pub sink: LifecycleSink,
+}
+
+/// Where committed lifecycle batches go.
+#[derive(Clone, Default)]
+pub enum LifecycleSink {
+    /// The desktop app's notify socket, for processes outside it.
+    #[default]
+    DesktopHost,
+    /// Code running inside the app hands batches over directly.
+    InProcess(std::sync::Arc<dyn Fn(TaskLifecycleBatch) + Send + Sync>),
+}
+
+impl std::fmt::Debug for LifecycleSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            LifecycleSink::DesktopHost => "DesktopHost",
+            LifecycleSink::InProcess(_) => "InProcess",
+        })
+    }
 }
 
 impl TaskLifecycleContext {
@@ -612,7 +631,10 @@ impl TaskLifecycleContext {
 /// Construct and forward one ordered batch after a local task mutation commits.
 pub fn emit_task_lifecycle(context: &TaskLifecycleContext, events: Vec<TaskLifecycleEvent>) {
     if let Some(batch) = context.batch(events) {
-        notify_task_lifecycle(&batch);
+        match &context.sink {
+            LifecycleSink::DesktopHost => notify_task_lifecycle(&batch),
+            LifecycleSink::InProcess(deliver) => deliver(batch),
+        }
     }
 }
 

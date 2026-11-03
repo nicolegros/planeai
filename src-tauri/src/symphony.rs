@@ -378,6 +378,7 @@ impl SqliteTaskSource {
                 origin: planeai_core::task_lifecycle::TaskLifecycleOrigin::Symphony,
                 project_id,
                 project_prefix,
+                sink: Default::default(),
             },
         }
     }

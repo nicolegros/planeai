@@ -1,10 +1,41 @@
 //! AXI task subcommands — ls, show, add, move.
 
+use std::path::Path;
+
+use planeai_core::task_lifecycle::TaskLifecycleOrigin;
 use planeai_tasks::model::{ListFilter, Status};
 use planeai_tasks::provider::TaskProvider;
+use planeai_tasks::sqlite::SqliteRepository;
 use planeai_toon::{field, render, str_val, Value};
 
 use super::helpers::{emit_error, task_detail_object};
+use crate::task_cli::{LifecycleSink, TaskLifecycleContext};
+
+/// One project's tasks, with the context their lifecycle changes are reported in.
+pub struct TaskScope {
+    pub repo: SqliteRepository,
+    pub lifecycle: TaskLifecycleContext,
+}
+
+impl TaskScope {
+    pub fn open(
+        db_path: &Path,
+        project: &crate::db::Project,
+        sink: LifecycleSink,
+    ) -> Result<Self, String> {
+        let db_path = db_path.to_str().ok_or("database path is not UTF-8")?;
+        let repo = SqliteRepository::open(db_path, &project.prefix).map_err(|e| e.to_string())?;
+        Ok(Self {
+            repo,
+            lifecycle: TaskLifecycleContext {
+                origin: TaskLifecycleOrigin::Axi,
+                project_id: project.id.clone(),
+                project_prefix: project.prefix.clone(),
+                sink,
+            },
+        })
+    }
+}
 
 pub fn task_ls(repo: &dyn TaskProvider, status: Option<&str>, tags: &[String]) -> (String, i32) {
     let filter = ListFilter {
@@ -250,6 +281,99 @@ pub fn task_wake(
 fn task_detail_result(json: Result<String, String>) -> (String, i32) {
     match json.and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string())) {
         Ok(task) => (render(&[field("task", task_detail_object(&task))]), 0),
+        Err(error) => (emit_error(&error, &[]), 1),
+    }
+}
+
+/// Field edits and a status move for one task; `None` leaves a field as it is.
+#[derive(Default)]
+pub struct TaskUpdate<'a> {
+    pub key: &'a str,
+    pub title: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub priority: Option<i32>,
+    pub tags: Option<&'a [String]>,
+    pub blocked_by: Option<&'a [String]>,
+    /// `Some(None)` clears the parent.
+    pub parent: Option<Option<&'a str>>,
+    pub base_branch: Option<&'a str>,
+    pub status: Option<&'a str>,
+}
+
+/// Apply the edits, then the move, each through its lifecycle-producing path.
+pub fn task_update(scope: &TaskScope, update: TaskUpdate) -> (String, i32) {
+    let not_found_help = ["Run `planeai-cli axi task ls` to see available tasks".to_string()];
+    if let Some(status) = update.status {
+        if Status::parse(status).is_none() {
+            return (
+                emit_error(
+                    &format!("invalid status: {status}"),
+                    &["Valid statuses: todo, in_progress, in_review, done".into()],
+                ),
+                1,
+            );
+        }
+    }
+    let edits = update.title.is_some()
+        || update.description.is_some()
+        || update.priority.is_some()
+        || update.tags.is_some()
+        || update.blocked_by.is_some()
+        || update.parent.is_some()
+        || update.base_branch.is_some();
+    if !edits && update.status.is_none() {
+        return (emit_error("nothing to update", &[]), 1);
+    }
+    if let Err(error) = scope.repo.get(update.key) {
+        return (emit_error(&error.to_string(), &not_found_help), 1);
+    }
+    if edits {
+        if let Err(error) = crate::task_cli::run_task_edit_with_lifecycle(
+            &scope.repo,
+            crate::task_cli::EditParams {
+                key: update.key,
+                title: update.title,
+                description: update.description,
+                priority: update.priority,
+                tags: update.tags,
+                blocked_by: update.blocked_by,
+                parent: update.parent,
+                base_branch: update.base_branch,
+            },
+            &scope.lifecycle,
+        ) {
+            return (emit_error(&error, &[]), 1);
+        }
+    }
+    if let Some(status) = update.status {
+        if let Err(error) = crate::task_cli::run_task_move_with_lifecycle(
+            &scope.repo,
+            update.key,
+            status,
+            &scope.lifecycle,
+        ) {
+            return (emit_error(&error, &[]), 1);
+        }
+    }
+    match scope.repo.get(update.key) {
+        Ok(task) => (render(&[field("task", task_detail_object(&task))]), 0),
+        Err(error) => (emit_error(&error.to_string(), &[]), 1),
+    }
+}
+
+/// Delete a task and the task workspace it owned.
+pub fn task_delete(scope: &TaskScope, key: &str) -> (String, i32) {
+    let not_found_help = ["Run `planeai-cli axi task ls` to see available tasks".to_string()];
+    // A mistyped key must not reach the workspace teardown.
+    if let Err(error) = scope.repo.get(key) {
+        return (emit_error(&error.to_string(), &not_found_help), 1);
+    }
+    match crate::task_cli::run_task_delete_in_project(
+        &scope.repo,
+        key,
+        Some(&scope.lifecycle.project_id),
+    ) {
+        Ok(_) => (render(&[field("deleted", str_val(key))]), 0),
         Err(error) => (emit_error(&error, &[]), 1),
     }
 }

@@ -760,7 +760,7 @@ fn main() {
                 | TaskAction::Delete { project, .. } => project.as_deref(),
             };
 
-            let prefix = match planeai::task_cli::resolve_prefix(&conn, project_flag, &cwd) {
+            let project = match planeai::task_cli::resolve_project(&conn, project_flag, &cwd) {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("{{\"error\": \"{e}\"}}");
@@ -770,7 +770,7 @@ fn main() {
 
             let repo = match planeai_tasks::sqlite::SqliteRepository::open(
                 db_path.to_str().unwrap(),
-                &prefix,
+                &project.prefix,
             ) {
                 Ok(r) => r,
                 Err(e) => {
@@ -781,15 +781,9 @@ fn main() {
 
             let lifecycle_context = planeai::task_cli::TaskLifecycleContext {
                 origin: planeai_core::task_lifecycle::TaskLifecycleOrigin::Cli,
-                project_id: conn
-                    .query_row(
-                        "SELECT id FROM projects WHERE prefix = ?1",
-                        [&prefix],
-                        |row| row.get(0),
-                    )
-                    .map_err(|error| error.to_string())
-                    .unwrap_or_default(),
-                project_prefix: prefix.clone(),
+                project_id: project.id.clone(),
+                project_prefix: project.prefix.clone(),
+                sink: Default::default(),
             };
 
             let (result, pretty, key_for_notify) = match action {
@@ -894,16 +888,10 @@ fn main() {
                     (r, pretty, Some(key))
                 }
                 TaskAction::Delete { key, pretty, .. } => {
-                    let project_id = planeai::db::list_projects(&conn).ok().and_then(|projects| {
-                        projects
-                            .into_iter()
-                            .find(|candidate| candidate.prefix == prefix)
-                            .map(|candidate| candidate.id)
-                    });
                     let r = planeai::task_cli::run_task_delete_in_project(
                         &repo,
                         &key,
-                        project_id.as_deref(),
+                        Some(&project.id),
                     );
                     (r, pretty, Some(key))
                 }
@@ -970,8 +958,10 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
         | AxiTaskAction::Wake { project, .. } => project.as_deref(),
     };
 
-    let prefix = match planeai::task_cli::resolve_prefix(conn, project_flag, cwd) {
-        Ok(p) => p,
+    let scope = planeai::task_cli::resolve_project(conn, project_flag, cwd)
+        .and_then(|project| planeai::axi::TaskScope::open(&db_path, &project, Default::default()));
+    let scope = match scope {
+        Ok(scope) => scope,
         Err(e) => {
             let output = planeai_toon::render(&[
                 planeai_toon::field("error", planeai_toon::str_val(&e)),
@@ -986,40 +976,13 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
             return 1;
         }
     };
-
-    let repo =
-        match planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap(), &prefix) {
-            Ok(r) => r,
-            Err(e) => {
-                print!(
-                    "{}",
-                    planeai_toon::render(&[planeai_toon::field(
-                        "error",
-                        planeai_toon::str_val(&e.to_string())
-                    )])
-                );
-                return 1;
-            }
-        };
-
-    let lifecycle_context = planeai::task_cli::TaskLifecycleContext {
-        origin: planeai_core::task_lifecycle::TaskLifecycleOrigin::Axi,
-        project_id: conn
-            .query_row(
-                "SELECT id FROM projects WHERE prefix = ?1",
-                [&prefix],
-                |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())
-            .unwrap_or_default(),
-        project_prefix: prefix.clone(),
-    };
+    let (repo, lifecycle_context) = (&scope.repo, &scope.lifecycle);
 
     let (output, code) = match action {
         AxiTaskAction::List { status, tags, .. } => {
-            planeai::axi::task_ls(&repo, status.as_deref(), &tags)
+            planeai::axi::task_ls(repo, status.as_deref(), &tags)
         }
-        AxiTaskAction::Show { key, .. } => planeai::axi::task_show(&repo, &key),
+        AxiTaskAction::Show { key, .. } => planeai::axi::task_show(repo, &key),
         AxiTaskAction::Add {
             title,
             desc,
@@ -1031,7 +994,7 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
             ..
         } => {
             let result = planeai::axi::task_add_with_lifecycle(
-                &repo,
+                repo,
                 planeai::task_cli::AddParams {
                     title: &title,
                     description: &desc,
@@ -1041,7 +1004,7 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
                     parent: parent.as_deref(),
                     base_branch: base_branch.as_deref(),
                 },
-                &lifecycle_context,
+                lifecycle_context,
             );
             if code_of(&result) == 0 {
                 if let Some(key) = extract_key(&result.0) {
@@ -1052,7 +1015,7 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
         }
         AxiTaskAction::Move { key, status, .. } => {
             let result =
-                planeai::axi::task_move_with_lifecycle(&repo, &key, &status, &lifecycle_context);
+                planeai::axi::task_move_with_lifecycle(repo, &key, &status, lifecycle_context);
             if code_of(&result) == 0 {
                 planeai::task_cli::notify_task_changed(&key);
             }
@@ -1163,118 +1126,11 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
             after,
             max_bytes,
         } => {
-            let session = match planeai::session_ops::resolve_session_by_prefix(conn, &id) {
-                Ok(s) => s,
-                Err(e) => return emit_axi_error(&e.to_string()),
+            let range = match after {
+                Some(cursor) => planeai::axi::ReadRange::After { cursor, max_bytes },
+                None => planeai::axi::ReadRange::Tail { lines },
             };
-
-            // If --after is provided, use cursor-based incremental read
-            if let Some(cursor_str) = after {
-                return match session.backend.as_str() {
-                    "daemon" => {
-                        // Parse daemon cursor: "daemon:<offset>"
-                        let offset = match parse_daemon_cursor(&cursor_str) {
-                            Ok(o) => o,
-                            Err(e) => return emit_axi_error(&e),
-                        };
-                        match planeai::session_ops::read_daemon_buffer_after(
-                            &session.id,
-                            offset,
-                            max_bytes,
-                        ) {
-                            Ok(result) => {
-                                let cursor = format!("daemon:{}", result.cursor);
-                                let (output, code) = planeai::axi::session_read_cursor_output(
-                                    &session.id[..8],
-                                    "daemon",
-                                    &cursor,
-                                    result.truncated,
-                                    &result.text,
-                                );
-                                print!("{output}");
-                                code
-                            }
-                            Err(e) => emit_axi_error(&e),
-                        }
-                    }
-                    "tmux" => {
-                        let tmux_name = match session.tmux_name.as_deref() {
-                            Some(n) => n,
-                            None => return emit_axi_error("tmux session has no tmux_name"),
-                        };
-                        // Validate cursor prefix
-                        if !cursor_str.trim().trim_matches('"').starts_with("tmux:") {
-                            return emit_axi_error(&format!(
-                                "invalid cursor for tmux backend: {cursor_str}"
-                            ));
-                        }
-                        match planeai::session_ops::read_tmux_pane_after(
-                            tmux_name,
-                            &cursor_str,
-                            max_bytes,
-                        ) {
-                            Ok(result) => {
-                                let (output, code) = planeai::axi::session_read_cursor_output(
-                                    &session.id[..8],
-                                    "tmux",
-                                    &result.cursor,
-                                    result.truncated,
-                                    &result.text,
-                                );
-                                print!("{output}");
-                                code
-                            }
-                            Err(e) => emit_axi_error(&e),
-                        }
-                    }
-                    planeai_rmux::BACKEND => {
-                        match planeai::rmux_ops::read_pane_after(
-                            &session.id,
-                            &cursor_str,
-                            max_bytes,
-                        ) {
-                            Ok(result) => {
-                                let (output, code) = planeai::axi::session_read_cursor_output(
-                                    &session.id[..8],
-                                    planeai_rmux::BACKEND,
-                                    &result.cursor,
-                                    result.truncated,
-                                    &result.text,
-                                );
-                                print!("{output}");
-                                code
-                            }
-                            Err(e) => emit_axi_error(&e),
-                        }
-                    }
-                    "local" => emit_axi_error("local backend does not support remote read"),
-                    other => emit_axi_error(&format!("unsupported backend: {other}")),
-                };
-            }
-
-            // Legacy --lines mode (no cursor)
-            match session.backend.as_str() {
-                "daemon" => match planeai::session_ops::read_daemon_buffer(&session.id, lines) {
-                    Ok(text) => planeai::axi::session_read_output(&session.id[..8], &text),
-                    Err(e) => return emit_axi_error(&e),
-                },
-                "tmux" => {
-                    let tmux_name = match session.tmux_name.as_deref() {
-                        Some(n) => n,
-                        None => return emit_axi_error("tmux session has no tmux_name"),
-                    };
-                    match planeai::session_ops::read_tmux_pane(tmux_name, lines) {
-                        Ok(text) => planeai::axi::session_read_output(&session.id[..8], &text),
-                        Err(e) => return emit_axi_error(&e),
-                    }
-                }
-                planeai_rmux::BACKEND => match planeai::rmux_ops::read_pane(&session.id, lines) {
-                    Ok(text) => planeai::axi::session_read_output(&session.id[..8], &text),
-                    Err(e) => return emit_axi_error(&e),
-                },
-                "local" => return emit_axi_error("local backend does not support remote read"),
-                other => return emit_axi_error(&format!("unsupported backend: {other}")),
-            }
+            planeai::axi::session_read(conn, &id, range)
         }
     };
     print!("{output}");
@@ -1285,20 +1141,6 @@ fn emit_axi_error(msg: &str) -> i32 {
     let output = planeai_toon::render(&[planeai_toon::field("error", planeai_toon::str_val(msg))]);
     print!("{output}");
     1
-}
-
-/// Parse a daemon cursor string "daemon:<offset>" into the byte offset.
-fn parse_daemon_cursor(cursor: &str) -> Result<u64, String> {
-    // TOON quotes any value containing a colon, so a cursor copied verbatim from
-    // `axi session read` output arrives quoted.
-    let cursor = cursor.trim().trim_matches('"');
-    let parts: Vec<&str> = cursor.splitn(2, ':').collect();
-    if parts.len() != 2 || parts[0] != "daemon" {
-        return Err(format!("invalid cursor for daemon backend: {cursor}"));
-    }
-    parts[1]
-        .parse::<u64>()
-        .map_err(|_| format!("invalid cursor offset: {}", parts[1]))
 }
 
 fn run_axi_project(conn: &rusqlite::Connection, action: AxiProjectAction) -> i32 {
