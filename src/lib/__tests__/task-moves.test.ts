@@ -129,7 +129,8 @@ describe("task moves", () => {
     toasts.requestDismissToast(
       toasts.getToasts().find((toast) => toast.message.startsWith("PLA-1"))!.id,
     );
-    await vi.waitFor(() => expect(backendMoves()).toEqual(["PLA-1:done"]));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(backendMoves()).toEqual(["PLA-1:done"]);
     await moves.commitPendingDone();
 
     expect(backendMoves()).toEqual(["PLA-1:done", "PLA-2:done"]);
@@ -277,7 +278,8 @@ describe("task moves", () => {
     expect(statusOf("PLA-1")).toBe("done");
 
     await moves.undoLastTaskMove(onMoved);
-    await vi.waitFor(() => expect(statusOf("PLA-1")).toBe("in_review"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusOf("PLA-1")).toBe("in_review");
   });
 
   it("keeps an interrupted Done saved while its project can't be read", async () => {
@@ -307,5 +309,22 @@ describe("task moves", () => {
     expect(JSON.parse(localStorage.getItem("planeai.pending-done")!)).toEqual([
       { key: "PLA-1", repoPath: "/repo" },
     ]);
+  });
+
+  it("leaves a Done the user starts again while recovery reads its project to its own undo window", async () => {
+    localStorage.setItem(
+      "planeai.pending-done",
+      JSON.stringify([{ key: "PLA-1", repoPath: "/repo" }]),
+    );
+    const recovering = moves.applyInterruptedDone(onMoved);
+    await moves.completeTask(workspace("PLA-1"), onMoved);
+    await recovering;
+
+    expect(backendMoves()).toEqual([]);
+    expect(JSON.parse(localStorage.getItem("planeai.pending-done")!)).toEqual([
+      { key: "PLA-1", repoPath: "/repo" },
+    ]);
+    await moves.undoLastTaskMove(onMoved);
+    expect(backendMoves()).toEqual([]);
   });
 });

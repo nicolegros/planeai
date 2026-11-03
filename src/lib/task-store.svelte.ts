@@ -13,7 +13,8 @@ let taskRequestGeneration = 0;
 /** Statuses shown ahead of the backend, such as a Done move waiting out its undo window. */
 const heldStatuses = new Map<string, { status: string; token: number }>();
 let lastHoldToken = 0;
-const heldKey = (repoPath: string, key: string) => `${repoPath}\u0000${key}`;
+/** A task's identity across projects, which can reuse keys. */
+export const taskRef = (repoPath: string, key: string) => `${repoPath}\u0000${key}`;
 
 /** Applied when a snapshot is assigned, so a hold that starts or ends mid-reload still counts. */
 function withHeldStatuses(byProject: Record<string, TaskItem[]>): Record<string, TaskItem[]> {
@@ -22,7 +23,7 @@ function withHeldStatuses(byProject: Record<string, TaskItem[]>): Record<string,
     Object.entries(byProject).map(([repoPath, items]) => [
       repoPath,
       items.map((task) => {
-        const held = heldStatuses.get(heldKey(repoPath, task.key));
+        const held = heldStatuses.get(taskRef(repoPath, task.key));
         return held === undefined ? task : { ...task, status: held.status };
       }),
     ]),
@@ -41,14 +42,14 @@ function setLocalStatus(key: string, repoPath: string, status: string): void {
 /** Shows `status` for the task across reloads until its token is released; a newer hold replaces it. */
 export function holdStatus(key: string, repoPath: string, status: string): number {
   const token = ++lastHoldToken;
-  heldStatuses.set(heldKey(repoPath, key), { status, token });
+  heldStatuses.set(taskRef(repoPath, key), { status, token });
   setLocalStatus(key, repoPath, status);
   return token;
 }
 
 /** Ends a hold unless a newer one replaced it, showing `status` (if given) until the next reload. */
 export function releaseStatus(key: string, repoPath: string, token: number, status?: string): void {
-  const id = heldKey(repoPath, key);
+  const id = taskRef(repoPath, key);
   if (heldStatuses.get(id)?.token !== token) return;
   heldStatuses.delete(id);
   if (status !== undefined) setLocalStatus(key, repoPath, status);

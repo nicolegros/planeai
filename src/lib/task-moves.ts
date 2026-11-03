@@ -28,7 +28,6 @@ const savedDone = new Map<string, { key: string; repoPath: string }>();
 /** What Mod+Z reverts: a Done still in `pendingDone`, or the last move that applied. */
 let lastMove: TaskMove | null = null;
 
-const taskId = (repoPath: string, key: string) => `${repoPath}\u0000${key}`;
 const doneToastId = (id: string) => `task-done:${id}`;
 
 function statusLabel(status: string): string {
@@ -65,7 +64,7 @@ function showMovedBack(move: TaskMove): void {
 }
 
 function startPendingDone(move: TaskMove, onMoved: () => void): void {
-  const id = taskId(move.repoPath, move.key);
+  const id = taskStore.taskRef(move.repoPath, move.key);
   const hold = taskStore.holdStatus(move.key, move.repoPath, "done");
   pendingDone.set(id, { move, onMoved, hold });
   savedDone.set(id, { key: move.key, repoPath: move.repoPath });
@@ -133,7 +132,7 @@ export async function changeTaskStatus(
   repoPath: string,
   onMoved: () => void,
 ): Promise<boolean> {
-  cancelDone(taskId(repoPath, key), false);
+  cancelDone(taskStore.taskRef(repoPath, key), false);
   const from = taskStore.findTask(repoPath, key)?.status;
   if (from === status) return true;
   if (from !== undefined && status === "done") {
@@ -166,7 +165,7 @@ export async function completeTask(
 
 /** Applies Done at once for flows with their own confirmation, replacing a pending one. */
 export async function applyDoneNow(key: string, repoPath: string): Promise<void> {
-  cancelDone(taskId(repoPath, key), false);
+  cancelDone(taskStore.taskRef(repoPath, key), false);
   await taskStore.moveTask(key, "done", repoPath);
 }
 
@@ -174,7 +173,10 @@ export async function applyDoneNow(key: string, repoPath: string): Promise<void>
 export function canUndoTaskMove(): boolean {
   if (!lastMove) return false;
   const { key, repoPath, to } = lastMove;
-  return pendingDone.has(taskId(repoPath, key)) || taskStore.findTask(repoPath, key)?.status === to;
+  return (
+    pendingDone.has(taskStore.taskRef(repoPath, key)) ||
+    taskStore.findTask(repoPath, key)?.status === to
+  );
 }
 
 /**
@@ -184,7 +186,7 @@ export function canUndoTaskMove(): boolean {
 export async function undoLastTaskMove(onMoved: () => void): Promise<void> {
   const move = lastMove;
   if (!move) return;
-  const id = taskId(move.repoPath, move.key);
+  const id = taskStore.taskRef(move.repoPath, move.key);
   if (pendingDone.get(id)?.move === move) {
     cancelDone(id);
     return;
@@ -224,10 +226,10 @@ export async function applyInterruptedDone(onMoved: () => void): Promise<void> {
     (entry): entry is { key: string; repoPath: string } =>
       typeof entry?.key === "string" && typeof entry.repoPath === "string",
   );
-  for (const entry of entries) savedDone.set(taskId(entry.repoPath, entry.key), entry);
+  for (const entry of entries) savedDone.set(taskStore.taskRef(entry.repoPath, entry.key), entry);
   let moved = false;
   for (const { key, repoPath } of entries) {
-    const id = taskId(repoPath, key);
+    const id = taskStore.taskRef(repoPath, key);
     if (pendingDone.has(id)) continue;
     let status: string | undefined;
     try {
@@ -235,6 +237,8 @@ export async function applyInterruptedDone(onMoved: () => void): Promise<void> {
     } catch {
       continue;
     }
+    // The user may have started a new Done on it while the project was read.
+    if (pendingDone.has(id)) continue;
     if (status !== undefined && status !== "done")
       moved = (await apply(key, "done", repoPath)) || moved;
     savedDone.delete(id);
