@@ -385,28 +385,17 @@ pub fn create_workspace_sibling(
     parent_session_id: &str,
     opts: WorkspaceSiblingOpts,
 ) -> Result<db::Session, String> {
-    let parent = db::get_session(conn, parent_session_id)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("current session not found: {parent_session_id}"))?;
+    let parent = parent_session(conn, parent_session_id)?;
     let task_key = parent
         .task_key
         .clone()
         .ok_or_else(|| "current session is not linked to a task workspace".to_string())?;
-    let project = db::list_projects(conn)
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .find(|candidate| candidate.id == parent.project_id)
-        .ok_or_else(|| "project for current session not found".to_string())?;
-    let suffix = &uuid::Uuid::new_v4().to_string().replace('-', "")[..8];
-    let branch = opts
-        .branch
-        .unwrap_or_else(|| format!("{}--{suffix}", parent.branch));
-
+    let project = parent_project_name(conn, &parent)?;
     create_session(
         conn,
         SessionCreateOpts {
-            project: project.name,
-            branch,
+            project,
+            branch: opts.branch.unwrap_or_else(|| derived_branch(&parent)),
             name: opts.name.or_else(|| Some(parent.name.clone())),
             new_branch: true,
             worktree: true,
@@ -419,6 +408,71 @@ pub fn create_workspace_sibling(
             parent_session_id: Some(parent.id),
         },
     )
+}
+
+/// A child session's choices; each `None` takes the default `create_child_session` names.
+pub struct ChildSessionOpts {
+    pub project: Option<String>,
+    pub name: Option<String>,
+    pub branch: Option<String>,
+    pub base_branch: Option<String>,
+    pub worktree: Option<bool>,
+    pub yolo: bool,
+    pub provider: Option<String>,
+    pub task_key: Option<String>,
+    pub task_project: Option<String>,
+    pub prompt: Option<String>,
+}
+
+/// Create a child of an existing session: in the parent's project, on a new branch derived
+/// from the parent's, in its own worktree unless asked otherwise.
+pub fn create_child_session(
+    conn: &Connection,
+    parent_session_id: &str,
+    opts: ChildSessionOpts,
+) -> Result<db::Session, String> {
+    let parent = parent_session(conn, parent_session_id)?;
+    let project = match opts.project {
+        Some(project) => project,
+        None => parent_project_name(conn, &parent)?,
+    };
+    create_session(
+        conn,
+        SessionCreateOpts {
+            project,
+            branch: opts.branch.unwrap_or_else(|| derived_branch(&parent)),
+            name: opts.name,
+            new_branch: true,
+            // A checkout session would switch the branch under the agents already there.
+            worktree: opts.worktree.unwrap_or(true),
+            base_branch: opts.base_branch,
+            yolo: opts.yolo,
+            provider: opts.provider,
+            task_key: opts.task_key,
+            task_project: opts.task_project,
+            prompt: opts.prompt,
+            parent_session_id: Some(parent.id),
+        },
+    )
+}
+
+fn parent_session(conn: &Connection, id: &str) -> Result<db::Session, String> {
+    db::get_session(conn, id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("current session not found: {id}"))
+}
+
+fn parent_project_name(conn: &Connection, parent: &db::Session) -> Result<String, String> {
+    db::get_project(conn, &parent.project_id)
+        .map_err(|error| error.to_string())?
+        .map(|project| project.name)
+        .ok_or_else(|| "project for current session not found".to_string())
+}
+
+/// A new branch beside the parent's: its name with a unique suffix.
+fn derived_branch(parent: &db::Session) -> String {
+    let suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    format!("{}--{suffix}", parent.branch)
 }
 
 #[cfg(not(windows))]

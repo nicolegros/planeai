@@ -27,7 +27,7 @@ pub struct ToolContext {
     pub events: Arc<dyn AppEvents>,
 }
 
-pub use planeai_core::mcp::Effect;
+use planeai_core::mcp::Effect;
 
 fn annotations(effect: Effect) -> ToolAnnotations {
     let (read_only, destructive, idempotent) = match effect {
@@ -74,8 +74,8 @@ type Handler = Box<dyn Fn(&ToolContext, &McpCaller, JsonObject) -> ToolOutput + 
 
 pub struct ToolDef {
     pub name: &'static str,
-    pub description: &'static str,
-    pub effect: Effect,
+    description: &'static str,
+    effect: Effect,
     /// The app reloads its tasks after every call, even a failed one, which may have
     /// written part of its change.
     refreshes_tasks: bool,
@@ -583,42 +583,22 @@ fn session_create(
                 },
             )?
         }
-        SessionMode::Child => {
-            let parent = crate::db::get_session(&conn, &caller.session_id)
-                .map_err(|error| error.to_string())?
-                .ok_or("this session no longer exists")?;
-            let project = match input.project {
-                Some(name) => name,
-                None => {
-                    crate::db::get_project(&conn, &caller.project_id)
-                        .map_err(|error| error.to_string())?
-                        .ok_or("the project of this session no longer exists")?
-                        .name
-                }
-            };
-            let branch = input.branch.unwrap_or_else(|| {
-                let suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
-                format!("{}--{suffix}", parent.branch)
-            });
-            crate::cli::create_session(
-                &conn,
-                crate::cli::SessionCreateOpts {
-                    project,
-                    branch,
-                    name: input.name,
-                    new_branch: true,
-                    // A checkout session would switch the branch under the agents already there.
-                    worktree: input.worktree.unwrap_or(true),
-                    base_branch: input.base_branch,
-                    yolo,
-                    provider: input.provider,
-                    task_key: input.task_key,
-                    task_project: input.task_project,
-                    prompt: input.prompt,
-                    parent_session_id: Some(caller.session_id.clone()),
-                },
-            )?
-        }
+        SessionMode::Child => crate::cli::create_child_session(
+            &conn,
+            &caller.session_id,
+            crate::cli::ChildSessionOpts {
+                project: input.project,
+                name: input.name,
+                branch: input.branch,
+                base_branch: input.base_branch,
+                worktree: input.worktree,
+                yolo,
+                provider: input.provider,
+                task_key: input.task_key,
+                task_project: input.task_project,
+                prompt: input.prompt,
+            },
+        )?,
     };
     Ok(axi::session_create_output(&session).into())
 }

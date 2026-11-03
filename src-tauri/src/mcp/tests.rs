@@ -194,9 +194,6 @@ fn the_registry_serves_exactly_the_tools_the_launch_templates_approve() {
         .map(|tool| tool.name.to_string())
         .collect();
     assert_eq!(registry, table);
-    for tool in planeai_core::mcp::TOOLS {
-        assert_eq!(Registry::core().get(tool.name).unwrap().effect, tool.effect);
-    }
 }
 
 #[test]

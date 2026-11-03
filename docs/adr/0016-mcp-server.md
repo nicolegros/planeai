@@ -42,13 +42,14 @@ Claude Code and Codex both speak MCP natively, show its tools by name, and let a
 - Every tool carries MCP annotations derived from its effect: read, write (idempotent or not) or delete.
   The templates pre-approve reads, creates and updates, and leave `task_delete` to prompt.
   They do not list tools: `{mcp_allowed_tools}` (Claude Code's `mcp__planeai__<tool>` names) and `{mcp_codex_prompted_tools}` (Codex's per-tool `approval_mode="prompt"` overrides) are filled at launch from the tool table in `planeai-core`, which the app's registry must match, as a test checks.
-  A template saved with the tool list written out still works; it only misses tools added later.
 - The tools are `task_list`, `task_show`, `task_create`, `task_update`, `task_delete`, `session_list`, `session_tree`, `session_read`, `session_create`, `session_prompt` and `project_list`.
   They default to the caller: `task_show` and `task_update` without a key act on the session's task, task tools work in the project of that task, `session_tree` starts from the calling session, and `session_create` makes a child of it.
 - A session never reaches more permissions through the tools than it has.
   `session_create` defaults `yolo` to the caller's own setting and refuses `yolo: true` from a session that asks before running tools, and `session_prompt` refuses to prompt a yolo session from such a session.
   The check runs in the server, so it holds although the templates pre-approve both tools.
-- `task_update` checks its status, parent and blockers before writing, so a refused update changes nothing.
+- `task_update` checks its status, parent and blockers before writing, and drops repeated tags and blockers, so a refused update changes nothing.
+  The task store refuses a parent that is missing, the task itself or one of its subtasks, for every caller, and writes each edit in one transaction.
+  The edit and the status move stay two transactions: the move cascades through the lifecycle code, which works on any task provider.
   Every call of a task-writing tool refreshes the GUI once, from the tool registry, even a failed one.
 - Tools are thin adapters over the AXI domain functions and return the same TOON text the CLI prints, without its CLI-specific help hints.
   `planeai-cli axi` stays for agents outside PlaneAI sessions; there is one implementation behind both.
@@ -61,3 +62,6 @@ Claude Code and Codex both speak MCP natively, show its tools by name, and let a
 - Changing the port strands running agents on the old URL until they restart; Settings says so.
 - The skills that wrap `planeai-cli axi` become redundant inside sessions and can be removed once plugin tools and provider runtimes reach MCP.
 - Adding a tool means a registry entry with typed input; its annotations, and therefore its approval in the templates, follow from its effect.
+- Accepted risk: a session that asks before running tools can still create a task without asking, since `task_create` is pre-approved.
+  In a project with auto-dispatch on, that task is then picked up and run with yolo.
+  This is accepted because auto-dispatch is opt-in per project, and enabling it already means trusting every todo task in it, whoever wrote it.

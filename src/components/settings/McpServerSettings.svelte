@@ -1,5 +1,7 @@
 <script lang="ts">
   import { CircleAlert, CircleCheck } from "@lucide/svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import { onMount } from "svelte";
   import { preferences, type McpStatus } from "../../lib/api";
   import { getSettings, type AppConfig } from "../../lib/settings.svelte";
   import { saveSettings } from "../../lib/save-settings";
@@ -14,23 +16,26 @@
   let status = $state<McpStatus | null>(null);
   const port = $derived(config.mcp_port ?? status?.default_port ?? null);
 
+  let latestRead = 0;
   async function refreshStatus() {
+    const read = ++latestRead;
     try {
-      status = await preferences.getMcpStatus();
+      const next = await preferences.getMcpStatus();
+      if (read === latestRead) status = next;
     } catch (error) {
       console.warn("Failed to read the MCP server status:", error);
     }
   }
 
-  $effect(() => {
-    // Re-read whenever the settings change, including a reset or a reload from disk.
-    void [enabled, config.mcp_port];
+  // A save and a reload from disk both end with `settings-changed`, after the server applied them.
+  onMount(() => {
     void refreshStatus();
+    const unlisten = listen("settings-changed", () => void refreshStatus());
+    return () => void unlisten.then((stop) => stop());
   });
 
-  async function save(patch: Partial<AppConfig>) {
-    await saveSettings(patch);
-    await refreshStatus();
+  function save(patch: Partial<AppConfig>) {
+    void saveSettings(patch);
   }
 
   function setPort(input: HTMLInputElement) {
