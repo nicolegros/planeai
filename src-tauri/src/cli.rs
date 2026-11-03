@@ -6,8 +6,8 @@ use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 use crate::tmux;
 use crate::{config, db, git};
 
-/// Open the app's database. The CLI can run before an upgraded app first migrates it, so
-/// it migrates the project and session schema, which holds the MCP tokens its launches mint.
+/// Like `services::open_db_at` but without its pragmas, which would newly enforce foreign keys
+/// on CLI writes; it migrates because the CLI can mint MCP tokens before an upgraded app runs.
 pub fn open_db(path: &std::path::Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
     planeai_core::services::migrate(&conn).map_err(|e| e.to_string())?;
