@@ -113,10 +113,15 @@
   const zone = $derived(getActiveZone());
   const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
   const activeTaskWorkspace = $derived.by(() => {
-    if (selectedTaskWorkspace) return selectedTaskWorkspace;
+    const findTask = (project: Project, key: string) => taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === key);
+    // The selection holds a snapshot; read the store so status and title changes show.
+    if (selectedTaskWorkspace) {
+      const { task, project } = selectedTaskWorkspace;
+      return { task: findTask(project, task.key) ?? task, project };
+    }
     if (!activeSession?.task_key) return null;
     const project = projects.find((candidate) => candidate.id === sessionTaskProjectId(activeSession));
-    const task = project ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === activeSession.task_key) : undefined;
+    const task = project ? findTask(project, activeSession.task_key) : undefined;
     return task && project ? { task, project } : null;
   });
   const activeTaskSessions = $derived(
