@@ -30,7 +30,8 @@ tar -xzf "$TMP/repo.tar.gz" -C "$TMP/src" --strip-components=1 "iTerm2-Color-Sch
 
 rm -rf "$DEST"
 mkdir -p "$DEST"
-cp "$TMP/src/ghostty/"* "$DEST/"
+# Windows cannot check out file names with these characters, so those themes are skipped.
+find "$TMP/src/ghostty" -maxdepth 1 -type f ! -name '*[<>:"|?*]*' ! -name '*[. ]' -exec cp {} "$DEST/" \;
 cp "$TMP/src/LICENSE" "$DEST/LICENSE"
 cp "$TMP/src/CREDITS.md" "$DEST/CREDITS.md"
 echo "$SHA" > "$DEST/UPSTREAM"
