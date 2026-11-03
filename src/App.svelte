@@ -128,10 +128,6 @@
     return task && project ? { task, project } : null;
   });
   const snoozeMenu = $derived(getSnoozeMenu());
-  // The picker took focus from the zone it opened over; the terminal wants it back, the sidebar reads keys from the window.
-  function refocusAfterSnooze() {
-    void tick().then(() => { if (!getCustomSnooze() && getActiveZone() === "terminal") refocusTerminal(); });
-  }
   const customSnooze = $derived(getCustomSnooze());
   const activeTaskSessions = $derived(
     activeTaskWorkspace
@@ -1601,14 +1597,14 @@
   {/each}
 {/if}
 {#if snoozeMenu}
-  <ContextMenu x={snoozeMenu.x} y={snoozeMenu.y} items={snoozeMenuItems(snoozeMenu.target, true)} onClose={() => { closeSnoozeMenu(); refocusAfterSnooze(); }} />
+  <ContextMenu x={snoozeMenu.x} y={snoozeMenu.y} items={snoozeMenuItems(snoozeMenu.target, true)} onClose={closeSnoozeMenu} />
 {/if}
 {#if customSnooze}
   {@const { task, project } = customSnooze}
   <SnoozeCustomDialog
     title={`Snooze ${task.key}`}
     onSnooze={(at) => snoozeTask(taskStore.findTask(project.path, task.key) ?? task, project, at)}
-    onCancel={() => { closeCustomSnooze(); refocusAfterSnooze(); }}
+    onCancel={closeCustomSnooze}
   />
 {/if}
 <!-- Merge prompts stay visible during setup: their countdown keeps running and acts when it ends. -->

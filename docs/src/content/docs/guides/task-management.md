@@ -67,6 +67,8 @@ Snooze a task to set it aside until later, without changing its status or stoppi
 Right-click a task and choose **Snooze**, then a time: **In 1 hour**, **In 3 hours**, **This evening** (18:00), **Tomorrow** (09:00) or **Next week** (Monday 09:00), soonest first.
 Times that already passed today are left out, and the clock times follow your system's 12 or 24-hour format.
 **Custom…** asks for a date and time, or an amount of minutes, hours or days from now.
+In that dialog, **m** switches between the two, and **d**, **t**, **a** and **u** jump to the date, time, amount and unit.
+Closing the picker or the dialog puts focus back where it was.
 Press **⌘⌥Z** (macOS) or **Ctrl+Alt+Z** (Linux/Windows) to open the same choices for the open task, or **z** with the sidebar focused for the highlighted one; **1** to **5** pick a time, **C** opens Custom, and **Esc** closes the menu.
 
 A snoozed task leaves its place, including the top of the list and its project folder, for the **Snoozed** shelf between To do and Done.

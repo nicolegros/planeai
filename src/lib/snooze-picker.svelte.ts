@@ -2,7 +2,16 @@
  * The snooze picker: one preset menu for every entry point (task context menu, `z` in the sidebar,
  * Mod+Option+Z), and the Custom dialog it leads to.
  */
+import { tick } from "svelte";
 import type { MenuItem } from "../components/ui/ContextMenu.svelte";
+import {
+  focusEditor,
+  focusExplorer,
+  focusSidebar,
+  getActiveZone,
+  refocusTerminal,
+  type FocusZone,
+} from "./focus.svelte";
 import { snoozeTask, wakeTask } from "./task-moves";
 import { isTaskSnoozed, snoozeOptions } from "./task-snooze";
 import * as taskStore from "./task-store.svelte";
@@ -16,6 +25,36 @@ export interface SnoozeTarget {
 
 let menu = $state<{ target: SnoozeTarget; x: number; y: number } | null>(null);
 let custom = $state<SnoozeTarget | null>(null);
+/** Where focus was before the picker took it, given back once the menu and its Custom dialog close. */
+let returnFocus: { element: HTMLElement | null; zone: FocusZone } | null = null;
+
+function rememberFocus(): void {
+  if (returnFocus) return;
+  const active = document.activeElement;
+  const element = active instanceof HTMLElement && active !== document.body ? active : null;
+  returnFocus = { element, zone: getActiveZone() };
+}
+
+const REFOCUS_ZONE: Record<FocusZone, () => void> = {
+  terminal: refocusTerminal,
+  sidebar: focusSidebar,
+  editor: focusEditor,
+  explorer: focusExplorer,
+  none: () => {},
+};
+
+/** Waits a frame after the closing dialog unmounts, so its own focus handling cannot override this. */
+function giveFocusBack(): void {
+  if (menu || custom || !returnFocus) return;
+  const { element, zone } = returnFocus;
+  returnFocus = null;
+  void tick().then(() =>
+    requestAnimationFrame(() => {
+      if (element?.isConnected) element.focus();
+      else REFOCUS_ZONE[zone]();
+    }),
+  );
+}
 
 export function getSnoozeMenu() {
   return menu;
@@ -27,13 +66,16 @@ export function getCustomSnooze(): SnoozeTarget | null {
 
 export function closeSnoozeMenu(): void {
   menu = null;
+  giveFocusBack();
 }
 
 export function closeCustomSnooze(): void {
   custom = null;
+  giveFocusBack();
 }
 
 export function openCustomSnooze(target: SnoozeTarget): void {
+  rememberFocus();
   menu = null;
   custom = target;
 }
@@ -102,5 +144,6 @@ export function snoozeOrWake(target: SnoozeTarget | null): void {
     void wakeTask(target.task, target.project);
     return;
   }
+  rememberFocus();
   menu = { target, ...anchorOf(target) };
 }

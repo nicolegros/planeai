@@ -95,6 +95,51 @@ describe("snooze picker", () => {
     expect([getSnoozeMenu(), getCustomSnooze()]).toEqual([null, target]);
   });
 
+  describe("giving focus back", () => {
+    function focusedField(): HTMLTextAreaElement {
+      const field = document.createElement("textarea");
+      document.body.append(field);
+      field.focus();
+      return field;
+    }
+
+    function takeFocus(): void {
+      const menuItem = document.createElement("button");
+      document.body.append(menuItem);
+      menuItem.focus();
+      menuItem.remove();
+    }
+
+    afterEach(() => document.body.replaceChildren());
+
+    it("returns focus to where it was once the menu closes", async () => {
+      const field = focusedField();
+      snoozeOrWake({ task: task(), project });
+      takeFocus();
+
+      closeSnoozeMenu();
+      await vi.runAllTimersAsync();
+
+      expect(document.activeElement).toBe(field);
+    });
+
+    it("waits for the Custom dialog it led to, then returns focus to where it was", async () => {
+      const field = focusedField();
+      const target = { task: task(), project };
+      snoozeOrWake(target);
+      takeFocus();
+      leaves(snoozeMenuItems(target, true)).at(-1)!.onSelect();
+      closeSnoozeMenu();
+      await vi.runAllTimersAsync();
+      takeFocus();
+
+      closeCustomSnooze();
+      await vi.runAllTimersAsync();
+
+      expect(document.activeElement).toBe(field);
+    });
+  });
+
   it("opens the menu on an awake task and wakes a snoozed one instead", () => {
     snoozeOrWake({ task: task(), project });
     expect(getSnoozeMenu()?.target.task.key).toBe("PLA-1");
