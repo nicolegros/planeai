@@ -1,6 +1,14 @@
-/** Colors a tooltip line with the plugin theme token of the same name (`--planeai-success`, ...). */
 export const PLUGIN_TOOLTIP_TONES = ["success", "warning", "danger", "info", "muted"] as const;
 export type PluginTooltipTone = (typeof PLUGIN_TOOLTIP_TONES)[number];
+
+/** Host color of each tone; the status tones also back the plugin's `--planeai-<tone>` token, so both always agree. */
+export const PLUGIN_TONE_COLORS: Record<PluginTooltipTone, string> = {
+  success: "--color-status-running",
+  warning: "--color-status-review",
+  danger: "--color-status-exited",
+  info: "--color-status-working",
+  muted: "--color-t3",
+};
 
 export interface PluginTooltipLine {
   text: string;

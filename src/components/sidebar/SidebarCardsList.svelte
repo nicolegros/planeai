@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Tooltip } from "bits-ui";
   import { flip } from "svelte/animate";
   import { cubicOut } from "svelte/easing";
   import { crossfade } from "svelte/transition";
@@ -165,7 +166,7 @@
     <SessionRenameInput bind:value={() => rename.value, rename.onInput} onCommit={() => rename.onCommit(id)} onCancel={rename.onCancel} />
   {:else}
     {@const labelId = `sidebar-card-${sidebarRowNavKey(row)}`}
-    <!-- The row button lies behind its content so a meta slot can be a button of its own; clicks on either bubble here. -->
+    <!-- The row button lies behind its content so a meta slot can be a button of its own; content clicks bubble here, the slot's do not. -->
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="group relative" onclick={() => onSelectRow(row)} oncontextmenu={(e) => onRowContextMenu(e, row)}>
       <button
@@ -318,6 +319,8 @@
   </section>
 {/snippet}
 
+<!-- One provider for every meta pill, so moving between pills skips the tooltip delay. -->
+<Tooltip.Provider delayDuration={300}>
 <div class="flex flex-1 flex-col">
   {#each top as section (section.key)}
     {#if section.kind === "folder"}
@@ -341,3 +344,4 @@
     <p class="px-3 py-1 text-xs text-t3 italic">No sessions or tasks</p>
   {/if}
 </div>
+</Tooltip.Provider>

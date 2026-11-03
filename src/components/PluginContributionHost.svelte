@@ -18,7 +18,7 @@
   import type { PluginInventory, PluginProvider, PluginUiContribution } from "../lib/types";
   import { isSessionRequest, serveSessionRequest, type ProviderSessionBridge } from "../lib/provider-session-bridge";
   import { pluginFrameFonts } from "../lib/plugin-frame-fonts";
-  import { parseTooltipLines, type PluginTooltipLine } from "../lib/plugin-tooltip";
+  import { parseTooltipLines, PLUGIN_TONE_COLORS, type PluginTooltipLine } from "../lib/plugin-tooltip";
   import { FRAME_INTERACTION_EVENT } from "../lib/frame-interaction";
 
   interface Props {
@@ -110,10 +110,10 @@
     ["accent", "--color-accent"],
     ["on-accent", "--color-on-accent"],
     ["accent-subtle", "--color-accent-bg"],
-    ["success", "--color-status-running"],
-    ["warning", "--color-status-review"],
-    ["danger", "--color-status-exited"],
-    ["info", "--color-status-working"],
+    ["success", PLUGIN_TONE_COLORS.success],
+    ["warning", PLUGIN_TONE_COLORS.warning],
+    ["danger", PLUGIN_TONE_COLORS.danger],
+    ["info", PLUGIN_TONE_COLORS.info],
   ] as const;
 
   function escapePluginThemeValue(value: string): string {
