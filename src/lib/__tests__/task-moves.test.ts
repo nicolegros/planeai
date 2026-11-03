@@ -82,11 +82,10 @@ describe("task moves", () => {
     vi.resetModules();
     localStorage.clear();
     listAllFails.value = false;
-    [taskStore, moves, toasts] = await Promise.all([
-      import("../task-store.svelte"),
-      import("../task-moves"),
-      import("../toasts.svelte"),
-    ]);
+    // One at a time: evaluating them in parallel races on the shared Svelte runtime.
+    taskStore = await import("../task-store.svelte");
+    moves = await import("../task-moves");
+    toasts = await import("../toasts.svelte");
     onMoved.mockReset();
     for (const key of Object.keys(statuses)) delete statuses[key];
     for (const key of Object.keys(snoozes)) delete snoozes[key];
@@ -253,10 +252,8 @@ describe("task moves", () => {
     ]);
 
     vi.resetModules();
-    [taskStore, moves] = await Promise.all([
-      import("../task-store.svelte"),
-      import("../task-moves"),
-    ]);
+    taskStore = await import("../task-store.svelte");
+    moves = await import("../task-moves");
     await taskStore.loadTasks(["/repo"]);
     onMoved.mockReset();
     await moves.applyInterruptedDone(onMoved);
