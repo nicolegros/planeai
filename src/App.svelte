@@ -698,6 +698,39 @@
     });
   }
 
+  async function moveActiveTask(task: TaskItem, project: Project, status: string): Promise<boolean> {
+    try {
+      await taskStore.moveTask(task.key, status, project.path);
+    } catch (error) {
+      console.error("Failed to move task:", error);
+      showToast("Failed to move task.");
+      return false;
+    }
+    orchestrator.loadSessions();
+    return true;
+  }
+
+  async function completeActiveTask(): Promise<void> {
+    if (!activeTaskWorkspace) {
+      showToast({ kind: "info", message: "No task is open.", autoDismissMs: 3000 });
+      return;
+    }
+    const { task, project } = activeTaskWorkspace;
+    if (task.status === "done") {
+      showToast({ kind: "info", message: `${task.key} is already Done`, autoDismissMs: 3000 });
+      return;
+    }
+    const previousStatus = task.status;
+    if (!(await moveActiveTask(task, project, "done"))) return;
+    showToast({
+      kind: "success",
+      message: `${task.key} moved to Done`,
+      detail: task.title,
+      autoDismissMs: 5000,
+      actions: [{ key: "z", label: "Undo", run: () => void moveActiveTask(task, project, previousStatus) }],
+    });
+  }
+
   /**
    * `focusPtyKey` is the terminal that takes keyboard focus, when it is not the
    * agent's own tab (a shell of that session, clicked or selected).
@@ -986,6 +1019,7 @@
         else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskStore.refresh(projects.map((p) => p.path)); }
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { saveActiveEditorResource(); }
+        else if (action.type === "complete_task") { void completeActiveTask(); }
         else if (action.type === "focus_toast") { if (!toggleToastFocus()) focusPluginInteraction(); }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },

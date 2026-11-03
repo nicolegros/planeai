@@ -150,6 +150,20 @@ describe("matchChord", () => {
     });
   });
 
+  it("returns complete_task on platform mod+Option+S, whatever character Option types", () => {
+    for (const typed of ["s", "ß"]) {
+      expect(matchChord(key({ key: typed, code: "KeyS", [modKey]: true, altKey: true }))).toEqual({
+        type: "complete_task",
+      });
+    }
+  });
+
+  it("keeps platform mod+S as save_file", () => {
+    expect(matchChord(key({ key: "s", code: "KeyS", [modKey]: true }))).toEqual({
+      type: "save_file",
+    });
+  });
+
   it("returns toggle_task_panel on platform mod+Shift+T", () => {
     expect(matchChord(key({ key: "t", [modKey]: true, shiftKey: true }))).toEqual({
       type: "toggle_task_panel",

@@ -41,6 +41,12 @@ describe("split shortcuts while an editor has focus", () => {
     expect(pressInEditor({ key: "d" })).toEqual([{ type: "split_vertical" }]);
   });
 
+  it("moves the current task to done with Mod+Alt+S", () => {
+    expect(pressInEditor({ key: "ß", code: "KeyS", altKey: true })).toEqual([
+      { type: "complete_task" },
+    ]);
+  });
+
   it("leaves shortcuts the editor owns to the editor", () => {
     expect(pressInEditor({ key: "b" })).toEqual([]);
   });

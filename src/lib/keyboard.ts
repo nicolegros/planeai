@@ -50,6 +50,7 @@ export type KeyboardAction =
   | { type: "toggle_task_panel" }
   | { type: "focus_toast" }
   | { type: "refresh_tasks" }
+  | { type: "complete_task" }
   | { type: "open_file" }
   | { type: "save_file" }
   | { type: "show_shortcuts" }
@@ -160,6 +161,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "open_file" };
   }
 
+  // Mod+Option+S - move the current task to done. Option changes e.key on macOS, so match the physical key.
+  if (mod && e.altKey && !e.shiftKey && !otherMod && e.code === "KeyS") {
+    return { type: "complete_task" };
+  }
+
   // Mod+Shift+S — toggle sessions panel
   if (mod && e.shiftKey && key === "s") {
     return { type: "toggle_sessions_panel" };
@@ -263,6 +269,7 @@ export function installKeyboardRouter(
     "tab_switch",
     "tab_switch_reverse",
     "save_file",
+    "complete_task",
     "close_tab",
     "new_tab",
     "next_tab",
