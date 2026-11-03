@@ -20,6 +20,7 @@
   import { pluginFrameFonts } from "../lib/plugin-frame-fonts";
   import { parseTooltipLines, PLUGIN_TONE_COLORS, type PluginTooltipLine } from "../lib/plugin-tooltip";
   import { FRAME_INTERACTION_EVENT } from "../lib/frame-interaction";
+  import { refreshesSessionPanelInPlace } from "../lib/plugin-navigation";
 
   interface Props {
     plugin: PluginInventory;
@@ -142,7 +143,7 @@
   const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "dialog", "sidebar.header"];
 
   /** Local placements told about their plugin's data changes in place, since remounting them would flash and drop their state. */
-  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "session.meta", "sidebar.header", "main-pane", "dialog", "titlebar", "session.panel"];
+  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "session.meta", "sidebar.header", "main-pane", "dialog", "titlebar"];
 
   /** Visual-only placements drawn inside a sidebar row: pointer-inert, unfocusable and 16px tall. */
   function inSessionRow(placement: PluginUiContribution["placement"]): boolean {
@@ -668,7 +669,12 @@
     };
 
     const refreshData = (): void => frame.contentWindow?.postMessage({ type: "data-changed" }, "*");
-    if (refreshedInPlacePlacements.includes(contribution.placement)) refreshLocalPluginData = refreshData;
+    if (
+      refreshedInPlacePlacements.includes(contribution.placement) ||
+      (contribution.placement === "session.panel" && refreshesSessionPanelInPlace(plugin))
+    ) {
+      refreshLocalPluginData = refreshData;
+    }
     let framed = true;
     let unlistenSessionEvents: (() => void) | undefined;
     if (bridge) {

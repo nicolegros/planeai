@@ -334,7 +334,7 @@ For example, local UI CSS can adopt or intentionally customize the host theme:
 - `call(method, params?)` — RPC scoped to the owning sidecar. Lifecycle methods are reserved.
 - `settings.get<T extends Record<string, unknown>>()` and `settings.replace<T>(settings)` — typed public JSON-object settings. These are the UI counterpart to the capability-gated sidecar settings callbacks; they never expose secrets.
 - `data.changed()` - tells PlaneAI the plugin's data changed, as does each run of the [background service](#background-service). A running `sidebar.section` remounts after this event.
-- `data.onChanged(listener)` returns an unsubscribe function and calls `listener` when the plugin's data changed. A local `session.indicator`, `session.meta`, `sidebar.header`, `main-pane`, `dialog`, `titlebar`, or `session.panel` frame receives it in place and keeps its state, so subscribe to refresh what it shows. Other local frames never call it.
+- `data.onChanged(listener)` returns an unsubscribe function and calls `listener` when the plugin's data changed. A local `session.indicator`, `session.meta`, `sidebar.header`, `main-pane`, `dialog`, or `titlebar` frame receives it in place and keeps its state, so subscribe to refresh what it shows; so does a local `session.panel` on host API `planeai.plugin-host.v5` or later, while an older one remounts instead. Other local frames never call it.
 - `navigation.open(pluginId, contributionId)`, `navigation.close()`, and `navigation.openPreferences()`.
 - `sidebar.register(rows)`, `sidebar.select(rowId)`, and `sidebar.handleKeydown(event)` for sidebar navigation contributions. Always call the returned unregister function from your mount disposer.
 
