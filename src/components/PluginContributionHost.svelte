@@ -142,7 +142,7 @@
   const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "dialog", "sidebar.header"];
 
   /** Local placements told about their plugin's data changes in place, since remounting them would flash. */
-  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "session.meta", "sidebar.header", "main-pane", "dialog"];
+  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "session.meta", "sidebar.header", "main-pane", "dialog", "titlebar"];
 
   /** Visual-only placements drawn inside a sidebar row: pointer-inert, unfocusable and 16px tall. */
   function inSessionRow(placement: PluginUiContribution["placement"]): boolean {

@@ -233,7 +233,7 @@ describe("PluginContributionHost", () => {
     },
   );
 
-  it.each(["sidebar.header", "main-pane", "dialog"] as const)(
+  it.each(["sidebar.header", "main-pane", "dialog", "titlebar"] as const)(
     "tells a local %s frame its plugin's data changed without remounting it",
     async (placement) => {
       target = document.createElement("div");
