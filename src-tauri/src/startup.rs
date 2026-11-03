@@ -305,6 +305,7 @@ pub fn start_daemon_event_listener(app_handle: &tauri::AppHandle) {
                         })
                     };
                     if let Some(event) = lifecycle_event {
+                        crate::task_activity::record(&app, &evt.session_id);
                         app.state::<PluginRuntimeHandle>()
                             .0
                             .dispatch_session_lifecycle(event);

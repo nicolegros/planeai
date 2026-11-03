@@ -699,6 +699,8 @@ mod tests {
             base_branch: "develop".into(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
+            last_visited_at: None,
+            last_activity_at: None,
         }
     }
 
@@ -782,6 +784,8 @@ mod tests {
                 base_branch: text("base_branch"),
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
+                last_visited_at: None,
+                last_activity_at: None,
             };
             let templates: Option<TaskManagerTemplates> =
                 serde_json::from_value(case["templates"].clone()).unwrap();

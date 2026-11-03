@@ -3,7 +3,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
 use planeai_tasks::provider::TaskProvider;
-use planeai_tasks::sqlite::SqliteRepository;
+use planeai_tasks::sqlite::{SqliteRepository, Visit};
 
 use crate::commands::sessions::lifecycle::session_transition;
 use crate::db;
@@ -30,6 +30,8 @@ pub struct TaskItem {
     #[serde(default)]
     pub url: Option<String>,
     pub base_branch: String,
+    pub last_visited_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_activity_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<planeai_tasks::model::Task> for TaskItem {
@@ -45,6 +47,8 @@ impl From<planeai_tasks::model::Task> for TaskItem {
             parent_key: t.parent_key,
             url: None,
             base_branch: t.base_branch,
+            last_visited_at: t.last_visited_at,
+            last_activity_at: t.last_activity_at,
         }
     }
 }
@@ -219,6 +223,52 @@ pub fn edit_task_item(
         ));
     }
     Ok(TaskItem::from(task))
+}
+
+/// The user looked at the task: it is read until its agent's next activity.
+#[tauri::command]
+pub async fn mark_task_visited(
+    db_state: State<'_, DbState>,
+    project_id: String,
+    key: String,
+) -> Result<Visit, String> {
+    write_visit(db_state, project_id, key, |conn, prefix, key| {
+        planeai_tasks::sqlite::mark_visited(conn, prefix, key, chrono::Utc::now())
+    })
+    .await
+}
+
+/// Shows the task's last activity as unseen again.
+#[tauri::command]
+pub async fn mark_task_unread(
+    db_state: State<'_, DbState>,
+    project_id: String,
+    key: String,
+) -> Result<Visit, String> {
+    write_visit(
+        db_state,
+        project_id,
+        key,
+        planeai_tasks::sqlite::mark_unread,
+    )
+    .await
+}
+
+async fn write_visit(
+    db_state: State<'_, DbState>,
+    project_id: String,
+    key: String,
+    write: impl FnOnce(&rusqlite::Connection, &str, &str) -> Result<Visit, planeai_tasks::provider::Error>
+        + Send
+        + 'static,
+) -> Result<Visit, String> {
+    let db = db_state.0.clone();
+    super::blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        let prefix = crate::task_activity::project_prefix(&conn, &project_id)?;
+        write(&conn, &prefix, &key).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Start a session for the task, as "Start session immediately" does after creating it.

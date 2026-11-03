@@ -164,6 +164,9 @@ Show a task by key.
 planeai-cli task show <key> [--project <name>]
 ```
 
+Its JSON, like each task in `task ls`, includes `last_activity_at`, when an agent on the task last finished a turn, asked for attention or exited, and `last_visited_at`, when you last opened the task in the app.
+Both are `null` until it first happens.
+
 ### `task ls`
 
 List tasks with optional filters.
@@ -257,6 +260,8 @@ Show task details.
 ```bash
 planeai-cli axi task show <key> [--project <name>]
 ```
+
+Once set, `last_activity_at` and `last_visited_at` are listed after `created_at`.
 
 ### `axi task add`
 

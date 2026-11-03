@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   folderUrgency,
   rowActions,
-  sessionActivity,
+  rowActivity,
   splitBranch,
-  type SessionActivity,
+  type RowActivity,
 } from "../sidebar-cards";
 import type { SidebarRow } from "../sidebar-model";
 import type { Project, Session, TaskItem } from "../types";
@@ -35,7 +35,15 @@ function session(id: string, status: Session["status"] = "active"): Session {
   };
 }
 
-function taskRow(key: string, status: string, linkedSession?: Session): SidebarRow {
+function taskRow(
+  key: string,
+  status: string,
+  linkedSession?: Session,
+  visit: Pick<TaskItem, "last_visited_at" | "last_activity_at"> = {
+    last_visited_at: null,
+    last_activity_at: null,
+  },
+): SidebarRow {
   const task: TaskItem = {
     key,
     title: key,
@@ -47,6 +55,7 @@ function taskRow(key: string, status: string, linkedSession?: Session): SidebarR
     parent_key: null,
     url: null,
     base_branch: "main",
+    ...visit,
   };
   return { kind: "task", task, project, linkedSession };
 }
@@ -55,17 +64,38 @@ function sessionRow(s: Session): SidebarRow {
   return { kind: "session", session: s, project };
 }
 
-describe("sessionActivity", () => {
-  it("ranks a busy agent over review-ready over exited, and shows nothing when idle", () => {
-    const busyExited = session("a", "exited");
-    const readyExited = session("b", "exited");
-    const states = { a: "Busy", b: "Idle", d: "Idle" };
-    const ready = { a: true, b: true };
+describe("rowActivity", () => {
+  const states = { busy: "Busy", idle: "Idle", "busy-gone": "Busy" };
+  const unreadSessions = { busy: true, finished: true, "finished-gone": true, linked: true };
+  const activityOf = (row: SidebarRow) => rowActivity(row, states, unreadSessions);
+
+  it("ranks a busy agent over unread over exited for sessions, and shows nothing when idle", () => {
     expect(
-      [busyExited, readyExited, session("c", "exited"), session("d"), undefined].map((s) =>
-        sessionActivity(s, states, ready),
-      ),
-    ).toEqual(["working", "ready", "exited", null, null]);
+      [
+        session("busy"),
+        session("finished"),
+        session("finished-gone", "exited"),
+        session("gone", "exited"),
+        session("idle"),
+      ].map((s) => activityOf(sessionRow(s))),
+    ).toEqual(["working", "unread", "unread", "exited", null]);
+  });
+
+  it("reads a task's unread from its visit, not from its session", () => {
+    const seen = {
+      last_activity_at: "2026-11-03T10:00:00Z",
+      last_visited_at: "2026-11-03T10:05:00Z",
+    };
+    const unseen = { last_activity_at: "2026-11-03T10:00:00Z", last_visited_at: null };
+    expect([
+      activityOf(taskRow("A-1", "in_review", session("busy-gone", "exited"), unseen)),
+      activityOf(taskRow("A-2", "in_review", session("linked"), seen)),
+      activityOf(taskRow("A-3", "in_review", session("gone", "exited"), unseen)),
+      activityOf(taskRow("A-4", "in_review", undefined, unseen)),
+      activityOf(taskRow("A-5", "in_review", session("gone", "exited"), seen)),
+      activityOf(taskRow("A-6", "todo")),
+      activityOf(taskRow("A-7", "done", undefined, unseen)),
+    ]).toEqual(["working", null, "unread", "unread", "exited", null, null]);
   });
 });
 
@@ -82,9 +112,9 @@ describe("rowActions", () => {
 });
 
 describe("folderUrgency", () => {
-  const activities: Record<string, SessionActivity | null> = {
+  const activities: Record<string, RowActivity | null> = {
     busy: "working",
-    ready: "ready",
+    unread: "unread",
     exited: "exited",
     idle: null,
   };
@@ -94,7 +124,7 @@ describe("folderUrgency", () => {
   it("picks the most urgent row: exited, then review, then working", () => {
     expect([
       folderUrgency([sessionRow(session("busy")), sessionRow(session("exited"))], activityOf),
-      folderUrgency([sessionRow(session("busy")), sessionRow(session("ready"))], activityOf),
+      folderUrgency([sessionRow(session("busy")), sessionRow(session("unread"))], activityOf),
       folderUrgency([sessionRow(session("busy")), taskRow("A-1", "in_review")], activityOf),
       folderUrgency([sessionRow(session("idle")), sessionRow(session("busy"))], activityOf),
       folderUrgency([sessionRow(session("idle"))], activityOf),

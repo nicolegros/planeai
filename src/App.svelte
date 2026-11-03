@@ -3,7 +3,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { emitTo, listen } from "@tauri-apps/api/event";
-  import { sessions as sessionsApi, pty, notify, sessionLogs, editor as editorApi, updater } from "./lib/api";
+  import { appWindow, sessions as sessionsApi, pty, notify, sessionLogs, editor as editorApi, updater } from "./lib/api";
   import { TabEndedError } from "./lib/terminal-pty";
   import { sessionTaskProjectId, type Session, type Project, type TaskItem } from "./lib/types";
   import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
@@ -130,6 +130,24 @@
       : [],
   );
   const isEmptyTaskWorkspace = $derived(!!activeTaskWorkspace && activeTaskSessions.length === 0);
+  // A string, so the visit below runs once per switch rather than on every task store update.
+  const viewedTaskId = $derived(
+    activeTaskWorkspace && !activePluginId ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : null,
+  );
+  $effect(() => {
+    const viewed = viewedTaskId ? parseTaskWorkspaceId(viewedTaskId) : null;
+    if (viewed) visitTask(viewed.projectId, viewed.taskKey);
+  });
+  function visitTask(projectId: string, key: string): void {
+    taskStore.markTaskVisited(projectId, key).catch((error) => console.warn("Failed to mark a task visited:", error));
+  }
+  /** Activity on the task in front of the user does not make it unread. */
+  function isViewingTask(projectId: string, key: string): boolean {
+    return document.hasFocus() && viewedTaskId === toTaskWorkspaceId(projectId, key);
+  }
+  const returnVisit = taskStore.createReturnVisit(() =>
+    viewedTaskId && activeTaskWorkspace ? { projectId: activeTaskWorkspace.project.id, task: activeTaskWorkspace.task } : null,
+  );
   const activePluginSessionContext = $derived(activeSession ? {
     id: activeSession.id,
     projectId: activeSession.project_id,
@@ -850,6 +868,9 @@
     const cleanupSymphony = orchestrator.startSymphonyPolling();
     const cleanupProjectFocus = projectStore.reloadProjectsOnFocus();
     const cleanupTaskListener = taskStore.startTaskEventListener(() => projectStore.getProjects().map((p) => p.path));
+    const cleanupTaskActivity = taskStore.startTaskActivityListener(isViewingTask);
+    const cleanupLeaveWindow = appWindow.onBlurred(returnVisit.left);
+    const cleanupReturnToWindow = appWindow.onFocused(returnVisit.returned);
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     // Backend failures the user should see, from work no window is awaiting.
     const unlistenAppError = listen<string>("app-error", (event) => { showToast(event.payload); });
@@ -1065,7 +1086,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); unlistenFileDrop.then((fn) => fn()); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupProjectFocus(); cleanupTaskListener(); unlistenSettings.then((fn) => fn()); unlistenAppError.then((fn) => fn()); unlistenTabEnded.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); unlistenFileDrop.then((fn) => fn()); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupProjectFocus(); cleanupTaskListener(); cleanupTaskActivity(); cleanupLeaveWindow(); cleanupReturnToWindow(); unlistenSettings.then((fn) => fn()); unlistenAppError.then((fn) => fn()); unlistenTabEnded.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 

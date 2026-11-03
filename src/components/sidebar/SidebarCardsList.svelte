@@ -12,7 +12,7 @@
   import { locateProjectFolder } from "../../lib/locate-project";
   import * as orchestrator from "../../lib/session-orchestrator.svelte";
   import { SHELVES, TASK_STATUS_LABELS, navKey, shelfPage, sidebarRowNavKey, type IsCollapsed, type ShelfStatus, type ShownPages, type SidebarFolderSection, type SidebarRow, type SidebarSection, type SidebarShelfSection } from "../../lib/sidebar-model";
-  import { folderUrgency, rowActions, rowSession, sessionActivity, splitBranch, type FolderUrgency, type RowAction, type SessionActivity } from "../../lib/sidebar-cards";
+  import { folderUrgency, rowActions, rowActivity, rowSession, splitBranch, type FolderUrgency, type RowAction, type RowActivity } from "../../lib/sidebar-cards";
   import type { PluginSessionContext } from "../../lib/plugin-sdk";
   import type { PluginSlot, Project, Session } from "../../lib/types";
 
@@ -58,9 +58,9 @@
     isActive, isPreviewing, isFading, rename, projectAutoMode, onSelectRow, onRowAction, onRowContextMenu, onProjectContextMenu, plugins,
   }: Props = $props();
 
-  const ACTIVITY_SLOTS: Record<SessionActivity, { icon: LucideIcon; label: string; class: string }> = {
+  const ACTIVITY_SLOTS: Record<RowActivity, { icon: LucideIcon; label: string; class: string }> = {
     working: { icon: CircleDashed, label: "Working", class: "text-status-working" },
-    ready: { icon: CircleCheck, label: "Ready", class: "text-status-review" },
+    unread: { icon: CircleCheck, label: "Unread", class: "text-status-review" },
     exited: { icon: CircleAlert, label: "Exited", class: "text-status-exited" },
   };
 
@@ -82,9 +82,17 @@
   const top = $derived(sections.filter((s) => s.kind === "attention" || s.kind === "folder"));
   const shelves = $derived(sections.filter((s): s is SidebarShelfSection => s.kind === "shelf"));
   const agentStates = $derived(orchestrator.getAgentStates());
-  const reviewReady = $derived(orchestrator.getReviewReady());
+  const unreadSessions = $derived(orchestrator.getUnreadSessions());
 
-  const activityOf = (row: SidebarRow) => sessionActivity(rowSession(row), agentStates, reviewReady);
+  const activityOf = (row: SidebarRow) => rowActivity(row, agentStates, unreadSessions);
+  // The status slot gives way to hover actions, so the row itself explains an unread.
+  function rowTitle(row: SidebarRow, activity: RowActivity | null): string | undefined {
+    const lines = [
+      row.kind === "task" && !showTaskKeys ? row.task.key : null,
+      activity === "unread" ? `Unread: the agent finished since you last opened this ${row.kind}` : null,
+    ].filter((line) => line !== null);
+    return lines.length > 0 ? lines.join("\n") : undefined;
+  }
   const isSelected = (navIdx: number) => getActiveZone() === "sidebar" && navIdx === getSelectedIndex();
 
   const motionMs = () => (window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 150);
@@ -112,7 +120,7 @@
   <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={plugins.sessionContext(session)} onNavigate={plugins.onNavigate ?? (() => {})} onClose={plugins.onClose ?? (() => {})} />
 {/snippet}
 
-{#snippet trailing(session: Session | undefined, activity: SessionActivity | null)}
+{#snippet trailing(session: Session | undefined, activity: RowActivity | null)}
   {#if session}
     {#each plugins.indicators as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
       <span class="flex size-4 shrink-0 has-[[data-plugin-indicator-visible=false]]:hidden" data-plugin-session-indicator={session.id}>
@@ -177,7 +185,7 @@
       <div
         id={labelId}
         class="relative flex w-full cursor-default flex-col gap-1 px-2.5 py-2 transition-opacity {receded ? 'opacity-75 group-hover:opacity-100 group-has-focus-visible:opacity-100' : ''}"
-        title={row.kind === "task" && !showTaskKeys ? row.task.key : undefined}
+        title={rowTitle(row, activity)}
       >
           {#if showProjects && !inFolder}
             <span class="flex h-5 items-center gap-1.5">
@@ -221,7 +229,7 @@
     <button
       data-nav-index={navIdx}
       class="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left transition-colors {rowStateClass(active, selected, selected || isPreviewing(row))}"
-      title={row.kind === "task" && !showTaskKeys ? row.task.key : undefined}
+      title={rowTitle(row, activity)}
       onclick={() => onSelectRow(row)}
       oncontextmenu={(e) => onRowContextMenu(e, row)}
     >
@@ -230,7 +238,7 @@
         {#if row.kind === "task" && showTaskKeys}<span class="shrink-0 font-mono text-[10px] text-t3">{row.task.key}</span>{/if}
         <span class="min-w-0 truncate text-[13px] {shelf === 'done' ? 'text-t3' : 'text-t1'}">{row.kind === "task" ? row.task.title : row.session.name || row.session.branch}</span>
       </span>
-      {#if session}<span class="flex h-6 shrink-0 items-center justify-end gap-1.5">{@render trailing(session, activity)}</span>{/if}
+      {#if session || activity}<span class="flex h-6 shrink-0 items-center justify-end gap-1.5">{@render trailing(session, activity)}</span>{/if}
     </button>
     {@render hoverActions(row, shelf, active, "top-1")}
   </div>

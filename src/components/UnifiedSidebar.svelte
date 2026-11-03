@@ -8,7 +8,7 @@
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
   import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarRow, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
-  import { rowSession, type RowAction } from "../lib/sidebar-cards";
+  import { rowActivity, rowSession, type RowAction, type RowActivity } from "../lib/sidebar-cards";
   import { getSidebarModel } from "../lib/sidebar-model-store.svelte";
   import { sidebarViewMenuItems } from "../lib/sidebar-view-menu";
   import { projectContextMenuItems } from "../lib/project-context-menu";
@@ -26,6 +26,7 @@
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import { changeTaskStatus } from "../lib/task-moves";
+  import { isTaskUnread } from "../lib/task-unread";
   import { getPluginSidebarRows, type PluginSidebarNavRow } from "../lib/plugin-sidebar-navigation.svelte";
   import { pluginPreferencesLocation, type SettingsLocation } from "../lib/settings-registry";
 
@@ -94,6 +95,7 @@
   const sessions = $derived(orchestrator.getSessions());
   const activeSessionId = $derived(orchestrator.getActiveSessionId());
   const agentStates = $derived(orchestrator.getAgentStates());
+  const unreadSessions = $derived(orchestrator.getUnreadSessions());
   const zone = $derived(getActiveZone());
   const sections = $derived(getSidebarModel());
   const groupBy = $derived(resolveSidebarGroupBy(getSettings()));
@@ -271,6 +273,16 @@
     // Only follow when the user has not moved the selection while the move was in flight.
     if (followSelection && getSelectedIndex() === selectedBefore) selectTaskOrItsGroup(project.id, task.key);
   }
+
+  /** Read and unread only mean something once an agent has done something on the task. */
+  function unreadToggle(row: SidebarTaskRow): { label: string; onSelect: () => void } | null {
+    if (row.task.last_activity_at === null || row.task.status === "done") return null;
+    return isTaskUnread(row.task)
+      ? { label: "Mark as read", onSelect: () => void taskStore.markTaskVisited(row.project.id, row.task.key).catch(reportUnreadFailure) }
+      : { label: "Mark as unread", onSelect: () => void taskStore.markTaskUnread(row.project.id, row.task.key).catch(reportUnreadFailure) };
+  }
+  function toggleUnread(row: SidebarTaskRow) { unreadToggle(row)?.onSelect(); }
+  function reportUnreadFailure(error: unknown) { showToast(`Failed to update the task: ${error}`, "error"); }
 
   // After a status change the task lives in another group; keep the keyboard selection on it,
   // or on its group header when that group is collapsed.
@@ -478,6 +490,7 @@
       else if (action.type === "archive") { if (linked) fadeOutThenAct(linked.id, () => onArchiveSession(linked)); }
       else if (action.type === "delete") { if (linked) onDeleteSession(linked); }
       else if (action.type === "restart") { if (linked) onRestartSession(linked); }
+      else if (action.type === "toggle_unread") toggleUnread(current.row);
     } else if (current.type === "plugin" && action.type === "select") {
       current.row.onSelect?.();
     }
@@ -538,6 +551,16 @@
   {/if}
 {/snippet}
 
+{#snippet activityIndicator(activity: RowActivity | null, kind: SidebarRow["kind"])}
+  {#if activity === "working"}
+    <LoaderCircle class="size-3 animate-spin text-t2" />
+  {:else if activity === "unread"}
+    <span class="flex" title="Unread: the agent finished since you last opened this {kind}"><Lightbulb class="size-3.5 text-status-review animate-pulse" /></span>
+  {:else if activity === "exited"}
+    <span class="font-mono text-[9px] text-t3 bg-panel-hi rounded px-[5px] py-[1px]">exited</span>
+  {/if}
+{/snippet}
+
 {#snippet orphanList(orphans: SidebarSessionRow[])}
   {#if orphans.length > 0}
     <ul class="space-y-0.5 mb-1">
@@ -563,13 +586,7 @@
               {@render projectLabel(project)}
               <span class="truncate font-medium text-t1">{session.name || session.branch}</span>
               <span class="ml-auto shrink-0 flex items-center gap-1.5">
-                {#if orchestrator.getReviewReady()[session.id]}
-                  <Lightbulb class="size-3.5 text-status-review animate-pulse" />
-                {:else if session.status === 'exited'}
-                  <span class="font-mono text-[9px] text-t3 bg-panel-hi rounded px-[5px] py-[1px]">exited</span>
-                {:else if agentStates[session.id] === 'Busy'}
-                  <LoaderCircle class="size-3 animate-spin text-t2" />
-                {/if}
+                {@render activityIndicator(rowActivity({ kind: "session", session, project }, agentStates, unreadSessions), "session")}
               </span>
             </button>
             {#each sessionIndicatorContributions as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
@@ -589,6 +606,7 @@
   <ul class="space-y-0.5">
     {#each rows as row (`${row.project.id}:${row.task.key}`)}
       {@const { task, project, linkedSession: linked } = row}
+      {@const activity = rowActivity(row, agentStates, unreadSessions)}
       {@const isActive = (selectedTaskWorkspace?.projectId === project.id && selectedTaskWorkspace.taskKey === task.key) || linked?.id === activeSessionId}
       {@const taskNavIdx = flatNavIndex.get(navKey.task(project.id, task.key)) ?? -1}
       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
@@ -610,16 +628,8 @@
           {#if showTaskKeys && task.parent_key && !showProjectLabels}<span class="shrink-0 font-mono text-[10px] text-t3">{task.parent_key} ›</span>{/if}
           {#if showTaskKeys}<span class="shrink-0 font-mono text-[10px] {linked ? 'text-accent/70' : 'text-t3'}">{task.key}</span>{/if}
           <span class="truncate text-[12.5px] {task.status === 'done' ? 'line-through text-t3' : 'text-t1'}">{task.title}</span>
-          {#if linked}
-            <span class="ml-auto shrink-0 flex items-center gap-1.5">
-              {#if agentStates[linked.id] === 'Busy'}
-                <LoaderCircle class="size-3 animate-spin text-t2" />
-              {:else if orchestrator.getReviewReady()[linked.id]}
-                <Lightbulb class="size-3.5 text-status-review animate-pulse" />
-              {:else if linked.status === 'exited'}
-                <span class="font-mono text-[9px] text-t3 bg-panel-hi rounded px-[5px] py-[1px]">exited</span>
-              {/if}
-            </span>
+          {#if activity}
+            <span class="ml-auto shrink-0 flex items-center gap-1.5">{@render activityIndicator(activity, "task")}</span>
           {/if}
         </button>
         {#if linked}
@@ -870,6 +880,7 @@
   {@const statusChildren = STATUS_OPTIONS
     .filter(s => s.value !== menuTask.status)
     .map(s => ({ label: s.label, onSelect: () => moveTask(menuRow, s.value) }))}
+  {@const readToggle = unreadToggle(menuRow)}
   <ContextMenu
     x={taskContextMenu.x}
     y={taskContextMenu.y}
@@ -878,6 +889,7 @@
       ...(linkedSession
         ? [{ label: "Review diff", onSelect: () => { onSelectSession(linkedSession.id); onToggleDiff?.(); } }]
         : []),
+      ...(readToggle ? [readToggle] : []),
       { label: "Edit task", onSelect: () => onEditTask(menuTask, menuRow.project) },
       { label: "Change status", children: statusChildren },
       ...(linkedSession

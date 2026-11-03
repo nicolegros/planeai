@@ -8,16 +8,25 @@ import type {
   TaskItem,
 } from "../../lib/types";
 
-const { configGet, configUpdate, projectList, sessionList, taskListAll, taskMove } = vi.hoisted(
-  () => ({
-    configGet: vi.fn(),
-    configUpdate: vi.fn(),
-    projectList: vi.fn(),
-    sessionList: vi.fn(),
-    taskListAll: vi.fn(),
-    taskMove: vi.fn(),
-  }),
-);
+const {
+  configGet,
+  configUpdate,
+  projectList,
+  sessionList,
+  taskListAll,
+  taskMove,
+  taskMarkVisited,
+  taskMarkUnread,
+} = vi.hoisted(() => ({
+  configGet: vi.fn(),
+  configUpdate: vi.fn(),
+  projectList: vi.fn(),
+  sessionList: vi.fn(),
+  taskListAll: vi.fn(),
+  taskMove: vi.fn(),
+  taskMarkVisited: vi.fn(),
+  taskMarkUnread: vi.fn(),
+}));
 
 vi.mock("../../lib/api", () => ({
   config: { get: configGet, update: configUpdate, refresh: configGet },
@@ -36,7 +45,12 @@ vi.mock("../../lib/api", () => ({
     acknowledge: vi.fn().mockResolvedValue(undefined),
     saveMruOrder: vi.fn().mockResolvedValue(undefined),
   },
-  tasks: { listAll: taskListAll, move: taskMove },
+  tasks: {
+    listAll: taskListAll,
+    move: taskMove,
+    markVisited: taskMarkVisited,
+    markUnread: taskMarkUnread,
+  },
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -87,6 +101,8 @@ function task(key: string, status: string, priority = 0): TaskItem {
     parent_key: null,
     url: null,
     base_branch: "main",
+    last_visited_at: null,
+    last_activity_at: null,
   };
 }
 
@@ -240,6 +256,92 @@ describe("UnifiedSidebar in the Cards layout", () => {
     focusTerminal();
     setSelectedIndex(0);
     vi.clearAllMocks();
+  });
+
+  it("shows Unread on a task its agent finished since it was last opened, with or without a session", async () => {
+    const finished = { last_activity_at: "2026-11-03T10:00:00Z", last_visited_at: null };
+    tasksByPath[alpha.path] = [
+      { ...task("A-1", "in_progress", 1), ...finished },
+      { ...task("A-2", "todo"), ...finished },
+    ];
+    tasksByPath[beta.path] = [
+      { ...task("B-1", "in_progress", 2), ...finished, last_visited_at: "2026-11-03T10:05:00Z" },
+    ];
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+
+    const statusOf = (title: string) => {
+      const row = rowOf(mounted!.target, title);
+      return {
+        unread: row.textContent!.includes("Unread"),
+        tooltip: row.querySelector("[title^='Unread']")?.getAttribute("title") ?? null,
+      };
+    };
+    expect([statusOf("Title A-1"), statusOf("Title A-2"), statusOf("Title B-1")]).toEqual([
+      { unread: true, tooltip: "Unread: the agent finished since you last opened this task" },
+      { unread: true, tooltip: "Unread: the agent finished since you last opened this task" },
+      { unread: false, tooltip: null },
+    ]);
+  });
+
+  it("marks a task unread or read from its context menu and with u", async () => {
+    const activity = "2026-11-03T10:00:00.000Z";
+    tasksByPath[alpha.path] = [
+      { ...task("A-1", "in_progress", 1), last_activity_at: activity, last_visited_at: null },
+      {
+        ...task("A-2", "in_progress"),
+        last_activity_at: activity,
+        last_visited_at: "2026-11-03T10:05:00.000Z",
+      },
+      task("A-3", "in_progress"),
+    ];
+    taskMarkVisited.mockResolvedValue({
+      last_visited_at: "2026-11-03T10:06:00.000Z",
+      last_activity_at: activity,
+    });
+    taskMarkUnread.mockResolvedValue({
+      last_visited_at: "2026-11-03T09:59:59.999Z",
+      last_activity_at: activity,
+    });
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const root = mounted.target;
+    const menuOf = (title: string) => {
+      rowOf(root, title).dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      );
+      flushSync();
+      const labels = [...document.querySelectorAll<HTMLElement>("[role='menuitem']")].map((el) =>
+        el.textContent!.trim(),
+      );
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      flushSync();
+      return labels.filter((label) => label.startsWith("Mark as"));
+    };
+    const unread = (title: string) => rowOf(root, title).textContent!.includes("Unread");
+
+    expect([menuOf("Title A-1"), menuOf("Title A-2"), menuOf("Title A-3")]).toEqual([
+      ["Mark as read"],
+      ["Mark as unread"],
+      [],
+    ]);
+
+    rowOf(root, "Title A-2").dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+    );
+    flushSync();
+    [...document.querySelectorAll<HTMLElement>("[role='menuitem']")]
+      .find((el) => el.textContent!.trim() === "Mark as unread")!
+      .click();
+    focusSidebar();
+    setSelectedIndex(navButtons(root).findIndex((b) => labelOf(b) === "Title A-1"));
+    press("u");
+    await vi.waitFor(() =>
+      expect([unread("Title A-1"), unread("Title A-2")]).toEqual([false, true]),
+    );
+
+    expect([taskMarkUnread.mock.calls, taskMarkVisited.mock.calls]).toEqual([
+      [["alpha", "A-2"]],
+      [["alpha", "A-1"]],
+    ]);
   });
 
   it("is the default, with sessions and review tasks on top and shelves in status order", async () => {

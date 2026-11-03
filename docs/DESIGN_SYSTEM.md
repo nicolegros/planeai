@@ -116,7 +116,7 @@ Tailwind classes: `font-sans` for UI, `font-mono` for code/metadata.
 All icons from `@lucide/svelte`. Key icons:
 
 - **Tabs:** `Bot` (Agent), `Terminal` (Shell), `GitCompare` (Diff), `FileCode` (Editor)
-- **Agent state:** `LoaderCircle` (busy, animate-spin), `Lightbulb` (needs attention, animate-pulse)
+- **Agent state:** `LoaderCircle` (busy, animate-spin), `Lightbulb` (unread in the Classic sidebar, animate-pulse)
 - **CI:** `CheckCircle2` (pass), `XCircle` (fail), `LoaderCircle` (running)
 - **Navigation:** `ChevronDown`, `ChevronRight`, `Plus`, `Settings`
 - **Auto-dispatch:** `Zap`

@@ -14,6 +14,7 @@ export type SidebarNavAction =
   | { type: "collapse" }
   | { type: "expand" }
   | { type: "status"; status: string }
+  | { type: "toggle_unread" }
   | { type: "start_session" };
 
 let selectedIndex = $state(0);
@@ -142,6 +143,11 @@ export function handleSidebarKey(e: KeyboardEvent, listLength: number): SidebarN
   if (key === "R") {
     e.preventDefault();
     return { type: "restart" };
+  }
+
+  if (key === "u") {
+    e.preventDefault();
+    return { type: "toggle_unread" };
   }
 
   // Start multi-key sequences
