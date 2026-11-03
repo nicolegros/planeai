@@ -6,6 +6,7 @@ import type {
   LaunchResult,
   Project,
   TaskItem,
+  TaskSnooze,
   TaskVisit,
   DirEntry,
   ChangedFile,
@@ -204,6 +205,11 @@ export const tasks = {
     invoke<TaskVisit>("mark_task_visited", { projectId, key }),
   markUnread: (projectId: string, key: string) =>
     invoke<TaskVisit>("mark_task_unread", { projectId, key }),
+  snooze: (projectId: string, key: string, until: Date) =>
+    invoke<TaskSnooze>("snooze_task", { projectId, key, until: until.toISOString() }),
+  wake: (projectId: string, key: string) => invoke<TaskSnooze>("wake_task", { projectId, key }),
+  restoreSnooze: (projectId: string, key: string, snooze: TaskSnooze) =>
+    invoke<TaskSnooze>("restore_task_snooze", { projectId, key, snooze }),
   fireNotifyHook: (sessionId: string) => invoke("fire_task_notify_hook", { sessionId }),
   fireResumeHook: (sessionId: string) => invoke("fire_task_resume_hook", { sessionId }),
 };

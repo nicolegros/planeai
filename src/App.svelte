@@ -16,7 +16,7 @@
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { sidebarNavigationOrder } from "./lib/sidebar-model";
-  import { applyDoneNow, applyInterruptedDone, canUndoTaskMove, commitPendingDone, completeTask, undoLastTaskMove } from "./lib/task-moves";
+  import { applyDoneNow, applyInterruptedDone, canUndoTaskChange, commitPendingDone, completeTask, undoLastTaskChange } from "./lib/task-moves";
   import { getSidebarModel, getVisibleNavigationOrder } from "./lib/sidebar-model-store.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
@@ -1029,7 +1029,7 @@
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { saveActiveEditorResource(); }
         else if (action.type === "complete_task") { void completeTask(activeTaskWorkspace, () => orchestrator.loadSessions()); }
-        else if (action.type === "undo") { void undoLastTaskMove(() => orchestrator.loadSessions()); }
+        else if (action.type === "undo") { void undoLastTaskChange(() => orchestrator.loadSessions()); }
         else if (action.type === "focus_toast") { if (!toggleToastFocus()) focusPluginInteraction(); }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
@@ -1037,7 +1037,7 @@
       () => getActiveZone() === "editor" && workspaceLayout.focusedTab()?.type === "editor",
       () => !!document.activeElement?.closest('[data-form-keyboard]'),
       () => showOnboarding,
-      canUndoTaskMove,
+      canUndoTaskChange,
     );
 
     function onModalKeydown(e: KeyboardEvent) {

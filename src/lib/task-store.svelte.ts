@@ -5,7 +5,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { tasks as tasksApi } from "./api";
 import { isTaskUnread } from "./task-unread";
-import type { TaskItem, TaskVisit } from "./types";
+import type { TaskItem, TaskSnooze, TaskVisit } from "./types";
 
 let tasksByProject = $state<Record<string, TaskItem[]>>({});
 let loading = $state(false);
@@ -160,27 +160,57 @@ export async function refresh(projectPaths: string[]): Promise<void> {
   }
 }
 
-/** Task keys are unique in the database, so every project listing the key shows the same task. */
-function applyVisit(key: string, visit: TaskVisit): void {
-  const { last_visited_at, last_activity_at } = visit;
+/**
+ * Updates the columns a backend write returned in place, without a reload. Task keys are unique in
+ * the database, so every project listing the key shows the same task.
+ */
+function applyFields(key: string, fields: Partial<TaskVisit & TaskSnooze>): void {
   tasksByProject = Object.fromEntries(
     Object.entries(tasksByProject).map(([repoPath, items]) => [
       repoPath,
       items.some((task) => task.key === key)
-        ? items.map((task) =>
-            task.key === key ? { ...task, last_visited_at, last_activity_at } : task,
-          )
+        ? items.map((task) => (task.key === key ? { ...task, ...fields } : task))
         : items,
     ]),
   );
 }
 
+const visitOf = ({ last_visited_at, last_activity_at }: TaskVisit): TaskVisit => ({
+  last_visited_at,
+  last_activity_at,
+});
+const snoozeOf = ({ snoozed_until, snoozed_at, woke_at }: TaskSnooze): TaskSnooze => ({
+  snoozed_until,
+  snoozed_at,
+  woke_at,
+});
+
 export async function markTaskVisited(projectId: string, key: string): Promise<void> {
-  applyVisit(key, await tasksApi.markVisited(projectId, key));
+  applyFields(key, visitOf(await tasksApi.markVisited(projectId, key)));
 }
 
 export async function markTaskUnread(projectId: string, key: string): Promise<void> {
-  applyVisit(key, await tasksApi.markUnread(projectId, key));
+  applyFields(key, visitOf(await tasksApi.markUnread(projectId, key)));
+}
+
+export async function snoozeTask(projectId: string, key: string, until: Date): Promise<TaskSnooze> {
+  const snooze = snoozeOf(await tasksApi.snooze(projectId, key, until));
+  applyFields(key, snooze);
+  return snooze;
+}
+
+export async function wakeTask(projectId: string, key: string): Promise<TaskSnooze> {
+  const snooze = snoozeOf(await tasksApi.wake(projectId, key));
+  applyFields(key, snooze);
+  return snooze;
+}
+
+export async function restoreTaskSnooze(
+  projectId: string,
+  key: string,
+  snooze: TaskSnooze,
+): Promise<void> {
+  applyFields(key, snoozeOf(await tasksApi.restoreSnooze(projectId, key, snooze)));
 }
 
 /**
@@ -210,11 +240,13 @@ export function createReturnVisit(viewed: () => { projectId: string; task: TaskI
 export function startTaskActivityListener(
   isViewing: (projectId: string, key: string) => boolean,
 ): () => void {
-  const unlisten = listen<TaskVisit & { project_id: string; task_key: string }>(
+  const unlisten = listen<TaskVisit & TaskSnooze & { project_id: string; task_key: string }>(
     "task-activity",
     ({ payload }) => {
+      // An early wake arrives with the activity that caused it.
+      applyFields(payload.task_key, snoozeOf(payload));
       if (!isViewing(payload.project_id, payload.task_key)) {
-        applyVisit(payload.task_key, payload);
+        applyFields(payload.task_key, visitOf(payload));
         return;
       }
       markTaskVisited(payload.project_id, payload.task_key).catch((error) =>

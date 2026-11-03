@@ -205,6 +205,9 @@ describe("task visits", () => {
         task_key: "PLA-1",
         last_visited_at: null,
         last_activity_at: "2026-11-03T10:00:00.000Z",
+        snoozed_until: null,
+        snoozed_at: null,
+        woke_at: null,
       },
     });
     await Promise.resolve();
@@ -213,6 +216,30 @@ describe("task visits", () => {
       { last_visited_at: null, last_activity_at: "2026-11-03T10:00:00.000Z" },
       { last_visited_at: null, last_activity_at: null },
     ]);
+    expect(listAll).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("shows an early wake in place with the activity that caused it", async () => {
+    const stop = taskStore.startTaskActivityListener(() => false);
+    const snooze = {
+      snoozed_until: "2026-11-04T09:00:00.000Z",
+      snoozed_at: "2026-11-03T09:00:00.000Z",
+      woke_at: "2026-11-03T10:00:00.000Z",
+    };
+    listeners.get("task-activity")?.({
+      payload: {
+        project_id: "p1",
+        task_key: "PLA-1",
+        last_visited_at: null,
+        last_activity_at: "2026-11-03T10:00:00.000Z",
+        ...snooze,
+      },
+    });
+    await Promise.resolve();
+
+    const { snoozed_until, snoozed_at, woke_at } = taskStore.findTask("/repo", "PLA-1")!;
+    expect({ snoozed_until, snoozed_at, woke_at }).toEqual(snooze);
     expect(listAll).not.toHaveBeenCalled();
     stop();
   });
@@ -231,6 +258,9 @@ describe("task visits", () => {
         task_key: "PLA-1",
         last_visited_at: null,
         last_activity_at: "2026-11-03T10:00:00.000Z",
+        snoozed_until: null,
+        snoozed_at: null,
+        woke_at: null,
       },
     });
     await vi.waitFor(() =>
