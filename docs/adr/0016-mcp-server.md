@@ -33,6 +33,9 @@ Claude Code and Codex both speak MCP natively, show its tools by name, and let a
   The templates pre-approve reads, creates and updates, and leave `task_delete` to prompt.
 - The tools are `task_list`, `task_show`, `task_create`, `task_update`, `task_delete`, `session_list`, `session_tree`, `session_read`, `session_create`, `session_prompt` and `project_list`.
   They default to the caller: `task_show` and `task_update` without a key act on the session's task, task tools work in the project of that task, `session_tree` starts from the calling session, and `session_create` makes a child of it.
+- A session never reaches more permissions through the tools than it has.
+  `session_create` defaults `yolo` to the caller's own setting and refuses `yolo: true` from a session that asks before running tools, and `session_prompt` refuses to prompt a yolo session from such a session.
+  The check runs in the server, so it holds although the templates pre-approve both tools.
 - Tools are thin adapters over the AXI domain functions and return the same TOON text the CLI prints, without its CLI-specific help hints.
   `planeai-cli axi` stays for agents outside PlaneAI sessions; there is one implementation behind both.
 - Tools live in a registry of definitions (name, description, effect, input schema, handler), so plugin tools can be appended later through plugin host API v6.

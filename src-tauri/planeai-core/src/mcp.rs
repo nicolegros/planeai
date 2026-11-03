@@ -43,6 +43,8 @@ pub struct McpCaller {
     /// The project the session runs in.
     pub project_id: String,
     pub task: Option<CallerTask>,
+    /// The session's agent runs without permission prompts (yolo).
+    pub auto_approve: bool,
 }
 
 /// The task a session works on, with the project that owns it.
@@ -112,7 +114,7 @@ pub fn endpoint(
 /// The live session a presented token belongs to, or `None` for an unknown or revoked token.
 pub fn resolve(conn: &Connection, token: &str) -> rusqlite::Result<Option<McpCaller>> {
     conn.query_row(
-        "SELECT s.id, s.project_id, s.task_key, COALESCE(s.task_project_id, s.project_id)
+        "SELECT s.id, s.project_id, s.task_key, COALESCE(s.task_project_id, s.project_id), s.auto_approve
          FROM mcp_tokens t JOIN sessions s ON s.id = t.session_id
          WHERE t.token_hash = ?1",
         params![hash(token)],
@@ -128,6 +130,7 @@ pub fn resolve(conn: &Connection, token: &str) -> rusqlite::Result<Option<McpCal
                     }),
                     None => None,
                 },
+                auto_approve: row.get(4)?,
             })
         },
     )
@@ -196,8 +199,21 @@ mod tests {
                 session_id: id,
                 project_id,
                 task: None,
+                auto_approve: false,
             })
         );
+    }
+
+    #[test]
+    fn a_yolo_session_resolves_as_auto_approving() {
+        let conn = db();
+        let (id, _) = session(&conn, None);
+        conn.execute("UPDATE sessions SET auto_approve = 1 WHERE id = ?1", [&id])
+            .unwrap();
+        let caller = resolve(&conn, &token(&issue(&conn, &id, URL).unwrap()))
+            .unwrap()
+            .unwrap();
+        assert!(caller.auto_approve);
     }
 
     #[test]

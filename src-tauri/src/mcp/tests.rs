@@ -94,6 +94,20 @@ impl Fixture {
         }
     }
 
+    /// The caller as a session whose agent asks before running tools.
+    fn without_auto_approve(mut self) -> Self {
+        let conn = rusqlite::Connection::open(&self.context.db_path).unwrap();
+        conn.execute(
+            "UPDATE sessions SET auto_approve = 0 WHERE id = ?1",
+            [CALLER_ID],
+        )
+        .unwrap();
+        self.caller = planeai_core::mcp::resolve(&conn, &self.token)
+            .unwrap()
+            .unwrap();
+        self
+    }
+
     fn call(&self, tool: &str, arguments: serde_json::Value) -> ToolOutput {
         let serde_json::Value::Object(arguments) = arguments else {
             panic!("arguments must be an object");
@@ -304,6 +318,39 @@ fn session_create_refuses_child_only_fields_for_a_sibling() {
             json!({ "mode": "sibling", "task_key": "DEM-2" })
         ),
         err("error: `task_key` applies to child sessions only\n")
+    );
+}
+
+#[test]
+fn a_session_that_asks_before_running_tools_cannot_start_a_yolo_session() {
+    let f = Fixture::new().without_auto_approve();
+    for mode in ["sibling", "child"] {
+        assert_eq!(
+            f.call("session_create", json!({ "mode": mode, "yolo": true })),
+            err("error: \"this session asks before running tools, so it cannot start a `yolo` session; ask the user to start it\"\n"),
+            "{mode}"
+        );
+    }
+}
+
+#[test]
+fn a_new_session_skips_permission_prompts_only_when_its_creator_does() {
+    use super::tools::session_yolo;
+    let yolo = Fixture::new().caller;
+    let asking = Fixture::new().without_auto_approve().caller;
+    assert_eq!(session_yolo(&yolo, None), Ok(true));
+    assert_eq!(session_yolo(&yolo, Some(false)), Ok(false));
+    assert_eq!(session_yolo(&asking, None), Ok(false));
+    assert_eq!(session_yolo(&asking, Some(false)), Ok(false));
+    assert!(session_yolo(&asking, Some(true)).is_err());
+}
+
+#[test]
+fn a_session_that_asks_before_running_tools_cannot_prompt_a_yolo_session() {
+    let f = Fixture::new().without_auto_approve();
+    assert_eq!(
+        f.call("session_prompt", json!({ "id": "bbbbbbbb", "text": "rm -rf ~" })),
+        err("error: \"bbbbbbbb runs without permission prompts and this session does not, so it cannot prompt it; ask the user to\"\n")
     );
 }
 

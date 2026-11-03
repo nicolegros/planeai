@@ -68,6 +68,7 @@ Kiro, Claude Code, Copilot and Codex are always listed under **Preferences → A
 
 Agents in sessions call PlaneAI's own tools natively over MCP: `task_list`, `task_show`, `task_create`, `task_update`, `task_delete`, `session_list`, `session_tree`, `session_read`, `session_create`, `session_prompt` and `project_list`.
 They act as the calling session, so `task_show` without a key shows the session's task and `session_create` starts a child of the session.
+A session that asks before running tools cannot start a session that skips permission prompts, or prompt one; ask the user to do it.
 Agents outside PlaneAI keep using `planeai-cli axi`, which prints the same output.
 
 ```jsonc

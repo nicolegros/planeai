@@ -193,13 +193,13 @@ impl Registry {
             ),
             ToolDef::new(
                 "session_create",
-                "Start an agent session. `child` starts one under this session in any project; `sibling` starts one on this session's task in an isolated worktree.",
+                "Start an agent session. `child` starts one under this session in any project; `sibling` starts one on this session's task in an isolated worktree. It runs without permission prompts (`yolo`) only if this session does.",
                 Effect::Write { idempotent: false },
                 session_create,
             ),
             ToolDef::new(
                 "session_prompt",
-                "Send a prompt to a running session.",
+                "Send a prompt to a running session. A session that asks before running tools cannot prompt one that does not.",
                 Effect::Write { idempotent: false },
                 session_prompt,
             ),
@@ -536,7 +536,8 @@ struct SessionCreateInput {
     base_branch: Option<String>,
     /// Agent to run; defaults to this session's agent for siblings, the default agent otherwise.
     provider: Option<String>,
-    /// Skip permission prompts; defaults to true for siblings, false for children.
+    /// Skip permission prompts; defaults to this session's own setting, and only a session
+    /// that skips them can start one that does.
     yolo: Option<bool>,
     /// Child only: project name; defaults to this session's project.
     project: Option<String>,
@@ -548,11 +549,20 @@ struct SessionCreateInput {
     task_project: Option<String>,
 }
 
+/// Whether a session the caller starts skips permission prompts: never more than the caller.
+pub(crate) fn session_yolo(caller: &McpCaller, requested: Option<bool>) -> Result<bool, String> {
+    match requested {
+        Some(true) if !caller.auto_approve => Err("this session asks before running tools, so it cannot start a `yolo` session; ask the user to start it".into()),
+        requested => Ok(requested.unwrap_or(caller.auto_approve)),
+    }
+}
+
 fn session_create(
     context: &ToolContext,
     caller: &McpCaller,
     input: SessionCreateInput,
 ) -> Result<ToolOutput, String> {
+    let yolo = session_yolo(caller, input.yolo)?;
     let conn = open(context)?;
     let session = match input.mode {
         SessionMode::Sibling => {
@@ -572,7 +582,7 @@ fn session_create(
                     name: input.name,
                     branch: input.branch,
                     base_branch: input.base_branch,
-                    yolo: input.yolo.unwrap_or(true),
+                    yolo,
                     provider: input.provider,
                     prompt: input.prompt,
                 },
@@ -605,7 +615,7 @@ fn session_create(
                     // A checkout session would switch the branch under the agents already there.
                     worktree: input.worktree.unwrap_or(true),
                     base_branch: input.base_branch,
-                    yolo: input.yolo.unwrap_or(false),
+                    yolo,
                     provider: input.provider,
                     task_key: input.task_key,
                     task_project: input.task_project,
@@ -628,11 +638,20 @@ struct SessionPromptInput {
 
 fn session_prompt(
     context: &ToolContext,
-    _caller: &McpCaller,
+    caller: &McpCaller,
     input: SessionPromptInput,
 ) -> Result<ToolOutput, String> {
+    let conn = open(context)?;
+    let target = crate::session_ops::resolve_session_by_prefix(&conn, &input.id)
+        .map_err(|error| error.to_string())?;
+    if target.auto_approve && !caller.auto_approve {
+        return Err(format!(
+            "{} runs without permission prompts and this session does not, so it cannot prompt it; ask the user to",
+            &target.id[..8]
+        ));
+    }
     let ops = crate::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
-    Ok(axi::session_prompt(&open(context)?, &input.id, &input.text, &ops).into())
+    Ok(axi::session_prompt(&conn, &target.id, &input.text, &ops).into())
 }
 
 #[derive(Deserialize, JsonSchema)]
