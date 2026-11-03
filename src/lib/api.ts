@@ -101,6 +101,13 @@ export const appWindow = {
     });
     return () => void unlisten.then((stop) => stop());
   },
+  /** Runs `handler` each time the main window loses focus; returns the unsubscribe. */
+  onBlurred: (handler: () => void): (() => void) => {
+    const unlisten = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (!focused) handler();
+    });
+    return () => void unlisten.then((stop) => stop());
+  },
 };
 
 export const pty = {

@@ -253,4 +253,41 @@ describe("task visits", () => {
       last_activity_at: "2026-11-03T10:00:00.000Z",
     });
   });
+
+  describe("returning to the window", () => {
+    const viewed = (last_activity_at: string, last_visited_at: string | null) => ({
+      projectId: "p1",
+      task: { ...task("PLA-9"), status: "in_review", last_activity_at, last_visited_at },
+    });
+
+    it("keeps a Mark as unread made before leaving", () => {
+      vi.useFakeTimers({ now: Date.parse("2026-11-03T10:05:00.000Z") });
+      const unreadBeforeLeaving = viewed("2026-11-03T10:00:00.000Z", "2026-11-03T09:59:59.999Z");
+      const visit = taskStore.createReturnVisit(() => unreadBeforeLeaving);
+
+      visit.left();
+      vi.setSystemTime(Date.parse("2026-11-03T10:10:00.000Z"));
+      visit.returned();
+
+      expect(markVisited.mock.calls).toEqual([]);
+      vi.useRealTimers();
+    });
+
+    it("visits the task when its agent did something while the user was away", () => {
+      markVisited.mockResolvedValue({
+        last_visited_at: "2026-11-03T10:10:00.000Z",
+        last_activity_at: "2026-11-03T10:07:00.000Z",
+      });
+      vi.useFakeTimers({ now: Date.parse("2026-11-03T10:05:00.000Z") });
+      const activityWhileAway = viewed("2026-11-03T10:07:00.000Z", "2026-11-03T10:04:00.000Z");
+      const visit = taskStore.createReturnVisit(() => activityWhileAway);
+
+      visit.left();
+      vi.setSystemTime(Date.parse("2026-11-03T10:10:00.000Z"));
+      visit.returned();
+
+      expect(markVisited.mock.calls).toEqual([["p1", "PLA-9"]]);
+      vi.useRealTimers();
+    });
+  });
 });

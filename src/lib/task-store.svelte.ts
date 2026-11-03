@@ -4,6 +4,7 @@
  */
 import { listen } from "@tauri-apps/api/event";
 import { tasks as tasksApi } from "./api";
+import { isTaskUnread } from "./task-unread";
 import type { TaskItem, TaskVisit } from "./types";
 
 let tasksByProject = $state<Record<string, TaskItem[]>>({});
@@ -69,6 +70,13 @@ export function findTask(repoPath: string, key: string): TaskItem | undefined {
 
 export function getAllTasks(): TaskItem[] {
   return Object.values(tasksByProject).flat();
+}
+
+// Indexed once per store change, since keystrokes look tasks up by key.
+const tasksByKey = $derived(new Map(getAllTasks().map((task) => [task.key, task])));
+
+export function findTaskByKey(key: string): TaskItem | undefined {
+  return tasksByKey.get(key);
 }
 
 export function getTaskStatuses(): Record<string, string> {
@@ -173,6 +181,29 @@ export async function markTaskVisited(projectId: string, key: string): Promise<v
 
 export async function markTaskUnread(projectId: string, key: string): Promise<void> {
   applyVisit(key, await tasksApi.markUnread(projectId, key));
+}
+
+/**
+ * Returning to the window visits the task on screen only for activity that came while the user was
+ * away, so a Mark as unread made before leaving survives.
+ */
+export function createReturnVisit(viewed: () => { projectId: string; task: TaskItem } | null) {
+  let leftAt: number | null = null;
+  return {
+    left(): void {
+      leftAt = Date.now();
+    },
+    returned(): void {
+      const since = leftAt;
+      leftAt = null;
+      const current = viewed();
+      if (since === null || !current || !isTaskUnread(current.task)) return;
+      if (Date.parse(current.task.last_activity_at ?? "") <= since) return;
+      markTaskVisited(current.projectId, current.task.key).catch((error) =>
+        console.warn(`Failed to mark ${current.task.key} visited:`, error),
+      );
+    },
+  };
 }
 
 /** Shows agent activity on tasks as it happens; a task the user `isViewing` is visited instead of turning unread. */
