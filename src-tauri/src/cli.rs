@@ -208,7 +208,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     let mcp = if plan.backend == "local" {
         None
     } else {
-        crate::mcp::endpoint(conn, &env.config, &plan.session_id)?
+        planeai_core::mcp::endpoint(conn, env.config.mcp_url(), &plan.session_id)?
     };
 
     if plan.backend == "daemon" {

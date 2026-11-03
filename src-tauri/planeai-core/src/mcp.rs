@@ -98,6 +98,17 @@ pub fn issue(conn: &Connection, session_id: &str, url: &str) -> rusqlite::Result
     })
 }
 
+/// Mint the token the session's next agent process carries; `None` while the server is off.
+pub fn endpoint(
+    conn: &Connection,
+    url: Option<String>,
+    session_id: &str,
+) -> Result<Option<McpEndpoint>, String> {
+    url.map(|url| issue(conn, session_id, &url))
+        .transpose()
+        .map_err(|error| format!("failed to mint the session's MCP token: {error}"))
+}
+
 /// The live session a presented token belongs to, or `None` for an unknown or revoked token.
 pub fn resolve(conn: &Connection, token: &str) -> rusqlite::Result<Option<McpCaller>> {
     conn.query_row(

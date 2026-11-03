@@ -14,7 +14,6 @@ mod github_migration;
 mod jira_migration;
 mod logging;
 mod lsp;
-mod mcp;
 mod notify;
 mod output_observer;
 mod paths;

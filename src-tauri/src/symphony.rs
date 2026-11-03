@@ -122,7 +122,7 @@ impl TauriBackend {
             cfg.clone()
         };
         let conn = self.db.lock().map_err(|e| e.to_string())?;
-        let mcp = crate::mcp::endpoint(&conn, &cfg, session_id)?;
+        let mcp = planeai_core::mcp::endpoint(&conn, cfg.mcp_url(), session_id)?;
         Ok((cfg.resolved_extra_path_dirs(), mcp))
     }
 }

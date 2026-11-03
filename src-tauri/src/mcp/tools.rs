@@ -1,0 +1,648 @@
+//! The tools agents call, one per verb, kept as a registry so plugin tools can join it
+//! (ADR-0016). Each tool is a thin adapter over the AXI domain functions the CLI uses.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use planeai_core::mcp::McpCaller;
+use planeai_core::task_lifecycle::TaskLifecycleBatch;
+use rmcp::model::{JsonObject, Tool, ToolAnnotations};
+use schemars::JsonSchema;
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+
+use crate::axi::{self, ReadRange, TaskScope, TaskUpdate};
+use crate::task_cli::LifecycleSink;
+
+/// What the app learns from tools that change its state.
+pub trait AppEvents: Send + Sync {
+    fn tasks_changed(&self);
+    fn task_lifecycle(&self, batch: TaskLifecycleBatch);
+}
+
+/// What tool handlers run against.
+#[derive(Clone)]
+pub struct ToolContext {
+    pub db_path: PathBuf,
+    pub events: Arc<dyn AppEvents>,
+}
+
+/// What a call does to PlaneAI state, which decides its MCP annotations and whether
+/// agents may run it without asking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    Read,
+    Write { idempotent: bool },
+    Delete,
+}
+
+impl Effect {
+    fn annotations(self) -> ToolAnnotations {
+        let (read_only, destructive, idempotent) = match self {
+            Effect::Read => (true, false, true),
+            Effect::Write { idempotent } => (false, false, idempotent),
+            Effect::Delete => (false, true, true),
+        };
+        ToolAnnotations::new()
+            .read_only(read_only)
+            .destructive(destructive)
+            .idempotent(idempotent)
+            .open_world(false)
+    }
+}
+
+/// A tool's TOON reply; errors are reported to the agent, not as protocol failures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolOutput {
+    pub text: String,
+    pub is_error: bool,
+}
+
+impl ToolOutput {
+    fn error(message: &str) -> Self {
+        Self {
+            text: planeai_toon::render(&[planeai_toon::field(
+                "error",
+                planeai_toon::str_val(message),
+            )]),
+            is_error: true,
+        }
+    }
+}
+
+impl From<(String, i32)> for ToolOutput {
+    fn from((text, code): (String, i32)) -> Self {
+        Self {
+            text: without_cli_help(&text),
+            is_error: code != 0,
+        }
+    }
+}
+
+type Handler = Box<dyn Fn(&ToolContext, &McpCaller, JsonObject) -> ToolOutput + Send + Sync>;
+
+pub struct ToolDef {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub effect: Effect,
+    input_schema: Arc<JsonObject>,
+    handler: Handler,
+}
+
+impl ToolDef {
+    fn new<I>(
+        name: &'static str,
+        description: &'static str,
+        effect: Effect,
+        run: fn(&ToolContext, &McpCaller, I) -> Result<ToolOutput, String>,
+    ) -> Self
+    where
+        I: DeserializeOwned + JsonSchema + 'static,
+    {
+        Self {
+            name,
+            description,
+            effect,
+            input_schema: rmcp::handler::server::common::schema_for_type::<I>(),
+            handler: Box::new(move |context, caller, arguments| {
+                match serde_json::from_value::<I>(serde_json::Value::Object(arguments)) {
+                    Ok(input) => run(context, caller, input)
+                        .unwrap_or_else(|message| ToolOutput::error(&message)),
+                    Err(error) => ToolOutput::error(&format!("invalid arguments: {error}")),
+                }
+            }),
+        }
+    }
+
+    pub fn tool(&self) -> Tool {
+        Tool::new(self.name, self.description, self.input_schema.clone())
+            .with_annotations(self.effect.annotations())
+    }
+
+    pub fn call(
+        &self,
+        context: &ToolContext,
+        caller: &McpCaller,
+        arguments: JsonObject,
+    ) -> ToolOutput {
+        (self.handler)(context, caller, arguments)
+    }
+}
+
+pub struct Registry(Vec<ToolDef>);
+
+impl Registry {
+    pub fn get(&self, name: &str) -> Option<&ToolDef> {
+        self.0.iter().find(|tool| tool.name == name)
+    }
+
+    pub fn tools(&self) -> Vec<Tool> {
+        self.0.iter().map(ToolDef::tool).collect()
+    }
+
+    /// PlaneAI's own tools.
+    pub fn core() -> Self {
+        Self(vec![
+            ToolDef::new(
+                "task_list",
+                "List tasks of a project (default: the project of this session's task).",
+                Effect::Read,
+                task_list,
+            ),
+            ToolDef::new(
+                "task_show",
+                "Show one task in full (default: this session's task).",
+                Effect::Read,
+                task_show,
+            ),
+            ToolDef::new(
+                "task_create",
+                "Create a task, optionally as a subtask of `parent`.",
+                Effect::Write { idempotent: false },
+                task_create,
+            ),
+            ToolDef::new(
+                "task_update",
+                "Edit a task's fields and/or move it to another status (default: this session's task). An empty `parent` clears it.",
+                Effect::Write { idempotent: true },
+                task_update,
+            ),
+            ToolDef::new(
+                "task_delete",
+                "Delete a task permanently, with its task workspace.",
+                Effect::Delete,
+                task_delete,
+            ),
+            ToolDef::new(
+                "session_list",
+                "List agent sessions with their status, task and branch.",
+                Effect::Read,
+                session_list,
+            ),
+            ToolDef::new(
+                "session_tree",
+                "Show the parent/child tree a session belongs to (default: this session).",
+                Effect::Read,
+                session_tree,
+            ),
+            ToolDef::new(
+                "session_read",
+                "Read a session's terminal output: the last `lines`, or only what came after `after`, a cursor from a previous read.",
+                Effect::Read,
+                session_read,
+            ),
+            ToolDef::new(
+                "session_create",
+                "Start an agent session. `child` starts one under this session in any project; `sibling` starts one on this session's task in an isolated worktree.",
+                Effect::Write { idempotent: false },
+                session_create,
+            ),
+            ToolDef::new(
+                "session_prompt",
+                "Send a prompt to a running session.",
+                Effect::Write { idempotent: false },
+                session_prompt,
+            ),
+            ToolDef::new(
+                "project_list",
+                "List the projects PlaneAI knows.",
+                Effect::Read,
+                project_list,
+            ),
+        ])
+    }
+}
+
+/// `help` hints name CLI commands; an MCP client has the tools instead.
+fn without_cli_help(toon: &str) -> String {
+    let mut out = String::new();
+    let mut skipping = false;
+    for line in toon.split_inclusive('\n') {
+        if !line.starts_with(' ') {
+            skipping = line.starts_with("help:") || line.starts_with("help[");
+        }
+        if !skipping {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+fn open(context: &ToolContext) -> Result<rusqlite::Connection, String> {
+    rusqlite::Connection::open(&context.db_path).map_err(|error| error.to_string())
+}
+
+/// The tasks of the named project, or of the caller's task workspace.
+fn scope(
+    conn: &rusqlite::Connection,
+    context: &ToolContext,
+    caller: &McpCaller,
+    project: Option<&str>,
+) -> Result<TaskScope, String> {
+    let projects = crate::db::list_projects(conn).map_err(|error| error.to_string())?;
+    let project = match project {
+        Some(name) => projects
+            .iter()
+            .find(|candidate| candidate.name == name)
+            .ok_or_else(|| format!("unknown project: {name}"))?,
+        None => projects
+            .iter()
+            .find(|candidate| candidate.id == caller.workspace_project_id())
+            .ok_or("the project of this session no longer exists")?,
+    };
+    let events = context.events.clone();
+    TaskScope::open(
+        &context.db_path,
+        project,
+        LifecycleSink::InProcess(Arc::new(move |batch| events.task_lifecycle(batch))),
+    )
+}
+
+/// An explicit key, else the caller's own task.
+fn task_key(caller: &McpCaller, key: Option<String>) -> Result<String, String> {
+    key.or_else(|| caller.task.as_ref().map(|task| task.key.clone()))
+        .ok_or_else(|| "this session has no task; pass `key`".to_string())
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum TaskStatus {
+    Todo,
+    InProgress,
+    InReview,
+    Done,
+}
+
+impl TaskStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            TaskStatus::Todo => "todo",
+            TaskStatus::InProgress => "in_progress",
+            TaskStatus::InReview => "in_review",
+            TaskStatus::Done => "done",
+        }
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct TaskListInput {
+    /// Project name; defaults to the project of this session's task.
+    project: Option<String>,
+    status: Option<TaskStatus>,
+    /// Only tasks carrying all of these tags.
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+fn task_list(
+    context: &ToolContext,
+    caller: &McpCaller,
+    input: TaskListInput,
+) -> Result<ToolOutput, String> {
+    let conn = open(context)?;
+    let scope = scope(&conn, context, caller, input.project.as_deref())?;
+    Ok(axi::task_ls(
+        &scope.repo,
+        input.status.map(TaskStatus::as_str),
+        &input.tags,
+    )
+    .into())
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct TaskShowInput {
+    /// Task key, e.g. PLA-12; defaults to this session's task.
+    key: Option<String>,
+    /// Project name owning `key`; defaults to the project of this session's task.
+    project: Option<String>,
+}
+
+fn task_show(
+    context: &ToolContext,
+    caller: &McpCaller,
+    input: TaskShowInput,
+) -> Result<ToolOutput, String> {
+    let conn = open(context)?;
+    let key = task_key(caller, input.key)?;
+    let scope = scope(&conn, context, caller, input.project.as_deref())?;
+    Ok(axi::task_show(&scope.repo, &key).into())
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct TaskCreateInput {
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    priority: i32,
+    #[serde(default)]
+    tags: Vec<String>,
+    /// Keys of tasks that must be done first.
+    #[serde(default)]
+    blocked_by: Vec<String>,
+    /// Key of the parent task, making this a subtask.
+    parent: Option<String>,
+    /// Branch new sessions on this task start from; defaults to main.
+    base_branch: Option<String>,
+    /// Project name; defaults to the project of this session's task.
+    project: Option<String>,
+}
+
+fn task_create(
+    context: &ToolContext,
+    caller: &McpCaller,
+    input: TaskCreateInput,
+) -> Result<ToolOutput, String> {
+    let conn = open(context)?;
+    let scope = scope(&conn, context, caller, input.project.as_deref())?;
+    let output: ToolOutput = axi::task_add_with_lifecycle(
+        &scope.repo,
+        crate::task_cli::AddParams {
+            title: &input.title,
+            description: &input.description,
+            priority: input.priority,
+            tags: &input.tags,
+            blocked_by: &input.blocked_by,
+            parent: input.parent.as_deref(),
+            base_branch: input.base_branch.as_deref(),
+        },
+        &scope.lifecycle,
+    )
+    .into();
+    if !output.is_error {
+        context.events.tasks_changed();
+    }
+    Ok(output)
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct TaskUpdateInput {
+    /// Task key; defaults to this session's task.
+    key: Option<String>,
+    /// Project name owning `key`; defaults to the project of this session's task.
+    project: Option<String>,
+    title: Option<String>,
+    description: Option<String>,
+    priority: Option<i32>,
+    /// Replaces the task's tags.
+    tags: Option<Vec<String>>,
+    /// Replaces the task's blockers.
+    blocked_by: Option<Vec<String>>,
+    /// Parent task key; an empty string clears it.
+    parent: Option<String>,
+    base_branch: Option<String>,
+    status: Option<TaskStatus>,
+}
+
+fn task_update(
+    context: &ToolContext,
+    caller: &McpCaller,
+    input: TaskUpdateInput,
+) -> Result<ToolOutput, String> {
+    let conn = open(context)?;
+    let key = task_key(caller, input.key)?;
+    let scope = scope(&conn, context, caller, input.project.as_deref())?;
+    let output: ToolOutput = axi::task_update(
+        &scope,
+        TaskUpdate {
+            key: &key,
+            title: input.title.as_deref(),
+            description: input.description.as_deref(),
+            priority: input.priority,
+            tags: input.tags.as_deref(),
+            blocked_by: input.blocked_by.as_deref(),
+            parent: input
+                .parent
+                .as_deref()
+                .map(|parent| (!parent.is_empty()).then_some(parent)),
+            base_branch: input.base_branch.as_deref(),
+            status: input.status.map(TaskStatus::as_str),
+        },
+    )
+    .into();
+    if !output.is_error {
+        context.events.tasks_changed();
+    }
+    Ok(output)
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct TaskDeleteInput {
+    key: String,
+    /// Project name owning `key`; defaults to the project of this session's task.
+    project: Option<String>,
+}
+
+fn task_delete(
+    context: &ToolContext,
+    caller: &McpCaller,
+    input: TaskDeleteInput,
+) -> Result<ToolOutput, String> {
+    let conn = open(context)?;
+    let scope = scope(&conn, context, caller, input.project.as_deref())?;
+    let output: ToolOutput = axi::task_delete(&scope, &input.key).into();
+    if !output.is_error {
+        context.events.tasks_changed();
+    }
+    Ok(output)
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SessionListInput {
+    /// List archived sessions instead of active ones.
+    #[serde(default)]
+    archived: bool,
+}
+
+fn session_list(
+    context: &ToolContext,
+    _caller: &McpCaller,
+    input: SessionListInput,
+) -> Result<ToolOutput, String> {
+    Ok(axi::session_ls(&open(context)?, input.archived).into())
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SessionTreeInput {
+    /// Session id or unique id prefix; defaults to this session.
+    id: Option<String>,
+}
+
+fn session_tree(
+    context: &ToolContext,
+    caller: &McpCaller,
+    input: SessionTreeInput,
+) -> Result<ToolOutput, String> {
+    let id = input.id.unwrap_or_else(|| caller.session_id.clone());
+    Ok(axi::session_tree(&open(context)?, &id).into())
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SessionReadInput {
+    /// Session id or unique id prefix.
+    id: String,
+    /// How many trailing lines to return when `after` is not given (default 100).
+    lines: Option<usize>,
+    /// Cursor from a previous read; returns only output produced since.
+    after: Option<String>,
+    /// With `after`, the most bytes to return (0 or absent: unlimited).
+    max_bytes: Option<usize>,
+}
+
+fn session_read(
+    context: &ToolContext,
+    _caller: &McpCaller,
+    input: SessionReadInput,
+) -> Result<ToolOutput, String> {
+    let range = match (input.after, input.lines) {
+        (Some(_), Some(_)) => return Err("pass either `lines` or `after`, not both".into()),
+        (Some(cursor), None) => ReadRange::After {
+            cursor,
+            max_bytes: input.max_bytes.unwrap_or(0),
+        },
+        (None, lines) => ReadRange::Tail {
+            lines: lines.unwrap_or(100),
+        },
+    };
+    Ok(axi::session_read(&open(context)?, &input.id, range).into())
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum SessionMode {
+    /// A new session under this one, in any project.
+    Child,
+    /// Another agent on this session's task, in its own worktree.
+    Sibling,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SessionCreateInput {
+    mode: SessionMode,
+    /// Initial prompt for the new agent.
+    prompt: Option<String>,
+    name: Option<String>,
+    /// Branch to work on; defaults to this session's branch with a unique suffix.
+    branch: Option<String>,
+    base_branch: Option<String>,
+    /// Agent to run; defaults to this session's agent for siblings, the default agent otherwise.
+    provider: Option<String>,
+    /// Skip permission prompts; defaults to true for siblings, false for children.
+    yolo: Option<bool>,
+    /// Child only: project name; defaults to this session's project.
+    project: Option<String>,
+    /// Child only: run in an isolated worktree (default true).
+    worktree: Option<bool>,
+    /// Child only: task the new session works on.
+    task_key: Option<String>,
+    /// Child only: project owning `task_key` when it differs from `project`.
+    task_project: Option<String>,
+}
+
+fn session_create(
+    context: &ToolContext,
+    caller: &McpCaller,
+    input: SessionCreateInput,
+) -> Result<ToolOutput, String> {
+    let conn = open(context)?;
+    let session = match input.mode {
+        SessionMode::Sibling => {
+            let child_only = [
+                ("project", input.project.is_some()),
+                ("worktree", input.worktree.is_some()),
+                ("task_key", input.task_key.is_some()),
+                ("task_project", input.task_project.is_some()),
+            ];
+            if let Some((field, _)) = child_only.iter().find(|(_, set)| *set) {
+                return Err(format!("`{field}` applies to child sessions only"));
+            }
+            crate::cli::create_workspace_sibling(
+                &conn,
+                &caller.session_id,
+                crate::cli::WorkspaceSiblingOpts {
+                    name: input.name,
+                    branch: input.branch,
+                    base_branch: input.base_branch,
+                    yolo: input.yolo.unwrap_or(true),
+                    provider: input.provider,
+                    prompt: input.prompt,
+                },
+            )?
+        }
+        SessionMode::Child => {
+            let parent = crate::db::get_session(&conn, &caller.session_id)
+                .map_err(|error| error.to_string())?
+                .ok_or("this session no longer exists")?;
+            let project = match input.project {
+                Some(name) => name,
+                None => {
+                    crate::db::get_project(&conn, &caller.project_id)
+                        .map_err(|error| error.to_string())?
+                        .ok_or("the project of this session no longer exists")?
+                        .name
+                }
+            };
+            let branch = input.branch.unwrap_or_else(|| {
+                let suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
+                format!("{}--{suffix}", parent.branch)
+            });
+            crate::cli::create_session(
+                &conn,
+                crate::cli::SessionCreateOpts {
+                    project,
+                    branch,
+                    name: input.name,
+                    new_branch: true,
+                    // A checkout session would switch the branch under the agents already there.
+                    worktree: input.worktree.unwrap_or(true),
+                    base_branch: input.base_branch,
+                    yolo: input.yolo.unwrap_or(false),
+                    provider: input.provider,
+                    task_key: input.task_key,
+                    task_project: input.task_project,
+                    prompt: input.prompt,
+                    parent_session_id: Some(caller.session_id.clone()),
+                },
+            )?
+        }
+    };
+    Ok(axi::session_create_output(&session).into())
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SessionPromptInput {
+    /// Session id or unique id prefix.
+    id: String,
+    text: String,
+}
+
+fn session_prompt(
+    context: &ToolContext,
+    _caller: &McpCaller,
+    input: SessionPromptInput,
+) -> Result<ToolOutput, String> {
+    let ops = crate::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
+    Ok(axi::session_prompt(&open(context)?, &input.id, &input.text, &ops).into())
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ProjectListInput {}
+
+fn project_list(
+    context: &ToolContext,
+    _caller: &McpCaller,
+    _input: ProjectListInput,
+) -> Result<ToolOutput, String> {
+    Ok(axi::project_ls(&open(context)?).into())
+}

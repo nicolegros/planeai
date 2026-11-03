@@ -1,17 +1,7 @@
-//! PlaneAI's MCP server: the tools agents in sessions call natively (ADR-0016).
+//! PlaneAI's MCP server: the tools agents in sessions call natively, and their HTTP
+//! transport (ADR-0016). Session tokens live in `planeai_core::mcp`.
 
-use planeai_core::mcp::McpEndpoint;
+pub mod tools;
 
-use crate::config::Config;
-
-/// Mint the token the session's next agent process carries, `None` while the server is off.
-pub fn endpoint(
-    conn: &rusqlite::Connection,
-    cfg: &Config,
-    session_id: &str,
-) -> Result<Option<McpEndpoint>, String> {
-    cfg.mcp_url()
-        .map(|url| planeai_core::mcp::issue(conn, session_id, &url))
-        .transpose()
-        .map_err(|error| format!("failed to mint the session's MCP token: {error}"))
-}
+#[cfg(test)]
+mod tests;

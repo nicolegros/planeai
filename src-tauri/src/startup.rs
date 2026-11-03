@@ -60,7 +60,7 @@ where
             .unwrap_or("/");
         let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
 
-        let mcp = match crate::mcp::endpoint(conn, cfg, &session.id) {
+        let mcp = match planeai_core::mcp::endpoint(conn, cfg.mcp_url(), &session.id) {
             Ok(mcp) => mcp,
             Err(error) => {
                 tracing::warn!(session_id = %session.id, %error, "[revive] reviving without MCP");

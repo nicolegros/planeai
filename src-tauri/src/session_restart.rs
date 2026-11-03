@@ -116,7 +116,7 @@ pub fn restart(
     let mcp = if session.backend == "local" {
         None
     } else {
-        crate::mcp::endpoint(conn, config, id)?
+        planeai_core::mcp::endpoint(conn, config.mcp_url(), id)?
     };
     let mcp = mcp.as_ref();
     let try_spawn = |cmd: &str| -> Result<(), String> {

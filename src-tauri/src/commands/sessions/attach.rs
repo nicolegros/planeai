@@ -150,7 +150,7 @@ pub fn claim_attach_plan(
 ) -> Result<AttachPlan, String> {
     let mut plan = resolve_attach_plan(conn, cfg, session_id, dark_mode)?;
     if !agent_running && matches!(plan.pty_target, pty::PtyTarget::Shell { .. }) {
-        if let Some(endpoint) = crate::mcp::endpoint(conn, cfg, session_id)? {
+        if let Some(endpoint) = planeai_core::mcp::endpoint(conn, cfg.mcp_url(), session_id)? {
             plan.env.extend(
                 endpoint
                     .env()
