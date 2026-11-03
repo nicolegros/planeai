@@ -41,6 +41,13 @@ pub(crate) fn task_detail_object(task: &Task) -> Value {
     if let Some(at) = task.last_activity_at {
         fields.push(field("last_activity_at", str_val(&at.to_rfc3339())));
     }
+    if let Some(until) = task
+        .snooze
+        .snoozed_until
+        .filter(|_| task.is_snoozed(chrono::Utc::now()))
+    {
+        fields.push(field("snoozed_until", str_val(&until.to_rfc3339())));
+    }
     Value::Object(fields)
 }
 

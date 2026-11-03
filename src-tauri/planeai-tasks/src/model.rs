@@ -56,6 +56,33 @@ pub struct Task {
     /// When an agent working on the task last finished a turn, asked for attention, or exited.
     #[serde(default)]
     pub last_activity_at: Option<DateTime<Utc>>,
+    #[serde(flatten, default)]
+    pub snooze: Snooze,
+}
+
+impl Task {
+    /// Hidden from the active lists until it wakes; a Done task is never snoozed.
+    pub fn is_snoozed(&self, now: DateTime<Utc>) -> bool {
+        self.status != Status::Done && self.snooze.is_snoozed(now)
+    }
+}
+
+/// When a snoozed task wakes. The user's snooze writes `snoozed_until` and `snoozed_at`; an agent
+/// asking for attention or exiting writes `woke_at`; waking it by hand, or Done, clears all three.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snooze {
+    #[serde(default)]
+    pub snoozed_until: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub snoozed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub woke_at: Option<DateTime<Utc>>,
+}
+
+impl Snooze {
+    pub fn is_snoozed(&self, now: DateTime<Utc>) -> bool {
+        self.woke_at.is_none() && self.snoozed_until.is_some_and(|until| now < until)
+    }
 }
 
 pub const DEFAULT_BASE_BRANCH: &str = "main";

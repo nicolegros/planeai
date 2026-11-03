@@ -50,9 +50,14 @@ export interface TaskItem {
   /** RFC 3339; together with `last_activity_at` decides whether the task is unread. */
   last_visited_at: string | null;
   last_activity_at: string | null;
+  /** RFC 3339; see `src/lib/task-snooze.ts` for what they mean together. */
+  snoozed_until: string | null;
+  snoozed_at: string | null;
+  woke_at: string | null;
 }
 
 export type TaskVisit = Pick<TaskItem, "last_visited_at" | "last_activity_at">;
+export type TaskSnooze = Pick<TaskItem, "snoozed_until" | "snoozed_at" | "woke_at">;
 
 import type { ReviewFileDiff } from "./review-diff";
 

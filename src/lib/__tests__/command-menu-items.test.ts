@@ -32,6 +32,9 @@ function makeTask(overrides: Partial<TaskItem> = {}): TaskItem {
     base_branch: "main",
     last_visited_at: null,
     last_activity_at: null,
+    snoozed_until: null,
+    snoozed_at: null,
+    woke_at: null,
     ...overrides,
   };
 }

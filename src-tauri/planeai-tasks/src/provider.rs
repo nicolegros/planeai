@@ -25,6 +25,8 @@ pub trait TaskProvider {
 pub enum Error {
     NotFound,
     InvalidStatus(String),
+    /// The request makes no sense for the task as it is, e.g. snoozing into the past.
+    Rejected(String),
     Storage(String),
 }
 
@@ -33,6 +35,7 @@ impl std::fmt::Display for Error {
         match self {
             Self::NotFound => write!(f, "task not found"),
             Self::InvalidStatus(s) => write!(f, "invalid status: {s}"),
+            Self::Rejected(s) => write!(f, "{s}"),
             Self::Storage(s) => write!(f, "storage error: {s}"),
         }
     }

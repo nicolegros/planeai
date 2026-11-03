@@ -55,6 +55,9 @@ function taskRow(
     parent_key: null,
     url: null,
     base_branch: "main",
+    snoozed_until: null,
+    snoozed_at: null,
+    woke_at: null,
     ...visit,
   };
   return { kind: "task", task, project, linkedSession };
