@@ -14,12 +14,26 @@ vi.mock("../../lib/api", () => ({
 }));
 vi.mock("../../lib/settings.svelte", () => ({ isDark: () => false }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+const resizeCallbacks = new Set<() => void>();
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    constructor(private callback: () => void) {}
+    observe() {
+      resizeCallbacks.add(this.callback);
+    }
+    disconnect() {
+      resizeCallbacks.delete(this.callback);
+    }
+  },
+);
 vi.stubGlobal(
   "fetch",
   vi.fn(async () => new Response(new Uint8Array())),
 );
 
 import PluginDialogHarness from "./PluginDialogHarness.svelte";
+import { FRAME_INTERACTION_EVENT } from "../../lib/frame-interaction";
 
 const restoreLayout = stubLayoutAsVisible();
 afterAll(restoreLayout);
@@ -68,14 +82,42 @@ describe("PluginDialog", () => {
     await vi.waitFor(() => expect(document.querySelector("[role=dialog]")).toBeNull());
   });
 
-  it("keeps a session panel in the form-width dialog, top edge still, without a close button", () => {
+  it("opens a session panel centered in the form-width dialog, without a close button", () => {
     const dialog = open("session.panel");
     expect(dialog.className).toContain("w-[min(452px,calc(100vw-32px))]");
     expect(dialog.className).toContain("min-h-[min(360px,85vh)]");
-    expect(dialog.className, "content that changes height grows the bottom edge only").toContain(
-      "top-[7.5vh]",
-    );
-    expect(dialog.className).not.toContain("top-1/2");
+    expect(dialog.className).toContain("top-1/2 -translate-y-1/2");
     expect(document.querySelector('button[aria-label="Close Routines"]')).toBeNull();
+  });
+
+  it("holds a session panel's top edge once the user acts inside its plugin frame", () => {
+    const dialog = open("session.panel");
+    vi.spyOn(dialog, "getBoundingClientRect").mockReturnValue({ top: 180 } as DOMRect);
+
+    document
+      .querySelector("[data-plugin-ui-contribution]")!
+      .dispatchEvent(new CustomEvent(FRAME_INTERACTION_EVENT, { bubbles: true }));
+    flushSync();
+
+    expect(
+      dialog.className,
+      "content that changes height now grows the bottom edge only",
+    ).not.toContain("top-1/2");
+    expect(dialog.style.top).toBe("180px");
+  });
+
+  it("moves a held session panel up only as far as grown content needs to stay inside the window", () => {
+    const dialog = open("session.panel");
+    vi.spyOn(dialog, "getBoundingClientRect").mockReturnValue({ top: 180 } as DOMRect);
+    dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    Object.defineProperty(dialog, "offsetHeight", { configurable: true, value: 640 });
+
+    for (const callback of resizeCallbacks) callback();
+    flushSync();
+
+    expect(window.innerHeight).toBe(768);
+    expect(dialog.style.top, "bottom edge stays 7.5vh above the window's").toBe(
+      `${768 * 0.925 - 640}px`,
+    );
   });
 });

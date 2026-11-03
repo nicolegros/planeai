@@ -14,7 +14,7 @@
     size?: "form" | "wide" | "xl";
     /** Shows a close button beside the title, for content that has no Cancel of its own. */
     closeButton?: boolean;
-    anchor?: "center" | "top";
+    anchor?: "center" | "top" | "center-hold";
   }
 
   let { title, onClose, children, class: className = "", preventEscapeClose = true, preventOpenAutoFocus = false, size = "form", closeButton = false, anchor = "center" }: Props = $props();

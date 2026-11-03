@@ -19,6 +19,7 @@
   import { isSessionRequest, serveSessionRequest, type ProviderSessionBridge } from "../lib/provider-session-bridge";
   import { pluginFrameFonts } from "../lib/plugin-frame-fonts";
   import { parseTooltipLines, type PluginTooltipLine } from "../lib/plugin-tooltip";
+  import { FRAME_INTERACTION_EVENT } from "../lib/frame-interaction";
 
   interface Props {
     plugin: PluginInventory;
@@ -292,6 +293,14 @@
             if (height > 0) send({ type: "content-height", height });
           });
         };
+        // Events inside the frame never reach the host page, so a dialog that holds its position once the user acts needs this.
+        const reportInteraction = () => {
+          removeEventListener("pointerdown", reportInteraction, true);
+          removeEventListener("keydown", reportInteraction, true);
+          send({ type: "interaction" });
+        };
+        addEventListener("pointerdown", reportInteraction, true);
+        addEventListener("keydown", reportInteraction, true);
         const observeContentHeight = (contribution) => {
           if (!${JSON.stringify(contentSizedPlacements)}.includes(contribution?.placement) || !document.body) return;
           contentHeightObserver?.disconnect();
@@ -606,6 +615,8 @@
       } else if (message.type === "notify" && typeof message.message === "string") {
         const notification = message.message.trim();
         if (notification) showToast(notification, message.kind ?? "error");
+      } else if (message.type === "interaction") {
+        container?.dispatchEvent(new CustomEvent(FRAME_INTERACTION_EVENT, { bubbles: true }));
       } else if (message.type === "sidebar-select" && typeof message.rowId === "string") {
         container?.dispatchEvent(
           new CustomEvent("plugin-sidebar-select", { bubbles: true, detail: { rowId: message.rowId } }),
