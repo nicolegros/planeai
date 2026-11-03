@@ -62,7 +62,8 @@ export function activatesItselfOnEnter(e: KeyboardEvent, control: HTMLElement | 
  * The caller should check if zone === "sidebar" before calling.
  */
 export function handleSidebarKey(e: KeyboardEvent, listLength: number): SidebarNavAction | null {
-  if (listLength === 0) return null;
+  // Chords belong to the app router, which listens on the same window: Mod+Z must undo, not snooze.
+  if (listLength === 0 || e.metaKey || e.ctrlKey || e.altKey) return null;
 
   const key = e.key;
 

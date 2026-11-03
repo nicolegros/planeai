@@ -267,4 +267,16 @@ describe("plugin sidebar focus", () => {
 
     expect(shouldBypassSidebarKeyboard(sidebarContribution)).toBe(false);
   });
+
+  it("leaves chords with Cmd, Ctrl or Option to the app, so Mod+Z undoes instead of snoozing", () => {
+    const chords = [{ metaKey: true }, { ctrlKey: true }, { altKey: true }].map((mod) =>
+      handleSidebarKey(key({ key: "z", ...mod }), 3),
+    );
+    expect([...chords, handleSidebarKey(key({ key: "z" }), 3)]).toEqual([
+      null,
+      null,
+      null,
+      { type: "snooze" },
+    ]);
+  });
 });
