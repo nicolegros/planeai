@@ -4,7 +4,7 @@
  */
 import { listen } from "@tauri-apps/api/event";
 import { tasks as tasksApi } from "./api";
-import type { TaskItem } from "./types";
+import type { TaskItem, TaskVisit } from "./types";
 
 let tasksByProject = $state<Record<string, TaskItem[]>>({});
 let loading = $state(false);
@@ -150,6 +150,47 @@ export async function refresh(projectPaths: string[]): Promise<void> {
   } finally {
     if (requestGeneration === taskRequestGeneration) loading = false;
   }
+}
+
+/** Task keys are unique in the database, so every project listing the key shows the same task. */
+function applyVisit(key: string, visit: TaskVisit): void {
+  const { last_visited_at, last_activity_at } = visit;
+  tasksByProject = Object.fromEntries(
+    Object.entries(tasksByProject).map(([repoPath, items]) => [
+      repoPath,
+      items.some((task) => task.key === key)
+        ? items.map((task) =>
+            task.key === key ? { ...task, last_visited_at, last_activity_at } : task,
+          )
+        : items,
+    ]),
+  );
+}
+
+export async function markTaskVisited(projectId: string, key: string): Promise<void> {
+  applyVisit(key, await tasksApi.markVisited(projectId, key));
+}
+
+export async function markTaskUnread(projectId: string, key: string): Promise<void> {
+  applyVisit(key, await tasksApi.markUnread(projectId, key));
+}
+
+/** Shows agent activity on tasks as it happens; a task the user `isViewing` is visited instead of turning unread. */
+export function startTaskActivityListener(
+  isViewing: (projectId: string, key: string) => boolean,
+): () => void {
+  const unlisten = listen<TaskVisit & { project_id: string; task_key: string }>(
+    "task-activity",
+    ({ payload }) => {
+      applyVisit(payload.task_key, payload);
+      if (isViewing(payload.project_id, payload.task_key)) {
+        markTaskVisited(payload.project_id, payload.task_key).catch((error) =>
+          console.warn("Failed to mark a task visited:", error),
+        );
+      }
+    },
+  );
+  return () => void unlisten.then((fn) => fn());
 }
 
 /** Shows the new status while the backend applies it, so a quick next move or undo starts from it. */

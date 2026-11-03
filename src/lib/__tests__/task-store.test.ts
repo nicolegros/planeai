@@ -1,13 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskItem } from "../types";
 
-const { listAll, move } = vi.hoisted(() => ({ listAll: vi.fn(), move: vi.fn() }));
+const { listAll, move, markVisited, markUnread } = vi.hoisted(() => ({
+  listAll: vi.fn(),
+  move: vi.fn(),
+  markVisited: vi.fn(),
+  markUnread: vi.fn(),
+}));
 
-const { listeners } = vi.hoisted(() => ({ listeners: new Map<string, () => void>() }));
+const { listeners } = vi.hoisted(() => ({
+  listeners: new Map<string, (event?: { payload: unknown }) => void>(),
+}));
 
-vi.mock("../api", () => ({ tasks: { listAll, move } }));
+vi.mock("../api", () => ({ tasks: { listAll, move, markVisited, markUnread } }));
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn((event: string, handler: () => void) => {
+  listen: vi.fn((event: string, handler: (event?: { payload: unknown }) => void) => {
     listeners.set(event, handler);
     return Promise.resolve(() => listeners.delete(event));
   }),
@@ -166,6 +173,84 @@ describe("task store", () => {
       finishReload([{ ...task("PLA-1"), status: "in_review" }]);
       await moving;
       expect(statusOf("PLA-1")).toBe("in_review");
+    });
+  });
+});
+
+describe("task visits", () => {
+  const visitOf = (key: string) => {
+    const found = taskStore.findTask("/repo", key);
+    return (
+      found && { last_visited_at: found.last_visited_at, last_activity_at: found.last_activity_at }
+    );
+  };
+
+  beforeEach(async () => {
+    listAll.mockReset();
+    markVisited.mockReset();
+    markUnread.mockReset();
+    listAll.mockResolvedValue([task("PLA-1"), task("PLA-2")]);
+    await taskStore.loadTasks(["/repo"]);
+    listAll.mockClear();
+  });
+
+  it("shows activity on a task the user is not looking at, without reloading", async () => {
+    const stop = taskStore.startTaskActivityListener(() => false);
+    listeners.get("task-activity")?.({
+      payload: {
+        project_id: "p1",
+        task_key: "PLA-1",
+        last_visited_at: null,
+        last_activity_at: "2026-11-03T10:00:00.000Z",
+      },
+    });
+    await Promise.resolve();
+
+    expect([visitOf("PLA-1"), visitOf("PLA-2")]).toEqual([
+      { last_visited_at: null, last_activity_at: "2026-11-03T10:00:00.000Z" },
+      { last_visited_at: null, last_activity_at: null },
+    ]);
+    expect(listAll).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("marks the task visited when the user is looking at it as its agent settles", async () => {
+    markVisited.mockResolvedValue({
+      last_visited_at: "2026-11-03T10:00:00.010Z",
+      last_activity_at: "2026-11-03T10:00:00.000Z",
+    });
+    const stop = taskStore.startTaskActivityListener(
+      (projectId, key) => projectId === "p1" && key === "PLA-1",
+    );
+    listeners.get("task-activity")?.({
+      payload: {
+        project_id: "p1",
+        task_key: "PLA-1",
+        last_visited_at: null,
+        last_activity_at: "2026-11-03T10:00:00.000Z",
+      },
+    });
+    await vi.waitFor(() =>
+      expect(visitOf("PLA-1")).toEqual({
+        last_visited_at: "2026-11-03T10:00:00.010Z",
+        last_activity_at: "2026-11-03T10:00:00.000Z",
+      }),
+    );
+    expect(markVisited.mock.calls).toEqual([["p1", "PLA-1"]]);
+    stop();
+  });
+
+  it("applies the visit the backend wrote when marking a task unread", async () => {
+    markUnread.mockResolvedValue({
+      last_visited_at: "2026-11-03T09:59:59.999Z",
+      last_activity_at: "2026-11-03T10:00:00.000Z",
+    });
+
+    await taskStore.markTaskUnread("p1", "PLA-2");
+
+    expect(visitOf("PLA-2")).toEqual({
+      last_visited_at: "2026-11-03T09:59:59.999Z",
+      last_activity_at: "2026-11-03T10:00:00.000Z",
     });
   });
 });

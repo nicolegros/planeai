@@ -17,6 +17,8 @@ import { playTaskComplete } from "./soundPlayer";
 import { getCycleState } from "./tab-switcher.svelte";
 import { providerHandoff, taskWorkspaceLayout } from "./task-workspace-layout.svelte";
 import { isPluginSession } from "./plugin-providers";
+import { getAllTasks, markTaskVisited } from "./task-store.svelte";
+import { isTaskUnread } from "./task-unread";
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -29,7 +31,8 @@ const turns = new Set<string>();
 let symphonyStatus = $state<{ active: boolean; slots_used: number; max_concurrent: number } | null>(
   null,
 );
-let reviewReady = $state<Record<string, boolean>>({});
+/** Sessions whose agent settled while another session was active; a task row reads its task's persisted unread instead. */
+let unreadSessions = $state<Record<string, boolean>>({});
 
 // ─── Testing helper ──────────────────────────────────────────────────────────
 
@@ -39,11 +42,7 @@ export function _resetForTests(): void {
   agentStates = {};
   turns.clear();
   symphonyStatus = null;
-  reviewReady = {};
-}
-
-export function _setReviewReadyForTests(sessionId: string): void {
-  reviewReady = { ...reviewReady, [sessionId]: true };
+  unreadSessions = {};
 }
 
 // ─── Getters ─────────────────────────────────────────────────────────────────
@@ -70,13 +69,13 @@ export function getAgentState(id: string): string | undefined {
 export function getSymphonyStatus() {
   return symphonyStatus;
 }
-export function getReviewReady(): Record<string, boolean> {
-  return reviewReady;
+export function getUnreadSessions(): Record<string, boolean> {
+  return unreadSessions;
 }
-export function clearReviewReady(sessionId: string): void {
-  if (!reviewReady[sessionId]) return;
-  const { [sessionId]: _, ...rest } = reviewReady;
-  reviewReady = rest;
+function markSessionRead(sessionId: string): void {
+  if (!unreadSessions[sessionId]) return;
+  const { [sessionId]: _, ...rest } = unreadSessions;
+  unreadSessions = rest;
 }
 
 // ─── Session Lifecycle ───────────────────────────────────────────────────────
@@ -118,6 +117,7 @@ export function isSelectionExplicit(sessionId: string): boolean {
 function setActiveSession(id: string | null, opts: { explicit?: boolean } = {}): void {
   explicitlySelectedSessionId = opts.explicit && id ? id : null;
   activeSessionId = id;
+  if (id) markSessionRead(id);
 }
 
 export function selectSession(id: string, opts: { explicit?: boolean } = {}): void {
@@ -235,7 +235,15 @@ export function clearAgentState(sessionId: string): void {
 /** Invalidate review state before bytes from a user action reach the PTY. */
 export function recordUserInput(sessionId: string): void {
   if (agentStates[sessionId]) clearAgentState(sessionId);
-  clearReviewReady(sessionId);
+  markSessionRead(sessionId);
+  const session = sessions.find((s) => s.id === sessionId);
+  if (!session?.task_key) return;
+  const task = getAllTasks().find((t) => t.key === session.task_key);
+  if (task && isTaskUnread(task)) {
+    markTaskVisited(sessionTaskProjectId(session), task.key).catch((error) =>
+      console.warn("Failed to mark a task visited:", error),
+    );
+  }
 }
 export function updateSessionStatus(sessionId: string, status: Session["status"]): void {
   sessions = sessions.map((s) => (s.id === sessionId ? { ...s, status } : s));
@@ -312,18 +320,17 @@ export function startEventListeners(): () => void {
           playTaskComplete();
         }
         queueTaskHook(event.payload.session_id, tasks.fireNotifyHook);
-        // Auto-open review tab when agent finishes
         const sid = event.payload.session_id;
         const session = sessions.find((s) => s.id === sid);
-        if (session?.worktree_path && session.base_branch) {
-          if (sid === activeSessionId) {
-            if (getSettings().auto_open_review === true) {
-              // Defer to next frame so state updates don't block the current tick
-              requestAnimationFrame(() => taskWorkspaceLayout.openDiff(sid));
-            }
-          } else {
-            reviewReady = { ...reviewReady, [sid]: true };
-          }
+        if (sid !== activeSessionId) {
+          unreadSessions = { ...unreadSessions, [sid]: true };
+        } else if (
+          session?.worktree_path &&
+          session.base_branch &&
+          getSettings().auto_open_review === true
+        ) {
+          // Defer to next frame so state updates don't block the current tick
+          requestAnimationFrame(() => taskWorkspaceLayout.openDiff(sid));
         }
       }
     }),

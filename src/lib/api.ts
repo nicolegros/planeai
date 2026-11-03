@@ -6,6 +6,7 @@ import type {
   LaunchResult,
   Project,
   TaskItem,
+  TaskVisit,
   DirEntry,
   ChangedFile,
   FileDiff,
@@ -192,6 +193,10 @@ export const tasks = {
   },
   move: (key: string, status: string, repoPath: string) =>
     invoke("move_task_item", { key, status, repoPath }),
+  markVisited: (projectId: string, key: string) =>
+    invoke<TaskVisit>("mark_task_visited", { projectId, key }),
+  markUnread: (projectId: string, key: string) =>
+    invoke<TaskVisit>("mark_task_unread", { projectId, key }),
   fireNotifyHook: (sessionId: string) => invoke("fire_task_notify_hook", { sessionId }),
   fireResumeHook: (sessionId: string) => invoke("fire_task_resume_hook", { sessionId }),
 };

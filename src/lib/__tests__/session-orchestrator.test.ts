@@ -54,11 +54,19 @@ vi.mock("../api", () => ({
   tasks: {
     fireNotifyHook: vi.fn(() => Promise.resolve()),
     fireResumeHook: vi.fn(() => Promise.resolve()),
+    listAll: vi.fn(() => Promise.resolve([])),
+    markVisited: vi.fn(() =>
+      Promise.resolve({
+        last_visited_at: "2026-11-03T10:05:00Z",
+        last_activity_at: "2026-11-03T10:00:00Z",
+      }),
+    ),
   },
   git: { getChangedFiles: vi.fn(() => Promise.resolve([])) },
 }));
 
-import { sessions as sessionsApi, symphony } from "../api";
+import { sessions as sessionsApi, symphony, tasks as tasksApi } from "../api";
+import * as taskStore from "../task-store.svelte";
 import { providerHandoff, taskWorkspaceLayout } from "../task-workspace-layout.svelte";
 import { getSettings } from "../settings.svelte";
 import type { Session } from "../types";
@@ -85,12 +93,10 @@ import {
   getAgentStates,
   clearAgentState,
   recordUserInput,
-  getReviewReady,
-  clearReviewReady,
+  getUnreadSessions,
   startEventListeners,
   startSymphonyPolling,
   _resetForTests,
-  _setReviewReadyForTests,
 } from "../session-orchestrator.svelte";
 
 const api = vi.mocked(sessionsApi);
@@ -690,36 +696,81 @@ describe("session-orchestrator", () => {
     });
   });
 
-  describe("reviewReady (PLA-187)", () => {
-    it("selectSession does NOT clear reviewReady (bulb persists until user input)", async () => {
+  describe("unread sessions", () => {
+    async function settle(sessionId: string): Promise<() => void> {
+      const { listen } = await import("@tauri-apps/api/event");
+      const listenMock = vi.mocked(listen);
+      listenMock.mockClear();
+      const cleanup = startEventListeners();
+      const handler = listenMock.mock.calls.find(
+        (c) => c[0] === "agent-state-change",
+      )![1] as (event: { payload: { session_id: string; state: string } }) => void;
+      handler({ payload: { session_id: sessionId, state: "Idle" } });
+      return cleanup;
+    }
+
+    it("marks a session unread when its agent settles out of view, worktree or not", async () => {
+      api.list.mockResolvedValue([
+        makeSession({ id: "s1" }),
+        makeSession({ id: "s2" }),
+        makeSession({ id: "s3", worktree_path: "/tmp/wt", base_branch: "main" }),
+      ]);
+      await loadSessions();
+      selectSession("s1");
+
+      const cleanups = [await settle("s1"), await settle("s2"), await settle("s3")];
+
+      expect(getUnreadSessions()).toEqual({ s2: true, s3: true });
+      for (const cleanup of cleanups) cleanup();
+    });
+
+    it("reads a session once it is selected", async () => {
       api.list.mockResolvedValue([makeSession({ id: "s1" }), makeSession({ id: "s2" })]);
       await loadSessions();
-      _setReviewReadyForTests("s2");
-      expect(getReviewReady()["s2"]).toBe(true);
+      selectSession("s1");
+      const cleanup = await settle("s2");
 
       selectSession("s2");
-      expect(getReviewReady()["s2"]).toBe(true);
+
+      expect(getUnreadSessions()).toEqual({});
+      cleanup();
     });
 
-    it("clearReviewReady removes the bulb for a session", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1" }), makeSession({ id: "s2" })]);
+    it("reads a session, and visits its unread task, when the user types into it", async () => {
+      vi.mocked(tasksApi.listAll).mockResolvedValueOnce([
+        {
+          key: "PLA-1",
+          title: "Watched",
+          status: "in_progress",
+          description: "",
+          priority: 0,
+          blocked_by: [],
+          tags: [],
+          parent_key: null,
+          url: null,
+          base_branch: "main",
+          last_visited_at: null,
+          last_activity_at: "2026-11-03T10:00:00Z",
+        },
+      ]);
+      await taskStore.loadTasks(["/repo"]);
+      api.list.mockResolvedValue([
+        makeSession({ id: "s1" }),
+        makeSession({ id: "s2", task_key: "PLA-1", task_project_id: "owner" }),
+      ]);
       await loadSessions();
-      _setReviewReadyForTests("s1");
-      _setReviewReadyForTests("s2");
+      selectSession("s1");
+      const cleanup = await settle("s2");
 
-      clearReviewReady("s2");
-      expect(getReviewReady()["s2"]).toBeUndefined();
-      expect(getReviewReady()["s1"]).toBe(true);
-    });
-
-    it("recordUserInput clears review readiness before a write", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
-      await loadSessions();
-      _setReviewReadyForTests("s1");
-
+      recordUserInput("s2");
       recordUserInput("s1");
 
-      expect(getReviewReady()["s1"]).toBeUndefined();
+      expect(getUnreadSessions()).toEqual({});
+      await vi.waitFor(() =>
+        expect(taskStore.findTask("/repo", "PLA-1")?.last_visited_at).toBe("2026-11-03T10:05:00Z"),
+      );
+      expect(vi.mocked(tasksApi.markVisited).mock.calls).toEqual([["owner", "PLA-1"]]);
+      cleanup();
     });
   });
 });

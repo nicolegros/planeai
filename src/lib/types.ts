@@ -52,6 +52,8 @@ export interface TaskItem {
   last_activity_at: string | null;
 }
 
+export type TaskVisit = Pick<TaskItem, "last_visited_at" | "last_activity_at">;
+
 import type { ReviewFileDiff } from "./review-diff";
 
 export interface DirEntry {

@@ -244,6 +244,31 @@ describe("UnifiedSidebar in the Cards layout", () => {
     vi.clearAllMocks();
   });
 
+  it("shows Unread on a task its agent finished since it was last opened, with or without a session", async () => {
+    const finished = { last_activity_at: "2026-11-03T10:00:00Z", last_visited_at: null };
+    tasksByPath[alpha.path] = [
+      { ...task("A-1", "in_progress", 1), ...finished },
+      { ...task("A-2", "todo"), ...finished },
+    ];
+    tasksByPath[beta.path] = [
+      { ...task("B-1", "in_progress", 2), ...finished, last_visited_at: "2026-11-03T10:05:00Z" },
+    ];
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+
+    const statusOf = (title: string) => {
+      const row = rowOf(mounted!.target, title);
+      return {
+        unread: row.textContent!.includes("Unread"),
+        tooltip: row.querySelector("[title^='Unread']")?.getAttribute("title") ?? null,
+      };
+    };
+    expect([statusOf("Title A-1"), statusOf("Title A-2"), statusOf("Title B-1")]).toEqual([
+      { unread: true, tooltip: "Unread: the agent finished since you last opened this task" },
+      { unread: true, tooltip: "Unread: the agent finished since you last opened this task" },
+      { unread: false, tooltip: null },
+    ]);
+  });
+
   it("is the default, with sessions and review tasks on top and shelves in status order", async () => {
     mounted = await mountSidebar({ sidebar_group_by: "status" });
 

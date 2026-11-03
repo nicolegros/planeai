@@ -4,23 +4,26 @@
  */
 import type { Session } from "./types";
 import type { ShelfStatus, SidebarRow } from "./sidebar-model";
+import { isTaskUnread } from "./task-unread";
 
-/** What a row's session shows in its status slot; idle and session-less rows show nothing. */
-export type SessionActivity = "working" | "ready" | "exited";
+/** What a row shows in its status slot; a row with nothing new shows nothing. */
+export type RowActivity = "working" | "unread" | "exited";
 
 export function rowSession(row: SidebarRow): Session | undefined {
   return row.kind === "task" ? row.linkedSession : row.session;
 }
 
-export function sessionActivity(
-  session: Session | undefined,
+/** A task's unread is persisted on the task; a session without a task keeps it in `unreadSessions`. */
+export function rowActivity(
+  row: SidebarRow,
   agentStates: Record<string, string>,
-  reviewReady: Record<string, boolean>,
-): SessionActivity | null {
-  if (!session) return null;
-  if (agentStates[session.id] === "Busy") return "working";
-  if (reviewReady[session.id]) return "ready";
-  if (session.status === "exited") return "exited";
+  unreadSessions: Record<string, boolean>,
+): RowActivity | null {
+  const session = rowSession(row);
+  if (session && agentStates[session.id] === "Busy") return "working";
+  if (row.kind === "task" ? isTaskUnread(row.task) : unreadSessions[row.session.id])
+    return "unread";
+  if (session?.status === "exited") return "exited";
   return null;
 }
 
@@ -41,13 +44,13 @@ export type FolderUrgency = "exited" | "review" | "running";
 
 export function folderUrgency(
   rows: SidebarRow[],
-  activityOf: (row: SidebarRow) => SessionActivity | null,
+  activityOf: (row: SidebarRow) => RowActivity | null,
 ): FolderUrgency | null {
   let urgency: FolderUrgency | null = null;
   for (const row of rows) {
     const activity = activityOf(row);
     if (activity === "exited") return "exited";
-    if (activity === "ready" || (row.kind === "task" && row.task.status === "in_review")) {
+    if (activity === "unread" || (row.kind === "task" && row.task.status === "in_review")) {
       urgency = "review";
     } else if (activity === "working" && urgency === null) {
       urgency = "running";
