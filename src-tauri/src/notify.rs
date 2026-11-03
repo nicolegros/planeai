@@ -163,6 +163,7 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 tracing::warn!("discarding malformed task lifecycle notify message without batch");
                 return;
             };
+            let _ = app.emit("tasks-changed", ());
             apply_task_lifecycle(app, batch);
         }
         NotifyEvent::TaskChanged => {
@@ -182,7 +183,6 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
 }
 
 fn apply_task_lifecycle(app: &AppHandle, batch: planeai_core::task_lifecycle::TaskLifecycleBatch) {
-    let _ = app.emit("tasks-changed", ());
     app.state::<crate::plugins::PluginRuntimeHandle>()
         .0
         .dispatch_task_lifecycle(batch);
@@ -199,6 +199,7 @@ impl planeai::mcp::tools::AppEvents for McpAppEvents {
         let _ = self.0.emit("tasks-changed", ());
     }
 
+    /// The tool call that produced the batch refreshes the GUI itself.
     fn task_lifecycle(&self, batch: planeai_core::task_lifecycle::TaskLifecycleBatch) {
         apply_task_lifecycle(&self.0, batch);
     }

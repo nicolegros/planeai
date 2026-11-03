@@ -85,6 +85,9 @@ pub struct ToolDef {
     pub name: &'static str,
     pub description: &'static str,
     pub effect: Effect,
+    /// The app reloads its tasks after every call, even a failed one, which may have
+    /// written part of its change.
+    refreshes_tasks: bool,
     input_schema: Arc<JsonObject>,
     handler: Handler,
 }
@@ -103,6 +106,7 @@ impl ToolDef {
             name,
             description,
             effect,
+            refreshes_tasks: false,
             input_schema: rmcp::handler::server::common::schema_for_type::<I>(),
             handler: Box::new(move |context, caller, arguments| {
                 match serde_json::from_value::<I>(serde_json::Value::Object(arguments)) {
@@ -111,6 +115,13 @@ impl ToolDef {
                     Err(error) => ToolOutput::error(&format!("invalid arguments: {error}")),
                 }
             }),
+        }
+    }
+
+    fn refreshing_tasks(self) -> Self {
+        Self {
+            refreshes_tasks: true,
+            ..self
         }
     }
 
@@ -125,7 +136,11 @@ impl ToolDef {
         caller: &McpCaller,
         arguments: JsonObject,
     ) -> ToolOutput {
-        (self.handler)(context, caller, arguments)
+        let output = (self.handler)(context, caller, arguments);
+        if self.refreshes_tasks {
+            context.events.tasks_changed();
+        }
+        output
     }
 }
 
@@ -161,19 +176,22 @@ impl Registry {
                 "Create a task, optionally as a subtask of `parent`.",
                 Effect::Write { idempotent: false },
                 task_create,
-            ),
+            )
+            .refreshing_tasks(),
             ToolDef::new(
                 "task_update",
-                "Edit a task's fields and/or move it to another status (default: this session's task). An empty `parent` clears it.",
+                "Edit a task's fields and/or move it to another status (default: this session's task). An empty `parent` clears it. A refused update changes nothing.",
                 Effect::Write { idempotent: true },
                 task_update,
-            ),
+            )
+            .refreshing_tasks(),
             ToolDef::new(
                 "task_delete",
                 "Delete a task permanently, with its task workspace.",
                 Effect::Delete,
                 task_delete,
-            ),
+            )
+            .refreshing_tasks(),
             ToolDef::new(
                 "session_list",
                 "List agent sessions with their status, task and branch.",
@@ -363,7 +381,7 @@ fn task_create(
 ) -> Result<ToolOutput, String> {
     let conn = open(context)?;
     let scope = scope(&conn, context, caller, input.project.as_deref())?;
-    let output: ToolOutput = axi::task_add_with_lifecycle(
+    Ok(axi::task_add_with_lifecycle(
         &scope.repo,
         crate::task_cli::AddParams {
             title: &input.title,
@@ -376,11 +394,7 @@ fn task_create(
         },
         &scope.lifecycle,
     )
-    .into();
-    if !output.is_error {
-        context.events.tasks_changed();
-    }
-    Ok(output)
+    .into())
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -411,7 +425,7 @@ fn task_update(
     let conn = open(context)?;
     let key = task_key(caller, input.key)?;
     let scope = scope(&conn, context, caller, input.project.as_deref())?;
-    let output: ToolOutput = axi::task_update(
+    Ok(axi::task_update(
         &scope,
         TaskUpdate {
             key: &key,
@@ -428,11 +442,7 @@ fn task_update(
             status: input.status.map(TaskStatus::as_str),
         },
     )
-    .into();
-    if !output.is_error {
-        context.events.tasks_changed();
-    }
-    Ok(output)
+    .into())
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -450,11 +460,7 @@ fn task_delete(
 ) -> Result<ToolOutput, String> {
     let conn = open(context)?;
     let scope = scope(&conn, context, caller, input.project.as_deref())?;
-    let output: ToolOutput = axi::task_delete(&scope, &input.key).into();
-    if !output.is_error {
-        context.events.tasks_changed();
-    }
-    Ok(output)
+    Ok(axi::task_delete(&scope, &input.key).into())
 }
 
 #[derive(Deserialize, JsonSchema)]

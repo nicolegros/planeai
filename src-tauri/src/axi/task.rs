@@ -300,9 +300,9 @@ pub struct TaskUpdate<'a> {
     pub status: Option<&'a str>,
 }
 
-/// Apply the edits, then the move, each through its lifecycle-producing path.
+/// Apply the edits, then the move, each through its lifecycle-producing path. Everything
+/// that can be refused is checked first, so a refused update writes nothing.
 pub fn task_update(scope: &TaskScope, update: TaskUpdate) -> (String, i32) {
-    let not_found_help = ["Run `planeai-cli axi task ls` to see available tasks".to_string()];
     if let Some(status) = update.status {
         if Status::parse(status).is_none() {
             return (
@@ -325,7 +325,20 @@ pub fn task_update(scope: &TaskScope, update: TaskUpdate) -> (String, i32) {
         return (emit_error("nothing to update", &[]), 1);
     }
     if let Err(error) = scope.repo.get(update.key) {
-        return (emit_error(&error.to_string(), &not_found_help), 1);
+        return (emit_error(&error.to_string(), &[]), 1);
+    }
+    if let Some(Some(parent)) = update.parent {
+        if let Err(error) = check_parent(&scope.repo, update.key, parent) {
+            return (emit_error(&error, &[]), 1);
+        }
+    }
+    for blocker in update.blocked_by.unwrap_or_default() {
+        if scope.repo.get(blocker).is_err() {
+            return (
+                emit_error(&format!("blocking task not found: {blocker}"), &[]),
+                1,
+            );
+        }
     }
     if edits {
         if let Err(error) = crate::task_cli::run_task_edit_with_lifecycle(
@@ -361,12 +374,37 @@ pub fn task_update(scope: &TaskScope, update: TaskUpdate) -> (String, i32) {
     }
 }
 
+/// `parent` exists and is neither `key` nor one of its subtasks.
+fn check_parent(repo: &dyn TaskProvider, key: &str, parent: &str) -> Result<(), String> {
+    if parent == key {
+        return Err("a task cannot be its own parent".into());
+    }
+    let mut ancestor = repo
+        .get(parent)
+        .map_err(|_| format!("parent task not found: {parent}"))?;
+    let mut seen = std::collections::HashSet::new();
+    while let Some(next) = ancestor.parent_key.clone() {
+        if next == key {
+            return Err(format!(
+                "{parent} is a subtask of {key}, so it cannot be its parent"
+            ));
+        }
+        if !seen.insert(next.clone()) {
+            break;
+        }
+        match repo.get(&next) {
+            Ok(task) => ancestor = task,
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
 /// Delete a task and the task workspace it owned.
 pub fn task_delete(scope: &TaskScope, key: &str) -> (String, i32) {
-    let not_found_help = ["Run `planeai-cli axi task ls` to see available tasks".to_string()];
     // A mistyped key must not reach the workspace teardown.
     if let Err(error) = scope.repo.get(key) {
-        return (emit_error(&error.to_string(), &not_found_help), 1);
+        return (emit_error(&error.to_string(), &[]), 1);
     }
     match crate::task_cli::run_task_delete_in_project(
         &scope.repo,

@@ -278,7 +278,62 @@ fn task_delete_of_an_unknown_task_changes_nothing() {
         f.call("task_delete", json!({ "key": "DEM-9" })),
         err("error: task not found\n")
     );
-    assert_eq!(*f.events.tasks_changed.lock().unwrap(), 0);
+    assert_eq!(f.repo.list(Default::default()).unwrap().len(), 2);
+}
+
+#[test]
+fn task_update_writes_nothing_when_its_parent_is_invalid() {
+    let f = Fixture::new();
+    f.call("task_update", json!({ "key": "DEM-2", "parent": "DEM-1" }));
+    for (parent, error) in [
+        ("DEM-9", "error: \"parent task not found: DEM-9\"\n"),
+        ("DEM-1", "error: a task cannot be its own parent\n"),
+        (
+            "DEM-2",
+            "error: \"DEM-2 is a subtask of DEM-1, so it cannot be its parent\"\n",
+        ),
+    ] {
+        assert_eq!(
+            f.call(
+                "task_update",
+                json!({ "title": "Renamed", "parent": parent, "status": "done" })
+            ),
+            err(error),
+            "{parent}"
+        );
+        let task = f.repo.get("DEM-1").unwrap();
+        assert_eq!(
+            (task.title.as_str(), task.status.as_str(), task.parent_key),
+            ("Ship the MCP server", "todo", None)
+        );
+    }
+}
+
+#[test]
+fn task_update_writes_nothing_when_a_blocker_is_unknown() {
+    let f = Fixture::new();
+    assert_eq!(
+        f.call(
+            "task_update",
+            json!({ "title": "Renamed", "blocked_by": ["DEM-2", "DEM-9"] })
+        ),
+        err("error: \"blocking task not found: DEM-9\"\n")
+    );
+    let task = f.repo.get("DEM-1").unwrap();
+    assert_eq!(
+        (task.title.as_str(), task.blocked_by),
+        ("Ship the MCP server", vec![])
+    );
+}
+
+#[test]
+fn every_task_writing_call_refreshes_the_app_once() {
+    let f = Fixture::new();
+    f.call("task_update", json!({ "key": "DEM-2", "parent": "DEM-1" }));
+    f.call("task_create", json!({ "title": "More" }));
+    f.call("task_delete", json!({ "key": "DEM-3" }));
+    f.call("task_list", json!({}));
+    assert_eq!(*f.events.tasks_changed.lock().unwrap(), 3);
 }
 
 #[test]

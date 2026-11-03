@@ -707,12 +707,7 @@ fn task_delete_of_an_unknown_task_reports_it_and_deletes_nothing() {
 
     let (output, code) = task_delete(&fixture.scope, &format!("{prefix}-9"));
 
-    assert_eq!(code, 1);
-    assert!(output.starts_with("error: "), "output:\n{output}");
-    assert!(
-        output.ends_with("help[1]:\n  - Run `planeai-cli axi task ls` to see available tasks\n"),
-        "output:\n{output}"
-    );
+    assert_eq!((output.as_str(), code), ("error: task not found\n", 1));
     assert!(fixture.scope.repo.get(&format!("{prefix}-1")).is_ok());
 }
 
