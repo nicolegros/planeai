@@ -1,3 +1,4 @@
+import { tasks as tasksApi } from "./api";
 import { TASK_STATUS_LABELS, type TaskStatus } from "./sidebar-model";
 import * as taskStore from "./task-store.svelte";
 import { dismissToast, showToast } from "./toasts.svelte";
@@ -15,7 +16,15 @@ interface TaskMove {
   to: string;
 }
 
-const pendingDone = new Map<string, { move: TaskMove; onMoved: () => void }>();
+interface PendingDone {
+  move: TaskMove;
+  onMoved: () => void;
+  hold: number;
+}
+
+const pendingDone = new Map<string, PendingDone>();
+/** Done moves not yet confirmed applied, including ones being applied or left by an earlier run. */
+const savedDone = new Map<string, { key: string; repoPath: string }>();
 /** What Mod+Z reverts: a Done still in `pendingDone`, or the last move that applied. */
 let lastMove: TaskMove | null = null;
 
@@ -27,10 +36,7 @@ function statusLabel(status: string): string {
 }
 
 function savePendingDone(): void {
-  const moves = [...pendingDone.values()].map(({ move }) => ({
-    key: move.key,
-    repoPath: move.repoPath,
-  }));
+  const moves = [...savedDone.values()];
   try {
     if (moves.length > 0) localStorage.setItem(PENDING_DONE_STORAGE_KEY, JSON.stringify(moves));
     else localStorage.removeItem(PENDING_DONE_STORAGE_KEY);
@@ -60,8 +66,9 @@ function showMovedBack(move: TaskMove): void {
 
 function startPendingDone(move: TaskMove, onMoved: () => void): void {
   const id = taskId(move.repoPath, move.key);
-  taskStore.holdStatus(move.key, move.repoPath, "done");
-  pendingDone.set(id, { move, onMoved });
+  const hold = taskStore.holdStatus(move.key, move.repoPath, "done");
+  pendingDone.set(id, { move, onMoved, hold });
+  savedDone.set(id, { key: move.key, repoPath: move.repoPath });
   savePendingDone();
   lastMove = move;
   showToast({
@@ -69,7 +76,7 @@ function startPendingDone(move: TaskMove, onMoved: () => void): void {
     kind: "success",
     message: `${move.key} moved to ${statusLabel("done")}`,
     detail: taskStore.findTask(move.repoPath, move.key)?.title,
-    actions: [{ key: "z", label: "Undo", run: () => cancelDone(id) }],
+    actions: [{ key: "z", label: "Undo", run: () => void cancelDone(id) }],
     dismiss: () => commitDone(id),
     countdown: {
       seconds: DONE_UNDO_SECONDS,
@@ -79,7 +86,7 @@ function startPendingDone(move: TaskMove, onMoved: () => void): void {
   });
 }
 
-function takePendingDone(id: string): { move: TaskMove; onMoved: () => void } | undefined {
+function takePendingDone(id: string): PendingDone | undefined {
   const pending = pendingDone.get(id);
   if (!pending) return undefined;
   pendingDone.delete(id);
@@ -88,24 +95,32 @@ function takePendingDone(id: string): { move: TaskMove; onMoved: () => void } | 
   return pending;
 }
 
-async function commitDone(id: string): Promise<void> {
+/** `keepIfFailed` leaves a failed move saved for the next launch, for quitting where its error toast can't be seen. */
+async function commitDone(id: string, keepIfFailed = false): Promise<void> {
   const pending = takePendingDone(id);
   if (!pending) return;
-  const { move, onMoved } = pending;
+  const { move, onMoved, hold } = pending;
   const moved = await apply(move.key, "done", move.repoPath);
-  // Saved only now, so a quit while this applies still finds it on the next launch.
-  savePendingDone();
-  taskStore.releaseStatus(move.key, move.repoPath, moved ? "done" : move.from);
+  taskStore.releaseStatus(move.key, move.repoPath, hold);
+  if (moved || !keepIfFailed) {
+    savedDone.delete(id);
+    savePendingDone();
+  }
   if (moved) onMoved();
+  else void taskStore.refresh([move.repoPath]);
 }
 
-function cancelDone(id: string): void {
+/** Drops a pending Done. The hold hid backend changes meanwhile, so the task is re-read. */
+function cancelDone(id: string, announce = true): boolean {
   const pending = takePendingDone(id);
-  if (!pending) return;
+  if (!pending) return false;
+  savedDone.delete(id);
   savePendingDone();
-  const { move } = pending;
-  taskStore.releaseStatus(move.key, move.repoPath, move.from);
-  showMovedBack(move);
+  const { move, hold } = pending;
+  taskStore.releaseStatus(move.key, move.repoPath, hold, move.from);
+  void taskStore.refresh([move.repoPath]);
+  if (announce) showMovedBack(move);
+  return true;
 }
 
 /**
@@ -118,11 +133,7 @@ export async function changeTaskStatus(
   repoPath: string,
   onMoved: () => void,
 ): Promise<boolean> {
-  const superseded = takePendingDone(taskId(repoPath, key));
-  if (superseded) {
-    savePendingDone();
-    taskStore.releaseStatus(key, repoPath, superseded.move.from);
-  }
+  cancelDone(taskId(repoPath, key), false);
   const from = taskStore.findTask(repoPath, key)?.status;
   if (from === status) return true;
   if (from !== undefined && status === "done") {
@@ -153,9 +164,17 @@ export async function completeTask(
   await changeTaskStatus(task.key, "done", project.path, onMoved);
 }
 
+/** Applies Done at once for flows with their own confirmation, replacing a pending one. */
+export async function applyDoneNow(key: string, repoPath: string): Promise<void> {
+  cancelDone(taskId(repoPath, key), false);
+  await taskStore.moveTask(key, "done", repoPath);
+}
+
 /** Whether Mod+Z has a task move to revert; otherwise the key stays with the focused content. */
 export function canUndoTaskMove(): boolean {
-  return lastMove !== null;
+  if (!lastMove) return false;
+  const { key, repoPath, to } = lastMove;
+  return pendingDone.has(taskId(repoPath, key)) || taskStore.findTask(repoPath, key)?.status === to;
 }
 
 /**
@@ -186,22 +205,40 @@ export async function undoLastTaskMove(onMoved: () => void): Promise<void> {
 
 /** Applies every Done still in its undo window, for quitting. */
 export async function commitPendingDone(): Promise<void> {
-  await Promise.all([...pendingDone.keys()].map(commitDone));
+  await Promise.all([...pendingDone.keys()].map((id) => commitDone(id, true)));
 }
 
-/** Applies the Done moves a quit or crash interrupted, once the tasks have loaded. */
-export async function applyInterruptedDone(): Promise<void> {
+/**
+ * Applies the Done moves a quit or crash interrupted. Each is checked against the backend, since
+ * the store may not have loaded yet; one whose project can't be read stays saved for next time.
+ */
+export async function applyInterruptedDone(onMoved: () => void): Promise<void> {
   let saved: unknown;
   try {
     saved = JSON.parse(localStorage.getItem(PENDING_DONE_STORAGE_KEY) ?? "[]");
-    localStorage.removeItem(PENDING_DONE_STORAGE_KEY);
   } catch {
     return;
   }
   if (!Array.isArray(saved)) return;
-  for (const entry of saved as { key?: unknown; repoPath?: unknown }[]) {
-    if (typeof entry?.key !== "string" || typeof entry.repoPath !== "string") continue;
-    const task = taskStore.findTask(entry.repoPath, entry.key);
-    if (task && task.status !== "done") await apply(entry.key, "done", entry.repoPath);
+  const entries = (saved as { key?: unknown; repoPath?: unknown }[]).filter(
+    (entry): entry is { key: string; repoPath: string } =>
+      typeof entry?.key === "string" && typeof entry.repoPath === "string",
+  );
+  for (const entry of entries) savedDone.set(taskId(entry.repoPath, entry.key), entry);
+  let moved = false;
+  for (const { key, repoPath } of entries) {
+    const id = taskId(repoPath, key);
+    if (pendingDone.has(id)) continue;
+    let status: string | undefined;
+    try {
+      status = (await tasksApi.listAll(repoPath)).find((task) => task.key === key)?.status;
+    } catch {
+      continue;
+    }
+    if (status !== undefined && status !== "done")
+      moved = (await apply(key, "done", repoPath)) || moved;
+    savedDone.delete(id);
   }
+  savePendingDone();
+  if (moved) onMoved();
 }

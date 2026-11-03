@@ -1,15 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project, TaskItem } from "../types";
 
-const { statuses, move } = vi.hoisted(() => ({
+const { statuses, move, listAllFails } = vi.hoisted(() => ({
   statuses: {} as Record<string, string>,
   move: vi.fn(),
+  listAllFails: { value: false },
 }));
 
 vi.mock("../api", () => ({
   tasks: {
     listAll: () =>
-      Promise.resolve(Object.entries(statuses).map(([key, status]) => ({ ...task(key), status }))),
+      listAllFails.value
+        ? Promise.reject(new Error("project unavailable"))
+        : Promise.resolve(
+            Object.entries(statuses).map(([key, status]) => ({ ...task(key), status })),
+          ),
     move,
   },
 }));
@@ -51,6 +56,7 @@ describe("task moves", () => {
     vi.useFakeTimers();
     vi.resetModules();
     localStorage.clear();
+    listAllFails.value = false;
     [taskStore, moves, toasts] = await Promise.all([
       import("../task-store.svelte"),
       import("../task-moves"),
@@ -153,6 +159,7 @@ describe("task moves", () => {
     await moves.changeTaskStatus("PLA-2", "in_review", "/repo", onMoved);
     statuses["PLA-2"] = "in_progress";
     await taskStore.refresh(["/repo"]);
+    expect(moves.canUndoTaskMove()).toBe(false);
     await moves.undoLastTaskMove(onMoved);
 
     expect(backendMoves()).toEqual(["PLA-2:in_review"]);
@@ -223,10 +230,12 @@ describe("task moves", () => {
       import("../task-moves"),
     ]);
     await taskStore.loadTasks(["/repo"]);
-    await moves.applyInterruptedDone();
-    await moves.applyInterruptedDone();
+    onMoved.mockReset();
+    await moves.applyInterruptedDone(onMoved);
+    await moves.applyInterruptedDone(onMoved);
 
     expect(backendMoves()).toEqual(["PLA-1:done"]);
+    expect(onMoved).toHaveBeenCalledTimes(1);
     expect(localStorage.getItem("planeai.pending-done")).toBeNull();
   });
 
@@ -238,5 +247,65 @@ describe("task moves", () => {
     await moves.completeTask(workspace("PLA-1"), onMoved);
     await waitOutUndoWindow();
     expect(localStorage.getItem("planeai.pending-done")).toBeNull();
+  });
+
+  it("replaces a pending Done when the task moves elsewhere first", async () => {
+    await moves.completeTask(workspace("PLA-1"), onMoved);
+    await moves.changeTaskStatus("PLA-1", "in_review", "/repo", onMoved);
+    await waitOutUndoWindow();
+
+    expect(backendMoves()).toEqual(["PLA-1:in_review"]);
+    expect(statusOf("PLA-1")).toBe("in_review");
+    expect(messages()).toEqual([]);
+    expect(localStorage.getItem("planeai.pending-done")).toBeNull();
+  });
+
+  it("applies Done at once for a flow with its own confirmation, replacing a pending one", async () => {
+    await moves.completeTask(workspace("PLA-1"), onMoved);
+    await moves.applyDoneNow("PLA-1", "/repo");
+    await waitOutUndoWindow();
+
+    expect(backendMoves()).toEqual(["PLA-1:done"]);
+    expect(messages()).toEqual([]);
+    expect(moves.canUndoTaskMove()).toBe(false);
+  });
+
+  it("shows the backend's status after an undo, not the one the hold hid", async () => {
+    await moves.completeTask(workspace("PLA-1"), onMoved);
+    statuses["PLA-1"] = "in_review";
+    await taskStore.refresh(["/repo"]);
+    expect(statusOf("PLA-1")).toBe("done");
+
+    await moves.undoLastTaskMove(onMoved);
+    await vi.waitFor(() => expect(statusOf("PLA-1")).toBe("in_review"));
+  });
+
+  it("keeps an interrupted Done saved while its project can't be read", async () => {
+    localStorage.setItem(
+      "planeai.pending-done",
+      JSON.stringify([{ key: "PLA-1", repoPath: "/repo" }]),
+    );
+    listAllFails.value = true;
+    await moves.applyInterruptedDone(onMoved);
+    expect(backendMoves()).toEqual([]);
+    expect(JSON.parse(localStorage.getItem("planeai.pending-done")!)).toEqual([
+      { key: "PLA-1", repoPath: "/repo" },
+    ]);
+
+    listAllFails.value = false;
+    await moves.applyInterruptedDone(onMoved);
+    expect(backendMoves()).toEqual(["PLA-1:done"]);
+    expect(localStorage.getItem("planeai.pending-done")).toBeNull();
+  });
+
+  it("keeps a Done that failed to apply while quitting saved for the next launch", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await moves.completeTask(workspace("PLA-1"), onMoved);
+    move.mockRejectedValueOnce(new Error("database busy"));
+    await moves.commitPendingDone();
+
+    expect(JSON.parse(localStorage.getItem("planeai.pending-done")!)).toEqual([
+      { key: "PLA-1", repoPath: "/repo" },
+    ]);
   });
 });

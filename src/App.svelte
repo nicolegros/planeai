@@ -16,7 +16,7 @@
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { sidebarNavigationOrder } from "./lib/sidebar-model";
-  import { applyInterruptedDone, canUndoTaskMove, commitPendingDone, completeTask, undoLastTaskMove } from "./lib/task-moves";
+  import { applyDoneNow, applyInterruptedDone, canUndoTaskMove, commitPendingDone, completeTask, undoLastTaskMove } from "./lib/task-moves";
   import { getSidebarModel } from "./lib/sidebar-model-store.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
@@ -692,7 +692,7 @@
             const found = sessions.find((candidate) => candidate.id === id);
             if (!found?.task_key) return;
             const project = projects.find((candidate) => candidate.id === sessionTaskProjectId(found));
-            if (project) await taskStore.moveTask(found.task_key, "done", project.path);
+            if (project) await applyDoneNow(found.task_key, project.path);
           }
         : undefined,
     });
@@ -841,7 +841,7 @@
 
   onMount(() => {
     projectStore.loadProjects().then(() => {
-      taskStore.loadTasks(projectStore.getProjects().map((p) => p.path)).then(applyInterruptedDone);
+      taskStore.loadTasks(projectStore.getProjects().map((p) => p.path)).then(() => applyInterruptedDone(() => orchestrator.loadSessions()));
     });
     orchestrator.loadSessions();
     loadSettings().then(() => loadTheme());

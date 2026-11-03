@@ -421,7 +421,7 @@ export function countSessionsLostOnQuit(
 /** `beforeClose` finishes work that must not be lost, such as a Done in its undo window; the confirm's Quit runs it itself. */
 export function setupQuitGuard(
   onShowConfirm: (count: number) => void,
-  beforeClose: () => Promise<void> = async () => {},
+  beforeClose: () => Promise<void>,
 ): Promise<() => void> {
   return getCurrentWindow().onCloseRequested(async (event) => {
     flushMru().catch(() => {});

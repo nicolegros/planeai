@@ -11,7 +11,8 @@ let loading = $state(false);
 let taskRequestGeneration = 0;
 
 /** Statuses shown ahead of the backend, such as a Done move waiting out its undo window. */
-const heldStatuses = new Map<string, string>();
+const heldStatuses = new Map<string, { status: string; token: number }>();
+let lastHoldToken = 0;
 const heldKey = (repoPath: string, key: string) => `${repoPath}\u0000${key}`;
 
 /** Applied when a snapshot is assigned, so a hold that starts or ends mid-reload still counts. */
@@ -21,8 +22,8 @@ function withHeldStatuses(byProject: Record<string, TaskItem[]>): Record<string,
     Object.entries(byProject).map(([repoPath, items]) => [
       repoPath,
       items.map((task) => {
-        const status = heldStatuses.get(heldKey(repoPath, task.key));
-        return status === undefined ? task : { ...task, status };
+        const held = heldStatuses.get(heldKey(repoPath, task.key));
+        return held === undefined ? task : { ...task, status: held.status };
       }),
     ]),
   );
@@ -37,16 +38,20 @@ function setLocalStatus(key: string, repoPath: string, status: string): void {
   };
 }
 
-/** Shows `status` for the task until `releaseStatus`, surviving reloads. */
-export function holdStatus(key: string, repoPath: string, status: string): void {
-  heldStatuses.set(heldKey(repoPath, key), status);
+/** Shows `status` for the task across reloads until its token is released; a newer hold replaces it. */
+export function holdStatus(key: string, repoPath: string, status: string): number {
+  const token = ++lastHoldToken;
+  heldStatuses.set(heldKey(repoPath, key), { status, token });
   setLocalStatus(key, repoPath, status);
+  return token;
 }
 
-/** Ends a hold, showing `status` until the next reload brings the backend's. */
-export function releaseStatus(key: string, repoPath: string, status: string): void {
-  heldStatuses.delete(heldKey(repoPath, key));
-  setLocalStatus(key, repoPath, status);
+/** Ends a hold unless a newer one replaced it, showing `status` (if given) until the next reload. */
+export function releaseStatus(key: string, repoPath: string, token: number, status?: string): void {
+  const id = heldKey(repoPath, key);
+  if (heldStatuses.get(id)?.token !== token) return;
+  heldStatuses.delete(id);
+  if (status !== undefined) setLocalStatus(key, repoPath, status);
 }
 
 export function getTasksByProject(): Record<string, TaskItem[]> {
@@ -149,14 +154,14 @@ export async function refresh(projectPaths: string[]): Promise<void> {
 /** Shows the new status while the backend applies it, so a quick next move or undo starts from it. */
 export async function moveTask(key: string, status: string, repoPath: string): Promise<void> {
   const previous = findTask(repoPath, key)?.status;
-  holdStatus(key, repoPath, status);
+  const token = holdStatus(key, repoPath, status);
   try {
     await tasksApi.move(key, status, repoPath);
   } catch (error) {
-    releaseStatus(key, repoPath, previous ?? status);
+    releaseStatus(key, repoPath, token, previous);
     throw error;
   }
-  releaseStatus(key, repoPath, status);
+  releaseStatus(key, repoPath, token);
   await loadTasks(Object.keys(tasksByProject));
 }
 

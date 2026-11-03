@@ -103,8 +103,7 @@ describe("task store", () => {
 
   describe("statuses ahead of the backend", () => {
     let statuses: Record<string, string>;
-    const statusOf = (key: string) =>
-      taskStore.getTasksForProject("/repo").find((candidate) => candidate.key === key)?.status;
+    const statusOf = (key: string) => taskStore.findTask("/repo", key)?.status;
 
     beforeEach(async () => {
       statuses = { "PLA-1": "in_progress" };
@@ -117,14 +116,14 @@ describe("task store", () => {
     });
 
     it("keeps a held status across reloads until it is released", async () => {
-      taskStore.holdStatus("PLA-1", "/repo", "done");
+      const hold = taskStore.holdStatus("PLA-1", "/repo", "done");
       expect(statusOf("PLA-1")).toBe("done");
 
       await taskStore.refresh(["/repo"]);
       await taskStore.loadTasks(["/repo"]);
       expect(statusOf("PLA-1")).toBe("done");
 
-      taskStore.releaseStatus("PLA-1", "/repo", "in_progress");
+      taskStore.releaseStatus("PLA-1", "/repo", hold, "in_progress");
       expect(statusOf("PLA-1")).toBe("in_progress");
       statuses["PLA-1"] = "in_review";
       await taskStore.refresh(["/repo"]);
@@ -136,12 +135,22 @@ describe("task store", () => {
       listAll.mockReturnValueOnce(new Promise<TaskItem[]>((resolve) => (finishReload = resolve)));
 
       const reloading = taskStore.refresh(["/repo"]);
-      taskStore.holdStatus("PLA-1", "/repo", "done");
+      const hold = taskStore.holdStatus("PLA-1", "/repo", "done");
       finishReload([{ ...task("PLA-1"), status: "in_progress" }]);
       await reloading;
 
       expect(statusOf("PLA-1")).toBe("done");
-      taskStore.releaseStatus("PLA-1", "/repo", "in_progress");
+      taskStore.releaseStatus("PLA-1", "/repo", hold, "in_progress");
+    });
+
+    it("leaves a newer hold in place when an older one is released", async () => {
+      const older = taskStore.holdStatus("PLA-1", "/repo", "done");
+      const newer = taskStore.holdStatus("PLA-1", "/repo", "in_review");
+      taskStore.releaseStatus("PLA-1", "/repo", older, "in_progress");
+      await taskStore.refresh(["/repo"]);
+
+      expect(statusOf("PLA-1")).toBe("in_review");
+      taskStore.releaseStatus("PLA-1", "/repo", newer);
     });
 
     it("shows a move before the reload that follows it lands", async () => {
@@ -150,7 +159,7 @@ describe("task store", () => {
       listAll.mockReturnValueOnce(new Promise<TaskItem[]>((resolve) => (finishReload = resolve)));
 
       const moving = taskStore.moveTask("PLA-1", "in_review", "/repo");
-      await vi.waitFor(() => expect(statusOf("PLA-1")).toBe("in_review"));
+      expect(statusOf("PLA-1")).toBe("in_review");
 
       finishReload([{ ...task("PLA-1"), status: "in_review" }]);
       await moving;
