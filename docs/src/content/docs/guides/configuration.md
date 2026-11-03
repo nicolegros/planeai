@@ -56,12 +56,38 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
 | `autonomous_prompt_template` | Template rendered when auto-dispatch sends a task                 |
 | `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations            |
 | `resume_command`             | Command to resume interactively when restarting an exited session |
+| `mcp_args`                   | Arguments connecting the agent to PlaneAI's tools (see below)     |
 
 `prompt_command` must keep the agent interactive: `{prompt}` becomes the shell-quoted task prompt, and `--` ends option parsing so a prompt starting with `-` stays a prompt.
 The built-in agents use `-- {prompt}`, except Copilot, which uses `--interactive={prompt}`.
 A built-in agent still holding an earlier default (`-p {prompt}` for Claude Code, `copilot --resume` for Copilot) is upgraded when the config loads; a value you changed is kept.
 
 Kiro, Claude Code, Copilot and Codex are always listed under **Preferences → Agents**. Turn one on to add its preset entry, or off to remove it. The default agent cannot be turned off. Each agent shows whether its binary was found on the session PATH, and **Search paths** adds folders to `extra_path_dirs`.
+
+## PlaneAI tools (MCP)
+
+Agents in sessions call PlaneAI's own tools natively over MCP: `task_list`, `task_show`, `task_create`, `task_update`, `task_delete`, `session_list`, `session_tree`, `session_read`, `session_create`, `session_prompt` and `project_list`.
+They act as the calling session, so `task_show` without a key shows the session's task and `session_create` starts a child of the session.
+Agents outside PlaneAI keep using `planeai-cli axi`, which prints the same output.
+
+```jsonc
+{
+  // Serve the tools; unset means on
+  "mcp_enabled": true,
+  // Loopback port; unset means 47437
+  "mcp_port": 47437,
+}
+```
+
+The server listens on `http://127.0.0.1:<port>/mcp` while the app runs.
+If the port is taken, **Preferences → Agents → PlaneAI tools** shows the error; free the port or pick another.
+Agents keep the URL they were started with, so restart running agents after changing the port.
+
+Each launch gets a session token in `PLANEAI_MCP_TOKEN` and the URL in `PLANEAI_MCP_URL`.
+A provider's `mcp_args` is appended to its command, with `{mcp_url}` replaced by the URL.
+Claude Code and Codex come with templates that pre-approve every tool except `task_delete`, which still asks.
+Kiro and Copilot come with none.
+Set `mcp_args` to `""` to keep an agent off the tools, or edit it under **Preferences → Agents** with the pencil button.
 
 ### Notification hooks
 

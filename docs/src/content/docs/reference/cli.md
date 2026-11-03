@@ -265,6 +265,8 @@ planeai-cli symphony stop
 
 Agent eXperience Interface — token-efficient TOON output designed for autonomous agents. Use `planeai-cli axi` instead of the JSON commands when building agent integrations.
 
+Agents running in PlaneAI sessions get the same operations as MCP tools and do not need the CLI; see [PlaneAI tools](/guides/configuration/#planeai-tools-mcp).
+
 Running `planeai-cli axi` with no subcommand prints a context-aware home view (current project, open tasks, active sessions).
 
 ### `axi task ls`
