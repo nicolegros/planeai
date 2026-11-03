@@ -40,8 +40,15 @@
 
   const input = $derived<CustomSnooze>(mode === "at" ? { mode, date, time } : { mode, amount, unit });
 
+  function toggleMode() {
+    mode = mode === "at" ? "after" : "at";
+    error = null;
+  }
+
   const fk = createFormKeyboardController(
-    () => (mode === "at"
+    () => [
+      { key: "m", toggle: toggleMode, shiftToggle: toggleMode },
+      ...(mode === "at"
       ? [
           { key: "d", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='date'] input") ?? null },
           { key: "t", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='time'] input") ?? null },
@@ -50,6 +57,7 @@
           { key: "a", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='amount'] input") ?? null },
           { key: "u", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='unit'] input") ?? null },
         ]),
+    ],
     // svelte-ignore state_referenced_locally
     { wrapper: () => wrapperEl ?? null, onDismiss: onCancel },
   );
@@ -82,7 +90,10 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div bind:this={wrapperEl} tabindex="0" onkeydown={(e) => { handleKeydown(e); fk.handleKeydown(e); }} onfocusin={(e) => { if (e.target === wrapperEl) return; fk.handleFocusin(e); }} class="outline-none px-5 pb-5" data-form-keyboard>
     <form class="space-y-3" onsubmit={(e) => { e.preventDefault(); void submit(); }}>
-      <SegmentedControl name="snooze-mode" label="Snooze" options={MODES} value={mode} onValueChange={(value) => { mode = value; error = null; }} />
+      <div class="flex items-center gap-2">
+        <SegmentedControl name="snooze-mode" label="Snooze" options={MODES} value={mode} onValueChange={(value) => { mode = value; error = null; }} />
+        {@render hint("m")}
+      </div>
       {#if mode === "at"}
         <div class="flex gap-2">
           <div class="flex-1 space-y-1" data-field="date">
