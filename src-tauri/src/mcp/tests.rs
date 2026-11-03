@@ -32,6 +32,7 @@ struct Fixture {
     context: ToolContext,
     events: Arc<RecordedEvents>,
     caller: McpCaller,
+    token: String,
     repo: SqliteRepository,
     registry: Registry,
 }
@@ -87,6 +88,7 @@ impl Fixture {
             },
             events,
             caller,
+            token,
             repo,
             registry: Registry::core(),
         }
@@ -330,4 +332,248 @@ fn unknown_arguments_are_reported_to_the_agent() {
         f.call("task_list", json!({ "bogus": 1 })),
         err("error: \"invalid arguments: unknown field `bogus`, expected one of `project`, `status`, `tags`\"\n")
     );
+}
+
+mod http {
+    use super::*;
+    use crate::mcp::server::{McpServer, McpStatus};
+
+    struct Response {
+        status: u16,
+        body: String,
+    }
+
+    impl Response {
+        fn json(&self) -> serde_json::Value {
+            serde_json::from_str(&self.body).unwrap_or_else(|_| panic!("not JSON: {}", self.body))
+        }
+    }
+
+    /// One POST to `/mcp` over a real socket; `Host` defaults to the loopback address.
+    async fn post(port: u16, headers: &[(&str, &str)], body: &str) -> Response {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut request = format!(
+            "POST /mcp HTTP/1.1\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nMCP-Protocol-Version: 2025-06-18\r\nContent-Length: {}\r\nConnection: close\r\n",
+            body.len()
+        );
+        if !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("host"))
+        {
+            request.push_str(&format!("Host: 127.0.0.1:{port}\r\n"));
+        }
+        for (name, value) in headers {
+            request.push_str(&format!("{name}: {value}\r\n"));
+        }
+        request.push_str("\r\n");
+        request.push_str(body);
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).await.unwrap();
+        let (head, body) = raw.split_once("\r\n\r\n").unwrap();
+        let status = head.split(' ').nth(1).unwrap().parse().unwrap();
+        let body = if head
+            .to_ascii_lowercase()
+            .contains("transfer-encoding: chunked")
+        {
+            dechunk(body)
+        } else {
+            body.to_string()
+        };
+        Response { status, body }
+    }
+
+    fn dechunk(mut body: &str) -> String {
+        let mut out = String::new();
+        while let Some((size, rest)) = body.split_once("\r\n") {
+            let size = usize::from_str_radix(size.trim(), 16).unwrap();
+            if size == 0 {
+                break;
+            }
+            out.push_str(&rest[..size]);
+            body = &rest[size + 2..];
+        }
+        out
+    }
+
+    fn rpc(id: u64, method: &str, params: serde_json::Value) -> String {
+        json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string()
+    }
+
+    fn initialize() -> String {
+        rpc(
+            1,
+            "initialize",
+            json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "0" }
+            }),
+        )
+    }
+
+    async fn serve(f: &Fixture) -> (McpServer, u16) {
+        let server = McpServer::new(Registry::core(), f.context.clone());
+        let McpStatus::Listening { port } = server.apply(Some(0)).await else {
+            panic!("server did not start");
+        };
+        (server, port)
+    }
+
+    #[tokio::test]
+    async fn an_agent_with_its_session_token_initializes_lists_and_calls_tools() {
+        let f = Fixture::new();
+        let (server, port) = serve(&f).await;
+        let bearer = format!("Bearer {}", f.token);
+        let auth = [("Authorization", bearer.as_str())];
+
+        let init = post(port, &auth, &initialize()).await;
+        assert_eq!(init.status, 200, "{}", init.body);
+        assert_eq!(init.json()["result"]["serverInfo"]["name"], "planeai");
+
+        let list = post(port, &auth, &rpc(2, "tools/list", json!({}))).await;
+        assert_eq!(list.status, 200, "{}", list.body);
+        let names: Vec<String> = list.json()["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "task_list",
+                "task_show",
+                "task_create",
+                "task_update",
+                "task_delete",
+                "session_list",
+                "session_tree",
+                "session_read",
+                "session_create",
+                "session_prompt",
+                "project_list"
+            ]
+        );
+
+        let call = post(
+            port,
+            &auth,
+            &rpc(
+                3,
+                "tools/call",
+                json!({ "name": "task_list", "arguments": {} }),
+            ),
+        )
+        .await;
+        assert_eq!(call.status, 200, "{}", call.body);
+        assert_eq!(
+            call.json()["result"],
+            json!({
+                "content": [{
+                    "type": "text",
+                    "text": "count: 2 total\ntasks[2]{key,title,status,priority,tags,blocked_by}:\n  DEM-1,Ship the MCP server,todo,0,,\n  DEM-2,Write the ADR,todo,0,,\n"
+                }],
+                "isError": false
+            })
+        );
+        assert_eq!(server.apply(None).await, McpStatus::Off);
+    }
+
+    #[tokio::test]
+    async fn a_request_without_a_valid_session_token_is_unauthorized() {
+        let f = Fixture::new();
+        let (_server, port) = serve(&f).await;
+
+        for headers in [
+            vec![],
+            vec![("Authorization", "Bearer not-a-planeai-token")],
+            vec![("Authorization", f.token.as_str())],
+        ] {
+            let response = post(port, &headers, &initialize()).await;
+            assert_eq!(
+                (response.status, response.body.as_str()),
+                (401, "A PlaneAI session token is required."),
+                "headers: {headers:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_revoked_token_is_unauthorized() {
+        let f = Fixture::new();
+        let (_server, port) = serve(&f).await;
+        let conn = rusqlite::Connection::open(&f.context.db_path).unwrap();
+        conn.execute(
+            "UPDATE sessions SET status = 'archived' WHERE id = ?1",
+            [CALLER_ID],
+        )
+        .unwrap();
+        let bearer = format!("Bearer {}", f.token);
+
+        let response = post(port, &[("Authorization", bearer.as_str())], &initialize()).await;
+
+        assert_eq!(response.status, 401);
+    }
+
+    #[tokio::test]
+    async fn browser_origins_and_foreign_hosts_are_rejected_even_with_a_token() {
+        let f = Fixture::new();
+        let (_server, port) = serve(&f).await;
+        let bearer = format!("Bearer {}", f.token);
+        let foreign_host = format!("attacker.example:{port}");
+
+        let from_page = post(
+            port,
+            &[
+                ("Authorization", bearer.as_str()),
+                ("Origin", "https://attacker.example"),
+            ],
+            &initialize(),
+        )
+        .await;
+        let rebound = post(
+            port,
+            &[
+                ("Authorization", bearer.as_str()),
+                ("Host", foreign_host.as_str()),
+            ],
+            &initialize(),
+        )
+        .await;
+
+        assert_eq!(from_page.status, 403, "{}", from_page.body);
+        assert_eq!(rebound.status, 403, "{}", rebound.body);
+    }
+
+    #[tokio::test]
+    async fn a_taken_port_fails_visibly_and_is_retried_on_the_next_apply() {
+        let f = Fixture::new();
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = taken.local_addr().unwrap().port();
+        let server = McpServer::new(Registry::core(), f.context.clone());
+
+        assert_eq!(
+            server.apply(Some(port)).await,
+            McpStatus::Failed {
+                port,
+                reason: format!("Port {port} is already in use.")
+            }
+        );
+        drop(taken);
+        assert_eq!(
+            server.apply(Some(port)).await,
+            McpStatus::Listening { port }
+        );
+        assert_eq!(
+            server.apply(Some(port)).await,
+            McpStatus::Listening { port }
+        );
+        assert_eq!(server.status().await, McpStatus::Listening { port });
+        assert_eq!(server.apply(None).await, McpStatus::Off);
+        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok());
+    }
 }

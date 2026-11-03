@@ -281,6 +281,24 @@ fn main() {
             notify::start_silence_checker(notify_state.clone(), app.handle().clone());
             app.manage(NotifyHandle(notify_state.clone()));
 
+            let mcp_port = app
+                .state::<ConfigState>()
+                .0
+                .lock()
+                .unwrap()
+                .mcp_listen_port();
+            app.manage(McpServerState(planeai::mcp::server::McpServer::new(
+                planeai::mcp::tools::Registry::core(),
+                planeai::mcp::tools::ToolContext {
+                    db_path: app_dir.join("planeai.db"),
+                    events: Arc::new(notify::McpAppEvents(app.handle().clone())),
+                },
+            )));
+            let mcp_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                mcp_app.state::<McpServerState>().0.apply(mcp_port).await;
+            });
+
             // Register active sessions in NotifyState (must happen after notify_state exists)
             {
                 let conn = db_arc.lock().unwrap();
@@ -401,6 +419,7 @@ fn main() {
             update_config,
             refresh_config,
             get_config_defaults,
+            get_mcp_status,
             detect_providers,
             get_theme_css,
             list_themes,

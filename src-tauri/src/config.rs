@@ -396,14 +396,17 @@ pub fn config_dir(app_name: &str) -> PathBuf {
 }
 
 impl Config {
+    /// The loopback port the MCP server serves on, `None` while it is off.
+    pub fn mcp_listen_port(&self) -> Option<u16> {
+        self.mcp_enabled
+            .unwrap_or(true)
+            .then(|| self.mcp_port.unwrap_or(DEFAULT_MCP_PORT))
+    }
+
     /// The MCP server's URL as agents reach it, `None` while the server is off.
     pub fn mcp_url(&self) -> Option<String> {
-        self.mcp_enabled.unwrap_or(true).then(|| {
-            format!(
-                "http://127.0.0.1:{}/mcp",
-                self.mcp_port.unwrap_or(DEFAULT_MCP_PORT)
-            )
-        })
+        self.mcp_listen_port()
+            .map(|port| format!("http://127.0.0.1:{port}/mcp"))
     }
 
     /// Return extra_path_dirs with tildes expanded.

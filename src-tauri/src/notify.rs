@@ -163,12 +163,7 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 tracing::warn!("discarding malformed task lifecycle notify message without batch");
                 return;
             };
-            let _ = app.emit("tasks-changed", ());
-            app.state::<crate::plugins::PluginRuntimeHandle>()
-                .0
-                .dispatch_task_lifecycle(batch);
-            // Completing a task archives its sessions from whichever process moved it.
-            reconcile_provider_sessions(app);
+            apply_task_lifecycle(app, batch);
         }
         NotifyEvent::TaskChanged => {
             let _ = app.emit("tasks-changed", ());
@@ -183,6 +178,29 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 async move { deliver_prompt(&app, &session_id, text).await },
             );
         }
+    }
+}
+
+fn apply_task_lifecycle(app: &AppHandle, batch: planeai_core::task_lifecycle::TaskLifecycleBatch) {
+    let _ = app.emit("tasks-changed", ());
+    app.state::<crate::plugins::PluginRuntimeHandle>()
+        .0
+        .dispatch_task_lifecycle(batch);
+    // Completing a task archives its sessions from whichever process moved it.
+    reconcile_provider_sessions(app);
+}
+
+/// MCP tool calls run inside the app, so their changes reach the GUI here rather than
+/// through the notify socket.
+pub struct McpAppEvents(pub AppHandle);
+
+impl planeai::mcp::tools::AppEvents for McpAppEvents {
+    fn tasks_changed(&self) {
+        let _ = self.0.emit("tasks-changed", ());
+    }
+
+    fn task_lifecycle(&self, batch: planeai_core::task_lifecycle::TaskLifecycleBatch) {
+        apply_task_lifecycle(&self.0, batch);
     }
 }
 
