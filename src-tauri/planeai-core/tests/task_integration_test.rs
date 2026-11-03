@@ -28,6 +28,8 @@ fn resolve_task_prompt_uses_default_template() {
         base_branch: "main".to_string(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        last_visited_at: None,
+        last_activity_at: None,
     };
     let prompt = TaskService::resolve_task_prompt(&task, None);
     assert_eq!(prompt, "Fix the bug\n\nIt crashes on start");
@@ -47,6 +49,8 @@ fn resolve_task_prompt_uses_custom_template() {
         base_branch: "main".to_string(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        last_visited_at: None,
+        last_activity_at: None,
     };
     let prompt = TaskService::resolve_task_prompt(&task, Some("[{key}] {title}"));
     assert_eq!(prompt, "[PLA-2] Add feature");
@@ -66,6 +70,8 @@ fn resolve_task_prompt_sees_every_task_template_variable() {
         base_branch: "develop".to_string(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        last_visited_at: None,
+        last_activity_at: None,
     };
     let prompt = TaskService::resolve_task_prompt(
         &task,

@@ -1137,6 +1137,8 @@ impl TaskService {
             base_branch: request.task_base_branch.clone(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
+            last_visited_at: None,
+            last_activity_at: None,
         };
 
         let prompt = Self::resolve_task_prompt(&task, prompt_template);

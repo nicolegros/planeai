@@ -608,3 +608,186 @@ fn insert_task_commits_and_rolls_back_with_the_callers_transaction() {
         .unwrap();
     assert_eq!(row, ("main".to_string(), "weekly".to_string()));
 }
+
+fn at(rfc3339: &str) -> chrono::DateTime<Utc> {
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
+/// A repository and a second connection to the same file, as the app shares its DB.
+fn shared_db() -> (tempfile::TempDir, SqliteRepository, Connection) {
+    let directory = tempfile::TempDir::new().unwrap();
+    let path = directory.path().join("tasks.db");
+    let repo = SqliteRepository::open(path.to_str().unwrap(), "TEST").unwrap();
+    repo.create(CreateParams {
+        title: "watched".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let conn = Connection::open(path).unwrap();
+    (directory, repo, conn)
+}
+
+#[test]
+fn migration_adds_visit_columns_to_an_existing_database() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE task_schema_version (version INTEGER NOT NULL);
+         INSERT INTO task_schema_version (version) VALUES (2);
+         CREATE TABLE task_projects (prefix TEXT PRIMARY KEY, next_seq INTEGER NOT NULL DEFAULT 1);
+         INSERT INTO task_projects (prefix, next_seq) VALUES ('OLD', 2);
+         CREATE TABLE tasks (
+            key TEXT PRIMARY KEY,
+            project_prefix TEXT NOT NULL REFERENCES task_projects(prefix),
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'todo',
+            priority INTEGER NOT NULL DEFAULT 0,
+            parent_key TEXT REFERENCES tasks(key) ON DELETE CASCADE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            base_branch TEXT
+         );
+         CREATE TABLE task_blockers (task_key TEXT NOT NULL, blocked_by_key TEXT NOT NULL);
+         CREATE TABLE task_tags (task_key TEXT NOT NULL, tag TEXT NOT NULL);
+         INSERT INTO tasks (key, project_prefix, title, created_at, updated_at)
+            VALUES ('OLD-1', 'OLD', 'from before', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00');",
+    )
+    .unwrap();
+
+    let repo = SqliteRepository::new(conn, "OLD").unwrap();
+    let task = repo.get("OLD-1").unwrap();
+
+    assert_eq!(task.title, "from before");
+    assert_eq!(task.last_visited_at, None);
+    assert_eq!(task.last_activity_at, None);
+}
+
+#[test]
+fn a_new_task_has_neither_visit_nor_activity() {
+    let task = repo()
+        .create(CreateParams {
+            title: "fresh".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(task.last_visited_at, None);
+    assert_eq!(task.last_activity_at, None);
+}
+
+#[test]
+fn recorded_activity_is_read_back_to_the_millisecond() {
+    let (_directory, repo, conn) = shared_db();
+
+    let visit =
+        record_activity(&conn, "TEST", "TEST-1", at("2026-11-03T10:00:00.123456Z")).unwrap();
+
+    let expected = Visit {
+        last_visited_at: None,
+        last_activity_at: Some(at("2026-11-03T10:00:00.123Z")),
+    };
+    assert_eq!(visit, expected);
+    let task = repo.get("TEST-1").unwrap();
+    assert_eq!(
+        (task.last_visited_at, task.last_activity_at),
+        (None, Some(at("2026-11-03T10:00:00.123Z")))
+    );
+}
+
+#[test]
+fn marking_visited_stamps_the_visit() {
+    let (_directory, repo, conn) = shared_db();
+    record_activity(&conn, "TEST", "TEST-1", at("2026-11-03T10:00:00Z")).unwrap();
+
+    let visit = mark_visited(&conn, "TEST", "TEST-1", at("2026-11-03T10:05:00Z")).unwrap();
+
+    assert_eq!(
+        visit,
+        Visit {
+            last_visited_at: Some(at("2026-11-03T10:05:00Z")),
+            last_activity_at: Some(at("2026-11-03T10:00:00Z")),
+        }
+    );
+    assert_eq!(
+        repo.get("TEST-1").unwrap().last_visited_at,
+        Some(at("2026-11-03T10:05:00Z"))
+    );
+}
+
+#[test]
+fn marking_unread_puts_the_visit_just_before_the_activity() {
+    let (_directory, repo, conn) = shared_db();
+    record_activity(&conn, "TEST", "TEST-1", at("2026-11-03T10:00:00.500Z")).unwrap();
+    mark_visited(&conn, "TEST", "TEST-1", at("2026-11-03T10:05:00Z")).unwrap();
+
+    let visit = mark_unread(&conn, "TEST", "TEST-1").unwrap();
+
+    assert_eq!(
+        visit,
+        Visit {
+            last_visited_at: Some(at("2026-11-03T10:00:00.499Z")),
+            last_activity_at: Some(at("2026-11-03T10:00:00.500Z")),
+        }
+    );
+    assert_eq!(
+        repo.get("TEST-1").unwrap().last_visited_at,
+        Some(at("2026-11-03T10:00:00.499Z"))
+    );
+}
+
+#[test]
+fn marking_unread_without_activity_changes_nothing() {
+    let (_directory, _repo, conn) = shared_db();
+    mark_visited(&conn, "TEST", "TEST-1", at("2026-11-03T10:05:00Z")).unwrap();
+
+    let visit = mark_unread(&conn, "TEST", "TEST-1").unwrap();
+
+    assert_eq!(
+        visit,
+        Visit {
+            last_visited_at: Some(at("2026-11-03T10:05:00Z")),
+            last_activity_at: None,
+        }
+    );
+}
+
+#[test]
+fn visit_writes_only_reach_a_task_of_the_given_project() {
+    let (_directory, repo, conn) = shared_db();
+
+    let stamped = record_activity(&conn, "OTHER", "TEST-1", at("2026-11-03T10:00:00Z"));
+
+    assert!(matches!(stamped, Err(Error::NotFound)), "{stamped:?}");
+    assert!(matches!(
+        mark_visited(&conn, "TEST", "TEST-404", at("2026-11-03T10:00:00Z")),
+        Err(Error::NotFound)
+    ));
+    assert_eq!(repo.get("TEST-1").unwrap().last_activity_at, None);
+}
+
+#[test]
+fn editing_a_task_keeps_its_visit_and_activity() {
+    let (_directory, repo, conn) = shared_db();
+    record_activity(&conn, "TEST", "TEST-1", at("2026-11-03T10:00:00Z")).unwrap();
+    mark_visited(&conn, "TEST", "TEST-1", at("2026-11-03T10:05:00Z")).unwrap();
+
+    let task = repo
+        .update(
+            "TEST-1",
+            UpdateParams {
+                title: Some("renamed".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(task.title, "renamed");
+    assert_eq!(
+        (task.last_visited_at, task.last_activity_at),
+        (
+            Some(at("2026-11-03T10:05:00Z")),
+            Some(at("2026-11-03T10:00:00Z"))
+        )
+    );
+}

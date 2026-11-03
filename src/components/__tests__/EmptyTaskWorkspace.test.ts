@@ -15,6 +15,8 @@ const task: TaskItem = {
   tags: [],
   url: null,
   base_branch: "main",
+  last_visited_at: null,
+  last_activity_at: null,
 };
 
 const archived = {

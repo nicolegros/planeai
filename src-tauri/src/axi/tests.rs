@@ -478,3 +478,48 @@ fn session_tree_from_child_shows_full_tree() {
     assert!(output.contains("root: aaaaaaaa"), "output:\n{output}");
     assert!(output.contains("sessions[4]"), "output:\n{output}");
 }
+
+#[test]
+fn task_detail_shows_visit_and_activity_once_set() {
+    let at = |text: &str| {
+        chrono::DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    };
+    let mut task = planeai_tasks::model::Task {
+        key: "TST-1".into(),
+        title: "Watched".into(),
+        description: String::new(),
+        status: Status::InProgress,
+        priority: 0,
+        parent_key: None,
+        blocked_by: vec![],
+        tags: vec![],
+        base_branch: "main".into(),
+        created_at: at("2026-11-01T09:00:00Z"),
+        updated_at: at("2026-11-01T09:00:00Z"),
+        last_visited_at: None,
+        last_activity_at: None,
+    };
+    let render_task = |task: &planeai_tasks::model::Task| {
+        planeai_toon::render(&[planeai_toon::field(
+            "task",
+            super::helpers::task_detail_object(task),
+        )])
+    };
+
+    let unvisited = render_task(&task);
+    task.last_visited_at = Some(at("2026-11-03T10:05:00Z"));
+    task.last_activity_at = Some(at("2026-11-03T10:00:00.250Z"));
+    let visited = render_task(&task);
+
+    assert!(!unvisited.contains("last_"), "output:\n{unvisited}");
+    assert!(
+        visited.contains("last_visited_at: \"2026-11-03T10:05:00+00:00\""),
+        "output:\n{visited}"
+    );
+    assert!(
+        visited.contains("last_activity_at: \"2026-11-03T10:00:00.250+00:00\""),
+        "output:\n{visited}"
+    );
+}

@@ -35,6 +35,12 @@ pub(crate) fn task_detail_object(task: &Task) -> Value {
     }
     fields.push(field("base_branch", str_val(&task.base_branch)));
     fields.push(field("created_at", str_val(&task.created_at.to_rfc3339())));
+    if let Some(at) = task.last_visited_at {
+        fields.push(field("last_visited_at", str_val(&at.to_rfc3339())));
+    }
+    if let Some(at) = task.last_activity_at {
+        fields.push(field("last_activity_at", str_val(&at.to_rfc3339())));
+    }
     Value::Object(fields)
 }
 

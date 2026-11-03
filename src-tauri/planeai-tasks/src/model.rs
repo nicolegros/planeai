@@ -50,6 +50,12 @@ pub struct Task {
     pub base_branch: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// When the user last looked at the task.
+    #[serde(default)]
+    pub last_visited_at: Option<DateTime<Utc>>,
+    /// When an agent working on the task last finished a turn, asked for attention, or exited.
+    #[serde(default)]
+    pub last_activity_at: Option<DateTime<Utc>>,
 }
 
 pub const DEFAULT_BASE_BRANCH: &str = "main";

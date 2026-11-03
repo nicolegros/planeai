@@ -47,6 +47,8 @@ function taskRow(key: string, status: string, linkedSession?: Session): SidebarR
     parent_key: null,
     url: null,
     base_branch: "main",
+    last_visited_at: null,
+    last_activity_at: null,
   };
   return { kind: "task", task, project, linkedSession };
 }

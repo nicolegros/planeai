@@ -47,6 +47,9 @@ export interface TaskItem {
   parent_key: string | null;
   url: string | null;
   base_branch: string;
+  /** RFC 3339; together with `last_activity_at` decides whether the task is unread. */
+  last_visited_at: string | null;
+  last_activity_at: string | null;
 }
 
 import type { ReviewFileDiff } from "./review-diff";

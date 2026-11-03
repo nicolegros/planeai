@@ -1,5 +1,5 @@
-use chrono::Utc;
-use rusqlite::{params, Connection, OpenFlags};
+use chrono::{DateTime, SecondsFormat, SubsecRound, Utc};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -122,6 +122,8 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
             PRIMARY KEY (task_key, tag)
         );",
         "ALTER TABLE tasks ADD COLUMN base_branch TEXT;",
+        "ALTER TABLE tasks ADD COLUMN last_visited_at TEXT;
+         ALTER TABLE tasks ADD COLUMN last_activity_at TEXT;",
     ];
 
     for (i, sql) in migrations.iter().enumerate() {
@@ -136,6 +138,93 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// A task's visit and activity, which decide whether it is unread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Visit {
+    pub last_visited_at: Option<DateTime<Utc>>,
+    pub last_activity_at: Option<DateTime<Utc>>,
+}
+
+/// Stored to the millisecond with a fixed width, so a reader parsing it gets back the same instant.
+fn format_time(at: DateTime<Utc>) -> String {
+    at.to_rfc3339_opts(SecondsFormat::Millis, false)
+}
+
+fn parse_time(text: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(text)
+        .ok()
+        .map(|at| at.with_timezone(&Utc))
+}
+
+fn read_visit(conn: &Connection, prefix: &str, key: &str) -> Result<Visit, Error> {
+    let (visited, activity) = conn
+        .query_row(
+            "SELECT last_visited_at, last_activity_at FROM tasks WHERE key = ?1 AND project_prefix = ?2",
+            params![key, prefix],
+            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+        )
+        .optional()
+        .map_err(|e| Error::Storage(e.to_string()))?
+        .ok_or(Error::NotFound)?;
+    Ok(Visit {
+        last_visited_at: visited.as_deref().and_then(parse_time),
+        last_activity_at: activity.as_deref().and_then(parse_time),
+    })
+}
+
+fn set_time(
+    conn: &Connection,
+    column: &str,
+    prefix: &str,
+    key: &str,
+    at: DateTime<Utc>,
+) -> Result<Visit, Error> {
+    let updated = conn
+        .execute(
+            &format!("UPDATE tasks SET {column} = ?1 WHERE key = ?2 AND project_prefix = ?3"),
+            params![format_time(at.trunc_subsecs(3)), key, prefix],
+        )
+        .map_err(|e| Error::Storage(e.to_string()))?;
+    if updated == 0 {
+        return Err(Error::NotFound);
+    }
+    read_visit(conn, prefix, key)
+}
+
+/// Records that an agent working on the task finished a turn, asked for attention, or exited.
+pub fn record_activity(
+    conn: &Connection,
+    prefix: &str,
+    key: &str,
+    at: DateTime<Utc>,
+) -> Result<Visit, Error> {
+    set_time(conn, "last_activity_at", prefix, key, at)
+}
+
+pub fn mark_visited(
+    conn: &Connection,
+    prefix: &str,
+    key: &str,
+    at: DateTime<Utc>,
+) -> Result<Visit, Error> {
+    set_time(conn, "last_visited_at", prefix, key, at)
+}
+
+/// Moves the visit to just before the last activity; a task without activity stays as it is.
+pub fn mark_unread(conn: &Connection, prefix: &str, key: &str) -> Result<Visit, Error> {
+    let visit = read_visit(conn, prefix, key)?;
+    match visit.last_activity_at {
+        Some(activity) => set_time(
+            conn,
+            "last_visited_at",
+            prefix,
+            key,
+            activity - chrono::Duration::milliseconds(1),
+        ),
+        None => Ok(visit),
+    }
 }
 
 /// Derive a project prefix from a project name.
@@ -385,12 +474,10 @@ impl SqliteRepository {
             base_branch: row
                 .base_branch
                 .unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string()),
-            created_at: chrono::DateTime::parse_from_rfc3339(&row.created_at)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
-            updated_at: chrono::DateTime::parse_from_rfc3339(&row.updated_at)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
+            created_at: parse_time(&row.created_at).unwrap_or_else(Utc::now),
+            updated_at: parse_time(&row.updated_at).unwrap_or_else(Utc::now),
+            last_visited_at: row.last_visited_at.as_deref().and_then(parse_time),
+            last_activity_at: row.last_activity_at.as_deref().and_then(parse_time),
         })
     }
 
@@ -400,59 +487,28 @@ impl SqliteRepository {
         key: &str,
         prefix_filter: Option<&str>,
     ) -> Result<Task, Error> {
-        let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match prefix_filter {
-            Some(p) => (
-                "SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1 AND project_prefix = ?2",
-                vec![Box::new(key.to_string()), Box::new(p.to_string())],
+        let row = match prefix_filter {
+            Some(prefix) => conn.query_row(
+                &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE key = ?1 AND project_prefix = ?2"),
+                params![key, prefix],
+                TaskRow::read,
             ),
-            None => (
-                "SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1",
-                vec![Box::new(key.to_string())],
+            None => conn.query_row(
+                &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE key = ?1"),
+                params![key],
+                TaskRow::read,
             ),
-        };
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| Error::Storage(e.to_string()))?;
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
-
-        stmt.query_row(params_refs.as_slice(), |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i32>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
-            ))
-        })
+        }
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => Error::NotFound,
             _ => Error::Storage(e.to_string()),
-        })
-        .and_then(
-            |(k, title, desc, status, priority, parent, base_branch, created, updated)| {
-                self.row_to_task(
-                    conn,
-                    TaskRow {
-                        key: k,
-                        title,
-                        description: desc,
-                        status,
-                        priority,
-                        parent_key: parent,
-                        base_branch,
-                        created_at: created,
-                        updated_at: updated,
-                    },
-                )
-            },
-        )
+        })?;
+        self.row_to_task(conn, row)
     }
 }
+
+/// Columns `TaskRow::read` expects, in order.
+const TASK_COLUMNS: &str = "key, title, description, status, priority, parent_key, base_branch, created_at, updated_at, last_visited_at, last_activity_at";
 
 struct TaskRow {
     key: String,
@@ -464,6 +520,26 @@ struct TaskRow {
     base_branch: Option<String>,
     created_at: String,
     updated_at: String,
+    last_visited_at: Option<String>,
+    last_activity_at: Option<String>,
+}
+
+impl TaskRow {
+    fn read(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            key: row.get(0)?,
+            title: row.get(1)?,
+            description: row.get(2)?,
+            status: row.get(3)?,
+            priority: row.get(4)?,
+            parent_key: row.get(5)?,
+            base_branch: row.get(6)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+            last_visited_at: row.get(9)?,
+            last_activity_at: row.get(10)?,
+        })
+    }
 }
 
 impl TaskProvider for SqliteRepository {
@@ -513,20 +589,7 @@ impl TaskProvider for SqliteRepository {
             .map_err(|e| Error::Storage(e.to_string()))?;
         }
 
-        self.row_to_task(
-            &conn,
-            TaskRow {
-                key,
-                title: params.title,
-                description: params.description,
-                status: status.as_str().to_string(),
-                priority: params.priority,
-                parent_key: params.parent_key,
-                base_branch: Some(params.base_branch),
-                created_at: now.clone(),
-                updated_at: now,
-            },
-        )
+        self.query_task(&conn, &key, Some(&self.prefix))
     }
 
     fn create_with_first_child_assignment(
@@ -558,7 +621,7 @@ impl TaskProvider for SqliteRepository {
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
 
-        let mut sql = "SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE project_prefix = ?1".to_string();
+        let mut sql = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE project_prefix = ?1");
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
             vec![Box::new(self.prefix.clone())];
 
@@ -600,39 +663,13 @@ impl TaskProvider for SqliteRepository {
             .prepare(&sql)
             .map_err(|e| Error::Storage(e.to_string()))?;
         let rows = stmt
-            .query_map(params_refs.as_slice(), |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, i32>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                    row.get::<_, Option<String>>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, String>(8)?,
-                ))
-            })
+            .query_map(params_refs.as_slice(), TaskRow::read)
             .map_err(|e| Error::Storage(e.to_string()))?;
 
         let mut tasks = Vec::new();
         for row in rows {
-            let (k, title, desc, status, priority, parent, base_branch, created, updated) =
-                row.map_err(|e| Error::Storage(e.to_string()))?;
-            tasks.push(self.row_to_task(
-                &conn,
-                TaskRow {
-                    key: k,
-                    title,
-                    description: desc,
-                    status,
-                    priority,
-                    parent_key: parent,
-                    base_branch,
-                    created_at: created,
-                    updated_at: updated,
-                },
-            )?);
+            let row = row.map_err(|e| Error::Storage(e.to_string()))?;
+            tasks.push(self.row_to_task(&conn, row)?);
         }
         Ok(tasks)
     }
@@ -712,20 +749,7 @@ impl TaskProvider for SqliteRepository {
             }
         }
 
-        self.row_to_task(
-            &conn,
-            TaskRow {
-                key: key.to_string(),
-                title,
-                description,
-                status: status_str,
-                priority,
-                parent_key,
-                base_branch: Some(base_branch),
-                created_at: now.clone(),
-                updated_at: now,
-            },
-        )
+        self.query_task(&conn, key, None)
     }
 
     fn delete(&self, key: &str) -> Result<(), Error> {

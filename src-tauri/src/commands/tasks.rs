@@ -30,6 +30,8 @@ pub struct TaskItem {
     #[serde(default)]
     pub url: Option<String>,
     pub base_branch: String,
+    pub last_visited_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_activity_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<planeai_tasks::model::Task> for TaskItem {
@@ -45,6 +47,8 @@ impl From<planeai_tasks::model::Task> for TaskItem {
             parent_key: t.parent_key,
             url: None,
             base_branch: t.base_branch,
+            last_visited_at: t.last_visited_at,
+            last_activity_at: t.last_activity_at,
         }
     }
 }

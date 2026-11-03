@@ -87,6 +87,8 @@ function task(key: string, status: string, priority = 0): TaskItem {
     parent_key: null,
     url: null,
     base_branch: "main",
+    last_visited_at: null,
+    last_activity_at: null,
   };
 }
 
