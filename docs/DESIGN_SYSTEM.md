@@ -40,6 +40,7 @@ Custom user themes are plain CSS files in `~/.config/planeai/themes/` that overr
 | Token            | Purpose                    | Light     | Dark      |
 | ---------------- | -------------------------- | --------- | --------- |
 | `status-running` | Running/success/green      | `#1a7f37` | `#3fb950` |
+| `status-working` | Agent working/blue         | `#0969da` | `#58a6ff` |
 | `status-review`  | Needs review/warning/amber | `#9a6700` | `#d29922` |
 | `status-exited`  | Exited/error/red           | `#cf222e` | `#ff7b72` |
 | `status-idle`    | Idle sessions              | `#aeaeb5` | `#5b5b61` |

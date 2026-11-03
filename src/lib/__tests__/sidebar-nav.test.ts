@@ -5,6 +5,8 @@ import {
   clampIndex,
   handleSidebarKey,
   shouldBypassSidebarKeyboard,
+  activatesItselfOnEnter,
+  focusedSidebarControl,
 } from "../sidebar-nav.svelte";
 
 function key(overrides: Partial<KeyboardEvent>): KeyboardEvent {
@@ -171,6 +173,40 @@ describe("sidebar-nav", () => {
       const button = document.createElement("button");
       button.dataset.pluginSidebarAction = "minimal-logger:log";
       expect(shouldBypassSidebarKeyboard(button)).toBe(true);
+    });
+  });
+
+  describe("controls inside the sidebar", () => {
+    const row = () => {
+      const card = document.createElement("div");
+      card.innerHTML =
+        '<button data-nav-index="3"></button><div><button aria-label="Pull requests"><span></span></button></div>';
+      return {
+        card,
+        nav: card.querySelector<HTMLElement>("[data-nav-index]")!,
+        pill: card.querySelector<HTMLElement>("[aria-label]")!,
+      };
+    };
+
+    it("finds the focused control that is not a navigation row", () => {
+      const { card, nav, pill } = row();
+      expect(focusedSidebarControl(pill.querySelector("span"))).toBe(pill);
+      expect(focusedSidebarControl(nav)).toBeNull();
+      expect(focusedSidebarControl(card)).toBeNull();
+    });
+
+    it("lets a keyboard-focused control keep Enter, but not a mouse-focused one", () => {
+      const { pill } = row();
+      const focusVisible = (visible: boolean) => {
+        vi.spyOn(pill, "matches").mockImplementation(
+          (selector: string) => selector === ":focus-visible" && visible,
+        );
+        return pill;
+      };
+      expect(activatesItselfOnEnter(key({ key: "Enter" }), focusVisible(true))).toBe(true);
+      expect(activatesItselfOnEnter(key({ key: "Enter" }), focusVisible(false))).toBe(false);
+      expect(activatesItselfOnEnter(key({ key: "ArrowDown" }), focusVisible(true))).toBe(false);
+      expect(activatesItselfOnEnter(key({ key: "Enter" }), null)).toBe(false);
     });
   });
 

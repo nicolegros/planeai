@@ -52,12 +52,17 @@ pub const PROVIDER_HOST_API_VERSION: &str = "planeai.plugin-host.v3";
 /// `host.sessions.providers`) and the `dialog` placement.
 pub const TASK_SESSION_HOST_API_VERSION: &str = "planeai.plugin-host.v4";
 
+/// A `session.meta` slot's tooltip and click-through to the plugin's session panel; on older
+/// host APIs the slot stays visual-only. The frontend enforces it in `src/lib/plugin-navigation.ts`.
+pub const SESSION_META_HOST_API_VERSION: &str = "planeai.plugin-host.v5";
+
 /// Every host API this host serves, oldest first; each includes the ones before it.
-const HOST_API_VERSIONS: [&str; 4] = [
+const HOST_API_VERSIONS: [&str; 5] = [
     HOST_API_VERSION,
     RECIPIENT_HOST_API_VERSION,
     PROVIDER_HOST_API_VERSION,
     TASK_SESSION_HOST_API_VERSION,
+    SESSION_META_HOST_API_VERSION,
 ];
 
 pub fn supports_host_api_version(version: &str) -> bool {
@@ -448,7 +453,7 @@ mod tests {
             "id": "integration",
             "name": "Integration",
             "version": "0.1.0",
-            "host_api_version": "planeai.plugin-host.v4",
+            "host_api_version": SESSION_META_HOST_API_VERSION,
             "source_kind": "local",
             "backend_entrypoints": { "macos-arm64": "bin/plugin" },
             "capabilities": [
@@ -499,6 +504,14 @@ mod tests {
                 "{placement}"
             );
         }
+    }
+
+    #[test]
+    fn session_meta_stays_valid_on_the_host_api_it_shipped_with() {
+        let mut manifest = manifest();
+        manifest["ui_contributions"][0]["placement"] = json!("session.meta");
+        manifest["host_api_version"] = json!(TASK_SESSION_HOST_API_VERSION);
+        assert!(validate_local_manifest(&manifest, "macos-arm64").is_ok());
     }
 
     #[test]

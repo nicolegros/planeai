@@ -4,7 +4,7 @@
   import type { PluginSessionContext } from "../lib/plugin-sdk";
   import { pluginSessionActionsForProvider } from "../lib/plugin-session-actions";
   import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
-  import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
+  import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard, activatesItselfOnEnter, focusedSidebarControl } from "../lib/sidebar-nav.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
   import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarRow, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
@@ -55,9 +55,11 @@
     onPluginSessionAction?: (session: Session, action: PluginSessionAction) => void;
     onPluginNavigate?: (pluginId: string, contributionId: string) => void;
     onPluginClose?: () => void;
+    /** Selects a session and opens a plugin's session panel for it, from the plugin's meta slot. */
+    onOpenPluginSessionPanel?: (sessionId: string, pluginId: string, contributionId: string) => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onToggleDiff, selectedTaskWorkspace = null, pluginContributions = [], sessionIndicatorContributions = [], sessionMetaContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onToggleDiff, selectedTaskWorkspace = null, pluginContributions = [], sessionIndicatorContributions = [], sessionMetaContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose, onOpenPluginSessionPanel }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
   function pluginContributionKey(item: PluginSlot): string {
@@ -397,8 +399,12 @@
     if (flatNav.length === 0) return;
     const origin = e.composedPath().find((node): node is Element => node instanceof Element);
     if (shouldBypassSidebarKeyboard(origin ?? document.activeElement)) return;
+    const control = focusedSidebarControl(origin ?? document.activeElement);
+    if (activatesItselfOnEnter(e, control)) return;
 
     const action = handleSidebarKey(e, flatNav.length);
+    // Once the sidebar takes a key, such as a highlight move, the next Enter belongs to the highlighted row.
+    if (e.defaultPrevented) control?.blur();
     if (!action) return;
 
     const idx = getSelectedIndex();
@@ -714,6 +720,7 @@
           sessionContext: pluginSessionContext,
           onNavigate: onPluginNavigate,
           onClose: onPluginClose,
+          onOpenPanel: onOpenPluginSessionPanel,
         }}
       />
     {:else}

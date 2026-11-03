@@ -233,14 +233,20 @@ describe("PluginContributionHost", () => {
     },
   );
 
-  it.each(["sidebar.header", "main-pane", "dialog"] as const)(
-    "tells a local %s frame its plugin's data changed without remounting it",
-    async (placement) => {
+  it.each([
+    ["sidebar.header", "planeai.plugin-host.v1"],
+    ["main-pane", "planeai.plugin-host.v1"],
+    ["dialog", "planeai.plugin-host.v1"],
+    ["titlebar", "planeai.plugin-host.v1"],
+    ["session.panel", "planeai.plugin-host.v5"],
+  ] as const)(
+    "tells a local %s frame on %s its plugin's data changed without remounting it",
+    async (placement, hostApiVersion) => {
       target = document.createElement("div");
       document.body.append(target);
       component = mount(PluginContributionHostLocalHarness, {
         target,
-        props: { placement },
+        props: { placement, hostApiVersion },
       }) as typeof component;
 
       const frame = await vi.waitFor(() => {
@@ -265,6 +271,32 @@ describe("PluginContributionHost", () => {
       ).toBe(frame);
     },
   );
+
+  it("remounts a local session panel from before host API v5 when its plugin's data changed", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "session.panel", hostApiVersion: "planeai.plugin-host.v4" },
+    }) as typeof component;
+    const frameOf = () =>
+      target
+        .querySelector("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+    const frame = await vi.waitFor(() => {
+      expect(frameOf()).toBeTruthy();
+      return frameOf()!;
+    });
+    const changed = await vi.waitFor(() => {
+      const listener = eventListeners.get("plugin-data-changed");
+      expect(listener).toBeTruthy();
+      return listener!;
+    });
+
+    changed({ payload: "local-fixture" });
+
+    await vi.waitFor(() => expect(frameOf()).not.toBe(frame));
+  });
 
   it("sizes a local sidebar-header iframe to its content instead of a fixed block", async () => {
     target = document.createElement("div");

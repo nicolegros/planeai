@@ -161,7 +161,9 @@ function labelOf(button: HTMLElement): string {
   if (button.hasAttribute("aria-expanded")) {
     return `[${button.textContent!.replace(/\s+/g, " ").trim()}]`;
   }
-  return (button.querySelector("span.text-\\[13px\\]") ?? button).textContent!.trim();
+  const labelledBy = button.getAttribute("aria-labelledby");
+  const content = labelledBy ? document.getElementById(labelledBy)! : button;
+  return (content.querySelector("span.text-\\[13px\\]") ?? content).textContent!.trim();
 }
 
 function navLabels(root: HTMLElement): string[] {
@@ -338,6 +340,60 @@ describe("UnifiedSidebar in the Cards layout", () => {
         .querySelector('[data-plugin-session-meta="scratch"] [data-plugin-ui-contribution]')
         ?.getAttribute("data-plugin-ui-contribution"),
     ).toBe("ci:session.meta");
+  });
+
+  it("leaves Enter to a keyboard-focused meta pill, and gives Enter back to the row after a move", async () => {
+    const onSelectSession = vi.fn();
+    const onOpenPluginSessionPanel = vi.fn();
+    const contribution = (id: string, placement: PluginUiContribution["placement"]) =>
+      ({ id, label: id, placement }) as PluginUiContribution;
+    const plugin = {
+      id: "github",
+      name: "GitHub",
+      source_kind: "local",
+      host_api_version: "planeai.plugin-host.v5",
+      ui_contributions: [
+        contribution("pill", "session.meta"),
+        contribution("panel", "session.panel"),
+      ],
+    } as PluginInventory;
+    mounted = await mountSidebar(
+      { sidebar_group_by: "status" },
+      {
+        onSelectSession,
+        onOpenPluginSessionPanel,
+        sessionMetaContributions: [{ plugin, contribution: plugin.ui_contributions[0] }],
+      },
+    );
+    focusSidebar();
+    flushSync();
+    const rows = navLabels(mounted.target);
+    setSelectedIndex(rows.indexOf("scratch"));
+    flushSync();
+    const pill = rowOf(mounted.target, "scratch").querySelector<HTMLButtonElement>(
+      '[data-plugin-session-meta="scratch"] button',
+    )!;
+    pill.focus();
+    vi.spyOn(pill, "matches").mockImplementation((selector) => selector === ":focus-visible");
+    const pressOn = (target: Element, key: string) => {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      flushSync();
+      return event;
+    };
+
+    const enter = pressOn(pill, "Enter");
+    expect(enter.defaultPrevented, "the browser activates the pill").toBe(false);
+    expect(onSelectSession, "Enter does not select the highlighted row").not.toHaveBeenCalled();
+
+    pill.click();
+    expect(onOpenPluginSessionPanel).toHaveBeenCalledWith("scratch", "github", "panel");
+    expect(onSelectSession, "the pill's click does not select its row").not.toHaveBeenCalled();
+
+    pressOn(pill, "k");
+    expect(document.activeElement, "moving the highlight releases the pill").not.toBe(pill);
+    pressOn(document.body, "Enter");
+    expect(onSelectSession).toHaveBeenCalledTimes(1);
   });
 
   it("splits the top rows into project folders when grouped by project", async () => {

@@ -641,6 +641,11 @@
 
   const navigatePlugin = (pluginId: string, contributionId: string) => openPlugin(pluginId, contributionId, "navigation");
 
+  function openSessionPluginPanel(sessionId: string, pluginId: string, contributionId: string): void {
+    selectWorkspaceSession(sessionId);
+    openPlugin(pluginId, contributionId, "session-meta");
+  }
+
   function focusPluginInteraction(): boolean {
     const interaction = document.querySelector<HTMLElement>("[data-plugin-interaction-host] [data-plugin-ui-contribution]");
     if (!interaction) return false;
@@ -1102,6 +1107,7 @@
         onPluginSessionAction={runPluginSessionAction}
         onPluginNavigate={navigatePlugin}
         onPluginClose={leavePluginWorkspace}
+        onOpenPluginSessionPanel={openSessionPluginPanel}
       />
   {/if}
 
@@ -1523,15 +1529,17 @@
 </main>
 
 {#if modalPlugin && modalContribution && (modalContribution.placement === "dialog" || activePluginSessionContext)}
-  <PluginDialog
-    plugin={modalPlugin}
-    contribution={modalContribution}
-    session={activePluginSessionContext}
-    getFocusedAgentSession={() => activePluginSessionContext}
-    onNavigate={navigatePlugin}
-    onClose={closePluginContributionModal}
-    onOpenPreferences={() => openPreferences(pluginPreferencesLocation(modalPlugin))}
-  />
+  {#key `${modalPlugin.id}:${modalContribution.id}`}
+    <PluginDialog
+      plugin={modalPlugin}
+      contribution={modalContribution}
+      session={activePluginSessionContext}
+      getFocusedAgentSession={() => activePluginSessionContext}
+      onNavigate={navigatePlugin}
+      onClose={closePluginContributionModal}
+      onOpenPreferences={() => openPreferences(pluginPreferencesLocation(modalPlugin))}
+    />
+  {/key}
 {/if}
 
 <!-- Workspace prompts would sit on top of setup and act on the hidden workspace; they return after it. -->

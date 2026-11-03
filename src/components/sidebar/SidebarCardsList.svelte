@@ -1,9 +1,11 @@
 <script lang="ts">
+  import { Tooltip } from "bits-ui";
   import { flip } from "svelte/animate";
   import { cubicOut } from "svelte/easing";
   import { crossfade } from "svelte/transition";
   import { Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, GitBranch, GitCompare, Play, RotateCcw, TriangleAlert, Undo2, Zap, type LucideIcon } from "@lucide/svelte";
   import PluginContributionHost from "../PluginContributionHost.svelte";
+  import SessionMetaSlot from "./SessionMetaSlot.svelte";
   import SessionRenameInput from "./SessionRenameInput.svelte";
   import { getActiveZone } from "../../lib/focus.svelte";
   import { getSelectedIndex } from "../../lib/sidebar-nav.svelte";
@@ -46,6 +48,8 @@
       sessionContext: (session: Session) => PluginSessionContext;
       onNavigate?: (pluginId: string, contributionId: string) => void;
       onClose?: () => void;
+      /** Selects the session and opens the plugin's session panel, from its meta slot. */
+      onOpenPanel?: (sessionId: string, pluginId: string, contributionId: string) => void;
     };
   }
 
@@ -55,7 +59,7 @@
   }: Props = $props();
 
   const ACTIVITY_SLOTS: Record<SessionActivity, { icon: LucideIcon; label: string; class: string }> = {
-    working: { icon: CircleDashed, label: "Working", class: "text-status-running" },
+    working: { icon: CircleDashed, label: "Working", class: "text-status-working" },
     ready: { icon: CircleCheck, label: "Ready", class: "text-status-review" },
     exited: { icon: CircleAlert, label: "Exited", class: "text-status-exited" },
   };
@@ -72,7 +76,7 @@
   const URGENCY_DOTS: Record<FolderUrgency, { class: string; label: string }> = {
     exited: { class: "bg-status-exited", label: "Has an exited session" },
     review: { class: "bg-status-review", label: "Needs review" },
-    running: { class: "bg-status-running", label: "Working" },
+    running: { class: "bg-status-working", label: "Working" },
   };
 
   const top = $derived(sections.filter((s) => s.kind === "attention" || s.kind === "folder"));
@@ -94,7 +98,7 @@
   const rowItemClass = (row: SidebarRow) => `transition-opacity duration-200 ${isFading(row) ? "opacity-0" : "opacity-100"}`;
 
   function rowStateClass(active: boolean, selected: boolean, ringed: boolean): string {
-    const background = active ? "bg-sidebar-row-active" : selected ? "bg-sidebar-row-selected" : "hover:bg-sidebar-row-hover";
+    const background = active ? "bg-sidebar-row-active" : selected ? "bg-sidebar-row-selected" : "group-hover:bg-sidebar-row-hover";
     const ring = ringed ? "ring-2 ring-inset ring-accent" : active ? "ring-1 ring-inset ring-border-s" : "";
     return `${background} ${ring}`;
   }
@@ -161,15 +165,20 @@
     {@const id = row.session.id}
     <SessionRenameInput bind:value={() => rename.value, rename.onInput} onCommit={() => rename.onCommit(id)} onCancel={rename.onCancel} />
   {:else}
-    <div class="group relative">
+    {@const labelId = `sidebar-card-${sidebarRowNavKey(row)}`}
+    <!-- The row button lies behind its content so a meta slot can be a button of its own; content clicks bubble here, the slot's do not. -->
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="group relative" onclick={() => onSelectRow(row)} oncontextmenu={(e) => onRowContextMenu(e, row)}>
       <button
         data-nav-index={navIdx}
-        class="flex w-full flex-col gap-1 rounded-md px-2.5 py-2 text-left transition-colors {rowStateClass(active, selected, selected || isPreviewing(row))}"
+        class="absolute inset-0 rounded-md transition-colors {rowStateClass(active, selected, selected || isPreviewing(row))}"
+        aria-labelledby={labelId}
+      ></button>
+      <div
+        id={labelId}
+        class="relative flex w-full cursor-default flex-col gap-1 px-2.5 py-2 transition-opacity {receded ? 'opacity-75 group-hover:opacity-100 group-has-focus-visible:opacity-100' : ''}"
         title={row.kind === "task" && !showTaskKeys ? row.task.key : undefined}
-        onclick={() => onSelectRow(row)}
-        oncontextmenu={(e) => onRowContextMenu(e, row)}
       >
-        <span class="flex w-full flex-col gap-1 transition-opacity {receded ? 'opacity-75 group-hover:opacity-100 group-has-focus-visible:opacity-100' : ''}">
           {#if showProjects && !inFolder}
             <span class="flex h-5 items-center gap-1.5">
               <span class="min-w-0 flex-1 truncate text-xs text-t2" title={row.project.path}>{row.project.name}</span>
@@ -188,13 +197,14 @@
               <GitBranch class="size-3.5 shrink-0" />
               <span class="flex min-w-0" title={session.branch}><span class="truncate">{head}</span><span class="shrink-0">{tail}</span></span>
               {#each plugins.meta as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
-                <span class="flex shrink-0" data-plugin-session-meta={session.id}>{@render pluginHost(item, session)}</span>
+                <span class="flex shrink-0" data-plugin-session-meta={session.id}>
+                  <SessionMetaSlot {item} session={plugins.sessionContext(session)} onNavigate={plugins.onNavigate ?? (() => {})} onClose={plugins.onClose ?? (() => {})} onOpenPanel={plugins.onOpenPanel} />
+                </span>
               {/each}
               {#if session.provider}<span class="ml-auto shrink-0 font-mono text-[10px] text-t3">{session.provider}</span>{/if}
             </span>
           {/if}
-        </span>
-      </button>
+      </div>
       {@render hoverActions(row, undefined, active, "top-1.5")}
     </div>
   {/if}
@@ -309,6 +319,8 @@
   </section>
 {/snippet}
 
+<!-- One provider for every meta pill, so moving between pills skips the tooltip delay. -->
+<Tooltip.Provider delayDuration={300}>
 <div class="flex flex-1 flex-col">
   {#each top as section (section.key)}
     {#if section.kind === "folder"}
@@ -332,3 +344,4 @@
     <p class="px-3 py-1 text-xs text-t3 italic">No sessions or tasks</p>
   {/if}
 </div>
+</Tooltip.Provider>

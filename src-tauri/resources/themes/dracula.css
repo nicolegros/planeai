@@ -18,6 +18,7 @@
   --color-accent-bg: rgba(189, 147, 249, 0.1);
   --color-scrim: rgba(33, 34, 44, 0.3);
   --color-status-running: #50fa7b;
+  --color-status-working: #bd93f9;
   --color-status-review: #f1fa8c;
   --color-status-exited: #ff5555;
   --color-status-idle: #a8a4a0;
@@ -93,6 +94,7 @@
   --color-accent-bg: rgba(189, 147, 249, 0.12);
   --color-scrim: rgba(0, 0, 0, 0.55);
   --color-status-running: #50fa7b;
+  --color-status-working: #bd93f9;
   --color-status-review: #f1fa8c;
   --color-status-exited: #ff5555;
   --color-status-idle: #44475a;

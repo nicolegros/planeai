@@ -18,6 +18,9 @@
   import type { PluginInventory, PluginProvider, PluginUiContribution } from "../lib/types";
   import { isSessionRequest, serveSessionRequest, type ProviderSessionBridge } from "../lib/provider-session-bridge";
   import { pluginFrameFonts } from "../lib/plugin-frame-fonts";
+  import { parseTooltipLines, PLUGIN_TONE_COLORS, type PluginTooltipLine } from "../lib/plugin-tooltip";
+  import { FRAME_INTERACTION_EVENT } from "../lib/frame-interaction";
+  import { refreshesSessionPanelInPlace } from "../lib/plugin-navigation";
 
   interface Props {
     plugin: PluginInventory;
@@ -35,6 +38,8 @@
     onFocused?: () => void;
     /** Resolves the focused session at action time for local plugin recipients. */
     getFocusedAgentSession?: () => PluginSessionContext | undefined;
+    /** session.meta only: the lines the plugin asks the host to show when its slot is hovered or focused. */
+    onTooltip?: (lines: PluginTooltipLine[]) => void;
   }
 
   type LocalPluginFrameMessage = {
@@ -62,9 +67,10 @@
     height?: number;
     width?: number;
     text?: unknown;
+    lines?: unknown;
   };
 
-  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, providerSession, onFocused, getFocusedAgentSession = () => undefined }: Props = $props();
+  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, providerSession, onFocused, getFocusedAgentSession = () => undefined, onTooltip }: Props = $props();
   const serializedSession = $derived(session ? JSON.stringify(session) : "");
   let container = $state<HTMLElement>();
   let disposer: PluginUiDisposer | null = null;
@@ -105,9 +111,10 @@
     ["accent", "--color-accent"],
     ["on-accent", "--color-on-accent"],
     ["accent-subtle", "--color-accent-bg"],
-    ["success", "--color-status-running"],
-    ["warning", "--color-status-review"],
-    ["danger", "--color-status-exited"],
+    ["success", PLUGIN_TONE_COLORS.success],
+    ["warning", PLUGIN_TONE_COLORS.warning],
+    ["danger", PLUGIN_TONE_COLORS.danger],
+    ["info", PLUGIN_TONE_COLORS.info],
   ] as const;
 
   function escapePluginThemeValue(value: string): string {
@@ -135,8 +142,8 @@
   /** Placements whose frame is as tall as the plugin's content, reported from inside the frame. */
   const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "dialog", "sidebar.header"];
 
-  /** Local placements told about their plugin's data changes in place, since remounting them would flash. */
-  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "session.meta", "sidebar.header", "main-pane", "dialog"];
+  /** Local placements told about their plugin's data changes in place, since remounting them would flash and drop their state. */
+  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "session.meta", "sidebar.header", "main-pane", "dialog", "titlebar"];
 
   /** Visual-only placements drawn inside a sidebar row: pointer-inert, unfocusable and 16px tall. */
   function inSessionRow(placement: PluginUiContribution["placement"]): boolean {
@@ -287,6 +294,14 @@
             if (height > 0) send({ type: "content-height", height });
           });
         };
+        // Events inside the frame never reach the host page, so a dialog that holds its position once the user acts needs this.
+        const reportInteraction = () => {
+          removeEventListener("pointerdown", reportInteraction, true);
+          removeEventListener("keydown", reportInteraction, true);
+          send({ type: "interaction" });
+        };
+        addEventListener("pointerdown", reportInteraction, true);
+        addEventListener("keydown", reportInteraction, true);
         const observeContentHeight = (contribution) => {
           if (!${JSON.stringify(contentSizedPlacements)}.includes(contribution?.placement) || !document.body) return;
           contentHeightObserver?.disconnect();
@@ -581,6 +596,9 @@
           frame.style.width = width;
           if (container) container.style.width = width;
         }
+      } else if (message.type === "tooltip" && isSessionMeta) {
+        const lines = parseTooltipLines(message.lines);
+        if (lines) onTooltip?.(lines);
       } else if (message.type === "navigation") {
         if (message.action === "open" && message.pluginId && message.contributionId) {
           onNavigate(message.pluginId, message.contributionId);
@@ -598,6 +616,8 @@
       } else if (message.type === "notify" && typeof message.message === "string") {
         const notification = message.message.trim();
         if (notification) showToast(notification, message.kind ?? "error");
+      } else if (message.type === "interaction") {
+        container?.dispatchEvent(new CustomEvent(FRAME_INTERACTION_EVENT, { bubbles: true }));
       } else if (message.type === "sidebar-select" && typeof message.rowId === "string") {
         container?.dispatchEvent(
           new CustomEvent("plugin-sidebar-select", { bubbles: true, detail: { rowId: message.rowId } }),
@@ -649,7 +669,12 @@
     };
 
     const refreshData = (): void => frame.contentWindow?.postMessage({ type: "data-changed" }, "*");
-    if (refreshedInPlacePlacements.includes(contribution.placement)) refreshLocalPluginData = refreshData;
+    if (
+      refreshedInPlacePlacements.includes(contribution.placement) ||
+      (contribution.placement === "session.panel" && refreshesSessionPanelInPlace(plugin))
+    ) {
+      refreshLocalPluginData = refreshData;
+    }
     let framed = true;
     let unlistenSessionEvents: (() => void) | undefined;
     if (bridge) {

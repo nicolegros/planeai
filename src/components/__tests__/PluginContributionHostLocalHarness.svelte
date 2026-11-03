@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import PluginContributionHost from "../PluginContributionHost.svelte";
   import type { PluginInventory, PluginUiContribution } from "../../lib/types";
 
@@ -6,14 +7,15 @@
     placement?: PluginUiContribution["placement"];
     closeOnEscape?: boolean;
     autofocus?: boolean;
+    hostApiVersion?: string;
   }
 
-  let { placement = "sidebar.section", closeOnEscape = false, autofocus = false }: Props = $props();
+  let { placement = "sidebar.section", closeOnEscape = false, autofocus = false, hostApiVersion = "planeai.plugin-host.v1" }: Props = $props();
   let plugin = $state<PluginInventory>({
     id: "local-fixture",
     name: "Local Fixture",
     version: "0.1.0",
-    host_api_version: "planeai.plugin-host.v1",
+    host_api_version: untrack(() => hostApiVersion),
     source_kind: "local",
     backend_entrypoint: "bin/planeai-plugin-fixture",
     capabilities: ["settings", "tasks.read", "task-events"],
