@@ -296,6 +296,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "drives the real Finder over AppleScript, which times out under load and fills the user's Trash"]
     fn delete_to_trash_removes_from_listing() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
