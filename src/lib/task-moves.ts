@@ -132,7 +132,9 @@ export async function changeTaskStatus(
   repoPath: string,
   onMoved: () => void,
 ): Promise<boolean> {
-  cancelDone(taskStore.taskRef(repoPath, key), false);
+  const id = taskStore.taskRef(repoPath, key);
+  cancelDone(id, false);
+  if (savedDone.delete(id)) savePendingDone();
   const from = taskStore.findTask(repoPath, key)?.status;
   if (from === status) return true;
   if (from !== undefined && status === "done") {
@@ -180,8 +182,8 @@ export function canUndoTaskMove(): boolean {
 }
 
 /**
- * Mod+Z: cancels the newest Done still in its undo window, or reverts the last applied move while
- * the task still has the status it was moved to.
+ * Mod+Z: undoes the last UI status change, once. A Done still in its undo window is cancelled;
+ * any other move is reverted while the task still has the status it was moved to.
  */
 export async function undoLastTaskMove(onMoved: () => void): Promise<void> {
   const move = lastMove;
@@ -237,8 +239,8 @@ export async function applyInterruptedDone(onMoved: () => void): Promise<void> {
     } catch {
       continue;
     }
-    // The user may have started a new Done on it while the project was read.
-    if (pendingDone.has(id)) continue;
+    // The user may have changed its status while the project was read; that choice wins.
+    if (pendingDone.has(id) || !savedDone.has(id)) continue;
     if (status !== undefined && status !== "done")
       moved = (await apply(key, "done", repoPath)) || moved;
     savedDone.delete(id);

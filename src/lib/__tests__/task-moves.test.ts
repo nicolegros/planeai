@@ -327,4 +327,17 @@ describe("task moves", () => {
     await moves.undoLastTaskMove(onMoved);
     expect(backendMoves()).toEqual([]);
   });
+
+  it("lets a status change made while recovery reads the project win over the saved Done", async () => {
+    localStorage.setItem(
+      "planeai.pending-done",
+      JSON.stringify([{ key: "PLA-1", repoPath: "/repo" }]),
+    );
+    const recovering = moves.applyInterruptedDone(onMoved);
+    await moves.changeTaskStatus("PLA-1", "in_review", "/repo", onMoved);
+    await recovering;
+
+    expect(backendMoves()).toEqual(["PLA-1:in_review"]);
+    expect(localStorage.getItem("planeai.pending-done")).toBeNull();
+  });
 });
