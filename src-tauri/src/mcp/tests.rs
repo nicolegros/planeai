@@ -361,6 +361,28 @@ fn task_update_writes_nothing_when_a_blocker_is_unknown() {
 }
 
 #[test]
+fn task_update_drops_repeated_tags_and_blockers() {
+    let f = Fixture::new();
+    f.call(
+        "task_update",
+        json!({
+            "title": "Renamed",
+            "tags": ["mcp", "api", "mcp"],
+            "blocked_by": ["DEM-2", "DEM-2"]
+        }),
+    );
+    let task = f.repo.get("DEM-1").unwrap();
+    assert_eq!(
+        (task.title.as_str(), task.tags, task.blocked_by),
+        (
+            "Renamed",
+            vec!["api".to_string(), "mcp".to_string()],
+            vec!["DEM-2".to_string()]
+        )
+    );
+}
+
+#[test]
 fn every_task_writing_call_refreshes_the_app_once() {
     let f = Fixture::new();
     f.call("task_update", json!({ "key": "DEM-2", "parent": "DEM-1" }));

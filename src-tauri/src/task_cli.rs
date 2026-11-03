@@ -145,6 +145,8 @@ pub fn run_task_wake(
     run_task_show(repo, key)
 }
 
+/// Field edits for one task; `None` leaves a field as it is.
+#[derive(Default)]
 pub struct EditParams<'a> {
     pub key: &'a str,
     pub title: Option<&'a str>,
@@ -152,8 +154,21 @@ pub struct EditParams<'a> {
     pub priority: Option<i32>,
     pub tags: Option<&'a [String]>,
     pub blocked_by: Option<&'a [String]>,
+    /// `Some(None)` clears the parent.
     pub parent: Option<Option<&'a str>>,
     pub base_branch: Option<&'a str>,
+}
+
+impl EditParams<'_> {
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.description.is_none()
+            && self.priority.is_none()
+            && self.tags.is_none()
+            && self.blocked_by.is_none()
+            && self.parent.is_none()
+            && self.base_branch.is_none()
+    }
 }
 
 pub fn run_task_edit(repo: &dyn TaskProvider, params: EditParams) -> Result<String, String> {

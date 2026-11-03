@@ -901,6 +901,53 @@ fn tomorrow() -> Snooze {
 }
 
 #[test]
+fn update_that_fails_midway_leaves_the_task_unchanged() {
+    let r = repo();
+    for title in ["blocker", "other"] {
+        r.create(CreateParams {
+            title: title.into(),
+            ..Default::default()
+        })
+        .unwrap();
+    }
+    let task = r
+        .create(CreateParams {
+            title: "Original".into(),
+            tags: vec!["keep".into()],
+            blocked_by: vec!["TEST-1".into()],
+            ..Default::default()
+        })
+        .unwrap();
+
+    for params in [
+        UpdateParams {
+            title: Some("Renamed".into()),
+            blocked_by: Some(vec!["TEST-2".into(), "TEST-2".into()]),
+            ..Default::default()
+        },
+        UpdateParams {
+            title: Some("Renamed".into()),
+            tags: Some(vec!["dup".into(), "dup".into()]),
+            ..Default::default()
+        },
+    ] {
+        assert!(matches!(
+            r.update(&task.key, params),
+            Err(Error::Storage(_))
+        ));
+        let after = r.get(&task.key).unwrap();
+        assert_eq!(
+            (after.title.as_str(), after.tags, after.blocked_by),
+            (
+                "Original",
+                vec!["keep".to_string()],
+                vec!["TEST-1".to_string()]
+            )
+        );
+    }
+}
+
+#[test]
 fn a_new_task_starts_at_snooze_revision_zero() {
     let (_directory, repo, _conn) = shared_db();
 
@@ -1116,4 +1163,52 @@ fn a_task_is_snoozed_until_the_instant_it_wakes() {
 
     assert!(task.is_snoozed(at("2026-11-04T08:59:59.999Z")));
     assert!(!task.is_snoozed(at("2026-11-04T09:00:00Z")));
+}
+
+#[test]
+fn a_task_cannot_become_its_own_ancestor() {
+    let r = repo();
+    for title in ["root", "child", "grandchild"] {
+        r.create(CreateParams {
+            title: title.into(),
+            ..Default::default()
+        })
+        .unwrap();
+    }
+    r.set_parent_with_first_child_assignment("TEST-2", Some("TEST-1".into()))
+        .unwrap();
+    r.set_parent_with_first_child_assignment("TEST-3", Some("TEST-2".into()))
+        .unwrap();
+
+    let refusals = [
+        r.set_parent_with_first_child_assignment("TEST-1", Some("TEST-1".into()))
+            .unwrap_err()
+            .to_string(),
+        r.set_parent_with_first_child_assignment("TEST-1", Some("TEST-3".into()))
+            .unwrap_err()
+            .to_string(),
+        r.set_parent_with_first_child_assignment("TEST-1", Some("TEST-9".into()))
+            .unwrap_err()
+            .to_string(),
+        r.update(
+            "TEST-1",
+            UpdateParams {
+                parent_key: Some(Some("TEST-2".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap_err()
+        .to_string(),
+    ];
+
+    assert_eq!(
+        refusals,
+        [
+            "a task cannot be its own parent",
+            "TEST-3 is a subtask of TEST-1, so it cannot be its parent",
+            "parent task not found: TEST-9",
+            "TEST-2 is a subtask of TEST-1, so it cannot be its parent",
+        ]
+    );
+    assert_eq!(r.get("TEST-1").unwrap().parent_key, None);
 }

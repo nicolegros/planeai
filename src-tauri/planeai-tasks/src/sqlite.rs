@@ -84,6 +84,40 @@ pub fn insert_task(
     })
 }
 
+/// Refuse a `parent` that is missing, is `key` itself, or is one of `key`'s subtasks.
+pub fn check_parent(conn: &Connection, key: &str, parent: &str) -> Result<(), Error> {
+    let cycle = || Error::ParentCycle {
+        key: key.to_string(),
+        parent: parent.to_string(),
+    };
+    if parent == key {
+        return Err(cycle());
+    }
+    let parent_of = |task: &str| -> Result<Option<Option<String>>, Error> {
+        match conn.query_row(
+            "SELECT parent_key FROM tasks WHERE key = ?1",
+            params![task],
+            |row| row.get::<_, Option<String>>(0),
+        ) {
+            Ok(parent) => Ok(Some(parent)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(Error::Storage(e.to_string())),
+        }
+    };
+    let mut next = parent_of(parent)?.ok_or_else(|| Error::ParentNotFound(parent.to_string()))?;
+    let mut seen = std::collections::HashSet::new();
+    while let Some(ancestor) = next {
+        if ancestor == key {
+            return Err(cycle());
+        }
+        if !seen.insert(ancestor.clone()) {
+            break;
+        }
+        next = parent_of(&ancestor)?.flatten();
+    }
+    Ok(())
+}
+
 /// Run task-table migrations on an existing connection.
 /// Call this on the shared app DB connection before constructing a repository.
 pub fn migrate(conn: &Connection) -> Result<(), Error> {
@@ -539,6 +573,15 @@ impl SqliteRepository {
         Ok((task, created.first_child.filter(|_| created.inserted)))
     }
 
+    /// Whether `parent` may become `key`'s parent; see [`check_parent`].
+    pub fn check_parent(&self, key: &str, parent: &str) -> Result<(), Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        check_parent(&conn, key, parent)
+    }
+
     /// Change a task's parent and atomically report whether the new parent had
     /// no children before this assignment committed.
     pub fn set_parent_with_first_child_assignment(
@@ -567,6 +610,9 @@ impl SqliteRepository {
             tx.commit()
                 .map_err(|error| Error::Storage(error.to_string()))?;
             return Ok((self.query_task(&conn, key, None)?, None));
+        }
+        if let Some(parent) = &parent_key {
+            check_parent(&tx, key, parent)?;
         }
         let is_first = match &parent_key {
             Some(parent_key) => !tx
@@ -857,30 +903,38 @@ impl TaskProvider for SqliteRepository {
     }
 
     fn update(&self, key: &str, params: UpdateParams) -> Result<Task, Error> {
-        let conn = self
+        let storage = |e: rusqlite::Error| Error::Storage(e.to_string());
+        let mut conn = self
             .conn
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
+        let tx = conn.transaction().map_err(storage)?;
 
-        let existing = {
-            let mut stmt = conn
-                .prepare("SELECT title, description, status, priority, parent_key, base_branch FROM tasks WHERE key = ?1")
-                .map_err(|e| Error::Storage(e.to_string()))?;
-            stmt.query_row(rusqlite::params![key], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i32>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                ))
-            })
+        let existing = tx
+            .query_row(
+                "SELECT title, description, status, priority, parent_key, base_branch FROM tasks WHERE key = ?1",
+                rusqlite::params![key],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i32>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                    ))
+                },
+            )
             .map_err(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => Error::NotFound,
                 _ => Error::Storage(e.to_string()),
-            })?
-        };
+            })?;
+
+        if let Some(Some(parent)) = &params.parent_key {
+            if existing.4.as_ref() != Some(parent) {
+                check_parent(&tx, key, parent)?;
+            }
+        }
 
         let title = params.title.unwrap_or(existing.0);
         let description = params.description.unwrap_or(existing.1);
@@ -897,7 +951,7 @@ impl TaskProvider for SqliteRepository {
         let now = Utc::now().to_rfc3339();
 
         // Every status write lands here, so this is where Done ends a snooze.
-        conn.execute(
+        tx.execute(
             "UPDATE tasks SET title = ?1, description = ?2, status = ?3, priority = ?4, parent_key = ?5, base_branch = ?6, updated_at = ?7,
                snoozed_until = CASE WHEN ?3 = 'done' THEN NULL ELSE snoozed_until END,
                snoozed_at = CASE WHEN ?3 = 'done' THEN NULL ELSE snoozed_at END,
@@ -905,38 +959,39 @@ impl TaskProvider for SqliteRepository {
                snooze_rev = snooze_rev + CASE WHEN ?3 = 'done' THEN 1 ELSE 0 END
              WHERE key = ?8",
             rusqlite::params![title, description, status_str, priority, parent_key, base_branch, now, key],
-        ).map_err(|e| Error::Storage(e.to_string()))?;
+        ).map_err(storage)?;
 
         if let Some(ref blockers) = params.blocked_by {
-            conn.execute(
+            tx.execute(
                 "DELETE FROM task_blockers WHERE task_key = ?1",
                 rusqlite::params![key],
             )
-            .map_err(|e| Error::Storage(e.to_string()))?;
+            .map_err(storage)?;
             for bk in blockers {
-                conn.execute(
+                tx.execute(
                     "INSERT INTO task_blockers (task_key, blocked_by_key) VALUES (?1, ?2)",
                     rusqlite::params![key, bk],
                 )
-                .map_err(|e| Error::Storage(e.to_string()))?;
+                .map_err(storage)?;
             }
         }
 
         if let Some(ref tags) = params.tags {
-            conn.execute(
+            tx.execute(
                 "DELETE FROM task_tags WHERE task_key = ?1",
                 rusqlite::params![key],
             )
-            .map_err(|e| Error::Storage(e.to_string()))?;
+            .map_err(storage)?;
             for tag in tags {
-                conn.execute(
+                tx.execute(
                     "INSERT INTO task_tags (task_key, tag) VALUES (?1, ?2)",
                     rusqlite::params![key, tag],
                 )
-                .map_err(|e| Error::Storage(e.to_string()))?;
+                .map_err(storage)?;
             }
         }
 
+        tx.commit().map_err(storage)?;
         self.query_task(&conn, key, None)
     }
 

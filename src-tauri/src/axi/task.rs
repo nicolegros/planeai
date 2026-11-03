@@ -311,24 +311,19 @@ fn task_detail_result(json: Result<String, String>) -> (String, i32) {
     }
 }
 
-/// Field edits and a status move for one task; `None` leaves a field as it is.
+/// Field edits and a status move for one task.
 #[derive(Default)]
 pub struct TaskUpdate<'a> {
-    pub key: &'a str,
-    pub title: Option<&'a str>,
-    pub description: Option<&'a str>,
-    pub priority: Option<i32>,
-    pub tags: Option<&'a [String]>,
-    pub blocked_by: Option<&'a [String]>,
-    /// `Some(None)` clears the parent.
-    pub parent: Option<Option<&'a str>>,
-    pub base_branch: Option<&'a str>,
+    pub edit: crate::task_cli::EditParams<'a>,
     pub status: Option<&'a str>,
 }
 
 /// Apply the edits, then the move, each through its lifecycle-producing path. Everything
-/// that can be refused is checked first, so a refused update writes nothing.
+/// that can be refused is checked first, so a refused update writes nothing. The two writes
+/// are separate transactions because the move cascades through `move_task_with_lifecycle`,
+/// which works on any `TaskProvider`.
 pub fn task_update(scope: &TaskScope, update: TaskUpdate) -> (String, i32) {
+    let key = update.edit.key;
     if let Some(status) = update.status {
         if Status::parse(status).is_none() {
             return (
@@ -340,25 +335,19 @@ pub fn task_update(scope: &TaskScope, update: TaskUpdate) -> (String, i32) {
             );
         }
     }
-    let edits = update.title.is_some()
-        || update.description.is_some()
-        || update.priority.is_some()
-        || update.tags.is_some()
-        || update.blocked_by.is_some()
-        || update.parent.is_some()
-        || update.base_branch.is_some();
-    if !edits && update.status.is_none() {
+    if update.edit.is_empty() && update.status.is_none() {
         return (emit_error("nothing to update", &[]), 1);
     }
-    if let Err(error) = scope.repo.get(update.key) {
+    if let Err(error) = scope.repo.get(key) {
         return (emit_error(&error.to_string(), &[]), 1);
     }
-    if let Some(Some(parent)) = update.parent {
-        if let Err(error) = check_parent(&scope.repo, update.key, parent) {
-            return (emit_error(&error, &[]), 1);
+    if let Some(Some(parent)) = update.edit.parent {
+        if let Err(error) = scope.repo.check_parent(key, parent) {
+            return (emit_error(&error.to_string(), &[]), 1);
         }
     }
-    for blocker in update.blocked_by.unwrap_or_default() {
+    let blocked_by = update.edit.blocked_by.map(distinct);
+    for blocker in blocked_by.iter().flatten() {
         if scope.repo.get(blocker).is_err() {
             return (
                 emit_error(&format!("blocking task not found: {blocker}"), &[]),
@@ -366,64 +355,43 @@ pub fn task_update(scope: &TaskScope, update: TaskUpdate) -> (String, i32) {
             );
         }
     }
-    if edits {
-        if let Err(error) = crate::task_cli::run_task_edit_with_lifecycle(
-            &scope.repo,
-            crate::task_cli::EditParams {
-                key: update.key,
-                title: update.title,
-                description: update.description,
-                priority: update.priority,
-                tags: update.tags,
-                blocked_by: update.blocked_by,
-                parent: update.parent,
-                base_branch: update.base_branch,
-            },
-            &scope.lifecycle,
-        ) {
+    let tags = update.edit.tags.map(distinct);
+    let edit = crate::task_cli::EditParams {
+        tags: tags.as_deref(),
+        blocked_by: blocked_by.as_deref(),
+        ..update.edit
+    };
+    if !edit.is_empty() {
+        if let Err(error) =
+            crate::task_cli::run_task_edit_with_lifecycle(&scope.repo, edit, &scope.lifecycle)
+        {
             return (emit_error(&error, &[]), 1);
         }
     }
     if let Some(status) = update.status {
         if let Err(error) = crate::task_cli::run_task_move_with_lifecycle(
             &scope.repo,
-            update.key,
+            key,
             status,
             &scope.lifecycle,
         ) {
             return (emit_error(&error, &[]), 1);
         }
     }
-    match scope.repo.get(update.key) {
+    match scope.repo.get(key) {
         Ok(task) => (render(&[field("task", task_detail_object(&task))]), 0),
         Err(error) => (emit_error(&error.to_string(), &[]), 1),
     }
 }
 
-/// `parent` exists and is neither `key` nor one of its subtasks.
-fn check_parent(repo: &dyn TaskProvider, key: &str, parent: &str) -> Result<(), String> {
-    if parent == key {
-        return Err("a task cannot be its own parent".into());
-    }
-    let mut ancestor = repo
-        .get(parent)
-        .map_err(|_| format!("parent task not found: {parent}"))?;
+/// `values` without repeats, in first-seen order.
+fn distinct(values: &[String]) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
-    while let Some(next) = ancestor.parent_key.clone() {
-        if next == key {
-            return Err(format!(
-                "{parent} is a subtask of {key}, so it cannot be its parent"
-            ));
-        }
-        if !seen.insert(next.clone()) {
-            break;
-        }
-        match repo.get(&next) {
-            Ok(task) => ancestor = task,
-            Err(_) => break,
-        }
-    }
-    Ok(())
+    values
+        .iter()
+        .filter(|value| seen.insert(value.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// Delete a task and the task workspace it owned.

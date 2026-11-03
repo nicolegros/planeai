@@ -625,11 +625,13 @@ fn task_update_edits_fields_and_moves_status_in_one_call() {
     let (output, code) = task_update(
         &fixture.scope,
         TaskUpdate {
-            key: &key,
-            title: Some("New title"),
-            tags: Some(&tags),
+            edit: crate::task_cli::EditParams {
+                key: &key,
+                title: Some("New title"),
+                tags: Some(&tags),
+                ..Default::default()
+            },
             status: Some("in_progress"),
-            ..Default::default()
         },
     );
 
@@ -667,7 +669,10 @@ fn task_update_rejects_an_empty_update_and_unknown_tasks() {
         task_update(
             &fixture.scope,
             TaskUpdate {
-                key: &key,
+                edit: crate::task_cli::EditParams {
+                    key: &key,
+                    ..Default::default()
+                },
                 ..Default::default()
             }
         ),
@@ -677,9 +682,11 @@ fn task_update_rejects_an_empty_update_and_unknown_tasks() {
         task_update(
             &fixture.scope,
             TaskUpdate {
-                key: &key,
+                edit: crate::task_cli::EditParams {
+                    key: &key,
+                    ..Default::default()
+                },
                 status: Some("bogus"),
-                ..Default::default()
             }
         ),
         (
@@ -690,8 +697,11 @@ fn task_update_rejects_an_empty_update_and_unknown_tasks() {
     let (output, code) = task_update(
         &fixture.scope,
         TaskUpdate {
-            key: "NOPE-9",
-            title: Some("x"),
+            edit: crate::task_cli::EditParams {
+                key: "NOPE-9",
+                title: Some("x"),
+                ..Default::default()
+            },
             ..Default::default()
         },
     );

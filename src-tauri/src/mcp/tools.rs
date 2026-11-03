@@ -411,17 +411,19 @@ fn task_update(
     Ok(axi::task_update(
         &scope,
         TaskUpdate {
-            key: &key,
-            title: input.title.as_deref(),
-            description: input.description.as_deref(),
-            priority: input.priority,
-            tags: input.tags.as_deref(),
-            blocked_by: input.blocked_by.as_deref(),
-            parent: input
-                .parent
-                .as_deref()
-                .map(|parent| (!parent.is_empty()).then_some(parent)),
-            base_branch: input.base_branch.as_deref(),
+            edit: crate::task_cli::EditParams {
+                key: &key,
+                title: input.title.as_deref(),
+                description: input.description.as_deref(),
+                priority: input.priority,
+                tags: input.tags.as_deref(),
+                blocked_by: input.blocked_by.as_deref(),
+                parent: input
+                    .parent
+                    .as_deref()
+                    .map(|parent| (!parent.is_empty()).then_some(parent)),
+                base_branch: input.base_branch.as_deref(),
+            },
             status: input.status.map(TaskStatus::as_str),
         },
     )
