@@ -41,6 +41,7 @@
       { keys: `${MOD_LABEL}⇧T`, description: "Focus tasks panel" },
       { keys: `${MOD_LABEL}R`, description: "Refresh tasks" },
       { keys: `${MOD_LABEL}${ALT_LABEL}S`, description: "Move current task to Done" },
+      { keys: `${MOD_LABEL}Z`, description: "Undo the last move to Done" },
       { keys: `${MOD_LABEL}⇧R`, description: "Open Review" },
       { keys: `${MOD_LABEL}E`, description: "Toggle Explorer / prior pane focus" },
       { keys: `${MOD_LABEL}⇧E`, description: "Toggle file explorer" },

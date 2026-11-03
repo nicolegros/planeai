@@ -51,6 +51,7 @@ export type KeyboardAction =
   | { type: "focus_toast" }
   | { type: "refresh_tasks" }
   | { type: "complete_task" }
+  | { type: "undo" }
   | { type: "open_file" }
   | { type: "save_file" }
   | { type: "show_shortcuts" }
@@ -166,6 +167,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "complete_task" };
   }
 
+  // Mod+Z - revert the last task move, outside text fields
+  if (mod && !e.shiftKey && !e.altKey && !otherMod && key === "z") {
+    return { type: "undo" };
+  }
+
   // Mod+Shift+S — toggle sessions panel
   if (mod && e.shiftKey && key === "s") {
     return { type: "toggle_sessions_panel" };
@@ -237,6 +243,19 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
 
 export type ActionHandler = (action: KeyboardAction) => void;
 
+/** Text fields keep Mod+Z for their own undo; xterm's hidden input is not one. */
+function isTextFieldEvent(e: KeyboardEvent): boolean {
+  return e
+    .composedPath()
+    .some(
+      (target) =>
+        target instanceof HTMLElement &&
+        (target.matches('[contenteditable]:not([contenteditable="false"])') ||
+          ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+            !target.classList.contains("xterm-helper-textarea"))),
+    );
+}
+
 function isExplorerSearchEvent(e: KeyboardEvent): boolean {
   if (getActiveZone() !== "explorer") return false;
 
@@ -302,6 +321,8 @@ export function installKeyboardRouter(
     ) {
       return;
     }
+
+    if (action.type === "undo" && isTextFieldEvent(e)) return;
 
     // Explorer owns Escape while its shadow-DOM search input is focused;
     // let its capture handler close search and return focus to the tree row.

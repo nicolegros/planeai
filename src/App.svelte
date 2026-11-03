@@ -26,7 +26,7 @@
   import { openFileWithConfiguredEditor } from "./lib/file-editor";
   import { loadTheme } from "./lib/theme-loader";
   import { errorMessage } from "./lib/errors";
-  import { showToast } from "./lib/toasts.svelte";
+  import { dismissToast, showToast } from "./lib/toasts.svelte";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
   import KeyboardHelperBar from "./components/KeyboardHelperBar.svelte";
@@ -710,6 +710,10 @@
     return true;
   }
 
+  const COMPLETION_TOAST_ID = "task-completion";
+  // The last Mod+Option+S move; Mod+Z reverts it while the task is still done.
+  let lastCompletion: { task: TaskItem; project: Project; previousStatus: string } | null = null;
+
   async function completeActiveTask(): Promise<void> {
     if (!activeTaskWorkspace) {
       showToast({ kind: "info", message: "No task is open.", autoDismissMs: 3000 });
@@ -722,13 +726,25 @@
     }
     const previousStatus = task.status;
     if (!(await moveActiveTask(task, project, "done"))) return;
+    lastCompletion = { task, project, previousStatus };
     showToast({
+      id: COMPLETION_TOAST_ID,
       kind: "success",
       message: `${task.key} moved to Done`,
       detail: task.title,
       autoDismissMs: 5000,
-      actions: [{ key: "z", label: "Undo", run: () => void moveActiveTask(task, project, previousStatus) }],
+      actions: [{ key: "z", label: "Undo", run: undoCompletion }],
     });
+  }
+
+  async function undoCompletion(): Promise<void> {
+    const completion = lastCompletion;
+    lastCompletion = null;
+    dismissToast(COMPLETION_TOAST_ID);
+    if (!completion) return;
+    const { task, project, previousStatus } = completion;
+    const current = taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === task.key);
+    if (current?.status === "done") await moveActiveTask(task, project, previousStatus);
   }
 
   /**
@@ -1020,6 +1036,7 @@
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { saveActiveEditorResource(); }
         else if (action.type === "complete_task") { void completeActiveTask(); }
+        else if (action.type === "undo") { void undoCompletion(); }
         else if (action.type === "focus_toast") { if (!toggleToastFocus()) focusPluginInteraction(); }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
