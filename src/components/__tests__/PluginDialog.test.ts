@@ -68,11 +68,14 @@ describe("PluginDialog", () => {
     await vi.waitFor(() => expect(document.querySelector("[role=dialog]")).toBeNull());
   });
 
-  it("keeps a session panel in the form-width dialog without a close button", () => {
+  it("keeps a session panel in the form-width dialog, top edge still, without a close button", () => {
     const dialog = open("session.panel");
     expect(dialog.className).toContain("w-[min(452px,calc(100vw-32px))]");
     expect(dialog.className).toContain("min-h-[min(360px,85vh)]");
-    expect(dialog.className).toContain("top-1/2 -translate-y-1/2");
+    expect(dialog.className, "content that changes height grows the bottom edge only").toContain(
+      "top-[7.5vh]",
+    );
+    expect(dialog.className).not.toContain("top-1/2");
     expect(document.querySelector('button[aria-label="Close Routines"]')).toBeNull();
   });
 });
