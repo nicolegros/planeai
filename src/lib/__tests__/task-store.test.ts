@@ -131,6 +131,19 @@ describe("task store", () => {
       expect(statusOf("PLA-1")).toBe("in_review");
     });
 
+    it("keeps a hold that starts while a reload is in flight", async () => {
+      let finishReload!: (tasks: TaskItem[]) => void;
+      listAll.mockReturnValueOnce(new Promise<TaskItem[]>((resolve) => (finishReload = resolve)));
+
+      const reloading = taskStore.refresh(["/repo"]);
+      taskStore.holdStatus("PLA-1", "/repo", "done");
+      finishReload([{ ...task("PLA-1"), status: "in_progress" }]);
+      await reloading;
+
+      expect(statusOf("PLA-1")).toBe("done");
+      taskStore.releaseStatus("PLA-1", "/repo", "in_progress");
+    });
+
     it("shows a move before the reload that follows it lands", async () => {
       let finishReload!: (tasks: TaskItem[]) => void;
       move.mockResolvedValue(undefined);

@@ -15,7 +15,7 @@
 </script>
 
 <script lang="ts">
-  import { flushSync } from "svelte";
+  import { flushSync, untrack } from "svelte";
   import { Check } from "@lucide/svelte";
 
   interface Props {
@@ -28,7 +28,7 @@
   let { x, y, items, onClose }: Props = $props();
 
   let openSubmenuIndex = $state<number | null>(null);
-  let menuPosition = $state<{ x: number; y: number }>({ x: 0, y: 0 });
+  let menuPosition = $state<{ x: number; y: number }>(untrack(() => ({ x, y })));
   let submenuPosition = $state<{ x: number; y: number }>({ x: 0, y: 0 });
   let submenuTrigger = $state<DOMRect | null>(null);
   let menuEl = $state<HTMLElement | undefined>(undefined);

@@ -285,6 +285,8 @@ export function installKeyboardRouter(
   shouldYieldEscape?: () => boolean,
   /** True while a full-window takeover such as onboarding owns the keyboard. */
   isSuspended?: () => boolean,
+  /** False leaves Mod+Z to the focused content, such as a shell's Ctrl+Z off macOS. */
+  canUndo?: () => boolean,
 ): () => void {
   const editorAllowedActions = new Set<KeyboardAction["type"]>([
     "open_file",
@@ -330,7 +332,9 @@ export function installKeyboardRouter(
     }
 
     // Text fields keep Mod+Z for their own undo.
-    if (action.type === "undo" && e.composedPath().some(isTextEntryElement)) return;
+    if (action.type === "undo" && (!canUndo?.() || e.composedPath().some(isTextEntryElement))) {
+      return;
+    }
 
     // Explorer owns Escape while its shadow-DOM search input is focused;
     // let its capture handler close search and return focus to the tree row.

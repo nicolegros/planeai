@@ -142,13 +142,13 @@ describe("ContextMenu placement", () => {
     vi.restoreAllMocks();
   });
 
-  function placement(x: number, y: number): { menu: string; submenu: string } {
+  function placement(x: number, y: number, triggerLeft = 600): { menu: string; submenu: string } {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
       this: HTMLElement,
     ) {
       return this.getAttribute("role") === "menu"
         ? new DOMRect(0, 0, 160, 100)
-        : new DOMRect(this.closest("[role='menu']") ? 600 : 0, 700, 160, 28);
+        : new DOMRect(this.closest("[role='menu']") ? triggerLeft : 0, 700, 160, 28);
     });
     component = mount(ContextMenu, {
       target: document.body,
@@ -173,5 +173,10 @@ describe("ContextMenu placement", () => {
   it("flips up and left of the pointer near the bottom-right corner, and keeps the submenu inside the window", () => {
     // jsdom's window is 1024x768; the menu is 160x100 and its trigger spans x 600-760, y 700-728.
     expect(placement(1000, 750)).toEqual({ menu: "840px 650px", submenu: "756px 628px" });
+  });
+
+  it("opens the submenu to the left of its trigger near the right edge", () => {
+    // The trigger spans x 840-1000, so a 160px submenu only fits on its left: 840 + 4 - 160.
+    expect(placement(1000, 750, 840).submenu).toBe("684px 628px");
   });
 });

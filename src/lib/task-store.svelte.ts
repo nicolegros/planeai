@@ -14,12 +14,18 @@ let taskRequestGeneration = 0;
 const heldStatuses = new Map<string, string>();
 const heldKey = (repoPath: string, key: string) => `${repoPath}\u0000${key}`;
 
-function withHeldStatuses(repoPath: string, items: TaskItem[]): TaskItem[] {
-  if (heldStatuses.size === 0) return items;
-  return items.map((task) => {
-    const status = heldStatuses.get(heldKey(repoPath, task.key));
-    return status === undefined ? task : { ...task, status };
-  });
+/** Applied when a snapshot is assigned, so a hold that starts or ends mid-reload still counts. */
+function withHeldStatuses(byProject: Record<string, TaskItem[]>): Record<string, TaskItem[]> {
+  if (heldStatuses.size === 0) return byProject;
+  return Object.fromEntries(
+    Object.entries(byProject).map(([repoPath, items]) => [
+      repoPath,
+      items.map((task) => {
+        const status = heldStatuses.get(heldKey(repoPath, task.key));
+        return status === undefined ? task : { ...task, status };
+      }),
+    ]),
+  );
 }
 
 function setLocalStatus(key: string, repoPath: string, status: string): void {
@@ -49,6 +55,10 @@ export function getTasksByProject(): Record<string, TaskItem[]> {
 
 export function getTasksForProject(path: string): TaskItem[] {
   return tasksByProject[path] ?? [];
+}
+
+export function findTask(repoPath: string, key: string): TaskItem | undefined {
+  return getTasksForProject(repoPath).find((task) => task.key === key);
 }
 
 export function getAllTasks(): TaskItem[] {
@@ -81,13 +91,13 @@ export async function loadTasks(projectPaths: string[]): Promise<void> {
     await Promise.all(
       projectPaths.map(async (path) => {
         try {
-          results[path] = withHeldStatuses(path, await tasksApi.listAll(path));
+          results[path] = await tasksApi.listAll(path);
         } catch {
           results[path] = previous[path] ?? [];
         }
       }),
     );
-    if (requestGeneration === taskRequestGeneration) tasksByProject = results;
+    if (requestGeneration === taskRequestGeneration) tasksByProject = withHeldStatuses(results);
   } finally {
     if (requestGeneration === taskRequestGeneration) loading = false;
   }
@@ -122,24 +132,31 @@ export async function refresh(projectPaths: string[]): Promise<void> {
     await Promise.all(
       projectPaths.map(async (path) => {
         try {
-          results[path] = withHeldStatuses(path, await tasksApi.listAll(path));
+          results[path] = await tasksApi.listAll(path);
         } catch {
           // Keep the last successful snapshot for this project on refresh failure.
         }
       }),
     );
     if (requestGeneration === taskRequestGeneration) {
-      tasksByProject = { ...tasksByProject, ...results };
+      tasksByProject = withHeldStatuses({ ...tasksByProject, ...results });
     }
   } finally {
     if (requestGeneration === taskRequestGeneration) loading = false;
   }
 }
 
+/** Shows the new status while the backend applies it, so a quick next move or undo starts from it. */
 export async function moveTask(key: string, status: string, repoPath: string): Promise<void> {
-  await tasksApi.move(key, status, repoPath);
-  // Show the move before the reload lands, so an immediate undo sees it.
-  setLocalStatus(key, repoPath, status);
+  const previous = findTask(repoPath, key)?.status;
+  holdStatus(key, repoPath, status);
+  try {
+    await tasksApi.move(key, status, repoPath);
+  } catch (error) {
+    releaseStatus(key, repoPath, previous ?? status);
+    throw error;
+  }
+  releaseStatus(key, repoPath, status);
   await loadTasks(Object.keys(tasksByProject));
 }
 

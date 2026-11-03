@@ -9,9 +9,13 @@ describe("Mod+Z routing", () => {
     document.body.innerHTML = "";
   });
 
-  function pressModZIn(html: string): { actions: KeyboardAction[]; prevented: boolean } {
+  function pressModZIn(
+    html: string,
+    canUndo = true,
+  ): { actions: KeyboardAction[]; prevented: boolean } {
     const onAction = vi.fn((_action: KeyboardAction) => {});
-    cleanup = installKeyboardRouter(onAction);
+    const none = undefined;
+    cleanup = installKeyboardRouter(onAction, none, none, none, none, () => canUndo);
     document.body.innerHTML = html;
     const event = new KeyboardEvent("keydown", {
       bubbles: true,
@@ -26,11 +30,17 @@ describe("Mod+Z routing", () => {
     };
   }
 
+  const terminal = '<textarea class="xterm-helper-textarea"></textarea>';
+
   it.each([
     ["the page", ""],
-    ["the terminal", '<textarea class="xterm-helper-textarea"></textarea>'],
+    ["the terminal", terminal],
   ])("reverts the last task move from %s", (_where, html) => {
     expect(pressModZIn(html)).toEqual({ actions: [{ type: "undo" }], prevented: true });
+  });
+
+  it("leaves the key to the terminal when there is no task move to revert", () => {
+    expect(pressModZIn(terminal, false)).toEqual({ actions: [], prevented: false });
   });
 
   it.each([

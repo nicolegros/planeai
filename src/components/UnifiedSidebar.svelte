@@ -19,7 +19,7 @@
   import SidebarCardsList from "./sidebar/SidebarCardsList.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getCollapsedSections, getLayoutWidth, setCollapsedSections, setLayoutWidth } from "../lib/layout-state";
-  import { MOD_LABEL } from "../lib/keyboard";
+  import { isTextEntryElement, MOD_LABEL } from "../lib/keyboard";
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
   import { showToast } from "../lib/toasts.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
@@ -191,7 +191,7 @@
   // Empty space and group headers open view options. Rows, inputs, project headers and plugin slots keep their own menus.
   function onNavContextMenu(e: MouseEvent) {
     if (e.defaultPrevented) return;
-    if (e.composedPath().some((node) => node instanceof HTMLElement && (node.tagName === "LI" || node.tagName === "INPUT" || node.isContentEditable || node.dataset.pluginSidebarSlot !== undefined))) return;
+    if (e.composedPath().some((node) => node instanceof HTMLElement && (node.tagName === "LI" || isTextEntryElement(node) || node.dataset.pluginSidebarSlot !== undefined))) return;
     e.preventDefault();
     viewMenu = { x: e.clientX, y: e.clientY };
   }
