@@ -403,7 +403,7 @@
     if (activatesItselfOnEnter(e, control)) return;
 
     const action = handleSidebarKey(e, flatNav.length);
-    // Once navigation moves the highlight, the next Enter belongs to the highlighted row.
+    // Once the sidebar takes a key, such as a highlight move, the next Enter belongs to the highlighted row.
     if (e.defaultPrevented) control?.blur();
     if (!action) return;
 
