@@ -80,6 +80,7 @@ import { loadTasks } from "../../lib/task-store.svelte";
 import { commitPendingDone } from "../../lib/task-moves";
 import { loadSettings } from "../../lib/settings.svelte";
 import { setLayoutWidth } from "../../lib/layout-state";
+import { syncSnoozeClock } from "../../lib/snooze-clock.svelte";
 
 const alpha: Project = {
   id: "alpha",
@@ -366,6 +367,8 @@ describe("UnifiedSidebar in the Cards layout", () => {
       task("A-3", "done"),
     ];
     tasksByPath[beta.path] = [{ ...task("B-2", "in_review"), ...snoozedUntil(3_600_000) }];
+    // App starts the clock at launch, which reads the time.
+    syncSnoozeClock();
     mounted = await mountSidebar(
       { sidebar_group_by: "status" },
       { selectedTaskWorkspace: { projectId: "alpha", taskKey: "A-1" } },

@@ -4,10 +4,8 @@
  * Timers stall while the computer sleeps, so the clock never waits more than a minute and re-reads
  * the time when the window comes back.
  */
-import { soonestWake } from "./task-snooze";
+import { MINUTE, soonestWake } from "./task-snooze";
 import * as taskStore from "./task-store.svelte";
-
-const MINUTE = 60_000;
 
 let laneNow = $state(Date.now());
 let minuteNow = $state(Date.now());
@@ -40,11 +38,11 @@ export function startSnoozeClock(): () => void {
   sync();
   const stopTimer = $effect.root(() => {
     $effect(() => {
-      void minuteNow;
-      const real = Date.now();
-      const wake = soonestWake(taskStore.getAllTasks(), real);
-      const delay = wake === null ? MINUTE : Math.min(MINUTE, Math.max(0, wake - real));
-      const timer = setTimeout(sync, delay);
+      // Counted from the clocks, not from now: task changes re-run this, and must neither postpone
+      // the minute tick nor miss a snooze that arrives already run out (an undone wake).
+      const wake = soonestWake(taskStore.getAllTasks(), laneNow);
+      const next = wake === null ? minuteNow + MINUTE : Math.min(wake, minuteNow + MINUTE);
+      const timer = setTimeout(sync, Math.max(0, next - Date.now()));
       return () => clearTimeout(timer);
     });
   });
