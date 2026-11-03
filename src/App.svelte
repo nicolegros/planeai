@@ -1602,9 +1602,8 @@
   <ContextMenu x={snoozeMenu.x} y={snoozeMenu.y} items={snoozeMenuItems(snoozeMenu.target, true)} onClose={closeSnoozeMenu} />
 {/if}
 {#if customSnooze}
-  {@const { task, project } = customSnooze}
   <SnoozeCustomDialog
-    title={`Snooze ${task.key}`}
+    title={`Snooze ${customSnooze.task.key}`}
     onSnooze={(at) => snoozeCustom(customSnooze, at)}
     onCancel={closeCustomSnooze}
   />

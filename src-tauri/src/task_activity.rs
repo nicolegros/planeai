@@ -19,8 +19,8 @@ pub struct TaskActivity {
     pub task_key: String,
     #[serde(flatten)]
     pub visit: Visit,
-    /// Set only when this activity woke the task: a snooze read alongside other activity could
-    /// overwrite a newer one the user set meanwhile.
+    /// Set only when this activity woke the task, so other activity never carries a snooze that a
+    /// newer one may have replaced; the frontend also drops it unless it still shows that snooze.
     pub woke: Option<Snooze>,
 }
 

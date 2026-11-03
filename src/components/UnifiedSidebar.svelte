@@ -540,8 +540,8 @@
 {/snippet}
 
 {#snippet activityIndicator(activity: RowActivity | null, row: SidebarRow)}
-  {#if activity === "snoozed" && row.kind === "task" && row.task.snoozed_until}
-    <SnoozeCountdown snoozedUntil={row.task.snoozed_until} class="font-mono text-[10px]" />
+  {#if activity === "snoozed"}
+    <SnoozeCountdown snoozedUntil={row.kind === "task" ? row.task.snoozed_until : null} class="font-mono text-[10px]" />
   {:else if activity === "woke"}
     <span class="flex" role="img" aria-label="Woke" title={WOKE_TITLE}><AlarmClock class="size-3.5 text-status-review" /></span>
   {:else if activity === "working"}

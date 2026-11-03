@@ -18,7 +18,8 @@
   type Unit = Extract<CustomSnooze, { mode: "after" }>["unit"];
 
   const pad = (n: number) => String(n).padStart(2, "0");
-  const tomorrow = new Date(Date.now() + 24 * 3_600_000);
+  const today = new Date();
+  const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
 
   let mode = $state<Mode>("at");
   let date = $state(`${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}`);

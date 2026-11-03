@@ -3,19 +3,18 @@
  * `snoozed_at`; the backend writes `woke_at` when an agent asks for attention or exits meanwhile;
  * a manual wake or Done clears all three. A natural wake writes nothing: it is derived from the clock.
  */
-import type { TaskItem } from "./types";
+import type { TaskItem, TaskSnooze } from "./types";
 
 type SnoozeFields = Pick<TaskItem, "status" | "snoozed_until" | "woke_at">;
-type Snooze = Pick<TaskItem, "snoozed_until" | "snoozed_at" | "woke_at">;
 type WokeFields = SnoozeFields & Pick<TaskItem, "snoozed_at" | "last_visited_at">;
 
-const MINUTE = 60_000;
+export const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
 /** A snooze still running at `now`, whatever the task's status. */
 export function isSnoozeActive(
-  snooze: Pick<Snooze, "snoozed_until" | "woke_at">,
+  snooze: Pick<TaskSnooze, "snoozed_until" | "woke_at">,
   now: number,
 ): boolean {
   return (
@@ -29,7 +28,7 @@ export function isTaskSnoozed(task: SnoozeFields, now: number): boolean {
   return task.status !== "done" && isSnoozeActive(task, now);
 }
 
-export function snoozeOf({ snoozed_until, snoozed_at, woke_at }: Snooze): Snooze {
+export function snoozeOf({ snoozed_until, snoozed_at, woke_at }: TaskSnooze): TaskSnooze {
   return { snoozed_until, snoozed_at, woke_at };
 }
 

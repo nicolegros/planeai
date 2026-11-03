@@ -236,7 +236,7 @@ pub async fn mark_task_visited(
     project_id: String,
     key: String,
 ) -> Result<Visit, String> {
-    write_task_column(db_state, project_id, key, |conn, prefix, key| {
+    write_task_fields(db_state, project_id, key, |conn, prefix, key| {
         planeai_tasks::sqlite::mark_visited(conn, prefix, key, chrono::Utc::now())
     })
     .await
@@ -249,7 +249,7 @@ pub async fn mark_task_unread(
     project_id: String,
     key: String,
 ) -> Result<Visit, String> {
-    write_task_column(
+    write_task_fields(
         db_state,
         project_id,
         key,
@@ -266,7 +266,7 @@ pub async fn snooze_task(
     key: String,
     until: chrono::DateTime<chrono::Utc>,
 ) -> Result<Snooze, String> {
-    write_task_column(db_state, project_id, key, move |conn, prefix, key| {
+    write_task_fields(db_state, project_id, key, move |conn, prefix, key| {
         planeai_tasks::sqlite::snooze(conn, prefix, key, until, chrono::Utc::now())
     })
     .await
@@ -278,7 +278,7 @@ pub async fn wake_task(
     project_id: String,
     key: String,
 ) -> Result<Snooze, String> {
-    write_task_column(db_state, project_id, key, planeai_tasks::sqlite::wake).await
+    write_task_fields(db_state, project_id, key, planeai_tasks::sqlite::wake).await
 }
 
 /// Puts a snooze back as it was, to undo a snooze or a wake.
@@ -289,13 +289,13 @@ pub async fn restore_task_snooze(
     key: String,
     snooze: Snooze,
 ) -> Result<Snooze, String> {
-    write_task_column(db_state, project_id, key, move |conn, prefix, key| {
+    write_task_fields(db_state, project_id, key, move |conn, prefix, key| {
         planeai_tasks::sqlite::restore_snooze(conn, prefix, key, snooze)
     })
     .await
 }
 
-async fn write_task_column<T: Send + 'static>(
+async fn write_task_fields<T: Send + 'static>(
     db_state: State<'_, DbState>,
     project_id: String,
     key: String,

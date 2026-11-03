@@ -220,12 +220,9 @@ pub fn task_move_with_lifecycle(
     status: &str,
     context: &crate::task_cli::TaskLifecycleContext,
 ) -> (String, i32) {
-    match crate::task_cli::run_task_move_with_lifecycle(repo, key, status, context)
-        .and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))
-    {
-        Ok(task) => (render(&[field("task", task_detail_object(&task))]), 0),
-        Err(error) => (emit_error(&error, &[]), 1),
-    }
+    task_detail_result(crate::task_cli::run_task_move_with_lifecycle(
+        repo, key, status, context,
+    ))
 }
 
 /// AXI adapter for `task snooze`; `prefix` scopes the write to `repo`'s project.

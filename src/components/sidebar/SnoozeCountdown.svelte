@@ -3,15 +3,17 @@
   import { snoozeCountdown, wakeTimeLabel } from "../../lib/task-snooze";
 
   interface Props {
-    /** The wake time, as stored on the task. */
-    snoozedUntil: string;
+    /** The wake time, as stored on the task; nothing shows without one. */
+    snoozedUntil: string | null;
     class?: string;
   }
 
   let { snoozedUntil, class: className = "" }: Props = $props();
 
-  const until = $derived(Date.parse(snoozedUntil));
-  const wakes = $derived(`Wakes ${wakeTimeLabel(until)}`);
+  const until = $derived(snoozedUntil === null ? null : Date.parse(snoozedUntil));
 </script>
 
-<span class="tabular-nums text-t3 {className}" title={wakes} aria-label={`Snoozed, ${wakes.toLowerCase()}`}>{snoozeCountdown(until, getMinuteNow())}</span>
+{#if until !== null}
+  {@const wakeTime = wakeTimeLabel(until)}
+  <span class="tabular-nums text-t3 {className}" title={`Wakes ${wakeTime}`} aria-label={`Snoozed, wakes ${wakeTime}`}>{snoozeCountdown(until, getMinuteNow())}</span>
+{/if}

@@ -1,18 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskItem } from "../types";
 
-const { listAll, move, markVisited, markUnread } = vi.hoisted(() => ({
+const { listAll, move, markVisited, markUnread, snoozeApi } = vi.hoisted(() => ({
   listAll: vi.fn(),
   move: vi.fn(),
   markVisited: vi.fn(),
   markUnread: vi.fn(),
+  snoozeApi: vi.fn(),
 }));
 
 const { listeners } = vi.hoisted(() => ({
   listeners: new Map<string, (event?: { payload: unknown }) => void>(),
 }));
 
-vi.mock("../api", () => ({ tasks: { listAll, move, markVisited, markUnread } }));
+vi.mock("../api", () => ({
+  tasks: { listAll, move, markVisited, markUnread, snooze: snoozeApi },
+}));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((event: string, handler: (event?: { payload: unknown }) => void) => {
     listeners.set(event, handler);
@@ -220,53 +223,65 @@ describe("task visits", () => {
     stop();
   });
 
-  it("shows an early wake in place with the activity that caused it", async () => {
-    const stop = taskStore.startTaskActivityListener(() => false);
-    const snooze = {
-      snoozed_until: "2026-11-04T09:00:00.000Z",
-      snoozed_at: "2026-11-03T09:00:00.000Z",
-      woke_at: "2026-11-03T10:00:00.000Z",
-    };
+  const snoozedAt = (snoozed_at: string, woke_at: string | null = null) => ({
+    snoozed_until: "2026-11-04T09:00:00.000Z",
+    snoozed_at,
+    woke_at,
+  });
+
+  /** The task as the user snoozed it, through the store like the app does. */
+  async function userSnoozed(snooze: ReturnType<typeof snoozedAt>): Promise<void> {
+    snoozeApi.mockResolvedValueOnce(snooze);
+    await taskStore.snoozeTask("p1", "PLA-1", new Date(snooze.snoozed_until));
+  }
+
+  function activity(woke: ReturnType<typeof snoozedAt> | null): void {
     listeners.get("task-activity")?.({
       payload: {
         project_id: "p1",
         task_key: "PLA-1",
         last_visited_at: null,
-        last_activity_at: "2026-11-03T10:00:00.000Z",
-        woke: snooze,
+        last_activity_at: "2026-11-03T10:00:01.000Z",
+        woke,
       },
     });
-    await Promise.resolve();
+  }
 
+  const snoozeInStore = () => {
     const { snoozed_until, snoozed_at, woke_at } = taskStore.findTask("/repo", "PLA-1")!;
-    expect({ snoozed_until, snoozed_at, woke_at }).toEqual(snooze);
+    return { snoozed_until, snoozed_at, woke_at };
+  };
+
+  it("shows an early wake in place with the activity that caused it", async () => {
+    const stop = taskStore.startTaskActivityListener(() => false);
+    await userSnoozed(snoozedAt("2026-11-03T09:00:00.000Z"));
+
+    activity(snoozedAt("2026-11-03T09:00:00.000Z", "2026-11-03T10:00:00.000Z"));
+
+    expect(snoozeInStore()).toEqual(
+      snoozedAt("2026-11-03T09:00:00.000Z", "2026-11-03T10:00:00.000Z"),
+    );
     expect(listAll).not.toHaveBeenCalled();
     stop();
   });
 
-  it("leaves the snooze alone on activity that woke nothing, so it cannot undo a newer snooze", async () => {
+  it("drops an early wake of an older snooze that a newer snooze replaced first", async () => {
     const stop = taskStore.startTaskActivityListener(() => false);
-    const snooze = {
-      snoozed_until: "2026-11-04T09:00:00.000Z",
-      snoozed_at: "2026-11-03T10:00:00.000Z",
-      woke_at: null,
-    };
-    const activity = (woke: typeof snooze | null) =>
-      listeners.get("task-activity")?.({
-        payload: {
-          project_id: "p1",
-          task_key: "PLA-1",
-          last_visited_at: null,
-          last_activity_at: "2026-11-03T10:00:01.000Z",
-          woke,
-        },
-      });
-    activity({ ...snooze, woke_at: null });
-    activity(null);
-    await Promise.resolve();
+    await userSnoozed(snoozedAt("2026-11-03T10:00:00.500Z"));
 
-    const { snoozed_until, snoozed_at, woke_at } = taskStore.findTask("/repo", "PLA-1")!;
-    expect({ snoozed_until, snoozed_at, woke_at }).toEqual(snooze);
+    activity(snoozedAt("2026-11-03T09:00:00.000Z", "2026-11-03T10:00:00.000Z"));
+
+    expect(snoozeInStore()).toEqual(snoozedAt("2026-11-03T10:00:00.500Z"));
+    stop();
+  });
+
+  it("leaves the snooze alone on activity that woke nothing", async () => {
+    const stop = taskStore.startTaskActivityListener(() => false);
+    await userSnoozed(snoozedAt("2026-11-03T10:00:00.000Z"));
+
+    activity(null);
+
+    expect(snoozeInStore()).toEqual(snoozedAt("2026-11-03T10:00:00.000Z"));
     stop();
   });
 
