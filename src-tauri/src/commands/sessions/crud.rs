@@ -1,6 +1,6 @@
-use tauri::State;
+use tauri::{AppHandle, State};
 
-use crate::commands::sessions::lifecycle::session_transition;
+use crate::commands::sessions::lifecycle::{exit_active_session, session_transition};
 use crate::db;
 use crate::plugins::PluginRuntimeHandle;
 use crate::state::{ConfigState, DbState, NotifyHandle};
@@ -115,22 +115,22 @@ pub fn acknowledge_session(session_id: String, notify: State<NotifyHandle>) {
 }
 
 #[tauri::command]
-pub fn mark_exited(
+pub async fn mark_exited(
     session_id: String,
-    db_state: State<DbState>,
-    runtime: State<PluginRuntimeHandle>,
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+    runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<(), String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    let previous = db::get_session(&conn, &session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("session not found")?;
-    db::mark_session_exited(&conn, &session_id).map_err(|e| e.to_string())?;
-    if previous.status == "active" {
-        runtime.0.dispatch_session_lifecycle(session_transition(
-            &previous,
-            &previous.status,
-            "exited",
-        ));
+    let db = db_state.0.clone();
+    let id = session_id.clone();
+    let exited = crate::commands::blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        exit_active_session(&conn, &id)
+    })
+    .await?;
+    if let Some(transition) = exited {
+        crate::task_activity::record(&app, &session_id);
+        runtime.0.dispatch_session_lifecycle(transition);
     }
     Ok(())
 }

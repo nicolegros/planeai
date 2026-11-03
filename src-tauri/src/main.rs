@@ -33,6 +33,7 @@ mod session_restart;
 mod startup;
 mod state;
 mod symphony;
+mod task_activity;
 mod task_lifecycle;
 mod task_start;
 mod terminal_scheme;
@@ -438,6 +439,8 @@ fn main() {
             create_task_item,
             edit_task_item,
             move_task_item,
+            mark_task_visited,
+            mark_task_unread,
             fire_task_notify_hook,
             fire_task_resume_hook,
             fe_list_directory,

@@ -3,7 +3,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
 use planeai_tasks::provider::TaskProvider;
-use planeai_tasks::sqlite::SqliteRepository;
+use planeai_tasks::sqlite::{SqliteRepository, Visit};
 
 use crate::commands::sessions::lifecycle::session_transition;
 use crate::db;
@@ -223,6 +223,39 @@ pub fn edit_task_item(
         ));
     }
     Ok(TaskItem::from(task))
+}
+
+/// The user looked at the task: it is read until its agent's next activity.
+#[tauri::command]
+pub async fn mark_task_visited(
+    db_state: State<'_, DbState>,
+    project_id: String,
+    key: String,
+) -> Result<Visit, String> {
+    let db = db_state.0.clone();
+    super::blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        let prefix = crate::task_activity::project_prefix(&conn, &project_id)?;
+        planeai_tasks::sqlite::mark_visited(&conn, &prefix, &key, chrono::Utc::now())
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// Shows the task's last activity as unseen again.
+#[tauri::command]
+pub async fn mark_task_unread(
+    db_state: State<'_, DbState>,
+    project_id: String,
+    key: String,
+) -> Result<Visit, String> {
+    let db = db_state.0.clone();
+    super::blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        let prefix = crate::task_activity::project_prefix(&conn, &project_id)?;
+        planeai_tasks::sqlite::mark_unread(&conn, &prefix, &key).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Start a session for the task, as "Start session immediately" does after creating it.

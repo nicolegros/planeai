@@ -128,7 +128,7 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
             };
             if fired {
                 emit_state_change(app, &msg.session_id, AgentState::Idle);
-                fire_notification(app, &msg.session_id, state);
+                agent_settled(app, &msg.session_id, state);
             }
         }
         NotifyEvent::Stop => {
@@ -147,7 +147,7 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 drop(s);
                 if fired {
                     emit_state_change(app, &msg.session_id, AgentState::Idle);
-                    fire_notification(app, &msg.session_id, state);
+                    agent_settled(app, &msg.session_id, state);
                 }
             }
         }
@@ -283,7 +283,7 @@ pub fn apply_provider_status(
             let fired = state.lock().unwrap().provider_settled(session_id);
             if fired {
                 emit_state_change(app, session_id, AgentState::Idle);
-                fire_notification(app, session_id, &state);
+                agent_settled(app, session_id, &state);
             }
         }
         ProviderSessionStatus::Exited => {
@@ -321,6 +321,7 @@ fn mark_provider_session_exited(app: &AppHandle, session_id: &str) {
         .await;
         match exited {
             Ok(Some(event)) => {
+                crate::task_activity::record(&app, &session_id);
                 let _ = app.emit("pty-exited", serde_json::json!({ "pty_key": session_id }));
                 let _ = app.emit("sessions-changed", ());
                 app.state::<crate::plugins::PluginRuntimeHandle>()
@@ -367,7 +368,7 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
                     .unwrap_or_else(|| "?".into())
             };
             tracing::info!(%session_id, %name, "idle timeout, firing notification");
-            fire_notification(&app, &session_id, &state);
+            agent_settled(&app, &session_id, &state);
         }
     });
 }
@@ -385,6 +386,12 @@ fn emit_state_change(app: &AppHandle, session_id: &str, state: AgentState) {
             state,
         },
     );
+}
+
+/// The agent finished its turn or asks for attention.
+fn agent_settled(app: &AppHandle, session_id: &str, state: &SharedNotifyState) {
+    crate::task_activity::record(app, session_id);
+    fire_notification(app, session_id, state);
 }
 
 fn fire_notification(app: &AppHandle, session_id: &str, state: &SharedNotifyState) {
