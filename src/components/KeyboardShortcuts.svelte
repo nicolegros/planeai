@@ -24,7 +24,7 @@
     { section: "Sessions", items: [
       { keys: `${MOD_LABEL}N`, description: "New session" },
       { keys: `${MOD_LABEL}⇧N`, description: "New project" },
-      { keys: `${MOD_LABEL}1–9`, description: "Jump to session" },
+      { keys: `${MOD_LABEL}1–9`, description: "Jump to sidebar row" },
       { keys: `Ctrl+Tab`, description: "Switch session (MRU)" },
       { keys: `${MOD_LABEL}}`, description: "Next session" },
       { keys: `${MOD_LABEL}{`, description: "Previous session" },

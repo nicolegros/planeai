@@ -474,11 +474,15 @@ export function taskHeaderNavKeys(
 }
 
 /**
- * Navigation IDs in sidebar display order, ignoring collapse state.
+ * Navigation IDs in sidebar display order, by default ignoring collapse state.
  * Unlinked sessions are bare session IDs, tasks are task workspace IDs.
  */
-export function sidebarNavigationOrder(sections: SidebarSection[]): string[] {
-  return sidebarNavItems(sections).flatMap((item) => {
+export function sidebarNavigationOrder(
+  sections: SidebarSection[],
+  isCollapsed?: IsCollapsed,
+  shownPages?: ShownPages,
+): string[] {
+  return sidebarNavItems(sections, isCollapsed, shownPages).flatMap((item) => {
     if (item.type === "orphan") return [item.session.id];
     if (item.type === "task") return [toTaskWorkspaceId(item.row.project.id, item.row.task.key)];
     return [];

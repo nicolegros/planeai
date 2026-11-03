@@ -45,6 +45,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import UnifiedSidebar from "../UnifiedSidebar.svelte";
+import { _resetForTests as resetSidebarView } from "../../lib/sidebar-model-store.svelte";
 import { focusSidebar, focusTerminal } from "../../lib/focus.svelte";
 import { loadProjects } from "../../lib/project-store.svelte";
 import { _resetForTests, loadSessions } from "../../lib/session-orchestrator.svelte";
@@ -163,6 +164,7 @@ describe("UnifiedSidebar grouped by status", () => {
 
   beforeEach(() => {
     localStorage.clear();
+    resetSidebarView();
     _resetForTests();
     HTMLElement.prototype.scrollIntoView = vi.fn();
     tasksByPath = {

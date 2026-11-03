@@ -220,10 +220,6 @@ export async function restartSession(s: Session): Promise<void> {
   selectSession(s.id, { explicit: true });
 }
 
-export function jumpToSession(index: number): void {
-  if (index < sessions.length) selectSession(sessions[index].id, { explicit: true });
-}
-
 // ─── State setters ───────────────────────────────────────────────────────────
 
 export function clearAgentState(sessionId: string): void {

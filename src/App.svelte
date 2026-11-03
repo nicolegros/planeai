@@ -17,7 +17,7 @@
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { sidebarNavigationOrder } from "./lib/sidebar-model";
   import { applyDoneNow, applyInterruptedDone, canUndoTaskMove, commitPendingDone, completeTask, undoLastTaskMove } from "./lib/task-moves";
-  import { getSidebarModel } from "./lib/sidebar-model-store.svelte";
+  import { getSidebarModel, getVisibleNavigationOrder } from "./lib/sidebar-model-store.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId, toTaskWorkspaceId } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { taskSessionDefaults } from "./lib/task-session-defaults";
@@ -804,9 +804,24 @@
     }).catch(() => { archivedTaskSessions = []; });
   });
 
-  function jumpToWorkspaceSession(index: number): void {
+  /** Route a navigation target (task workspace or session). */
+  function routeNavTarget(target: string): void {
+    if (isTaskWorkspaceId(target)) {
+      const parsed = parseTaskWorkspaceId(target);
+      const project = parsed ? projects.find((candidate) => candidate.id === parsed.projectId) : undefined;
+      const task = project && parsed ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === parsed.taskKey) : undefined;
+      if (project && task) selectWorkspaceTask(task, project.path);
+    } else {
+      selectWorkspaceSession(target);
+    }
+  }
+
+  /** Open the sidebar row at this position, counting only the rows the sidebar shows. */
+  function jumpToSidebarRow(index: number): void {
+    const target = getVisibleNavigationOrder()[index];
+    if (!target) return;
     leavePluginWorkspace();
-    orchestrator.jumpToSession(index);
+    routeNavTarget(target);
   }
 
   /** Promote a UI-only workspace identity without sending it to session MRU persistence. */
@@ -966,7 +981,7 @@
           showNewItemModal = true;
         } else if (action.type === "new_project") { openAddProject(); }
         else if (action.type === "toggle_sidebar") { sidebarVisible = !sidebarVisible; if (sidebarVisible) focusSidebar(); else focusTerminal(); }
-        else if (action.type === "jump_to_session") { jumpToWorkspaceSession(action.index); }
+        else if (action.type === "jump_to_session") { jumpToSidebarRow(action.index); }
         else if (action.type === "tab_switch") {
           const sw = getCycleState();
           const currentId = activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
@@ -990,11 +1005,11 @@
         else if (action.type === "prev_tab") { cycleTab(-1); }
         else if (action.type === "next_session") {
           const currentId = activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
-          if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, 1);
+          if (!navCycle.isCycling()) navCycle.startPreview(getVisibleNavigationOrder(), currentId, 1);
           else navCycle.advance(1);
         } else if (action.type === "prev_session") {
           const currentId = activeTaskWorkspace ? toTaskWorkspaceId(activeTaskWorkspace.project.id, activeTaskWorkspace.task.key) : activeSessionId ?? undefined;
-          if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, -1);
+          if (!navCycle.isCycling()) navCycle.startPreview(getVisibleNavigationOrder(), currentId, -1);
           else navCycle.advance(-1);
         }
         else if (action.type === "toggle_diff") { toggleDiff(); }
@@ -1051,18 +1066,6 @@
       }
     }
     window.addEventListener("keydown", onModalKeydown, true);
-
-    /** Route a navigation target (task workspace or session). */
-    function routeNavTarget(target: string): void {
-      if (isTaskWorkspaceId(target)) {
-        const parsed = parseTaskWorkspaceId(target);
-        const project = parsed ? projects.find((candidate) => candidate.id === parsed.projectId) : undefined;
-        const task = project && parsed ? taskStore.getTasksForProject(project.path).find((candidate) => candidate.key === parsed.taskKey) : undefined;
-        if (project && task) selectWorkspaceTask(task, project.path);
-      } else {
-        selectWorkspaceSession(target);
-      }
-    }
 
     function onKeyUp(e: KeyboardEvent) {
       const isModRelease = (e.key === "Control" && !e.ctrlKey) || (e.key === "Meta" && !e.metaKey);

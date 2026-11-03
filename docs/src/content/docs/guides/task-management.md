@@ -84,6 +84,9 @@ Done sections start collapsed, and the sidebar remembers which sections you coll
 
 ### Finding a task from the keyboard
 
+**⌘1**-**⌘9** / **Ctrl+1**-**Ctrl+9** open the sidebar row at that position, counting from the top and skipping rows inside collapsed sections.
+**⌘}** and **⌘{** / **Ctrl+}** and **Ctrl+{** step through the same rows, top to bottom, and open the highlighted one when you release the modifier.
+
 Open the command menu (**⌘K** / **Ctrl+K**) and start typing a task key or title. Tasks from every project are searchable, so you do not need an active session in the right project first. Selecting a task does the same thing as clicking it in the sidebar.
 
 Tasks appear once you type — the menu's default view stays a short list of actions. Tasks in the project you are currently working in are listed first. Completed tasks are included unless "Hide done tasks" is enabled.

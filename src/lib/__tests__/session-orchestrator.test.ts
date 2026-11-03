@@ -88,7 +88,6 @@ import {
   parkSession,
   removeProjectSessions,
   restartSession,
-  jumpToSession,
   isSelectionExplicit,
   getAgentStates,
   clearAgentState,
@@ -786,13 +785,6 @@ describe("selection explicitness", () => {
   // an explicit user choice, so every entry point must classify itself correctly.
   it("marks a created session explicit", () => {
     createSession(makeSession({ id: "s1" }));
-    expect(isSelectionExplicit("s1")).toBe(true);
-  });
-
-  it("marks a jump-to-index explicit", () => {
-    createSession(makeSession({ id: "s1" }));
-    createSession(makeSession({ id: "s2" }));
-    jumpToSession(0);
     expect(isSelectionExplicit("s1")).toBe(true);
   });
 
