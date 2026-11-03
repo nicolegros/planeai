@@ -17,7 +17,7 @@ import { playTaskComplete } from "./soundPlayer";
 import { getCycleState } from "./tab-switcher.svelte";
 import { providerHandoff, taskWorkspaceLayout } from "./task-workspace-layout.svelte";
 import { isPluginSession } from "./plugin-providers";
-import { getAllTasks, markTaskVisited } from "./task-store.svelte";
+import { findTaskByKey, markTaskVisited } from "./task-store.svelte";
 import { isTaskUnread } from "./task-unread";
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -238,7 +238,7 @@ export function recordUserInput(sessionId: string): void {
   markSessionRead(sessionId);
   const session = sessions.find((s) => s.id === sessionId);
   if (!session?.task_key) return;
-  const task = getAllTasks().find((t) => t.key === session.task_key);
+  const task = findTaskByKey(session.task_key);
   if (task && isTaskUnread(task)) {
     markTaskVisited(sessionTaskProjectId(session), task.key).catch((error) =>
       console.warn("Failed to mark a task visited:", error),
