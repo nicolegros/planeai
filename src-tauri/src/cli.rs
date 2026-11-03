@@ -6,6 +6,14 @@ use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 use crate::tmux;
 use crate::{config, db, git};
 
+/// Open the app's database. The CLI can run before an upgraded app first migrates it, so
+/// it migrates the project and session schema, which holds the MCP tokens its launches mint.
+pub fn open_db(path: &std::path::Path) -> Result<Connection, String> {
+    let conn = Connection::open(path).map_err(|e| e.to_string())?;
+    planeai_core::services::migrate(&conn).map_err(|e| e.to_string())?;
+    Ok(conn)
+}
+
 pub fn run_project_list(conn: &Connection) -> String {
     let projects = db::list_projects(conn).unwrap_or_default();
     serde_json::to_string(&projects).unwrap()
@@ -705,6 +713,29 @@ mod tests {
             assert_eq!(cli, app, "yolo {yolo}, prompt {prompt:?}");
         }
         assert_eq!(command(false, Some("")).0, "kiro-cli chat");
+    }
+
+    #[test]
+    fn the_cli_launches_agents_with_mcp_before_the_upgraded_app_first_opens_the_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("planeai.db");
+        db::migrate(&rusqlite::Connection::open(&path).unwrap()).unwrap();
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "DROP TRIGGER mcp_tokens_revoke_on_session_end;
+                 DROP TRIGGER mcp_tokens_revoke_on_session_delete;
+                 DROP TABLE mcp_tokens;",
+            )
+            .unwrap();
+        let url = "http://127.0.0.1:47437/mcp";
+
+        let conn = open_db(&path).unwrap();
+        let endpoint =
+            planeai_core::mcp::launch_endpoint(&conn, Some(url), "session-1", "daemon").unwrap();
+
+        assert_eq!(endpoint.map(|endpoint| endpoint.url).as_deref(), Some(url));
+        assert!(open_db(&dir.path().join("fresh.db")).is_ok());
     }
 
     #[test]

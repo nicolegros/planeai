@@ -442,7 +442,7 @@ fn main() {
     let _guard = planeai::logging::init(&log_dir);
 
     let db_path = planeai_paths::db_path();
-    let conn = rusqlite::Connection::open(&db_path).unwrap_or_else(|e| {
+    let conn = planeai::cli::open_db(&db_path).unwrap_or_else(|e| {
         eprintln!("{{\"error\": \"failed to open database: {e}\"}}");
         std::process::exit(1);
     });

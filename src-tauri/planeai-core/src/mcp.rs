@@ -183,7 +183,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 /// Mint a token for the session's next agent process, replacing any earlier one.
-/// The token table exists: only a listening app hands out a URL, and it migrated first.
+/// The token table exists: the app and the CLI both migrate it when they open the database.
 pub fn issue(conn: &Connection, session_id: &str, url: &str) -> rusqlite::Result<McpEndpoint> {
     let token = random_secret();
     conn.execute(
