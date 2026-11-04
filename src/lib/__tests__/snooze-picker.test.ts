@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project, TaskItem } from "../types";
 
+// The snooze clock reads the time when it is imported, so it must import under the test clock.
+vi.hoisted(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 10, 3, 10, 0));
+});
+
 const { snoozeTask, wakeTask } = vi.hoisted(() => ({
   snoozeTask: vi.fn().mockResolvedValue(true),
   wakeTask: vi.fn().mockResolvedValue(true),
@@ -24,6 +30,7 @@ import {
 } from "../snooze-picker.svelte";
 import { showToast } from "../toasts.svelte";
 import type { MenuItem } from "../../components/ui/ContextMenu.svelte";
+vi.useRealTimers();
 
 const project: Project = { id: "p", name: "p", path: "/repo", hidden: false, path_missing: false };
 const NOW = new Date(2026, 10, 3, 10, 0);
