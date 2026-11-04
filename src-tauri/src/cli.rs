@@ -39,8 +39,8 @@ pub struct Env {
     pub backend: String,
     pub socket_path: std::path::PathBuf,
     pub config: config::Config,
-    /// The MCP server URL the agent connects to.
-    pub mcp_url: Option<String>,
+    /// The MCP server the agent connects to.
+    pub mcp: Option<planeai_core::mcp::McpLaunch>,
 }
 
 // ─── Plan / Execute ───
@@ -109,14 +109,8 @@ pub fn build_session_plan(
     if let Some(prompt) = &opts.prompt {
         planeai_core::session_launch::check_task_prompt(prompt)?;
     }
-    let cmd = provider_def.first_launch_command(
-        opts.yolo,
-        opts.prompt.as_deref(),
-        env.mcp_url
-            .as_deref()
-            .map(planeai_core::mcp::McpLaunch::new)
-            .as_ref(),
-    );
+    let cmd =
+        provider_def.first_launch_command(opts.yolo, opts.prompt.as_deref(), env.mcp.as_ref());
 
     let short_id = &session_id.replace('-', "")[..8];
 
@@ -219,7 +213,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     let worktree_path = checkout.worktree_path(repo);
     let mcp = planeai_core::mcp::launch_endpoint(
         conn,
-        env.mcp_url.as_deref(),
+        env.mcp.as_ref().map(|mcp| mcp.url.as_str()),
         &plan.session_id,
         &plan.backend,
     )?;
@@ -339,7 +333,7 @@ pub fn create_session(
         backend,
         socket_path: planeai_paths::notify_socket_path(),
         config: cfg,
-        mcp_url,
+        mcp: mcp_url.map(|url| crate::mcp::launch_from_inventory(conn, url)),
     };
 
     let project_name = opts.project.clone();
@@ -516,7 +510,9 @@ mod tests {
             backend: backend.to_string(),
             socket_path: std::path::PathBuf::from("/tmp/fake.sock"),
             config: config::Config::default(),
-            mcp_url: Some("http://127.0.0.1:47437/mcp".to_string()),
+            mcp: Some(planeai_core::mcp::McpLaunch::new(
+                "http://127.0.0.1:47437/mcp",
+            )),
         }
     }
 
@@ -758,7 +754,7 @@ mod tests {
             )
         );
 
-        env.mcp_url = None;
+        env.mcp = None;
         let plan = build_session_plan("abcd1234-0000", &opts, &env, &test_project()).unwrap();
         assert_eq!(plan.command, "codex");
     }

@@ -41,7 +41,9 @@ Agents should call them like PlaneAI's own tools: same server, same token, same 
   This is the simplest option that keeps both properties: Claude Code and Codex list tools when they connect, so what an agent sees is what was running at its launch, and its approvals match.
   Codex's template moves from approving by default with `prompt` overrides to asking by default with `approve` overrides, so on both agents a tool missing from the launch list, a delete or one from a plugin enabled later, asks.
   The placeholder is renamed from `{mcp_codex_prompted_tools}` to `{mcp_codex_approved_tools}` to match; ADR-0016's templates were never released.
-  Launches from `planeai-cli`, which runs no plugins, approve PlaneAI's tools only, so plugin tools ask there; a session revived at app startup also gets none, as plugins start after revival.
+  Sessions started through `planeai-cli` or the `session_create` tool, which do not reach the registry, read the same set from the plugin inventory: the declared tools of plugins whose row says `running`, which the supervisor writes right after publishing and right before retiring.
+  While the app is closed no row says `running`, and such agents cannot connect anyway.
+  A session revived at app startup gets PlaneAI's tools only, as plugins start after revival.
   Pre-approving plugin tools by declared effect trusts the plugin's annotations, which is consistent with plugins being trusted code.
   Rejected: leaving every plugin tool asking, which makes a read-only plugin tool cost a prompt per call and breaks non-interactive agents.
 - **Escalation.** ADR-0016's guard stays in PlaneAI's tools.

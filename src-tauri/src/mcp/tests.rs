@@ -628,6 +628,31 @@ fn unknown_arguments_are_reported_to_the_agent() {
     );
 }
 
+#[test]
+fn a_launch_outside_the_app_approves_the_running_plugins_tools_but_deletes() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    let url = || "http://127.0.0.1:1/mcp".to_string();
+    assert_eq!(
+        super::launch_from_inventory(&conn, url()),
+        planeai_core::mcp::McpLaunch::new(url())
+    );
+    conn.execute_batch(
+        r#"CREATE TABLE plugin_inventory (id TEXT, capabilities TEXT, tools TEXT, runtime_state TEXT);
+        INSERT INTO plugin_inventory VALUES
+            ('fixture', '["providers","tools"]',
+             '[{"name":"echo","annotations":{"readOnlyHint":true}},{"name":"note","annotations":{"destructiveHint":false}},{"name":"forget"}]',
+             'running'),
+            ('stopped', '["tools"]', '[{"name":"echo","annotations":{"readOnlyHint":true}}]', 'disabled'),
+            ('undeclared', '[]', '[{"name":"echo","annotations":{"readOnlyHint":true}}]', 'running');"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        super::launch_from_inventory(&conn, url()).approved_plugin_tools,
+        ["fixture_echo", "fixture_note"]
+    );
+}
+
 mod http {
     use super::*;
     use crate::mcp::server::{McpServer, McpStatus};
