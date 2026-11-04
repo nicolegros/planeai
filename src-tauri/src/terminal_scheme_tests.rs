@@ -282,3 +282,14 @@ fn user_schemes_override_bundled_ones_and_are_listed() {
             .dark
     );
 }
+
+#[test]
+fn bundled_scheme_names_are_valid_windows_file_names() {
+    let invalid: Vec<&str> = bundled_sources()
+        .map(|(name, _)| name)
+        .filter(|name| {
+            name.contains(['<', '>', ':', '"', '|', '?', '*']) || name.ends_with([' ', '.'])
+        })
+        .collect();
+    assert!(invalid.is_empty(), "Windows cannot check out: {invalid:?}");
+}
