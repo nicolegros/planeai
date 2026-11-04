@@ -7,7 +7,9 @@ use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::SqliteRepository;
 use serde_json::json;
 
-use super::tools::{AppEvents, Registry, ToolContext, ToolOutput};
+use planeai_core::mcp::Effect;
+
+use super::tools::{AppEvents, Registry, ToolContext, ToolDef, ToolOutput};
 
 const CALLER_ID: &str = "aaaaaaaa-1111-2222-3333-444444444444";
 const CHILD_ID: &str = "bbbbbbbb-1111-2222-3333-444444444444";
@@ -109,10 +111,14 @@ impl Fixture {
         let serde_json::Value::Object(arguments) = arguments else {
             panic!("arguments must be an object");
         };
-        self.registry
+        let tool = self
+            .registry
             .get(tool)
-            .unwrap_or_else(|| panic!("no tool {tool}"))
-            .call(&self.context, &self.caller, arguments)
+            .unwrap_or_else(|| panic!("no tool {tool}"));
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(tool.call(&self.context, &self.caller, arguments))
     }
 }
 
@@ -187,6 +193,142 @@ fn the_registry_serves_exactly_the_tools_the_launch_templates_approve() {
         .map(|tool| tool.name.to_string())
         .collect();
     assert_eq!(registry, table);
+}
+
+/// A plugin `fixture` serving `echo`, a read, and `forget`, a delete; `echo` answers with
+/// the calling session and its arguments.
+fn fixture_plugin_tools() -> Vec<ToolDef> {
+    let echo = ToolDef::plugin(
+        "fixture_echo".into(),
+        "Echo the arguments.".into(),
+        json!({ "type": "object" }).as_object().unwrap().clone(),
+        Effect::Read,
+        true,
+        |caller, arguments| {
+            Box::pin(async move {
+                ToolOutput {
+                    text: format!(
+                        "{} {}",
+                        caller.session_id,
+                        serde_json::Value::Object(arguments)
+                    ),
+                    is_error: false,
+                }
+            })
+        },
+    );
+    let forget = ToolDef::plugin(
+        "fixture_forget".into(),
+        "Forget a key.".into(),
+        json!({ "type": "object" }).as_object().unwrap().clone(),
+        Effect::Delete,
+        false,
+        |_, _| Box::pin(async { ToolOutput::error("nothing to forget") }),
+    );
+    vec![echo, forget]
+}
+
+fn names(registry: &Registry) -> Vec<String> {
+    registry
+        .tools()
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect()
+}
+
+#[test]
+fn a_running_plugins_tools_follow_planeai_tools_until_it_retires() {
+    let registry = Registry::core();
+    let core = names(&registry);
+
+    registry
+        .publish_plugin("fixture", fixture_plugin_tools())
+        .unwrap();
+
+    let listed = registry.tools();
+    let plugin: Vec<_> = listed[core.len()..]
+        .iter()
+        .map(|tool| {
+            let hints = tool.annotations.clone().unwrap();
+            (
+                tool.name.to_string(),
+                hints.read_only_hint.unwrap(),
+                hints.destructive_hint.unwrap(),
+                hints.open_world_hint.unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        plugin,
+        [
+            ("fixture_echo".to_string(), true, false, true),
+            ("fixture_forget".to_string(), false, true, false)
+        ]
+    );
+    assert_eq!(names(&registry)[..core.len()], core[..]);
+
+    registry.retire_plugin("fixture");
+
+    assert_eq!(names(&registry), core);
+    assert!(registry.get("fixture_echo").is_none());
+}
+
+#[test]
+fn a_plugin_tool_set_holding_a_served_name_is_refused_whole() {
+    let registry = Registry::core();
+    registry
+        .publish_plugin("fixture", fixture_plugin_tools())
+        .unwrap();
+    let renamed = |names: &[&str]| -> Vec<ToolDef> {
+        names
+            .iter()
+            .map(|name| {
+                ToolDef::plugin(
+                    name.to_string(),
+                    "x".into(),
+                    Default::default(),
+                    Effect::Read,
+                    false,
+                    |_, _| Box::pin(async { ToolOutput::error("unused") }),
+                )
+            })
+            .collect()
+    };
+
+    for (plugin, tools, served) in [
+        ("other", vec!["other_ok", "task_list"], "task_list"),
+        ("other", vec!["fixture_echo"], "fixture_echo"),
+        ("other", vec!["other_ok", "other_ok"], "other_ok"),
+    ] {
+        assert_eq!(
+            registry.publish_plugin(plugin, renamed(&tools)),
+            Err(format!("plugin {plugin} tool {served} is already served"))
+        );
+    }
+    assert!(registry.get("other_ok").is_none());
+
+    registry
+        .publish_plugin("fixture", renamed(&["fixture_echo"]))
+        .unwrap();
+    assert!(registry.get("fixture_forget").is_none());
+}
+
+#[test]
+fn a_plugin_tool_runs_as_the_calling_session() {
+    let f = Fixture::new();
+    f.registry
+        .publish_plugin("fixture", fixture_plugin_tools())
+        .unwrap();
+
+    assert_eq!(
+        f.call("fixture_echo", json!({ "text": "hi" })),
+        ok(&format!("{CALLER_ID} {{\"text\":\"hi\"}}"))
+    );
+    assert_eq!(
+        f.call("fixture_forget", json!({})),
+        err("error: nothing to forget\n")
+    );
+    assert_eq!(*f.events.tasks_changed.lock().unwrap(), 0);
 }
 
 #[test]
@@ -568,7 +710,7 @@ mod http {
     }
 
     async fn serve(f: &Fixture) -> (McpServer, u16) {
-        let server = McpServer::new(Registry::core(), f.context.clone());
+        let server = McpServer::new(Arc::new(Registry::core()), f.context.clone());
         let McpStatus::Listening { port, .. } = server.apply(Some(0)).await else {
             panic!("server did not start");
         };
@@ -631,6 +773,59 @@ mod http {
                 }],
                 "isError": false
             })
+        );
+        assert_eq!(server.apply(None).await, McpStatus::Off);
+    }
+
+    fn listed_names(response: &Response) -> Vec<String> {
+        response.json()["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn an_agent_lists_and_calls_a_running_plugins_tools_until_it_stops() {
+        let f = Fixture::new();
+        let registry = Arc::new(Registry::core());
+        let server = McpServer::new(registry.clone(), f.context.clone());
+        let McpStatus::Listening { port, .. } = server.apply(Some(0)).await else {
+            panic!("server did not start");
+        };
+        let bearer = format!("Bearer {}", f.token);
+        let auth = [("Authorization", bearer.as_str())];
+        let call = rpc(
+            3,
+            "tools/call",
+            json!({ "name": "fixture_echo", "arguments": { "text": "hi" } }),
+        );
+
+        registry
+            .publish_plugin("fixture", fixture_plugin_tools())
+            .unwrap();
+        let list = post(port, &auth, &rpc(2, "tools/list", json!({}))).await;
+        assert_eq!(
+            listed_names(&list)[11..],
+            ["fixture_echo".to_string(), "fixture_forget".to_string()]
+        );
+        let called = post(port, &auth, &call).await;
+        assert_eq!(
+            called.json()["result"],
+            json!({
+                "content": [{ "type": "text", "text": format!("{CALLER_ID} {{\"text\":\"hi\"}}") }],
+                "isError": false
+            })
+        );
+
+        registry.retire_plugin("fixture");
+        let list = post(port, &auth, &rpc(2, "tools/list", json!({}))).await;
+        assert_eq!(listed_names(&list).len(), 11);
+        let called = post(port, &auth, &call).await;
+        assert_eq!(
+            called.json()["error"]["message"],
+            "unknown tool: fixture_echo"
         );
         assert_eq!(server.apply(None).await, McpStatus::Off);
     }
@@ -706,7 +901,7 @@ mod http {
         let f = Fixture::new();
         let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = taken.local_addr().unwrap().port();
-        let server = McpServer::new(Registry::core(), f.context.clone());
+        let server = McpServer::new(Arc::new(Registry::core()), f.context.clone());
 
         assert_eq!(
             server.apply(Some(port)).await,

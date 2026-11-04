@@ -177,8 +177,9 @@ fn main() {
             tracing::info!("config loaded");
 
             // Listening before any agent is revived, so revived agents reconnect to it.
+            let mcp_tools = Arc::new(planeai::mcp::tools::Registry::core());
             let mcp_server = planeai::mcp::server::McpServer::new(
-                planeai::mcp::tools::Registry::core(),
+                mcp_tools.clone(),
                 planeai::mcp::tools::ToolContext::new(
                     app_dir.join("planeai.db"),
                     Arc::new(notify::McpAppEvents(app.handle().clone())),
