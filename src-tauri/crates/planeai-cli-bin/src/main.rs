@@ -853,11 +853,17 @@ fn main() {
                 TaskAction::Snooze {
                     key, until, pretty, ..
                 } => {
-                    let r = planeai::task_cli::run_task_snooze(&conn, &repo, &prefix, &key, &until);
+                    let r = planeai::task_cli::run_task_snooze(
+                        &conn,
+                        &repo,
+                        &project.prefix,
+                        &key,
+                        &until,
+                    );
                     (r, pretty, Some(key))
                 }
                 TaskAction::Wake { key, pretty, .. } => {
-                    let r = planeai::task_cli::run_task_wake(&conn, &repo, &prefix, &key);
+                    let r = planeai::task_cli::run_task_wake(&conn, &repo, &project.prefix, &key);
                     (r, pretty, Some(key))
                 }
                 TaskAction::Edit {
@@ -968,9 +974,10 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
             planeai_core::task_lifecycle::TaskLifecycleOrigin::Axi,
             Default::default(),
         )
+        .map(|scope| (scope, project.prefix))
     });
-    let scope = match scope {
-        Ok(scope) => scope,
+    let (scope, prefix) = match scope {
+        Ok(scoped) => scoped,
         Err(e) => {
             let output = planeai_toon::render(&[
                 planeai_toon::field("error", planeai_toon::str_val(&e)),
@@ -1031,14 +1038,14 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
             result
         }
         AxiTaskAction::Snooze { key, until, .. } => {
-            let result = planeai::axi::task_snooze(conn, &repo, &prefix, &key, &until);
+            let result = planeai::axi::task_snooze(conn, repo, &prefix, &key, &until);
             if code_of(&result) == 0 {
                 planeai::task_cli::notify_task_changed(&key);
             }
             result
         }
         AxiTaskAction::Wake { key, .. } => {
-            let result = planeai::axi::task_wake(conn, &repo, &prefix, &key);
+            let result = planeai::axi::task_wake(conn, repo, &prefix, &key);
             if code_of(&result) == 0 {
                 planeai::task_cli::notify_task_changed(&key);
             }

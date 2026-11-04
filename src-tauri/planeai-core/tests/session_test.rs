@@ -614,6 +614,7 @@ fn dispatch_spawns_the_agent_for_the_mcp_url_its_command_names() {
         blocked_by: vec![],
         subtasks: vec![],
         base_branch: "main".to_string(),
+        snoozed: false,
     };
 
     dispatcher.dispatch(&task, &backend).unwrap();
