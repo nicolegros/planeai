@@ -131,7 +131,6 @@
 {/snippet}
 
 {#snippet trailing(row: SidebarRow, session: Session | undefined, activity: RowActivity | null, hint: string | undefined)}
-  {#if hint}<JumpHintBadge label={hint} />{/if}
   {#if session}
     <!-- Hidden, not unmounted, so plugin indicators keep their state through a hint. -->
     {#each plugins.indicators as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
@@ -140,9 +139,11 @@
       </span>
     {/each}
   {/if}
-  {#if activity === "snoozed" && !hint}
+  {#if hint}
+    <JumpHintBadge label={hint} />
+  {:else if activity === "snoozed"}
     <SnoozeCountdown snoozedUntil={row.kind === "task" ? row.task.snoozed_until : null} class="shrink-0 text-xs transition-opacity group-focus-within:opacity-0 group-hover:opacity-0" />
-  {:else if activity && !hint}
+  {:else if activity}
     {@const slot = ACTIVITY_SLOTS[activity]}
     <span class="flex shrink-0 items-center gap-1 text-xs tabular-nums transition-opacity group-focus-within:opacity-0 group-hover:opacity-0 {slot.class}">
       <slot.icon class="size-3.5" />{slot.label}
