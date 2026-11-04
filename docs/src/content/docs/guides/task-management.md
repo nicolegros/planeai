@@ -239,7 +239,7 @@ Configure them in **Preferences → Tasks** (⌘, / Ctrl+,) or directly in your 
 | `on_start`    | A session is created from the task                  |
 | `on_notify`   | The agent goes idle and waits for you               |
 | `on_resume`   | The agent's hook reports new work after going idle  |
-| `on_restart`  | An exited session linked to the task is restarted   |
+| `on_restart`  | A linked session's exited agent is relaunched       |
 | `on_complete` | A session linked to the task is archived or deleted |
 
 A hook left unset never fires.

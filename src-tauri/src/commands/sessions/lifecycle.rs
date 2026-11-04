@@ -65,26 +65,42 @@ pub(crate) fn exit_active_session(
     Ok(Some(session_transition(&session, "active", "exited")))
 }
 
+/// Restart off the main thread: probing and spawning talk to the rmux daemon.
+/// Returns the session's status before the restart and the restarted session.
+pub(crate) async fn restart_blocking(
+    db: Arc<Mutex<Connection>>,
+    cfg: Config,
+    mcp: Option<planeai_core::mcp::McpLaunch>,
+    session_id: String,
+) -> Result<(String, db::Session), String> {
+    crate::commands::blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        let previous = db::get_session(&conn, &session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?;
+        let ops = crate::session_restart::real_restart_ops();
+        let session =
+            crate::session_restart::restart(&conn, &session_id, &cfg, mcp.as_ref(), &ops)?;
+        Ok((previous.status, session))
+    })
+    .await
+}
+
 #[tauri::command]
-pub fn restart_session(
+pub async fn restart_session(
     session_id: String,
     app: AppHandle,
-    db_state: State<DbState>,
-    config_state: State<ConfigState>,
-    runtime: State<PluginRuntimeHandle>,
-    mcp: State<McpServerState>,
+    db_state: State<'_, DbState>,
+    config_state: State<'_, ConfigState>,
+    runtime: State<'_, PluginRuntimeHandle>,
+    mcp: State<'_, McpServerState>,
 ) -> Result<db::Session, String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    let previous = db::get_session(&conn, &session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("session not found")?;
-    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-    let ops = crate::session_restart::real_restart_ops();
-    let session =
-        crate::session_restart::restart(&conn, &session_id, &cfg, mcp.0.launch().as_ref(), &ops)?;
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
+    let (previous_status, session) =
+        restart_blocking(db_state.0.clone(), cfg, mcp.0.launch(), session_id.clone()).await?;
     runtime
         .0
-        .dispatch_session_lifecycle(session_transition(&session, &previous.status, "active"));
+        .dispatch_session_lifecycle(session_transition(&session, &previous_status, "active"));
     // Emit event so frontend re-attaches the PTY to the restarted session
     let _ = app.emit(
         "session-restarted",

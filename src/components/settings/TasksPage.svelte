@@ -16,7 +16,7 @@
     { key: "on_start", label: "On start", suggestion: "in_progress", description: "A session is created from the task." },
     { key: "on_notify", label: "On notify", suggestion: "in_review", description: "The agent signals it is idle." },
     { key: "on_resume", label: "On resume", suggestion: "in_progress", description: "An idle agent with PlaneAI hooks works again. Only moves a task still in the On notify status." },
-    { key: "on_restart", label: "On restart", suggestion: "in_progress", description: "An exited task session is restarted." },
+    { key: "on_restart", label: "On restart", suggestion: "in_progress", description: "An exited task session relaunches its agent. Rejoining an agent that still runs does not count." },
     { key: "on_complete", label: "On complete", suggestion: "done", description: "A task session is archived or deleted." },
   ];
 

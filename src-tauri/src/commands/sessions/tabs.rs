@@ -168,10 +168,9 @@ impl PtyTabHost {
             // Found by name, as a spawn adopts it: a recorded pane id may since name another pane.
             TabBackend::Rmux { workspace } => {
                 let (name, key) = (workspace.clone(), pty_key.clone());
-                let pane = crate::commands::blocking(move || {
-                    crate::rmux_ops::find_tab_resource(&name, &key)
-                })
-                .await?;
+                let pane =
+                    crate::commands::blocking(move || crate::rmux_ops::find_resource(&name, &key))
+                        .await?;
                 let Some(handle) = pane else {
                     return Err(release_gone(&pty, &pty_key));
                 };
