@@ -90,6 +90,27 @@ pub const TOOLS: [ToolSpec; 11] = [
     },
 ];
 
+/// Agents call a tool as `mcp__planeai__<name>`, which Claude Code and Codex cap at 64
+/// characters.
+pub const MAX_TOOL_NAME_CHARS: usize = 64 - "mcp__".len() - SERVER_NAME.len() - "__".len();
+
+/// The name a plugin's tool is served under. Plugin ids have no `_`, so the names of two
+/// plugins' tools never meet; one a PlaneAI tool uses is refused.
+pub fn plugin_tool_name(plugin_id: &str, tool: &str) -> Result<String, String> {
+    let name = format!("{plugin_id}_{tool}");
+    if TOOLS.iter().any(|core| core.name == name) {
+        return Err(format!(
+            "plugin {plugin_id} tool {tool} would be served as {name}, a PlaneAI tool"
+        ));
+    }
+    if name.len() > MAX_TOOL_NAME_CHARS {
+        return Err(format!(
+            "plugin {plugin_id} tool {tool} would be served as {name}, longer than {MAX_TOOL_NAME_CHARS} characters"
+        ));
+    }
+    Ok(name)
+}
+
 /// What an agent process needs to reach the MCP server as its session.
 #[derive(Clone, PartialEq, Eq)]
 pub struct McpEndpoint {
@@ -310,6 +331,27 @@ mod tests {
 
     fn token(endpoint: &McpEndpoint) -> String {
         endpoint.env()[1].1.to_string()
+    }
+
+    #[test]
+    fn a_plugin_tool_is_served_under_its_plugin_id() {
+        assert_eq!(
+            plugin_tool_name("github", "pr_show"),
+            Ok("github_pr_show".to_string())
+        );
+        assert_eq!(
+            plugin_tool_name("task", "list"),
+            Err("plugin task tool list would be served as task_list, a PlaneAI tool".into())
+        );
+        let longest = "x".repeat(MAX_TOOL_NAME_CHARS - "github_".len());
+        assert!(plugin_tool_name("github", &longest).is_ok());
+        assert_eq!(
+            plugin_tool_name("github", &format!("{longest}x")),
+            Err(format!(
+                "plugin github tool {longest}x would be served as github_{longest}x, longer than {MAX_TOOL_NAME_CHARS} characters"
+            ))
+        );
+        assert_eq!(MAX_TOOL_NAME_CHARS, 50);
     }
 
     #[test]

@@ -21,7 +21,7 @@ my-plugin/
     └── entry.js
 ```
 
-`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers), `planeai.plugin-host.v4` for plugins that use the `sessions.start` capability or the `dialog` placement, or `planeai.plugin-host.v5` for a `session.meta` slot with a tooltip that opens the plugin's session panel (each version includes the ones before it); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
+`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers), `planeai.plugin-host.v4` for plugins that use the `sessions.start` capability or the `dialog` placement, `planeai.plugin-host.v5` for a `session.meta` slot with a tooltip that opens the plugin's session panel, or `planeai.plugin-host.v6` for plugins that contribute [tools](#tools) to agents (each version includes the ones before it); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
 
 Every backend and UI path must be a package-relative file path: no absolute paths and no `..`. The active platform's backend must exist and be executable. On Unix, its executable mode is preserved in the imported copy.
 
@@ -81,7 +81,7 @@ The platform key is the current OS and architecture: `macos-arm64`, `macos-x64`,
 
 ### Capabilities
 
-Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `sessions.start`, `tasks.read`, `tasks.create`, `tasks.transition`, `task-events`, and `providers`; duplicates and all other local capabilities are rejected.
+Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `sessions.start`, `tasks.read`, `tasks.create`, `tasks.transition`, `task-events`, `providers`, and `tools`; duplicates and all other local capabilities are rejected.
 
 - `settings` permits sidecar callbacks `host.settings.get` and `host.settings.replace`.
 - `projects.read` permits `host.projects.list`, returning non-hidden active projects.
@@ -118,6 +118,7 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
 - `tasks.transition` permits `host.sessions.transitionLinkedTask` with `{ "session_id", "status" }`. PlaneAI resolves the task strictly from that session's linked task key, changes its lifecycle status, and emits the normal task lifecycle batch (including automatic parent completion).
 - `task-events` permits event delivery only when the handshake also subscribes to `task.lifecycle`.
 - `providers` permits declaring `providers` (host API v3 only) and the provider session contract described in [Providers](#providers). It is required exactly when `providers` is declared.
+- `tools` permits declaring `tools` (host API v6) that agents in PlaneAI sessions call, described in [Tools](#tools). It is required exactly when `tools` is declared.
 - `session-events` permits best-effort `plugin.sessionLifecycle` delivery only when the handshake also subscribes to `session.lifecycle`. Events describe committed host session status changes and include the session/project identity, branch, linked task key, previous status, and new status.
 
 The sandbox UI can use the same read/create operations directly through `context.host.rpc.call("projects.list")`, `context.host.rpc.call("sessions.list")`, `context.host.rpc.call("task.get", { key })`, `context.host.rpc.call("tasks.create", params)`, `context.host.rpc.call("tasks.createChild", params)`, and `context.host.rpc.call("sessions.providers")`. The sidecar uses matching nested callbacks with the `host.` prefix. PlaneAI derives the owning plugin identity for both transports and applies identical manifest capability checks.
@@ -277,6 +278,40 @@ PlaneAI unmounts the UI when the user switches sessions, and resumes the session
 To rebuild the view, subscribe first, fetch a snapshot through a plugin-defined `context.host.call(...)` method, then drop live events whose `seq` is at or below the snapshot's.
 Every response is one frame, so a long transcript must come back in pages (for example, events after a given `seq` until the sidecar reports no more), or a single oversized response stops the runtime.
 The fixture's `ui/chat.js` and `fixture.providerSnapshot` show the pattern on a transcript small enough for one page.
+
+## Tools
+
+A plugin can give agents tools.
+Agents running in PlaneAI sessions reach PlaneAI's MCP server (ADR-0016), and every tool a running plugin declares joins PlaneAI's own tools there.
+See ADR-0017.
+
+```json
+"host_api_version": "planeai.plugin-host.v6",
+"capabilities": ["tools"],
+"tools": [
+  {
+    "name": "echo",
+    "description": "Echo a text back, with the calling session.",
+    "inputSchema": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] },
+    "annotations": { "readOnlyHint": true },
+    "timeoutMs": 5000
+  }
+]
+```
+
+- `name` starts with a lowercase letter and contains only lowercase letters, digits, and underscores, and is unique within the plugin.
+  Agents call the tool as `<plugin id>_<name>`, which Claude Code shows as `mcp__planeai__<plugin id>_<name>`.
+  That name must be at most 50 characters and must not be one of PlaneAI's own tools (`task_list`, for example, for a plugin `task` with a tool `list`), or the package does not install.
+  Plugin ids contain no underscore, so two plugins' tools never share a name.
+- `description` is a nonempty string, and `inputSchema` a JSON Schema whose `type` is `object`, as MCP requires.
+  Agents see both as written.
+- `annotations` holds MCP's `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` booleans, with MCP's defaults.
+  They decide the tool's effect: read-only, a write (idempotent or not), or destructive.
+  A tool that is not read-only is destructive unless it sets `destructiveHint: false`, so a tool without annotations counts as destructive.
+  A tool cannot be both read-only and destructive.
+- `timeoutMs` is how long PlaneAI waits for the tool, from 1 to 120000; the default is 30000.
+
+Unknown fields in a tool or its annotations are rejected.
 
 ## UI contributions
 

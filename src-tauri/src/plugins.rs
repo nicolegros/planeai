@@ -63,6 +63,8 @@ pub struct PluginManifest {
     pub background_service: Option<PluginBackgroundService>,
     #[serde(default)]
     pub providers: Vec<PluginProvider>,
+    #[serde(default)]
+    pub tools: Vec<PluginTool>,
     #[serde(default, rename = "ui_entrypoint")]
     legacy_ui_entrypoint: LegacyUiEntrypoint,
 }
@@ -163,6 +165,8 @@ pub enum PluginHostCapability {
     SidebarNavigation,
     #[serde(rename = "providers")]
     Providers,
+    #[serde(rename = "tools")]
+    Tools,
 }
 
 /// A session runtime a plugin offers as a provider; its UI replaces the agent terminal.
@@ -183,6 +187,20 @@ impl PluginProvider {
     pub fn supports(&self, feature: ProviderFeature) -> bool {
         self.supports.contains(&feature)
     }
+}
+
+/// An MCP tool a plugin contributes to agents in sessions (ADR-0017).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginTool {
+    /// Unique within the plugin; agents call it as `<plugin id>_<name>`.
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Map<String, Value>,
+    #[serde(default)]
+    pub annotations: planeai_plugin_contract::ToolAnnotations,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -308,9 +326,13 @@ impl PluginManifest {
                     "capabilities": self.capabilities,
                     "background_service": self.background_service,
                     "providers": (!self.providers.is_empty()).then_some(&self.providers),
+                    "tools": (!self.tools.is_empty()).then_some(&self.tools),
                 });
                 planeai_plugin_contract::validate_local_manifest(&manifest, platform)
                     .map_err(|error| error.to_string())?;
+                for tool in &self.tools {
+                    planeai_core::mcp::plugin_tool_name(&self.id, &tool.name)?;
+                }
                 return Ok(());
             }
         }
@@ -323,6 +345,9 @@ impl PluginManifest {
         }
         if !self.providers.is_empty() {
             return Err("bundled plugins cannot declare providers".to_string());
+        }
+        if !self.tools.is_empty() {
+            return Err("bundled plugins cannot declare tools".to_string());
         }
         validate_ui_contributions(&self.id, &self.effective_ui_contributions())?;
         validate_background_service(self.background_service.as_ref())?;
@@ -373,6 +398,7 @@ fn validate_capabilities(
                     | PluginHostCapability::TasksTransition
                     | PluginHostCapability::TaskEvents
                     | PluginHostCapability::Providers
+                    | PluginHostCapability::Tools
             )
         })
     {
@@ -542,6 +568,7 @@ pub struct PluginInventory {
     pub capabilities: Vec<PluginHostCapability>,
     pub background_service: Option<PluginBackgroundService>,
     pub providers: Vec<PluginProvider>,
+    pub tools: Vec<PluginTool>,
     pub installed_hash: Option<String>,
     pub installed_path: Option<String>,
     pub original_display_path: Option<String>,
@@ -630,6 +657,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ("capabilities", "TEXT NOT NULL DEFAULT '[]'"),
         ("background_service", "TEXT"),
         ("providers", "TEXT NOT NULL DEFAULT '[]'"),
+        ("tools", "TEXT NOT NULL DEFAULT '[]'"),
     ] {
         let has_column = conn
             .prepare("PRAGMA table_info(plugin_inventory)")?
@@ -822,6 +850,7 @@ struct ManifestColumns {
     capabilities: String,
     background_service: String,
     providers: String,
+    tools: String,
 }
 
 impl ManifestColumns {
@@ -835,6 +864,7 @@ impl ManifestColumns {
             capabilities: json(&manifest.capabilities, "capabilities")?,
             background_service: json(&manifest.background_service, "background service")?,
             providers: json(&manifest.providers, "providers")?,
+            tools: json(&manifest.tools, "tools")?,
         })
     }
 }
@@ -860,12 +890,13 @@ pub fn insert_local_inventory(
         capabilities,
         background_service,
         providers,
+        tools,
     } = ManifestColumns::of(manifest)?;
     conn.execute(
         "INSERT INTO plugin_inventory (
             id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions, capabilities, background_service,
-            installed_hash, installed_path, original_display_path, enabled, runtime_state, providers
-        ) VALUES (?1, ?2, ?3, ?4, 'local', ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 'disabled', ?12)",
+            installed_hash, installed_path, original_display_path, enabled, runtime_state, providers, tools
+        ) VALUES (?1, ?2, ?3, ?4, 'local', ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 'disabled', ?12, ?13)",
         params![
             manifest.id,
             manifest.name,
@@ -879,6 +910,7 @@ pub fn insert_local_inventory(
             package_dir.display().to_string(),
             original_display_path,
             providers,
+            tools,
         ],
     )
     .map_err(|error| format!("failed to persist imported local plugin: {error}"))?;
@@ -911,6 +943,7 @@ pub fn replace_local_inventory(
         capabilities,
         background_service,
         providers,
+        tools,
     } = ManifestColumns::of(manifest)?;
     conn.execute(
         "UPDATE plugin_inventory SET
@@ -918,7 +951,7 @@ pub fn replace_local_inventory(
             ui_contributions = ?6, capabilities = ?7, background_service = ?8,
             installed_hash = ?9, installed_path = ?10, original_display_path = ?11,
             enabled = 0, runtime_state = 'disabled', last_error = NULL, log_path = NULL,
-            providers = ?12, updated_at = CURRENT_TIMESTAMP
+            providers = ?12, tools = ?13, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?1 AND source_kind = 'local'",
         params![
             manifest.id,
@@ -933,6 +966,7 @@ pub fn replace_local_inventory(
             package_dir.display().to_string(),
             original_display_path,
             providers,
+            tools,
         ],
     )
     .map_err(|error| format!("failed to replace local plugin inventory: {error}"))?;
@@ -944,7 +978,7 @@ pub fn replace_local_inventory(
 pub fn list_inventory(conn: &Connection) -> rusqlite::Result<Vec<PluginInventory>> {
     let mut statement = conn.prepare(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers
+                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers, tools
          FROM plugin_inventory ORDER BY name COLLATE NOCASE",
     )?;
     let rows = statement.query_map([], row_to_inventory)?;
@@ -957,7 +991,7 @@ pub fn get_inventory(
 ) -> rusqlite::Result<Option<PluginInventory>> {
     conn.query_row(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers
+                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers, tools
          FROM plugin_inventory WHERE id = ?1",
         [plugin_id],
         row_to_inventory,
@@ -1063,6 +1097,13 @@ fn row_to_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInventory
         providers: serde_json::from_str(&row.get::<_, String>(16)?).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
                 16,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?,
+        tools: serde_json::from_str(&row.get::<_, String>(17)?).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                17,
                 rusqlite::types::Type::Text,
                 Box::new(error),
             )
@@ -4639,6 +4680,7 @@ mod tests {
             capabilities: vec![],
             background_service: None,
             providers: Vec::new(),
+            tools: Vec::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
@@ -4739,6 +4781,7 @@ mod tests {
             capabilities: vec![],
             background_service: None,
             providers: Vec::new(),
+            tools: Vec::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         sync_inventory(&conn, &[local]).unwrap();
@@ -4774,6 +4817,7 @@ mod tests {
             capabilities: vec![],
             background_service: None,
             providers: Vec::new(),
+            tools: Vec::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
@@ -4899,6 +4943,80 @@ mod tests {
         assert_eq!(provider.supports, [ProviderFeature::Handoff]);
     }
 
+    fn tools_manifest(id: &str, tool: &str) -> PluginManifest {
+        serde_json::from_value(serde_json::json!({
+            "schema": "planeai.plugin.v1",
+            "id": id,
+            "name": "Issues",
+            "version": "1.0.0",
+            "host_api_version": planeai_plugin_contract::TOOLS_HOST_API_VERSION,
+            "source_kind": "local",
+            "backend_entrypoints": { crate::plugin_packages::current_platform_key(): "bin/plugin" },
+            "capabilities": ["tools"],
+            "tools": [{
+                "name": tool,
+                "description": "Show an issue.",
+                "inputSchema": { "type": "object", "properties": { "key": { "type": "string" } } },
+                "annotations": { "readOnlyHint": true },
+                "timeoutMs": 5000
+            }]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn local_tools_round_trip_through_inventory() {
+        let conn = database();
+        let manifest = tools_manifest("issues", "show");
+        let package = tempfile::TempDir::new().unwrap();
+        insert_local_inventory(
+            &conn,
+            &manifest,
+            "bin/plugin",
+            "hash",
+            package.path(),
+            "/source",
+        )
+        .unwrap();
+
+        let inventory = get_inventory(&conn, "issues").unwrap().unwrap();
+
+        assert_eq!(inventory.capabilities, [PluginHostCapability::Tools]);
+        assert_eq!(
+            serde_json::to_value(&inventory.tools).unwrap(),
+            serde_json::json!([{
+                "name": "show",
+                "description": "Show an issue.",
+                "inputSchema": { "type": "object", "properties": { "key": { "type": "string" } } },
+                "annotations": { "readOnlyHint": true },
+                "timeoutMs": 5000
+            }])
+        );
+    }
+
+    #[test]
+    fn a_tool_that_cannot_be_served_under_its_name_is_refused_at_install() {
+        assert_eq!(
+            tools_manifest("task", "list").validate(),
+            Err("plugin task tool list would be served as task_list, a PlaneAI tool".into())
+        );
+        let long = "x".repeat(planeai_core::mcp::MAX_TOOL_NAME_CHARS);
+        assert!(tools_manifest("issues", &long)
+            .validate()
+            .unwrap_err()
+            .contains("longer than 50 characters"));
+    }
+
+    #[test]
+    fn bundled_plugins_cannot_declare_tools() {
+        let mut jira = bundled_manifests().unwrap().remove(0);
+        jira.tools = tools_manifest("jira", "show").tools;
+        assert_eq!(
+            jira.validate(),
+            Err("bundled plugins cannot declare tools".into())
+        );
+    }
+
     #[test]
     fn jira_sync_and_lifecycle_use_extended_rpc_timeouts() {
         assert_eq!(request_timeout("jira.syncNow"), JIRA_SYNC_RPC_TIMEOUT);
@@ -4934,6 +5052,7 @@ mod tests {
             capabilities: vec![],
             background_service: None,
             providers: Vec::new(),
+            tools: Vec::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         assert!(manifest
@@ -4999,6 +5118,7 @@ mod tests {
             ],
             background_service: None,
             providers: Vec::new(),
+            tools: Vec::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
