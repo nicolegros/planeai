@@ -120,7 +120,7 @@ pub struct McpLaunch {
 }
 
 impl McpLaunch {
-    /// A server serving no plugin tools, as the CLI, which runs none, sees it.
+    /// A server that serves no plugin tools.
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
