@@ -367,10 +367,24 @@ export const jiraDepartedInteractionEntrypoint: PluginUiEntrypoint = {
     const toastId = "jira:departed";
     let items: DepartedItem[] = [];
     let disposed = false;
-    let resolving = false;
+    let resolving: DepartedItem | null = null;
     const render = () => {
+      if (disposed) {
+        toasts.dismissToast(toastId);
+        return;
+      }
+      if (resolving) {
+        toasts.showToast({
+          id: toastId,
+          kind: "warning",
+          message: `Marking ${resolving.key} done…`,
+          detail: resolving.summary,
+          dismiss: "disabled",
+        });
+        return;
+      }
       const item = items[0];
-      if (!item || resolving || disposed) {
+      if (!item) {
         toasts.dismissToast(toastId);
         return;
       }
@@ -384,24 +398,33 @@ export const jiraDepartedInteractionEntrypoint: PluginUiEntrypoint = {
       });
     };
     const refresh = async () => {
-      const value = await call<{ items: DepartedItem[] }>(context, "jira.departures.list");
-      if (disposed) return;
-      items = value.items;
-      render();
+      try {
+        const value = await call<{ items: DepartedItem[] }>(context, "jira.departures.list");
+        if (disposed) return;
+        items = value.items;
+        render();
+      } catch (error) {
+        context.host.data.notify(`Could not load departed Jira issues: ${String(error)}`);
+      }
     };
     const dequeue = async (item: DepartedItem) => {
-      await call(context, "jira.departures.dequeue", { key: item.key });
+      try {
+        await call(context, "jira.departures.dequeue", { key: item.key });
+      } catch (error) {
+        context.host.data.notify(`Could not dismiss ${item.key}: ${String(error)}`);
+      }
       await refresh();
     };
     const resolve = async (item: DepartedItem) => {
-      resolving = true;
+      resolving = item;
+      render();
       try {
         // The sidecar dequeues only after its host task update succeeds.
         await call(context, "jira.departures.resolve", { key: item.key });
       } catch (error) {
         context.host.data.notify(`Could not mark ${item.key} done: ${String(error)}`);
       } finally {
-        resolving = false;
+        resolving = null;
       }
       await refresh();
     };
@@ -409,9 +432,7 @@ export const jiraDepartedInteractionEntrypoint: PluginUiEntrypoint = {
       context.host.data.onChanged?.(() => {
         void refresh();
       }) ?? (() => {});
-    void refresh().catch((error) =>
-      context.host.data.notify(`Could not load departed Jira issues: ${String(error)}`),
-    );
+    void refresh();
     root.replaceChildren();
     return () => {
       disposed = true;
