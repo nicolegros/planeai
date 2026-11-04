@@ -296,6 +296,25 @@ export const SETTINGS: readonly SettingDefinition[] = [
     description: "Searched before your PATH when finding agents and launching sessions.",
     keywords: ["path", "bin", "shims", "directory", "extra_path_dirs"],
   },
+  {
+    id: "mcp-server",
+    category: "agents",
+    section: "PlaneAI tools",
+    label: "Give agents PlaneAI tools",
+    description: "Agents in sessions list, create and update tasks and sessions through MCP.",
+    keywords: ["mcp", "server", "tools", "claude", "codex", "model context protocol"],
+    ...optional("mcp_enabled", true),
+  },
+  {
+    id: "mcp-port",
+    category: "agents",
+    section: "PlaneAI tools",
+    label: "Port",
+    description: "Loopback port agents connect to. Restart running agents after changing it.",
+    keywords: ["mcp", "server", "port", "localhost", "127.0.0.1"],
+    available: (config) => config.mcp_enabled !== false,
+    ...optional("mcp_port", null),
+  },
   // Sessions
   {
     id: "session-backend",

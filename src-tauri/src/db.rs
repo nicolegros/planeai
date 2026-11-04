@@ -116,6 +116,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         [],
     )?;
     planeai_core::prompt_lock::migrate(conn)?;
+    planeai_core::mcp::migrate(conn)?;
     planeai_core::services::drop_loop_tables(conn)?;
     crate::rmux_resources::migrate(conn)?;
     crate::terminal_tabs::migrate(conn)?;

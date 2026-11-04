@@ -176,11 +176,24 @@ fn main() {
             }
             tracing::info!("config loaded");
 
+            // Listening before any agent is revived, so revived agents reconnect to it.
+            let mcp_server = planeai::mcp::server::McpServer::new(
+                planeai::mcp::tools::Registry::core(),
+                planeai::mcp::tools::ToolContext::new(
+                    app_dir.join("planeai.db"),
+                    Arc::new(notify::McpAppEvents(app.handle().clone())),
+                ),
+            );
+            tauri::async_runtime::block_on(mcp_server.apply(cfg.mcp_listen_port()));
+            let mcp_url = mcp_server.url();
+            app.manage(McpServerState(mcp_server));
+
             // Revive sessions
             #[cfg(not(windows))]
             let _ = startup::revive_sessions(
                 &conn,
                 &cfg,
+                mcp_url.as_deref(),
                 tmux::has_session,
                 tmux::create_session_with_cmd_and_path,
             );
@@ -188,8 +201,9 @@ fn main() {
             let _ = startup::revive_sessions(
                 &conn,
                 &cfg,
+                mcp_url.as_deref(),
                 |_| false,
-                |_, _, _, _, _| Err("tmux not available".to_string()),
+                |_, _, _, _, _, _| Err("tmux not available".to_string()),
             );
 
             // Reconcile daemon sessions (mark dead ones as exited)
@@ -401,6 +415,7 @@ fn main() {
             update_config,
             refresh_config,
             get_config_defaults,
+            get_mcp_status,
             detect_providers,
             get_theme_css,
             list_themes,

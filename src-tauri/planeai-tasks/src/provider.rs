@@ -27,6 +27,12 @@ pub enum Error {
     InvalidStatus(String),
     /// The request makes no sense for the task as it is, e.g. snoozing into the past.
     Rejected(String),
+    ParentNotFound(String),
+    /// The parent would be the task itself or one of its subtasks.
+    ParentCycle {
+        key: String,
+        parent: String,
+    },
     Storage(String),
 }
 
@@ -36,6 +42,16 @@ impl std::fmt::Display for Error {
             Self::NotFound => write!(f, "task not found"),
             Self::InvalidStatus(s) => write!(f, "invalid status: {s}"),
             Self::Rejected(s) => write!(f, "{s}"),
+            Self::ParentNotFound(parent) => write!(f, "parent task not found: {parent}"),
+            Self::ParentCycle { key, parent } if key == parent => {
+                write!(f, "a task cannot be its own parent")
+            }
+            Self::ParentCycle { key, parent } => {
+                write!(
+                    f,
+                    "{parent} is a subtask of {key}, so it cannot be its parent"
+                )
+            }
             Self::Storage(s) => write!(f, "storage error: {s}"),
         }
     }

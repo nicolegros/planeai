@@ -88,7 +88,7 @@ pub(crate) fn build_local_env(
     dark_mode: bool,
     extra_path_dirs: Vec<String>,
 ) -> Result<Vec<(String, String)>, String> {
-    let mut pre_env = std::collections::HashMap::new();
+    let mut pre_env = HashMap::new();
     pre_env.insert(
         "COLORFGBG".to_string(),
         if dark_mode { "15;0" } else { "0;15" }.to_string(),

@@ -36,3 +36,4 @@ pub struct ConfigState(pub Mutex<config::Config>);
 pub struct FileExplorerState(pub Mutex<file_explorer::WatcherManager>);
 pub struct SymphonyHandle(pub Mutex<symphony::SymphonyState>);
 pub struct DaemonState(pub tokio::sync::Mutex<Option<daemon_client::DaemonClient>>);
+pub struct McpServerState(pub planeai::mcp::server::McpServer);

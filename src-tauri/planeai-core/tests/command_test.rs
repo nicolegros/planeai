@@ -71,7 +71,7 @@ fn build_daemon_env_includes_usr_local_bin() {
     let extra_path_dirs: Vec<String> = vec![];
     let session_id = "shell-tab-test";
     let mut path_buf = String::new();
-    let env = build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+    let env = build_daemon_env(&extra_path_dirs, session_id, &mut path_buf, None);
 
     let path = env.get("PATH").expect("daemon env must include PATH");
     assert!(
@@ -87,7 +87,7 @@ fn build_daemon_env_includes_session_id() {
     let extra_path_dirs: Vec<String> = vec![];
     let session_id = "test-tab:1";
     let mut path_buf = String::new();
-    let env = build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+    let env = build_daemon_env(&extra_path_dirs, session_id, &mut path_buf, None);
 
     assert_eq!(
         env.get("PLANEAI_SESSION_ID"),
@@ -103,11 +103,28 @@ fn build_daemon_env_includes_extra_path_dirs() {
     let extra_path_dirs = vec!["/custom/shims".to_string()];
     let session_id = "shell-tab:2";
     let mut path_buf = String::new();
-    let env = build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+    let env = build_daemon_env(&extra_path_dirs, session_id, &mut path_buf, None);
 
     let path = env.get("PATH").expect("daemon env must include PATH");
     assert!(
         path.contains("/custom/shims"),
         "daemon env PATH must include extra_path_dirs: {path}"
     );
+}
+
+#[test]
+fn build_daemon_env_hands_an_agent_its_mcp_endpoint() {
+    use planeai_core::command::build_daemon_env;
+
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    planeai_core::services::migrate(&conn).unwrap();
+    let endpoint =
+        planeai_core::mcp::issue(&conn, "session-1", "http://127.0.0.1:47437/mcp").unwrap();
+    let mut path_buf = String::new();
+    let env = build_daemon_env(&[], "session-1", &mut path_buf, Some(&endpoint));
+
+    assert_eq!(env["PLANEAI_MCP_URL"], "http://127.0.0.1:47437/mcp");
+    assert_eq!(env["PLANEAI_MCP_TOKEN"], endpoint.env()[1].1);
+    let shell = build_daemon_env(&[], "session-1:1", &mut path_buf, None);
+    assert!(!shell.contains_key("PLANEAI_MCP_TOKEN"));
 }

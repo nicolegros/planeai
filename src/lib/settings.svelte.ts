@@ -10,6 +10,8 @@ export interface Provider {
   yolo_flag: string | null;
   resume_command?: string | null;
   prompt_command?: string | null;
+  /** Arguments connecting the agent to PlaneAI's MCP server; empty opts out. */
+  mcp_args?: string | null;
 }
 
 export interface LifecycleHook {
@@ -101,6 +103,10 @@ export interface AppConfig {
   extra_path_dirs?: string[];
   /** `false` until first-run setup is finished or skipped; existing configs load as `true`. */
   onboarding_completed?: boolean | null;
+  /** Serve PlaneAI's tools to agents over MCP; unset means on. */
+  mcp_enabled?: boolean | null;
+  /** Loopback port of the MCP server; unset means the backend's default. */
+  mcp_port?: number | null;
 }
 
 const INITIAL_THEME: ThemeChoice = "default";

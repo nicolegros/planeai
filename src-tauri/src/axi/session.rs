@@ -4,6 +4,87 @@ use planeai_toon::{field, int_val, render, str_val, Value};
 
 use super::helpers::emit_error;
 
+/// Which part of a session's output to read.
+pub enum ReadRange {
+    /// The last `lines` lines.
+    Tail { lines: usize },
+    /// Output produced since `cursor`, at most `max_bytes` of it (0: unlimited).
+    After { cursor: String, max_bytes: usize },
+}
+
+/// Read a session's terminal output from whichever backend hosts it.
+pub fn session_read(conn: &rusqlite::Connection, id: &str, range: ReadRange) -> (String, i32) {
+    let session = match crate::session_ops::resolve_session_by_prefix(conn, id) {
+        Ok(session) => session,
+        Err(error) => return (emit_error(&error.to_string(), &[]), 1),
+    };
+    let short_id = &session.id[..8];
+    let backend = session.backend.as_str();
+    let fail = |message: &str| (emit_error(message, &[]), 1);
+    match range {
+        ReadRange::After { cursor, max_bytes } => {
+            let result = match backend {
+                "daemon" => parse_daemon_cursor(&cursor).and_then(|offset| {
+                    crate::session_ops::read_daemon_buffer_after(&session.id, offset, max_bytes)
+                        .map(|read| (format!("daemon:{}", read.cursor), read.truncated, read.text))
+                }),
+                "tmux" => match session.tmux_name.as_deref() {
+                    None => Err("tmux session has no tmux_name".to_string()),
+                    Some(_) if !cursor.trim().trim_matches('"').starts_with("tmux:") => {
+                        Err(format!("invalid cursor for tmux backend: {cursor}"))
+                    }
+                    Some(tmux_name) => {
+                        crate::session_ops::read_tmux_pane_after(tmux_name, &cursor, max_bytes)
+                            .map(|read| (read.cursor, read.truncated, read.text))
+                    }
+                },
+                planeai_rmux::BACKEND => {
+                    crate::rmux_ops::read_pane_after(&session.id, &cursor, max_bytes)
+                        .map(|read| (read.cursor, read.truncated, read.text))
+                }
+                "local" => Err("local backend does not support remote read".to_string()),
+                other => Err(format!("unsupported backend: {other}")),
+            };
+            match result {
+                Ok((cursor, truncated, text)) => {
+                    session_read_cursor_output(short_id, backend, &cursor, truncated, &text)
+                }
+                Err(error) => fail(&error),
+            }
+        }
+        ReadRange::Tail { lines } => {
+            let result = match backend {
+                "daemon" => crate::session_ops::read_daemon_buffer(&session.id, lines),
+                "tmux" => match session.tmux_name.as_deref() {
+                    Some(tmux_name) => crate::session_ops::read_tmux_pane(tmux_name, lines),
+                    None => Err("tmux session has no tmux_name".to_string()),
+                },
+                planeai_rmux::BACKEND => crate::rmux_ops::read_pane(&session.id, lines),
+                "local" => Err("local backend does not support remote read".to_string()),
+                other => Err(format!("unsupported backend: {other}")),
+            };
+            match result {
+                Ok(text) => session_read_output(short_id, &text),
+                Err(error) => fail(&error),
+            }
+        }
+    }
+}
+
+/// Parse a daemon cursor string "daemon:<offset>" into the byte offset.
+fn parse_daemon_cursor(cursor: &str) -> Result<u64, String> {
+    // TOON quotes any value containing a colon, so a cursor copied verbatim from
+    // `axi session read` output arrives quoted.
+    let cursor = cursor.trim().trim_matches('"');
+    let parts: Vec<&str> = cursor.splitn(2, ':').collect();
+    if parts.len() != 2 || parts[0] != "daemon" {
+        return Err(format!("invalid cursor for daemon backend: {cursor}"));
+    }
+    parts[1]
+        .parse::<u64>()
+        .map_err(|_| format!("invalid cursor offset: {}", parts[1]))
+}
+
 pub fn session_read_output(session_id: &str, text: &str) -> (String, i32) {
     let lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
     let line_count = lines.len();

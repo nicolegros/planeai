@@ -119,17 +119,19 @@ fn conventional_dirs(home: &str) -> Vec<String> {
 }
 
 /// Build the standard environment map for a daemon session spawn.
-/// Includes augmented PATH, TERM, and PLANEAI_SESSION_ID.
+/// Includes augmented PATH, TERM, PLANEAI_SESSION_ID, and for an agent the MCP endpoint.
 pub fn build_daemon_env<'a>(
     extra_path_dirs: &'a [String],
     session_id: &'a str,
     path_buf: &'a mut String,
+    mcp: Option<&'a crate::mcp::McpEndpoint>,
 ) -> std::collections::HashMap<&'a str, &'a str> {
     *path_buf = augmented_path(extra_path_dirs);
     let mut env = std::collections::HashMap::new();
     env.insert("PATH", path_buf.as_str());
     env.insert("TERM", "xterm-256color");
     env.insert("PLANEAI_SESSION_ID", session_id);
+    env.extend(mcp.into_iter().flat_map(|endpoint| endpoint.env()));
     env
 }
 

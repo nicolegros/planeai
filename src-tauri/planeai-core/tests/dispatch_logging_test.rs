@@ -29,13 +29,33 @@ impl Backend for AcceptingBackend {
     fn create_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
         Ok(())
     }
-    fn create_tmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+    fn create_tmux_session(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<(), String> {
         Ok(())
     }
-    fn create_daemon_session(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+    fn create_daemon_session(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<(), String> {
         Ok(())
     }
-    fn create_rmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+    fn create_rmux_session(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<(), String> {
         Ok(())
     }
     fn insert_session(&self, _: &NewSession) -> Result<(), String> {
@@ -99,6 +119,7 @@ fn dispatch_logs_the_prompt_size_but_never_its_text() {
             prompt_template: Some("Rotate key {title}".to_string()),
             prompt_command: Some("-- {prompt}".to_string()),
             prompt_wrapper: None,
+            mcp_args: None,
             name_template: None,
         },
         project_id: "p1".to_string(),

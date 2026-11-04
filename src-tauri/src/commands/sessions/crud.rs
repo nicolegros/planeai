@@ -3,7 +3,7 @@ use tauri::{AppHandle, State};
 use crate::commands::sessions::lifecycle::{exit_active_session, session_transition};
 use crate::db;
 use crate::plugins::PluginRuntimeHandle;
-use crate::state::{ConfigState, DbState, NotifyHandle};
+use crate::state::{ConfigState, DbState, McpServerState, NotifyHandle};
 
 use super::helpers::register_notify_session;
 
@@ -75,6 +75,7 @@ pub fn restore_session(
     notify: State<NotifyHandle>,
     config_state: State<ConfigState>,
     runtime: State<PluginRuntimeHandle>,
+    mcp: State<McpServerState>,
     id: String,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -85,7 +86,7 @@ pub fn restore_session(
 
     // Restart relaunches the agent process and sets status to active
     let ops = crate::session_restart::real_restart_ops();
-    let session = crate::session_restart::restart(&conn, &id, &cfg, &ops)?;
+    let session = crate::session_restart::restart(&conn, &id, &cfg, mcp.0.url().as_deref(), &ops)?;
     runtime
         .0
         .dispatch_session_lifecycle(session_transition(&session, &previous.status, "active"));

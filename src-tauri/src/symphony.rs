@@ -110,6 +110,23 @@ pub struct TauriBackend {
     pub notify_socket: std::path::PathBuf,
 }
 
+impl TauriBackend {
+    fn extra_path_dirs(&self) -> Result<Vec<String>, String> {
+        let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
+        let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
+        Ok(cfg.resolved_extra_path_dirs())
+    }
+
+    fn mint(
+        &self,
+        session_id: &str,
+        mcp_url: Option<&str>,
+    ) -> Result<Option<planeai_core::mcp::McpEndpoint>, String> {
+        let conn = self.db.lock().map_err(|e| e.to_string())?;
+        planeai_core::mcp::endpoint(&conn, mcp_url, session_id)
+    }
+}
+
 impl Backend for TauriBackend {
     fn create_worktree(
         &self,
@@ -137,8 +154,10 @@ impl Backend for TauriBackend {
         cwd: &str,
         cmd: &str,
         session_id: &str,
+        mcp_url: Option<&str>,
     ) -> Result<(), String> {
-        crate::tmux::create_session_with_cmd_and_path(name, cwd, cmd, session_id, &[])
+        let mcp = self.mint(session_id, mcp_url)?;
+        crate::tmux::create_session_with_cmd_and_path(name, cwd, cmd, session_id, &[], mcp.as_ref())
     }
 
     #[cfg(windows)]
@@ -148,25 +167,33 @@ impl Backend for TauriBackend {
         _cwd: &str,
         _cmd: &str,
         _session_id: &str,
+        _mcp_url: Option<&str>,
     ) -> Result<(), String> {
         Err("tmux is not supported on Windows".to_string())
     }
 
-    fn create_daemon_session(&self, session_id: &str, cmd: &str, cwd: &str) -> Result<(), String> {
+    fn create_daemon_session(
+        &self,
+        session_id: &str,
+        cmd: &str,
+        cwd: &str,
+        mcp_url: Option<&str>,
+    ) -> Result<(), String> {
         let socket_path = planeai_ipc::daemon_socket_path();
         let daemon_bin = crate::paths::resolve_daemon_binary(&self.app_handle);
         let scrollback = 1_048_576;
-        let extra_path_dirs = {
-            let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
-            let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
-            cfg.resolved_extra_path_dirs()
-        };
+        let extra_path_dirs = self.extra_path_dirs()?;
+        let mcp = self.mint(session_id, mcp_url)?;
 
         crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
         let mut path_buf = String::new();
-        let env =
-            planeai_core::command::build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+        let env = planeai_core::command::build_daemon_env(
+            &extra_path_dirs,
+            session_id,
+            &mut path_buf,
+            mcp.as_ref(),
+        );
         let (program, args) = planeai_core::command::shell_args(cmd);
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         crate::daemon::spawn_session(session_id, program, &args_refs, cwd, Some(&env))
@@ -178,17 +205,19 @@ impl Backend for TauriBackend {
         workspace: &str,
         cmd: &str,
         cwd: &str,
+        mcp_url: Option<&str>,
     ) -> Result<(), String> {
         let workspace = planeai_rmux::WorkspaceName::from_stored(workspace)
             .ok_or_else(|| format!("not a PlaneAI rmux workspace: {workspace}"))?;
-        let extra_path_dirs = {
-            let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
-            let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
-            cfg.resolved_extra_path_dirs()
-        };
+        let extra_path_dirs = self.extra_path_dirs()?;
+        let mcp = self.mint(session_id, mcp_url)?;
         let mut path_buf = String::new();
-        let env =
-            planeai_core::command::build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+        let env = planeai_core::command::build_daemon_env(
+            &extra_path_dirs,
+            session_id,
+            &mut path_buf,
+            mcp.as_ref(),
+        );
         crate::rmux_ops::spawn_resource_blocking(session_id, session_id, &workspace, cmd, cwd, &env)
             .map(|_| ())
     }
@@ -322,7 +351,15 @@ impl Backend for TauriBackend {
             prompt_command: provider.prompt_command.clone(),
             prompt_wrapper: auto.autonomous_prompt_template.clone(),
             name_template: tm.templates.as_ref().and_then(|t| t.name.clone()),
+            mcp_args: provider.mcp_args.clone(),
         })
+    }
+
+    fn mcp_url(&self) -> Option<String> {
+        self.app_handle
+            .state::<crate::state::McpServerState>()
+            .0
+            .url()
     }
 
     fn project_folder(&self, project_id: &str) -> Option<String> {
@@ -358,6 +395,7 @@ impl SqliteTaskSource {
                 origin: planeai_core::task_lifecycle::TaskLifecycleOrigin::Symphony,
                 project_id,
                 project_prefix,
+                sink: Default::default(),
             },
         }
     }
@@ -510,6 +548,7 @@ pub fn build_orchestrator_config(
                 prompt_command: provider.prompt_command.clone(),
                 prompt_wrapper: auto.autonomous_prompt_template.clone(),
                 name_template: tm.templates.as_ref().and_then(|t| t.name.clone()),
+                mcp_args: provider.mcp_args.clone(),
             },
         });
     }
@@ -562,6 +601,7 @@ mod tests {
                 command: "kiro-cli chat".to_string(),
                 yolo_flag: Some("--trust-all-tools".to_string()),
                 prompt_command: None,
+                mcp_args: None,
                 autonomous_prompt_template: None,
                 resume_command: None,
             },

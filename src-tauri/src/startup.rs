@@ -10,15 +10,24 @@ use crate::state::{ConfigState, DbState};
 
 /// Revive sessions on startup: recreate dead tmux sessions.
 /// Daemon sessions are managed by the daemon process and don't need reviving here.
+/// `mcp_url` is the MCP server's URL while it is listening.
 pub fn revive_sessions<F, G>(
     conn: &rusqlite::Connection,
     cfg: &config::Config,
+    mcp_url: Option<&str>,
     has_tmux_session: F,
     create_tmux: G,
 ) -> Vec<String>
 where
     F: Fn(&str) -> bool,
-    G: Fn(&str, &str, &str, &str, &[String]) -> Result<(), String>,
+    G: Fn(
+        &str,
+        &str,
+        &str,
+        &str,
+        &[String],
+        Option<&planeai_core::mcp::McpEndpoint>,
+    ) -> Result<(), String>,
 {
     let sessions = match db::list_sessions(conn) {
         Ok(s) => s,
@@ -41,7 +50,7 @@ where
         }
         let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
         let cmd = match cfg.providers.get(provider_key) {
-            Some(provider_def) => config::restart_command_for_provider(provider_def),
+            Some(provider_def) => config::restart_command_for_provider(provider_def, mcp_url),
             None => continue,
         };
         let project_path = projects
@@ -51,7 +60,21 @@ where
             .unwrap_or("/");
         let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
 
-        match create_tmux(tmux_name, cwd, &cmd, &session.id, &extra_path_dirs) {
+        let mcp = match planeai_core::mcp::endpoint(conn, mcp_url, &session.id) {
+            Ok(mcp) => mcp,
+            Err(error) => {
+                tracing::warn!(session_id = %session.id, %error, "[revive] reviving without MCP");
+                None
+            }
+        };
+        match create_tmux(
+            tmux_name,
+            cwd,
+            &cmd,
+            &session.id,
+            &extra_path_dirs,
+            mcp.as_ref(),
+        ) {
             Ok(()) => {
                 if session.status == "exited" {
                     let _ = db::restore_session(conn, &session.id);
@@ -450,8 +473,9 @@ mod tests {
         let failures = revive_sessions(
             &conn,
             &cfg,
+            None,
             |_| false,
-            |tmux_name, cwd, cmd, session_id, _extra_path_dirs| {
+            |tmux_name, cwd, cmd, session_id, _extra_path_dirs, _mcp| {
                 created.borrow_mut().push((
                     tmux_name.to_string(),
                     cwd.to_string(),
@@ -509,8 +533,9 @@ mod tests {
         let failures = revive_sessions(
             &conn,
             &cfg,
+            None,
             |_| false,
-            |tmux_name, cwd, cmd, session_id, _extra_path_dirs| {
+            |tmux_name, cwd, cmd, session_id, _extra_path_dirs, _mcp| {
                 created.borrow_mut().push((
                     tmux_name.to_string(),
                     cwd.to_string(),
@@ -559,8 +584,9 @@ mod tests {
         let failures = revive_sessions(
             &conn,
             &cfg,
+            None,
             |_| false,
-            |tmux_name, cwd, cmd, session_id, _extra_path_dirs| {
+            |tmux_name, cwd, cmd, session_id, _extra_path_dirs, _mcp| {
                 created.borrow_mut().push((
                     tmux_name.to_string(),
                     cwd.to_string(),
@@ -609,8 +635,9 @@ mod tests {
         let failures = revive_sessions(
             &conn,
             &cfg,
+            None,
             |_| false,
-            |_, _, _, _, _| Err("tmux not found".to_string()),
+            |_, _, _, _, _, _| Err("tmux not found".to_string()),
         );
 
         assert_eq!(failures, vec!["s1"]);
@@ -649,8 +676,9 @@ mod tests {
         let failures = revive_sessions(
             &conn,
             &cfg,
+            None,
             |_| true,
-            |tmux_name, cwd, cmd, session_id, _extra_path_dirs| {
+            |tmux_name, cwd, cmd, session_id, _extra_path_dirs, _mcp| {
                 created.borrow_mut().push((
                     tmux_name.to_string(),
                     cwd.to_string(),

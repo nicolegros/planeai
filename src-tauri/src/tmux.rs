@@ -70,7 +70,7 @@ pub fn create_session(
     } else {
         "kiro-cli chat".to_string()
     };
-    create_session_with_cmd_and_path(tmux_name, working_dir, &cmd, session_id, &[])
+    create_session_with_cmd_and_path(tmux_name, working_dir, &cmd, session_id, &[], None)
 }
 
 /// Create a tmux session with a custom command and extra PATH directories.
@@ -80,34 +80,100 @@ pub fn create_session_with_cmd_and_path(
     cmd: &str,
     session_id: &str,
     extra_path_dirs: &[String],
+    mcp: Option<&planeai_core::mcp::McpEndpoint>,
 ) -> Result<(), String> {
-    let env_flag = format!("PLANEAI_SESSION_ID={}", session_id);
-    let path_flag = format!(
-        "PATH={}",
-        planeai_core::command::augmented_path(extra_path_dirs)
-    );
-    let args = vec![
-        "new-session",
-        "-d",
-        "-s",
+    let (args, token_file) = new_session_args(
         tmux_name,
-        "-c",
         working_dir,
-        "-e",
-        &env_flag,
-        "-e",
-        &path_flag,
         cmd,
-    ];
-    let output = command(&args)
+        session_id,
+        extra_path_dirs,
+        mcp,
+        &planeai_paths::app_data_dir().join("mcp-tokens"),
+    )?;
+    let result = command(&args.iter().map(String::as_str).collect::<Vec<_>>())
         .output()
-        .map_err(|e| format!("failed to run tmux: {e}"))?;
-
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        .map_err(|e| format!("failed to run tmux: {e}"))
+        .and_then(|output| {
+            if output.status.success() {
+                Ok(())
+            } else {
+                Err(String::from_utf8_lossy(&output.stderr).to_string())
+            }
+        });
+    if let (Err(_), Some(file)) = (&result, token_file) {
+        let _ = std::fs::remove_file(file);
     }
+    result
+}
 
-    Ok(())
+/// The agent's shell reads the token from the file named by `$0`, then deletes it.
+const READ_MCP_TOKEN: &str =
+    r#"PLANEAI_MCP_TOKEN=$(cat "$0"); rm -f "$0"; export PLANEAI_MCP_TOKEN; "#;
+
+/// `tmux new-session` arguments, with the token file they hand over. `-e` values show in
+/// `ps` and stay in the tmux session's environment, so the token goes through a file that
+/// the agent's shell consumes instead.
+fn new_session_args(
+    tmux_name: &str,
+    working_dir: &str,
+    cmd: &str,
+    session_id: &str,
+    extra_path_dirs: &[String],
+    mcp: Option<&planeai_core::mcp::McpEndpoint>,
+    token_dir: &std::path::Path,
+) -> Result<(Vec<String>, Option<std::path::PathBuf>), String> {
+    let mut env = vec![
+        format!("PLANEAI_SESSION_ID={session_id}"),
+        format!(
+            "PATH={}",
+            planeai_core::command::augmented_path(extra_path_dirs)
+        ),
+    ];
+    if let Some(endpoint) = mcp {
+        env.push(format!("{}={}", planeai_core::mcp::URL_ENV, endpoint.url));
+    }
+    let mut args: Vec<String> = ["new-session", "-d", "-s", tmux_name, "-c", working_dir]
+        .map(String::from)
+        .to_vec();
+    for var in env {
+        args.extend(["-e".to_string(), var]);
+    }
+    let token_file = match mcp {
+        None => {
+            args.push(cmd.to_string());
+            None
+        }
+        Some(endpoint) => {
+            let file = endpoint
+                .write_token_file(token_dir)
+                .map_err(|e| format!("failed to hand the MCP token to tmux: {e}"))?;
+            args.push(format!(
+                "exec /bin/sh -c {} {}",
+                quote_for_any_shell(&format!("{READ_MCP_TOKEN}{cmd}")),
+                quote_for_any_shell(&file.display().to_string()),
+            ));
+            Some(file)
+        }
+    };
+    Ok((args, token_file))
+}
+
+/// Quote a word for any default shell: `'` and `\` stay out of the quotes, where fish reads escapes.
+fn quote_for_any_shell(word: &str) -> String {
+    let mut quoted = String::from("'");
+    for c in word.chars() {
+        match c {
+            '\'' | '\\' => {
+                quoted.push_str("'\\");
+                quoted.push(c);
+                quoted.push('\'');
+            }
+            c => quoted.push(c),
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 /// Send literal text to a tmux session, followed by Enter.
@@ -140,6 +206,79 @@ mod tests {
         let name = session_name("myapp");
         assert!(name.starts_with("planeai-myapp-"));
         assert_eq!(name.len(), "planeai-myapp-".len() + 8);
+    }
+
+    #[test]
+    fn the_mcp_token_reaches_the_agent_through_one_command_any_default_shell_runs() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        planeai_core::services::migrate(&conn).unwrap();
+        let endpoint =
+            planeai_core::mcp::issue(&conn, "session-1", "http://127.0.0.1:47437/mcp").unwrap();
+        let [_, (_, token)] = endpoint.env();
+        let shells = [
+            "/bin/sh",
+            "/bin/zsh",
+            "/opt/homebrew/bin/fish",
+            "/usr/bin/fish",
+        ]
+        .into_iter()
+        .filter(|shell| std::path::Path::new(shell).exists());
+
+        for shell in shells {
+            let root = tempfile::tempdir().unwrap();
+            let token_dir = root.path().join("Application Support");
+            let (args, _) = new_session_args(
+                "planeai-demo-1",
+                "/tmp",
+                r#"printf '%s %s\n' "$PLANEAI_MCP_TOKEN" "$PLANEAI_MCP_URL""#,
+                "session-1",
+                &[],
+                Some(&endpoint),
+                &token_dir,
+            )
+            .unwrap();
+
+            assert!(args.iter().all(|arg| !arg.contains(token)), "{args:?}");
+            assert!(args.contains(&"PLANEAI_MCP_URL=http://127.0.0.1:47437/mcp".to_string()));
+            let command = args.last().unwrap();
+            assert_eq!(
+                args[args.len() - 2],
+                "PLANEAI_MCP_URL=http://127.0.0.1:47437/mcp"
+            );
+            let output = std::process::Command::new(shell)
+                .args(["-c", command])
+                .env("PLANEAI_MCP_URL", "http://127.0.0.1:47437/mcp")
+                .output()
+                .unwrap();
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!("{token} http://127.0.0.1:47437/mcp\n"),
+                "{shell}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                std::fs::read_dir(&token_dir).unwrap().count(),
+                0,
+                "the agent deletes the token file once read"
+            );
+        }
+    }
+
+    #[test]
+    fn without_an_mcp_endpoint_tmux_runs_the_command_as_before() {
+        let token_dir = tempfile::tempdir().unwrap();
+        let (args, _) = new_session_args(
+            "planeai-demo-1",
+            "/tmp",
+            "claude",
+            "session-1",
+            &[],
+            None,
+            token_dir.path(),
+        )
+        .unwrap();
+        assert_eq!(args.last().map(String::as_str), Some("claude"));
+        assert!(!args.iter().any(|arg| arg.starts_with("PLANEAI_MCP_")));
     }
 
     #[test]

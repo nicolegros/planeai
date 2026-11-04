@@ -45,6 +45,9 @@ struct RecordingBackend {
     sessions_inserted: Mutex<Vec<NewSession>>,
     gui_notified: Mutex<Vec<String>>,
     fetches: Mutex<Vec<(String, String)>>,
+    spawn_mcp_urls: Mutex<Vec<Option<String>>>,
+    /// URLs `mcp_url` hands out, one per read, as a server that stops listening would.
+    mcp_urls: Mutex<Vec<String>>,
 }
 
 impl Backend for RecordingBackend {
@@ -69,7 +72,12 @@ impl Backend for RecordingBackend {
         cwd: &str,
         cmd: &str,
         session_id: &str,
+        mcp_url: Option<&str>,
     ) -> Result<(), String> {
+        self.spawn_mcp_urls
+            .lock()
+            .unwrap()
+            .push(mcp_url.map(str::to_string));
         self.tmux_sessions.lock().unwrap().push((
             name.to_string(),
             cwd.to_string(),
@@ -78,7 +86,17 @@ impl Backend for RecordingBackend {
         ));
         Ok(())
     }
-    fn create_daemon_session(&self, session_id: &str, cmd: &str, cwd: &str) -> Result<(), String> {
+    fn create_daemon_session(
+        &self,
+        session_id: &str,
+        cmd: &str,
+        cwd: &str,
+        mcp_url: Option<&str>,
+    ) -> Result<(), String> {
+        self.spawn_mcp_urls
+            .lock()
+            .unwrap()
+            .push(mcp_url.map(str::to_string));
         self.daemon_sessions.lock().unwrap().push((
             session_id.to_string(),
             cmd.to_string(),
@@ -92,7 +110,12 @@ impl Backend for RecordingBackend {
         workspace: &str,
         cmd: &str,
         cwd: &str,
+        mcp_url: Option<&str>,
     ) -> Result<(), String> {
+        self.spawn_mcp_urls
+            .lock()
+            .unwrap()
+            .push(mcp_url.map(str::to_string));
         self.rmux_sessions.lock().unwrap().push((
             session_id.to_string(),
             cmd.to_string(),
@@ -137,6 +160,10 @@ impl Backend for RecordingBackend {
     fn project_folder(&self, _: &str) -> Option<String> {
         Some("/tmp/testproj".to_string())
     }
+    fn mcp_url(&self) -> Option<String> {
+        let mut urls = self.mcp_urls.lock().unwrap();
+        (!urls.is_empty()).then(|| urls.remove(0))
+    }
 }
 
 #[test]
@@ -160,6 +187,7 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
             prompt_template: Some("Implement {key}: {title}\n\n{description}".to_string()),
             prompt_command: Some("{prompt}".to_string()),
             prompt_wrapper: None,
+            mcp_args: None,
             name_template: None,
         },
         project_id: "proj-1".to_string(),
@@ -235,6 +263,7 @@ fn dispatch_uses_task_base_branch_when_present() {
             prompt_template: None,
             prompt_command: None,
             prompt_wrapper: None,
+            mcp_args: None,
             name_template: None,
         },
         project_id: "p1".to_string(),
@@ -280,6 +309,7 @@ fn dispatch_fetches_base_before_worktree_creation() {
             prompt_template: None,
             prompt_command: None,
             prompt_wrapper: None,
+            mcp_args: None,
             name_template: None,
         },
         project_id: "p1".to_string(),
@@ -380,6 +410,7 @@ fn make_dispatcher(
             prompt_template: Some("Implement {key}: {title}".to_string()),
             prompt_command: prompt_command.map(|s| s.to_string()),
             prompt_wrapper: None,
+            mcp_args: None,
             name_template: None,
         },
         project_id: "p1".to_string(),
@@ -421,6 +452,7 @@ fn dispatch_daemon_backend_calls_create_daemon_session() {
             prompt_template: None,
             prompt_command: None,
             prompt_wrapper: None,
+            mcp_args: None,
             name_template: None,
         },
         project_id: "p1".to_string(),
@@ -458,6 +490,7 @@ fn dispatch_rmux_backend_calls_create_rmux_session() {
             prompt_template: None,
             prompt_command: None,
             prompt_wrapper: None,
+            mcp_args: None,
             name_template: None,
         },
         project_id: "p1".to_string(),
@@ -538,5 +571,60 @@ fn dispatch_without_parent_key_uses_task_key() {
         session.branch.starts_with("pla-42/"),
         "expected branch to start with 'pla-42/', got: {}",
         session.branch
+    );
+}
+
+#[test]
+fn dispatch_spawns_the_agent_for_the_mcp_url_its_command_names() {
+    let backend = RecordingBackend {
+        mcp_urls: Mutex::new(vec![
+            "http://127.0.0.1:47437/mcp".to_string(),
+            "http://127.0.0.1:50000/mcp".to_string(),
+        ]),
+        ..Default::default()
+    };
+    let dispatcher = SessionDispatcher {
+        task_source: Arc::new(MockTaskSource::new()),
+        on_start: None,
+        dispatch_config: DispatchConfig {
+            provider: "claude".to_string(),
+            provider_command: "claude".to_string(),
+            yolo: false,
+            yolo_flag: None,
+            worktree_root: "/tmp/wt".to_string(),
+            base_branch: "main".to_string(),
+            session_backend: "daemon".to_string(),
+            prompt_template: None,
+            prompt_command: None,
+            prompt_wrapper: None,
+            mcp_args: Some("--mcp {mcp_url}".to_string()),
+            name_template: None,
+        },
+        project_id: "proj-1".to_string(),
+        project_name: "myapp".to_string(),
+        project_path: "/home/user/myapp".to_string(),
+    };
+    let task = Task {
+        key: "KAN-3".to_string(),
+        title: "Add dark mode".to_string(),
+        status: "todo".to_string(),
+        description: String::new(),
+        priority: 1,
+        parent_key: None,
+        blocked_by: vec![],
+        subtasks: vec![],
+        base_branch: "main".to_string(),
+        snoozed: false,
+    };
+
+    dispatcher.dispatch(&task, &backend).unwrap();
+
+    assert_eq!(
+        backend.daemon_sessions.lock().unwrap()[0].1,
+        "claude --mcp http://127.0.0.1:47437/mcp"
+    );
+    assert_eq!(
+        *backend.spawn_mcp_urls.lock().unwrap(),
+        vec![Some("http://127.0.0.1:47437/mcp".to_string())]
     );
 }

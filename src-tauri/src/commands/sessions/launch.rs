@@ -2,6 +2,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use planeai_core::command::augmented_path;
+use planeai_core::mcp::McpEndpoint;
 use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 
 use crate::config;
@@ -9,7 +10,9 @@ use crate::db;
 use crate::git;
 use crate::plugin_providers;
 use crate::session_ops::PLUGIN_BACKEND;
-use crate::state::{ConfigState, DaemonState, DbState, NotifyHandle, ProjectOperationState};
+use crate::state::{
+    ConfigState, DaemonState, DbState, McpServerState, NotifyHandle, ProjectOperationState,
+};
 #[cfg(not(windows))]
 use crate::tmux;
 use crate::util::sanitize_project_name;
@@ -152,6 +155,8 @@ pub(crate) async fn launch(
         }
         _ => None,
     };
+    // Snapshotted once, so the command's MCP arguments and the minted token agree.
+    let mcp_url = app.state::<McpServerState>().0.url();
     // Phase 1: gather params from config (holding config lock briefly)
     let (cmd, provider_key, backend, scrollback_bytes, extra_path_dirs) = if let Some(key) =
         runtime_provider
@@ -172,7 +177,11 @@ pub(crate) async fn launch(
             .get(&pk)
             .ok_or_else(|| format!("Unknown provider: {pk}"))?;
 
-        let c = provider_def.first_launch_command(auto_approve, task_prompt.as_deref());
+        let c = provider_def.first_launch_command(
+            auto_approve,
+            task_prompt.as_deref(),
+            mcp_url.as_deref(),
+        );
         tracing::info!(provider_command = %provider_def.command, auto_approve, prompt_chars = ?prompt_chars, "launch command built");
 
         let be = config::resolve_backend(&cfg).to_string();
@@ -180,6 +189,18 @@ pub(crate) async fn launch(
         let epd = cfg.resolved_extra_path_dirs();
         (c, pk, be, sb, epd)
     };
+    let session_id = uuid::Uuid::new_v4().to_string();
+    // Minted before any git work, so a failure here has nothing to roll back.
+    let mcp = crate::commands::blocking({
+        let conn = state.0.clone();
+        let session_id = session_id.clone();
+        let backend = backend.clone();
+        move || {
+            let conn = conn.lock().map_err(|e| e.to_string())?;
+            planeai_core::mcp::launch_endpoint(&conn, mcp_url.as_deref(), &session_id, &backend)
+        }
+    })
+    .await?;
 
     // Phase 2: async work — detect base branch, git worktree/checkout
     let effective_base_branch = {
@@ -249,8 +270,6 @@ pub(crate) async fn launch(
     let created_worktree = checkout.created_worktree();
     let created_branch = checkout.created_branch();
 
-    let session_id = uuid::Uuid::new_v4().to_string();
-
     let tmux_name: Option<String> = if backend == "tmux" {
         #[cfg(not(windows))]
         {
@@ -261,6 +280,7 @@ pub(crate) async fn launch(
                 &cmd,
                 &session_id,
                 &extra_path_dirs,
+                mcp.as_ref(),
             )?;
             Some(tn)
         }
@@ -298,6 +318,7 @@ pub(crate) async fn launch(
                 &working_dir,
                 &cmd,
                 &extra_path_dirs,
+                mcp.as_ref(),
             )
             .await
         } else {
@@ -308,6 +329,7 @@ pub(crate) async fn launch(
                 &cmd,
                 &extra_path_dirs,
                 scrollback_bytes,
+                mcp.as_ref(),
             )
             .await
         };
@@ -433,6 +455,7 @@ async fn spawn_in_daemon(
     cmd: &str,
     extra_path_dirs: &[String],
     scrollback_bytes: usize,
+    mcp: Option<&McpEndpoint>,
 ) -> Result<(), String> {
     let daemon_state = app.state::<DaemonState>();
     let socket_path = planeai_ipc::daemon_socket_path();
@@ -446,7 +469,7 @@ async fn spawn_in_daemon(
         project_cwd: std::path::PathBuf::from(working_dir),
         session_target: planeai_core::session_launch::SessionTarget::Daemon,
         agent_command: cmd.to_string(),
-        env: std::collections::HashMap::new(),
+        env: mcp.into_iter().flat_map(McpEndpoint::owned_env).collect(),
         extra_path_dirs: extra_path_dirs.to_vec(),
         cols: 80,
         rows: 24,
@@ -512,13 +535,14 @@ async fn spawn_in_rmux(
     working_dir: &str,
     cmd: &str,
     extra_path_dirs: &[String],
+    mcp: Option<&McpEndpoint>,
 ) -> Result<(), String> {
     let launch_req = planeai_core::session_launch::CreateSessionRequest {
         session_id: session_id.to_string(),
         project_cwd: std::path::PathBuf::from(working_dir),
         session_target: planeai_core::session_launch::SessionTarget::Daemon,
         agent_command: cmd.to_string(),
-        env: std::collections::HashMap::new(),
+        env: mcp.into_iter().flat_map(McpEndpoint::owned_env).collect(),
         extra_path_dirs: extra_path_dirs.to_vec(),
         cols: crate::rmux_ops::DEFAULT_COLS,
         rows: crate::rmux_ops::DEFAULT_ROWS,

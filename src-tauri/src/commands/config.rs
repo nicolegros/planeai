@@ -1,23 +1,23 @@
 use tauri::State;
 
 use crate::config;
-use crate::state::ConfigState;
+use crate::state::{ConfigState, McpServerState};
 use crate::terminal_scheme;
 use crate::theme_css;
 
 #[tauri::command]
-pub fn refresh_config(
-    state: State<ConfigState>,
+pub async fn refresh_config(
+    state: State<'_, ConfigState>,
+    mcp: State<'_, McpServerState>,
     app: tauri::AppHandle,
 ) -> Result<config::Config, String> {
     let config_dir = config::config_dir(&app.package_info().name);
     tracing::info!("refreshing config from disk");
-    let new_config = config::refresh(&config_dir).map_err(|e| {
-        tracing::warn!("config refresh failed: {e}");
-        e
-    })?;
-    let mut cfg = state.0.lock().map_err(|e| e.to_string())?;
-    *cfg = new_config.clone();
+    let new_config = crate::commands::blocking(move || config::refresh(&config_dir))
+        .await
+        .inspect_err(|e| tracing::warn!("config refresh failed: {e}"))?;
+    *state.0.lock().map_err(|e| e.to_string())? = new_config.clone();
+    mcp.0.apply(new_config.mcp_listen_port()).await;
     tracing::info!("config refreshed successfully");
     Ok(new_config)
 }
@@ -46,6 +46,7 @@ pub async fn detect_providers(
 #[tauri::command]
 pub async fn update_config(
     state: State<'_, ConfigState>,
+    mcp: State<'_, McpServerState>,
     mut new_config: config::Config,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
@@ -58,13 +59,34 @@ pub async fn update_config(
         };
     }
     config::validate(&new_config)?;
+    config::backfill_provider_defaults(&mut new_config);
     let config_dir = config::config_dir(&app.package_info().name);
     // Held across the write so concurrent updates each diff against the config the file holds.
-    let mut cfg = state.0.lock().map_err(|e| e.to_string())?;
-    config::save(&config_dir, &cfg, &new_config)
-        .inspect_err(|e| tracing::warn!("config save failed: {e}"))?;
-    *cfg = new_config;
+    let mcp_port = new_config.mcp_listen_port();
+    {
+        let mut cfg = state.0.lock().map_err(|e| e.to_string())?;
+        config::save(&config_dir, &cfg, &new_config)
+            .inspect_err(|e| tracing::warn!("config save failed: {e}"))?;
+        *cfg = new_config;
+    }
+    mcp.0.apply(mcp_port).await;
     Ok(())
+}
+
+/// The server's status, with the port it uses when none is configured.
+#[derive(serde::Serialize)]
+pub struct McpServerView {
+    #[serde(flatten)]
+    status: planeai::mcp::server::McpStatus,
+    default_port: u16,
+}
+
+#[tauri::command]
+pub async fn get_mcp_status(mcp: State<'_, McpServerState>) -> Result<McpServerView, String> {
+    Ok(McpServerView {
+        status: mcp.0.status(),
+        default_port: config::DEFAULT_MCP_PORT,
+    })
 }
 
 #[tauri::command]

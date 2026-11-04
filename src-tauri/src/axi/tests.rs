@@ -1,3 +1,4 @@
+use super::session::{session_read_cursor_output, session_read_output};
 use super::*;
 use planeai_tasks::model::Status;
 use planeai_tasks::provider::TaskProvider;
@@ -571,4 +572,218 @@ fn task_detail_shows_snoozed_until_only_while_snoozed() {
         "output:\n{snoozed}"
     );
     assert!(!woken.contains("snoozed_until"), "output:\n{woken}");
+}
+
+// ─── Task update/delete and session read, shared by the CLI and MCP adapters ───
+
+struct ScopeFixture {
+    _dir: tempfile::TempDir,
+    scope: TaskScope,
+    batches:
+        std::sync::Arc<std::sync::Mutex<Vec<planeai_core::task_lifecycle::TaskLifecycleBatch>>>,
+}
+
+fn scope_fixture() -> ScopeFixture {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("planeai.db");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    crate::db::migrate(&conn).unwrap();
+    planeai_tasks::sqlite::migrate(&conn).unwrap();
+    let project = crate::db::create_project(&conn, "demo", "/tmp/demo").unwrap();
+    let batches = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink_batches = batches.clone();
+    let scope = TaskScope::open(
+        &db_path,
+        &project,
+        planeai_core::task_lifecycle::TaskLifecycleOrigin::Axi,
+        crate::task_cli::LifecycleSink::InProcess(std::sync::Arc::new(move |batch| {
+            sink_batches.lock().unwrap().push(batch)
+        })),
+    )
+    .unwrap();
+    ScopeFixture {
+        _dir: dir,
+        scope,
+        batches,
+    }
+}
+
+fn without_created_at(toon: &str) -> String {
+    toon.lines()
+        .filter(|line| !line.trim_start().starts_with("created_at:"))
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
+#[test]
+fn task_update_edits_fields_and_moves_status_in_one_call() {
+    let fixture = scope_fixture();
+    let prefix = fixture.scope.lifecycle.project_prefix.clone();
+    add_task(&fixture.scope.repo, "Old title");
+    let key = format!("{prefix}-1");
+    let tags = vec!["mcp".to_string()];
+
+    let (output, code) = task_update(
+        &fixture.scope,
+        TaskUpdate {
+            edit: crate::task_cli::EditParams {
+                key: &key,
+                title: Some("New title"),
+                tags: Some(&tags),
+                ..Default::default()
+            },
+            status: Some("in_progress"),
+        },
+    );
+
+    assert_eq!(code, 0, "output:\n{output}");
+    assert_eq!(
+        without_created_at(&output),
+        format!(
+            "task:\n  key: {key}\n  title: New title\n  status: in_progress\n  priority: 0\n  tags[1]: mcp\n  base_branch: main\n"
+        )
+    );
+    let batches = fixture.batches.lock().unwrap();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(
+        batches[0].events,
+        vec![
+            planeai_core::task_lifecycle::TaskLifecycleEvent::StatusChanged {
+                task_key: key.clone(),
+                parent_key: None,
+                previous_status: "todo".into(),
+                new_status: "in_progress".into(),
+                cause: planeai_core::task_lifecycle::StatusChangeCause::Direct,
+            }
+        ]
+    );
+}
+
+#[test]
+fn task_update_rejects_an_empty_update_and_unknown_tasks() {
+    let fixture = scope_fixture();
+    let prefix = fixture.scope.lifecycle.project_prefix.clone();
+    add_task(&fixture.scope.repo, "A task");
+    let key = format!("{prefix}-1");
+
+    assert_eq!(
+        task_update(
+            &fixture.scope,
+            TaskUpdate {
+                edit: crate::task_cli::EditParams {
+                    key: &key,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        ),
+        ("error: nothing to update\n".to_string(), 1)
+    );
+    assert_eq!(
+        task_update(
+            &fixture.scope,
+            TaskUpdate {
+                edit: crate::task_cli::EditParams {
+                    key: &key,
+                    ..Default::default()
+                },
+                status: Some("bogus"),
+            }
+        ),
+        (
+            "error: \"invalid status: bogus\"\nhelp[1]:\n  - \"Valid statuses: todo, in_progress, in_review, done\"\n".to_string(),
+            1
+        )
+    );
+    let (output, code) = task_update(
+        &fixture.scope,
+        TaskUpdate {
+            edit: crate::task_cli::EditParams {
+                key: "NOPE-9",
+                title: Some("x"),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    assert_eq!(code, 1);
+    assert!(output.starts_with("error: "), "output:\n{output}");
+    assert!(fixture.batches.lock().unwrap().is_empty());
+}
+
+#[test]
+fn task_delete_of_an_unknown_task_reports_it_and_deletes_nothing() {
+    let fixture = scope_fixture();
+    let prefix = fixture.scope.lifecycle.project_prefix.clone();
+    add_task(&fixture.scope.repo, "Keep me");
+
+    let (output, code) = task_delete(&fixture.scope, &format!("{prefix}-9"));
+
+    assert_eq!((output.as_str(), code), ("error: task not found\n", 1));
+    assert!(fixture.scope.repo.get(&format!("{prefix}-1")).is_ok());
+}
+
+#[test]
+fn session_read_reports_backends_that_cannot_be_read_remotely() {
+    let conn = setup_db();
+    let project = crate::db::create_project(&conn, "demo", "/tmp/demo").unwrap();
+    crate::db::create_session_with_id(
+        &conn,
+        "eeeeeeee-1111-2222-3333-444444444444",
+        &project.id,
+        "Local",
+        None,
+        "main",
+        None,
+        Some("claude"),
+        "local",
+        true,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        session_read(&conn, "eeeeeeee", ReadRange::Tail { lines: 10 }),
+        (
+            "error: local backend does not support remote read\n".to_string(),
+            1
+        )
+    );
+    assert_eq!(
+        session_read(
+            &conn,
+            "eeeeeeee",
+            ReadRange::After {
+                cursor: "daemon:0".into(),
+                max_bytes: 0
+            }
+        ),
+        (
+            "error: local backend does not support remote read\n".to_string(),
+            1
+        )
+    );
+}
+
+#[test]
+fn session_read_rejects_a_cursor_from_another_backend() {
+    let conn = setup_db();
+    let (root_id, ..) = setup_session_tree(&conn);
+
+    assert_eq!(
+        session_read(
+            &conn,
+            &root_id[..8],
+            ReadRange::After {
+                cursor: "tmux:3".into(),
+                max_bytes: 0
+            }
+        ),
+        (
+            "error: \"invalid cursor for daemon backend: tmux:3\"\n".to_string(),
+            1
+        )
+    );
 }

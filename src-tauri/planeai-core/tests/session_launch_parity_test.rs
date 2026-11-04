@@ -164,6 +164,7 @@ fn config_default_agent_command_resolves() {
             command: "test-agent run".to_string(),
             yolo_flag: None,
             prompt_command: None,
+            mcp_args: None,
         },
     );
     config.default_provider = "test".to_string();
@@ -295,6 +296,7 @@ fn auto_approve_adds_yolo_flag() {
             command: "agent".to_string(),
             yolo_flag: Some("--yolo".to_string()),
             prompt_command: None,
+            mcp_args: None,
         },
     );
     config.default_provider = "test".to_string();
@@ -439,6 +441,7 @@ fn kiro_provider() -> ProviderConfig {
         command: "kiro-cli chat".to_string(),
         yolo_flag: Some("--trust-all-tools".to_string()),
         prompt_command: Some("-- {prompt}".to_string()),
+        mcp_args: None,
     }
 }
 
@@ -447,6 +450,7 @@ fn claude_provider() -> ProviderConfig {
         command: "claude".to_string(),
         yolo_flag: Some("--dangerously-skip-permissions".to_string()),
         prompt_command: Some("-- {prompt}".to_string()),
+        mcp_args: None,
     }
 }
 
@@ -455,12 +459,13 @@ fn copilot_provider() -> ProviderConfig {
         command: "gh copilot".to_string(),
         yolo_flag: Some("--allow-all-tools".to_string()),
         prompt_command: Some("{prompt}".to_string()),
+        mcp_args: None,
     }
 }
 
 #[test]
 fn kiro_auto_approve_includes_yolo_flag() {
-    let result = build_provider_launch_command(&kiro_provider(), true, None, false, None);
+    let result = build_provider_launch_command(&kiro_provider(), true, None, false, None, None);
     assert_eq!(result.command, "kiro-cli chat --trust-all-tools");
     assert!(result.auto_approve_was_applied);
     assert!(!result.prompt_was_injected);
@@ -468,21 +473,21 @@ fn kiro_auto_approve_includes_yolo_flag() {
 
 #[test]
 fn claude_auto_approve_includes_yolo_flag() {
-    let result = build_provider_launch_command(&claude_provider(), true, None, false, None);
+    let result = build_provider_launch_command(&claude_provider(), true, None, false, None, None);
     assert_eq!(result.command, "claude --dangerously-skip-permissions");
     assert!(result.auto_approve_was_applied);
 }
 
 #[test]
 fn copilot_auto_approve_includes_yolo_flag() {
-    let result = build_provider_launch_command(&copilot_provider(), true, None, false, None);
+    let result = build_provider_launch_command(&copilot_provider(), true, None, false, None, None);
     assert_eq!(result.command, "gh copilot --allow-all-tools");
     assert!(result.auto_approve_was_applied);
 }
 
 #[test]
 fn no_auto_approve_omits_yolo_flag() {
-    let result = build_provider_launch_command(&kiro_provider(), false, None, false, None);
+    let result = build_provider_launch_command(&kiro_provider(), false, None, false, None, None);
     assert_eq!(result.command, "kiro-cli chat");
     assert!(!result.auto_approve_was_applied);
 }
@@ -493,8 +498,9 @@ fn missing_yolo_flag_does_not_fail() {
         command: "my-agent".to_string(),
         yolo_flag: None,
         prompt_command: None,
+        mcp_args: None,
     };
-    let result = build_provider_launch_command(&provider, true, None, false, None);
+    let result = build_provider_launch_command(&provider, true, None, false, None, None);
     assert_eq!(result.command, "my-agent");
     assert!(!result.auto_approve_was_applied);
 }
@@ -506,6 +512,7 @@ fn kiro_task_prompt_injected() {
         false,
         Some("Implement PLA-89: fix daemon task launch"),
         false,
+        None,
         None,
     );
     assert!(result
@@ -522,6 +529,7 @@ fn claude_task_prompt_starts_an_interactive_session() {
         Some("- Fix the login bug"),
         false,
         None,
+        None,
     );
     assert_eq!(result.command, "claude -- '- Fix the login bug'");
     assert!(result.prompt_was_injected);
@@ -535,6 +543,7 @@ fn task_prompt_with_auto_approve_both_applied() {
         Some("Implement feature X"),
         false,
         None,
+        None,
     );
     assert!(result.command.contains("--trust-all-tools"));
     assert!(result.command.contains("'Implement feature X'"));
@@ -544,7 +553,7 @@ fn task_prompt_with_auto_approve_both_applied() {
 
 #[test]
 fn no_prompt_no_auto_approve_returns_base_command() {
-    let result = build_provider_launch_command(&kiro_provider(), false, None, false, None);
+    let result = build_provider_launch_command(&kiro_provider(), false, None, false, None, None);
     assert_eq!(result.command, "kiro-cli chat");
     assert!(!result.auto_approve_was_applied);
     assert!(!result.prompt_was_injected);
@@ -556,8 +565,10 @@ fn no_prompt_injection_without_prompt_command() {
         command: "my-agent".to_string(),
         yolo_flag: Some("--yolo".to_string()),
         prompt_command: None,
+        mcp_args: None,
     };
-    let result = build_provider_launch_command(&provider, false, Some("Hello world"), false, None);
+    let result =
+        build_provider_launch_command(&provider, false, Some("Hello world"), false, None, None);
     // No prompt_command configured — prompt cannot be injected
     assert_eq!(result.command, "my-agent");
     assert!(!result.prompt_was_injected);
@@ -565,7 +576,8 @@ fn no_prompt_injection_without_prompt_command() {
 
 #[test]
 fn empty_prompt_is_not_injected() {
-    let result = build_provider_launch_command(&kiro_provider(), false, Some(""), false, None);
+    let result =
+        build_provider_launch_command(&kiro_provider(), false, Some(""), false, None, None);
     assert_eq!(result.command, "kiro-cli chat");
     assert!(!result.prompt_was_injected);
 }
@@ -577,6 +589,7 @@ fn prompt_with_spaces_preserved_safely() {
         false,
         Some("Fix bug in the login handler for SSO users"),
         false,
+        None,
         None,
     );
     assert!(result
@@ -592,6 +605,7 @@ fn prompt_with_newlines_preserved_safely() {
         Some("Fix this:\n- item 1\n- item 2"),
         false,
         None,
+        None,
     );
     // Shell-escaped with single quotes
     assert!(result.command.contains("'Fix this:\n- item 1\n- item 2'"));
@@ -604,6 +618,7 @@ fn prompt_with_single_quotes_escaped() {
         false,
         Some("Fix the user's profile page"),
         false,
+        None,
         None,
     );
     // Single quotes in prompt should be escaped
@@ -618,6 +633,7 @@ fn autonomous_prompt_template_applied_when_autonomous_true() {
         command: "kiro-cli chat".to_string(),
         yolo_flag: Some("--trust-all-tools".to_string()),
         prompt_command: Some("{prompt}".to_string()),
+        mcp_args: None,
     };
     let result = build_provider_launch_command(
         &provider,
@@ -625,6 +641,7 @@ fn autonomous_prompt_template_applied_when_autonomous_true() {
         Some("Fix the bug"),
         true,
         Some("You are autonomous. Complete this task:\n{prompt}"),
+        None,
     );
     assert!(result
         .command
@@ -640,6 +657,7 @@ fn autonomous_prompt_template_not_applied_when_autonomous_false() {
         command: "agent".to_string(),
         yolo_flag: None,
         prompt_command: Some("-p {prompt}".to_string()),
+        mcp_args: None,
     };
     let result = build_provider_launch_command(
         &provider,
@@ -647,6 +665,7 @@ fn autonomous_prompt_template_not_applied_when_autonomous_false() {
         Some("fix bug"),
         false,
         Some("AUTO: {prompt}"),
+        None,
     );
     assert!(result.command.contains("fix bug"));
     assert!(result.command.contains("-p"));
@@ -660,6 +679,7 @@ fn task_prompt_plus_auto_approve_autonomous_false() {
         command: "agent".to_string(),
         yolo_flag: Some("--yolo".to_string()),
         prompt_command: Some("-p {prompt}".to_string()),
+        mcp_args: None,
     };
     let result = build_provider_launch_command(
         &provider,
@@ -667,6 +687,7 @@ fn task_prompt_plus_auto_approve_autonomous_false() {
         Some("fix bug"),
         false,
         Some("AUTO: {prompt}"),
+        None,
     );
     assert!(result.command.contains("--yolo"));
     assert!(result.command.contains("fix bug"));
@@ -681,6 +702,7 @@ fn task_prompt_plus_auto_approve_autonomous_true() {
         command: "agent".to_string(),
         yolo_flag: Some("--yolo".to_string()),
         prompt_command: Some("-p {prompt}".to_string()),
+        mcp_args: None,
     };
     let result = build_provider_launch_command(
         &provider,
@@ -688,6 +710,7 @@ fn task_prompt_plus_auto_approve_autonomous_true() {
         Some("fix bug"),
         true,
         Some("AUTO: {prompt}"),
+        None,
     );
     assert!(result.command.contains("--yolo"));
     assert!(result.command.contains("AUTO: fix bug"));
@@ -767,7 +790,7 @@ fn tauri_and_iced_produce_same_command_for_task_launch() {
 
     // Tauri style: uses build_provider_launch_command directly
     let tauri_result =
-        build_provider_launch_command(&provider, true, Some(task_prompt), false, None);
+        build_provider_launch_command(&provider, true, Some(task_prompt), false, None, None);
 
     // Iced style: uses resolve_from_config which calls build_provider_launch_command
     let config = LaunchConfig::default();
@@ -801,7 +824,7 @@ fn tauri_and_iced_produce_same_command_for_claude_task() {
     let task_prompt = "Fix the login bug";
 
     let tauri_result =
-        build_provider_launch_command(&provider, true, Some(task_prompt), false, None);
+        build_provider_launch_command(&provider, true, Some(task_prompt), false, None, None);
 
     let overrides = SessionLaunchOverrides {
         cwd: Some(std::env::temp_dir()),
@@ -886,7 +909,7 @@ fn daemon_shell_tab_env_includes_usr_local_bin() {
 
     let extra_path_dirs: Vec<String> = vec![];
     let mut path_buf = String::new();
-    let env = build_daemon_env(&extra_path_dirs, "session:1", &mut path_buf);
+    let env = build_daemon_env(&extra_path_dirs, "session:1", &mut path_buf, None);
 
     let path = env.get("PATH").unwrap();
     assert!(
@@ -908,7 +931,7 @@ fn daemon_shell_tab_and_local_shell_tab_have_same_path() {
 
     // Daemon shell tab uses build_daemon_env
     let mut path_buf = String::new();
-    let daemon_env = build_daemon_env(&extra_path_dirs, "tab:1", &mut path_buf);
+    let daemon_env = build_daemon_env(&extra_path_dirs, "tab:1", &mut path_buf, None);
     let daemon_path = daemon_env.get("PATH").unwrap();
 
     // Local shell tab uses augmented_path (via prepare_session)
@@ -928,6 +951,7 @@ fn hostile_prompts_reach_the_agent_as_one_unchanged_argument() {
         command: "printf '[%s]'".to_string(),
         yolo_flag: None,
         prompt_command: Some("-- {prompt}".to_string()),
+        mcp_args: None,
     };
     let long = "x".repeat(65_536);
     for prompt in [
@@ -941,7 +965,8 @@ fn hostile_prompts_reach_the_agent_as_one_unchanged_argument() {
         long.as_str(),
     ] {
         let command =
-            build_provider_launch_command(&provider, false, Some(prompt), false, None).command;
+            build_provider_launch_command(&provider, false, Some(prompt), false, None, None)
+                .command;
         let (shell, args) = planeai_core::command::shell_args(&command);
         let output = std::process::Command::new(shell)
             .args(args)

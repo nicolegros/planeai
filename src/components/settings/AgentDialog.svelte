@@ -31,6 +31,8 @@
   let resumeCommand = $state(editing?.provider.resume_command ?? "");
   // svelte-ignore state_referenced_locally
   let promptCommand = $state(editing?.provider.prompt_command ?? "");
+  // svelte-ignore state_referenced_locally
+  let mcpArgs = $state(editing?.provider.mcp_args ?? "");
 
   const title = $derived(editing ? `Edit ${editing.label}` : "Add custom agent");
 
@@ -44,6 +46,8 @@
         yolo_flag: yoloFlag.trim() || null,
         resume_command: resumeCommand.trim() || null,
         prompt_command: promptCommand.trim() || null,
+        // Empty is kept as "", which opts a built-in agent out instead of restoring its template.
+        mcp_args: mcpArgs.trim(),
       },
     });
   }
@@ -68,6 +72,7 @@
     {#if editing}
       {@render field("agent-resume", "Resume command (optional)", "Run when restarting an exited session on focus. Falls back to the command when empty.", resumeCommand, (v) => (resumeCommand = v), "e.g. claude --resume")}
       {@render field("agent-prompt", "Prompt arguments (optional)", "{prompt} is replaced with the rendered task prompt.", promptCommand, (v) => (promptCommand = v), "{prompt} or -p {prompt}")}
+      {@render field("agent-mcp", "PlaneAI tools arguments (optional)", "Connects the agent to PlaneAI's MCP server. {mcp_url} is replaced with its URL, {mcp_allowed_tools} with Claude Code's pre-approved tools and {mcp_codex_prompted_tools} with Codex's prompting overrides; the token arrives in PLANEAI_MCP_TOKEN. Empty leaves the agent unconnected.", mcpArgs, (v) => (mcpArgs = v), "--mcp-config {mcp_url}")}
     {/if}
     {#if error}<p class="text-[12px] text-status-exited" role="alert">{error}</p>{/if}
     <div class="flex justify-end gap-2 pt-1">

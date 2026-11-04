@@ -34,6 +34,7 @@ pub fn open_db_at(path: &Path) -> SqlResult<Connection> {
 pub fn migrate(conn: &Connection) -> SqlResult<()> {
     migrate_project_session_schema(conn)?;
     crate::prompt_lock::migrate(conn)?;
+    crate::mcp::migrate(conn)?;
     LayoutService::migrate(conn)?;
     drop_loop_tables(conn)?;
     Ok(())

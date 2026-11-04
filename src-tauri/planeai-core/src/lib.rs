@@ -5,6 +5,7 @@ pub mod command;
 pub mod dispatch;
 pub mod git;
 pub mod jsonc;
+pub mod mcp;
 pub mod notify;
 pub mod orchestrator;
 pub mod prompt_lock;

@@ -23,6 +23,7 @@ planeai ships with no hardcoded agent — it works with any CLI that accepts tex
 - **prompt_command** - the arguments that start the agent on a task prompt
 - **yolo_flag** — what flag enables autonomous mode (skipping confirmations)
 - **autonomous_prompt_template** — how task details are formatted when dispatched
+- **mcp_args** - how the agent connects to PlaneAI's own tools for tasks and sessions
 
 You can have multiple providers configured and choose which one to use per session or per dispatch rule.
 

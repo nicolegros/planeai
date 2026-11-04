@@ -1,10 +1,67 @@
 //! AXI task subcommands — ls, show, add, move.
 
+use std::path::Path;
+
+use planeai_core::task_lifecycle::TaskLifecycleOrigin;
 use planeai_tasks::model::{ListFilter, Status};
 use planeai_tasks::provider::TaskProvider;
+use planeai_tasks::sqlite::SqliteRepository;
 use planeai_toon::{field, render, str_val, Value};
 
 use super::helpers::{emit_error, task_detail_object};
+use crate::task_cli::{LifecycleSink, TaskLifecycleContext};
+
+/// One project's tasks, with the context their lifecycle changes are reported in.
+pub struct TaskScope {
+    pub repo: SqliteRepository,
+    pub lifecycle: TaskLifecycleContext,
+}
+
+impl TaskScope {
+    /// Open the database, migrating its task tables first, as a process outside the app must.
+    pub fn open(
+        db_path: &Path,
+        project: &crate::db::Project,
+        origin: TaskLifecycleOrigin,
+        sink: LifecycleSink,
+    ) -> Result<Self, String> {
+        let db_path = db_path.to_str().ok_or("database path is not UTF-8")?;
+        let repo = SqliteRepository::open(db_path, &project.prefix).map_err(|e| e.to_string())?;
+        Ok(Self::new(repo, project, origin, sink))
+    }
+
+    /// Use a connection to the app's database, which it migrated at startup.
+    pub fn on_migrated(
+        conn: rusqlite::Connection,
+        project: &crate::db::Project,
+        origin: TaskLifecycleOrigin,
+        sink: LifecycleSink,
+    ) -> Self {
+        Self::new(
+            SqliteRepository::on_migrated(conn, &project.prefix),
+            project,
+            origin,
+            sink,
+        )
+    }
+
+    fn new(
+        repo: SqliteRepository,
+        project: &crate::db::Project,
+        origin: TaskLifecycleOrigin,
+        sink: LifecycleSink,
+    ) -> Self {
+        Self {
+            repo,
+            lifecycle: TaskLifecycleContext {
+                origin,
+                project_id: project.id.clone(),
+                project_prefix: project.prefix.clone(),
+                sink,
+            },
+        }
+    }
+}
 
 pub fn task_ls(repo: &dyn TaskProvider, status: Option<&str>, tags: &[String]) -> (String, i32) {
     let filter = ListFilter {
@@ -250,6 +307,90 @@ pub fn task_wake(
 fn task_detail_result(json: Result<String, String>) -> (String, i32) {
     match json.and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string())) {
         Ok(task) => (render(&[field("task", task_detail_object(&task))]), 0),
+        Err(error) => (emit_error(&error, &[]), 1),
+    }
+}
+
+/// Field edits and a status move for one task.
+#[derive(Default)]
+pub struct TaskUpdate<'a> {
+    pub edit: crate::task_cli::EditParams<'a>,
+    pub status: Option<&'a str>,
+}
+
+/// Apply the field edits, the parent change, then the move, each through its
+/// lifecycle-producing path. Everything that can be refused is checked first, so a refused
+/// update writes nothing. They are three transactions because the parent change and the move
+/// report lifecycle events through `TaskProvider` methods that work on any provider.
+pub fn task_update(scope: &TaskScope, update: TaskUpdate) -> (String, i32) {
+    let key = update.edit.key;
+    if let Some(status) = update.status {
+        if Status::parse(status).is_none() {
+            return (
+                emit_error(
+                    &format!("invalid status: {status}"),
+                    &["Valid statuses: todo, in_progress, in_review, done".into()],
+                ),
+                1,
+            );
+        }
+    }
+    if update.edit.is_empty() && update.status.is_none() {
+        return (emit_error("nothing to update", &[]), 1);
+    }
+    if let Err(error) = scope.repo.get(key) {
+        return (emit_error(&error.to_string(), &[]), 1);
+    }
+    if let Some(Some(parent)) = update.edit.parent {
+        if let Err(error) = scope.repo.check_parent(key, parent) {
+            return (emit_error(&error.to_string(), &[]), 1);
+        }
+    }
+    for blocker in update.edit.blocked_by.into_iter().flatten() {
+        if scope.repo.get(blocker).is_err() {
+            return (
+                emit_error(&format!("blocking task not found: {blocker}"), &[]),
+                1,
+            );
+        }
+    }
+    if !update.edit.is_empty() {
+        if let Err(error) = crate::task_cli::run_task_edit_with_lifecycle(
+            &scope.repo,
+            update.edit,
+            &scope.lifecycle,
+        ) {
+            return (emit_error(&error, &[]), 1);
+        }
+    }
+    if let Some(status) = update.status {
+        if let Err(error) = crate::task_cli::run_task_move_with_lifecycle(
+            &scope.repo,
+            key,
+            status,
+            &scope.lifecycle,
+        ) {
+            return (emit_error(&error, &[]), 1);
+        }
+    }
+    match scope.repo.get(key) {
+        Ok(task) => (render(&[field("task", task_detail_object(&task))]), 0),
+        Err(error) => (emit_error(&error.to_string(), &[]), 1),
+    }
+}
+
+/// Delete a task and the task workspace it owned.
+pub fn task_delete(scope: &TaskScope, key: &str) -> (String, i32) {
+    // A mistyped key must not reach the workspace teardown.
+    if let Err(error) = scope.repo.get(key) {
+        return (emit_error(&error.to_string(), &[]), 1);
+    }
+    match crate::task_cli::run_task_delete_in_project(
+        &scope.repo,
+        key,
+        Some(&scope.lifecycle.project_id),
+    ) {
+        Ok(_) => (render(&[field("deleted", str_val(key))]), 0),
         Err(error) => (emit_error(&error, &[]), 1),
     }
 }

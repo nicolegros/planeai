@@ -6,6 +6,14 @@ use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 use crate::tmux;
 use crate::{config, db, git};
 
+/// Like `services::open_db_at` but without its pragmas, which would newly enforce foreign keys
+/// on CLI writes; it migrates because the CLI can mint MCP tokens before an upgraded app runs.
+pub fn open_db(path: &std::path::Path) -> Result<Connection, String> {
+    let conn = Connection::open(path).map_err(|e| e.to_string())?;
+    planeai_core::services::migrate(&conn).map_err(|e| e.to_string())?;
+    Ok(conn)
+}
+
 pub fn run_project_list(conn: &Connection) -> String {
     let projects = db::list_projects(conn).unwrap_or_default();
     serde_json::to_string(&projects).unwrap()
@@ -31,6 +39,8 @@ pub struct Env {
     pub backend: String,
     pub socket_path: std::path::PathBuf,
     pub config: config::Config,
+    /// The MCP server URL the agent connects to.
+    pub mcp_url: Option<String>,
 }
 
 // ─── Plan / Execute ───
@@ -99,7 +109,11 @@ pub fn build_session_plan(
     if let Some(prompt) = &opts.prompt {
         planeai_core::session_launch::check_task_prompt(prompt)?;
     }
-    let cmd = provider_def.first_launch_command(opts.yolo, opts.prompt.as_deref());
+    let cmd = provider_def.first_launch_command(
+        opts.yolo,
+        opts.prompt.as_deref(),
+        env.mcp_url.as_deref(),
+    );
 
     let short_id = &session_id.replace('-', "")[..8];
 
@@ -200,6 +214,12 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     }
     let effective_working_dir = checkout.working_dir(repo).to_string();
     let worktree_path = checkout.worktree_path(repo);
+    let mcp = planeai_core::mcp::launch_endpoint(
+        conn,
+        env.mcp_url.as_deref(),
+        &plan.session_id,
+        &plan.backend,
+    )?;
 
     if plan.backend == "daemon" {
         let socket_path = planeai_ipc::daemon_socket_path();
@@ -213,6 +233,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             &extra_path_dirs,
             &plan.session_id,
             &mut path_buf,
+            mcp.as_ref(),
         );
         let (program, args) = planeai_core::command::shell_args(&plan.command);
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -232,6 +253,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             &extra_path_dirs,
             &plan.session_id,
             &mut path_buf,
+            mcp.as_ref(),
         );
         let workspace = planeai_rmux::WorkspaceKey::for_session(
             plan.workspace_project_id(),
@@ -257,6 +279,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
                 &plan.command,
                 &plan.session_id,
                 &extra_path_dirs,
+                mcp.as_ref(),
             )?;
         }
         #[cfg(windows)]
@@ -300,7 +323,11 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
 /// Shared session creation orchestration used by both the JSON CLI and the AXI
 /// interface. Loads config, resolves the project, builds a plan, and executes it.
 /// Returns the created `Session` on success.
-pub fn create_session(conn: &Connection, opts: SessionCreateOpts) -> Result<db::Session, String> {
+pub fn create_session(
+    conn: &Connection,
+    opts: SessionCreateOpts,
+    mcp_url: Option<String>,
+) -> Result<db::Session, String> {
     let cfg_dir = config::config_dir("planeai");
     let (cfg, _) = config::load(&cfg_dir);
     let backend = config::resolve_backend(&cfg).to_string();
@@ -309,6 +336,7 @@ pub fn create_session(conn: &Connection, opts: SessionCreateOpts) -> Result<db::
         backend,
         socket_path: planeai_paths::notify_socket_path(),
         config: cfg,
+        mcp_url,
     };
 
     let project_name = opts.project.clone();
@@ -366,29 +394,19 @@ pub fn create_workspace_sibling(
     conn: &Connection,
     parent_session_id: &str,
     opts: WorkspaceSiblingOpts,
+    mcp_url: Option<String>,
 ) -> Result<db::Session, String> {
-    let parent = db::get_session(conn, parent_session_id)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("current session not found: {parent_session_id}"))?;
+    let parent = parent_session(conn, parent_session_id)?;
     let task_key = parent
         .task_key
         .clone()
         .ok_or_else(|| "current session is not linked to a task workspace".to_string())?;
-    let project = db::list_projects(conn)
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .find(|candidate| candidate.id == parent.project_id)
-        .ok_or_else(|| "project for current session not found".to_string())?;
-    let suffix = &uuid::Uuid::new_v4().to_string().replace('-', "")[..8];
-    let branch = opts
-        .branch
-        .unwrap_or_else(|| format!("{}--{suffix}", parent.branch));
-
+    let project = parent_project_name(conn, &parent)?;
     create_session(
         conn,
         SessionCreateOpts {
-            project: project.name,
-            branch,
+            project,
+            branch: opts.branch.unwrap_or_else(|| derived_branch(&parent)),
             name: opts.name.or_else(|| Some(parent.name.clone())),
             new_branch: true,
             worktree: true,
@@ -400,7 +418,75 @@ pub fn create_workspace_sibling(
             prompt: opts.prompt,
             parent_session_id: Some(parent.id),
         },
+        mcp_url,
     )
+}
+
+/// A child session's choices; each `None` takes the default `create_child_session` names.
+pub struct ChildSessionOpts {
+    pub project: Option<String>,
+    pub name: Option<String>,
+    pub branch: Option<String>,
+    pub base_branch: Option<String>,
+    pub worktree: Option<bool>,
+    pub yolo: bool,
+    pub provider: Option<String>,
+    pub task_key: Option<String>,
+    pub task_project: Option<String>,
+    pub prompt: Option<String>,
+}
+
+/// Create a child of an existing session: in the parent's project, on a new branch derived
+/// from the parent's, in its own worktree unless asked otherwise.
+pub fn create_child_session(
+    conn: &Connection,
+    parent_session_id: &str,
+    opts: ChildSessionOpts,
+    mcp_url: Option<String>,
+) -> Result<db::Session, String> {
+    let parent = parent_session(conn, parent_session_id)?;
+    let project = match opts.project {
+        Some(project) => project,
+        None => parent_project_name(conn, &parent)?,
+    };
+    create_session(
+        conn,
+        SessionCreateOpts {
+            project,
+            branch: opts.branch.unwrap_or_else(|| derived_branch(&parent)),
+            name: opts.name,
+            new_branch: true,
+            // A checkout session would switch the branch under the agents already there.
+            worktree: opts.worktree.unwrap_or(true),
+            base_branch: opts.base_branch,
+            yolo: opts.yolo,
+            provider: opts.provider,
+            task_key: opts.task_key,
+            task_project: opts.task_project,
+            prompt: opts.prompt,
+            parent_session_id: Some(parent.id),
+        },
+        mcp_url,
+    )
+}
+
+fn parent_session(conn: &Connection, id: &str) -> Result<db::Session, String> {
+    db::get_session(conn, id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("current session not found: {id}"))
+}
+
+fn parent_project_name(conn: &Connection, parent: &db::Session) -> Result<String, String> {
+    db::get_project(conn, &parent.project_id)
+        .map_err(|error| error.to_string())?
+        .map(|project| project.name)
+        .ok_or_else(|| "project for current session not found".to_string())
+}
+
+/// A new branch beside the parent's: its name with a unique suffix.
+fn derived_branch(parent: &db::Session) -> String {
+    let suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    format!("{}--{suffix}", parent.branch)
 }
 
 #[cfg(not(windows))]
@@ -427,6 +513,7 @@ mod tests {
             backend: backend.to_string(),
             socket_path: std::path::PathBuf::from("/tmp/fake.sock"),
             config: config::Config::default(),
+            mcp_url: Some("http://127.0.0.1:47437/mcp".to_string()),
         }
     }
 
@@ -618,7 +705,7 @@ mod tests {
                 ..task_opts(Some("MYA-1"), None)
             };
             let plan = build_session_plan("session-1", &opts, &env, &test_project()).unwrap();
-            let app = env.config.providers["kiro"].first_launch_command(yolo, prompt);
+            let app = env.config.providers["kiro"].first_launch_command(yolo, prompt, None);
             (plan.command, app)
         };
         for (yolo, prompt) in [(false, None), (true, Some("- Fix it")), (false, Some(""))] {
@@ -626,6 +713,45 @@ mod tests {
             assert_eq!(cli, app, "yolo {yolo}, prompt {prompt:?}");
         }
         assert_eq!(command(false, Some("")).0, "kiro-cli chat");
+    }
+
+    #[test]
+    fn the_cli_launches_agents_with_mcp_before_the_upgraded_app_first_opens_the_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("planeai.db");
+        db::migrate(&rusqlite::Connection::open(&path).unwrap()).unwrap();
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "DROP TRIGGER mcp_tokens_revoke_on_session_end;
+                 DROP TRIGGER mcp_tokens_revoke_on_session_delete;
+                 DROP TABLE mcp_tokens;",
+            )
+            .unwrap();
+        let url = "http://127.0.0.1:47437/mcp";
+
+        let conn = open_db(&path).unwrap();
+        let endpoint =
+            planeai_core::mcp::launch_endpoint(&conn, Some(url), "session-1", "daemon").unwrap();
+
+        assert_eq!(endpoint.map(|endpoint| endpoint.url).as_deref(), Some(url));
+        assert!(open_db(&dir.path().join("fresh.db")).is_ok());
+    }
+
+    #[test]
+    fn a_planned_agent_is_pointed_at_the_mcp_server_only_while_mcp_is_on() {
+        let mut env = test_env("daemon");
+        let mut opts = task_opts(None, None);
+        opts.provider = Some("codex".into());
+        let plan = build_session_plan("abcd1234-0000", &opts, &env, &test_project()).unwrap();
+        assert_eq!(
+            plan.command,
+            r#"codex -c mcp_servers.planeai.url="http://127.0.0.1:47437/mcp" -c mcp_servers.planeai.bearer_token_env_var="PLANEAI_MCP_TOKEN" -c mcp_servers.planeai.default_tools_approval_mode="approve" -c mcp_servers.planeai.tools.task_delete.approval_mode="prompt""#
+        );
+
+        env.mcp_url = None;
+        let plan = build_session_plan("abcd1234-0000", &opts, &env, &test_project()).unwrap();
+        assert_eq!(plan.command, "codex");
     }
 
     #[test]
