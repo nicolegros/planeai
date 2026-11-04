@@ -1,108 +1,79 @@
 ---
 name: planeai-task-management
-description: "Manage tasks in the planeai task tracker — update, move, delete, list, and show tasks. Use when the user wants to edit a task, change task status, move a task, delete a task, list tasks, view task details, or any general task management operation that is NOT creating new tasks or breaking plans into tasks."
+description: "Manage tasks in the planeai task tracker: update, move, delete, list, and show tasks, and start sibling agent sessions. Use when the user wants to edit a task, change task status, move a task, delete a task, list tasks, view task details, or any general task management operation that is NOT creating new tasks or breaking plans into tasks."
 ---
 
 # Task Management
 
-Manage existing tasks using `planeai-cli`. Covers viewing, updating, moving, and deleting tasks.
+View, update, move and delete existing tasks, and start sibling agent sessions.
 
-## When to use
+## Which interface to use
 
-- User wants to see tasks: "show me PLA-3", "list my tasks", "what's in progress?"
-- User wants to update a task: "rename PLA-2", "change the description", "add tags", "update priority"
-- User wants to move a task: "mark PLA-1 as done", "move to in_progress", "start PLA-4"
-- User wants to delete a task: "delete PLA-5", "remove that task"
+- **PlaneAI tools available** (`mcp__planeai__*`, as in Claude Code and Codex sessions started by PlaneAI): use them.
+  They may be deferred: load them with your tool search first.
+  Inside a session, `key` and `project` default to your session's own task.
+- **Otherwise**: use `planeai-cli`.
+
+| Operation     | PlaneAI tool                                                                        | CLI                                                                                                                                |
+| ------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Show a task   | `task_show { key }`                                                                 | `planeai-cli axi task show <key>`                                                                                                  |
+| List tasks    | `task_list { status?, tags?, project? }`                                            | `planeai-cli axi task ls [--status <s>] [--tags <a,b>] [--project <name>]`                                                         |
+| Edit a task   | `task_update { key, title?, description?, priority?, tags?, blocked_by?, parent? }` | `planeai-cli task edit <key> [--title ...] [--desc ...] [--priority <int>] [--tags <a,b>] [--blocked-by <K1,K2>] [--parent <KEY>]` |
+| Move a task   | `task_update { key, status }`                                                       | `planeai-cli axi task move <key> <status>`                                                                                         |
+| Delete a task | `task_delete { key }`                                                               | `planeai-cli task delete <key>`                                                                                                    |
+
+`tags` and `blocked_by` replace the existing values, and an empty `parent` clears it.
 
 ## When NOT to use
 
-- Creating a new task from scratch → use `planeai-create-task`
-- Breaking a plan into multiple tasks → use `planeai-plan-to-tasks`
-
-## CLI Reference
-
-Use the AXI interface for token-efficient TOON output:
-
-```
-planeai-cli axi task show <key>                   # View task details
-planeai-cli axi task ls [flags]                   # List tasks
-planeai-cli axi task move <key> <status>          # Change task status
-```
-
-For edit and delete (not yet in axi), use the JSON interface:
-
-```
-planeai-cli task edit <key> [flags]               # Update task fields
-planeai-cli task delete <key>                     # Delete a task
-```
+- Creating a new task from scratch: use `planeai-create-task`
+- Breaking a plan into multiple tasks: use `planeai-plan-to-tasks`
 
 ## Operations
 
-### Show a task
+### Show or list
 
-```bash
-planeai-cli axi task show <key>
-```
+Use show when the user asks to see, view or inspect a task.
+Use list when they ask what tasks exist or what's in a status; with no filter it lists the current project.
 
-Use when the user asks to see, view, or inspect a task.
+### Edit
 
-### List tasks
+Only pass the fields the user wants to change.
 
-```bash
-planeai-cli axi task ls [--status <status>] [--tags <a,b>] [--project <name>]
-```
+### Move
 
-Use when the user asks what tasks exist, what's in a certain status, or wants an overview. Omit flags to list all tasks in the current project.
-
-### Edit a task
-
-```bash
-planeai-cli task edit <key> [--title "..."] [--desc "..."] [--priority <int>] [--tags <a,b>] [--blocked-by <K1,K2>]
-```
-
-Only pass flags for fields the user wants to change. Don't overwrite fields unnecessarily.
-
-### Move a task
-
-```bash
-planeai-cli axi task move <key> <status>
-```
-
-Status values: `todo`, `in_progress`, `done`, `cancelled`.
-
-Common phrasings mapped to statuses:
+Statuses: `todo`, `in_progress`, `in_review`, `done`.
 
 - "start", "working on", "pick up" → `in_progress`
+- "ready for review", "in review" → `in_review`
 - "done", "finish", "complete", "close" → `done`
-- "cancel", "drop", "won't do" → `cancelled`
 - "reopen", "back to todo" → `todo`
 
-### Delete a task
+### Delete
 
-```bash
-planeai-cli task delete <key>
-```
-
-Confirm with the user before deleting unless they were explicit (e.g., "delete PLA-5").
+Confirm with the user before deleting unless they were explicit (e.g. "delete PLA-5").
 
 ## Guidelines
 
 - When the user references a task by key, use that key directly.
-- When the user references a task vaguely ("that auth task"), run `planeai-cli axi task ls` to find it, then confirm the key before acting.
-- After any operation, briefly confirm what happened (e.g., "Moved **PLA-3** to done.").
-- If a command fails, report the error and suggest a fix.
-- Use `--project <name>` only when the user names a specific project or context makes it clear.
+- When the user references a task vaguely ("that auth task"), list tasks to find it, then confirm the key before acting.
+- After any operation, briefly confirm what happened (e.g. "Moved **PLA-3** to done.").
+- If a call fails, report the error and suggest a fix.
+- Pass a project only when the user names one or context makes it clear.
 
-## Create a sibling agent session in the current TaskWorkspace
+## Start a sibling agent session on the current task
 
-When you are running inside a PlaneAI agent session and need parallel work on the same task, create a sibling session through AXI instead of creating an unlinked manual session:
+When you run inside a PlaneAI agent session and need parallel work on the same task, start a sibling session instead of an unlinked one.
+It gets its own worktree and branch, inherits your project and task, and records your session as its parent.
+
+```
+mcp__planeai__session_create { "mode": "sibling", "prompt": "Investigate the historical data and report the impact" }
+```
 
 ```bash
 planeai-cli axi session spawn --prompt "Investigate the historical data and report the impact"
 ```
 
-The command reads `PLANEAI_SESSION_ID` and inherits the current agent session's project and task key. It creates a new isolated worktree and branch, records the current session as its parent, and defaults the new session name to the current task session name.
-
-Optional controls: `--name`, `--branch`, `--base-branch`, `--provider`, `--yolo`, and `--pretty`. `axi session spawn` defaults to yolo; use `--yolo false` to opt out.
-
-Do not use this command outside a task-linked PlaneAI agent session. It fails rather than creating an unlinked session.
+Both also take a name, branch, base branch, provider and yolo setting.
+The tool's yolo defaults to your own session's setting; `axi session spawn` defaults to yolo, so pass `--yolo false` to opt out.
+The CLI needs `PLANEAI_SESSION_ID`, and both fail outside a task-linked PlaneAI session rather than creating an unlinked session.

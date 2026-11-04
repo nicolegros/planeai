@@ -57,7 +57,8 @@ Claude Code and Codex both speak MCP natively, show its tools by name, and let a
 
 - An agent started while the server is off, or before this change, has no PlaneAI tools until it is restarted.
 - Changing the port strands running agents on the old URL until they restart; Settings says so.
-- The skills that wrap `planeai-cli axi` become redundant inside sessions and can be removed once plugin tools and provider runtimes reach MCP.
+- The skills that wrap `planeai-cli axi` stay, as a guide to both interfaces: they prefer the PlaneAI tools and fall back to the CLI for agents without an `mcp_args` template, such as Kiro and Copilot.
+  They can be removed once every provider reaches MCP.
 - Adding a tool means a registry entry with typed input; its annotations, and therefore its approval in the templates, follow from its effect.
 - Accepted risk: a session that asks before running tools can still create a task without asking, since `task_create` is pre-approved.
   In a project with auto-dispatch on, that task is then picked up and run with yolo.
