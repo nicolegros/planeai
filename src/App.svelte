@@ -678,13 +678,6 @@
     openPlugin(pluginId, contributionId, "session-meta");
   }
 
-  function focusPluginInteraction(): boolean {
-    const interaction = document.querySelector<HTMLElement>("[data-plugin-interaction-host] [data-plugin-ui-contribution]");
-    if (!interaction) return false;
-    interaction.focus();
-    return true;
-  }
-
   function invalidatePluginPage(pluginId: string): void {
     if (activePluginId === pluginId) leavePluginWorkspace();
   }
@@ -1041,7 +1034,7 @@
         else if (action.type === "complete_task") { void completeTask(activeTaskWorkspace, () => orchestrator.loadSessions()); }
         else if (action.type === "undo") { void undoLastTaskChange(() => orchestrator.loadSessions()); }
         else if (action.type === "snooze_task") { snoozeOrWake(activeTaskWorkspace); }
-        else if (action.type === "focus_toast") { if (!toggleToastFocus()) focusPluginInteraction(); }
+        else if (action.type === "focus_toast") toggleToastFocus();
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !pluginDialog && !getCycleState().isCycling && !navCycle.isCycling(),
