@@ -23,6 +23,7 @@ use crate::commands;
 use crate::plugin_rpc::*;
 use crate::task_lifecycle::TaskLifecycleBatch;
 use crate::task_start::{PendingTaskStart, RequestedStart, SessionStart, StartOptions};
+pub use planeai::mcp::plugin_tool::PluginTool;
 use planeai_plugin_contract::provider::is_host_controlled_method as is_host_controlled_plugin_method;
 use planeai_plugin_contract::supports_host_api_version;
 pub use planeai_plugin_contract::ProviderFeature;
@@ -187,20 +188,6 @@ impl PluginProvider {
     pub fn supports(&self, feature: ProviderFeature) -> bool {
         self.supports.contains(&feature)
     }
-}
-
-/// An MCP tool a plugin contributes to agents in sessions (ADR-0017).
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PluginTool {
-    /// Unique within the plugin; agents call it as `<plugin id>_<name>`.
-    pub name: String,
-    pub description: String,
-    pub input_schema: serde_json::Map<String, Value>,
-    #[serde(default)]
-    pub annotations: planeai_plugin_contract::ToolAnnotations,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -1158,7 +1145,8 @@ impl PluginRuntimeHandle {
         app: AppHandle,
         mcp_tools: Arc<planeai::mcp::tools::Registry>,
     ) -> Self {
-        Self(Arc::new(PluginRuntimeSupervisor {
+        Self(Arc::new_cyclic(|this| PluginRuntimeSupervisor {
+            this: this.clone(),
             db,
             app,
             mcp_tools,
@@ -1174,6 +1162,8 @@ impl PluginRuntimeHandle {
 }
 
 pub struct PluginRuntimeSupervisor {
+    /// Handed to the MCP tools this supervisor publishes, which must not keep it alive.
+    this: std::sync::Weak<PluginRuntimeSupervisor>,
     db: Arc<Mutex<Connection>>,
     app: AppHandle,
     /// The MCP server's tools, which serve each running plugin's tools (ADR-0017).
@@ -2899,13 +2889,16 @@ impl PluginRuntimeSupervisor {
         state: PluginRuntimeState,
         last_error: Option<String>,
     ) -> Result<(), String> {
+        let update_id = plugin_id.to_string();
+        let error = last_error.clone();
+        let written = self
+            .with_db(move |conn| set_state(conn, &update_id, enabled, state, error.as_deref()))
+            .await;
+        // Launches outside the app read the row, so it stops saying running first.
         if state != PluginRuntimeState::Running {
             self.mcp_tools.retire_plugin(plugin_id);
         }
-        let update_id = plugin_id.to_string();
-        let error = last_error.clone();
-        self.with_db(move |conn| set_state(conn, &update_id, enabled, state, error.as_deref()))
-            .await?;
+        written?;
         self.emit_change(plugin_id).await;
         Ok(())
     }
@@ -3393,29 +3386,34 @@ impl PluginRuntimeSupervisor {
     /// Serve the plugin's tools to agents; a running plugin's tools are served exactly
     /// while it runs.
     fn publish_tools(&self, inventory: &PluginInventory) -> Result<(), String> {
-        if !inventory
-            .capabilities
-            .contains(&PluginHostCapability::Tools)
-        {
-            return Ok(());
-        }
         let tools = inventory
             .tools
             .iter()
             .map(|tool| {
-                let app = self.app.clone();
-                let plugin_id = inventory.id.clone();
-                let name = tool.name.clone();
-                let timeout = tool_timeout(tool);
-                plugin_tool_def(&inventory.id, tool, move |caller, arguments| {
-                    let (app, plugin_id, name) = (app.clone(), plugin_id.clone(), name.clone());
-                    Box::pin(async move {
-                        let runtime = app.state::<PluginRuntimeHandle>().0.clone();
-                        runtime
-                            .call_tool(&plugin_id, &name, timeout, arguments, caller)
-                            .await
-                    })
-                })
+                let supervisor = self.this.clone();
+                let plugin_id: Arc<str> = inventory.id.as_str().into();
+                let name: Arc<str> = tool.name.as_str().into();
+                let timeout = tool.timeout();
+                crate::plugin_tools::plugin_tool_def(
+                    &inventory.id,
+                    tool,
+                    move |caller, arguments| {
+                        let (supervisor, plugin_id, name) =
+                            (supervisor.clone(), plugin_id.clone(), name.clone());
+                        Box::pin(async move {
+                            match supervisor.upgrade() {
+                                Some(supervisor) => {
+                                    supervisor
+                                        .call_tool(&plugin_id, &name, timeout, arguments, caller)
+                                        .await
+                                }
+                                None => planeai::mcp::tools::ToolOutput::error(
+                                    "PlaneAI's plugin runtime has stopped",
+                                ),
+                            }
+                        })
+                    },
+                )
             })
             .collect::<Result<Vec<_>, String>>()?;
         self.mcp_tools.publish_plugin(&inventory.id, tools)
@@ -3432,24 +3430,35 @@ impl PluginRuntimeSupervisor {
         caller: planeai_core::mcp::McpCaller,
     ) -> planeai::mcp::tools::ToolOutput {
         tracing::info!(plugin_id, tool, session_id = %caller.session_id, "plugin tool.call");
-        let caller = match self.with_db(move |conn| tool_caller(conn, &caller)).await {
+        let caller = match self
+            .with_db(move |conn| crate::plugin_tools::tool_caller(conn, &caller))
+            .await
+        {
             Ok(caller) => caller,
             Err(error) => return planeai::mcp::tools::ToolOutput::error(&error),
         };
-        let params = serde_json::json!({ "tool": tool, "arguments": arguments, "caller": caller });
-        let result = self
-            .call_internal_within(
-                plugin_id,
-                planeai_plugin_contract::TOOL_CALL,
-                params,
-                true,
-                timeout,
-            )
-            .await;
+        let params = planeai_plugin_contract::ToolCallParams {
+            tool: tool.to_string(),
+            arguments,
+            caller,
+        };
+        let result = match serde_json::to_value(params) {
+            Ok(params) => {
+                self.call_internal_within(
+                    plugin_id,
+                    planeai_plugin_contract::TOOL_CALL,
+                    params,
+                    true,
+                    timeout,
+                )
+                .await
+            }
+            Err(error) => Err(PluginRpcError::NotSent(error.to_string())),
+        };
         if let Err(error) = &result {
             tracing::warn!(plugin_id, tool, %error, "plugin tool.call failed");
         }
-        tool_output(plugin_id, timeout, result)
+        crate::plugin_tools::tool_output(plugin_id, timeout, result)
     }
 
     pub async fn local_provider_ui_source(
@@ -4057,7 +4066,6 @@ impl PluginRuntimeSupervisor {
                 if !owns_process {
                     return;
                 }
-                mcp_tools.retire_plugin(&plugin_id);
                 if let Some(worker) = background_workers.lock().await.remove(&plugin_id) {
                     worker.cancel.cancel();
                     worker.task.abort();
@@ -4073,100 +4081,10 @@ impl PluginRuntimeSupervisor {
                 {
                     tracing::warn!(plugin_id, %update_error, "failed to record plugin runtime exit");
                 }
+                mcp_tools.retire_plugin(&plugin_id);
                 return;
             }
         });
-    }
-}
-
-fn tool_timeout(tool: &PluginTool) -> Duration {
-    Duration::from_millis(
-        tool.timeout_ms
-            .unwrap_or(planeai_plugin_contract::DEFAULT_TOOL_TIMEOUT_MS),
-    )
-}
-
-/// The registry entry serving a plugin's declared tool under its served name.
-fn plugin_tool_def(
-    plugin_id: &str,
-    tool: &PluginTool,
-    run: impl Fn(
-            planeai_core::mcp::McpCaller,
-            serde_json::Map<String, Value>,
-        ) -> planeai::mcp::tools::ToolFuture
-        + Send
-        + Sync
-        + 'static,
-) -> Result<planeai::mcp::tools::ToolDef, String> {
-    use planeai_core::mcp::Effect;
-    use planeai_plugin_contract::ToolEffect;
-    let effect = match tool
-        .annotations
-        .effect()
-        .map_err(|error| format!("plugin {plugin_id} tool {} {error}", tool.name))?
-    {
-        ToolEffect::Read => Effect::Read,
-        ToolEffect::Write { idempotent } => Effect::Write { idempotent },
-        ToolEffect::Delete => Effect::Delete,
-    };
-    Ok(planeai::mcp::tools::ToolDef::plugin(
-        planeai_core::mcp::plugin_tool_name(plugin_id, &tool.name)?,
-        tool.description.clone(),
-        tool.input_schema.clone(),
-        effect,
-        tool.annotations.open_world(),
-        run,
-    ))
-}
-
-/// The calling session as `tool.call` describes it to the plugin.
-fn tool_caller(conn: &Connection, caller: &planeai_core::mcp::McpCaller) -> Result<Value, String> {
-    let project = |id: &str| -> Result<Value, String> {
-        let project = crate::db::get_project(conn, id)
-            .map_err(|error| error.to_string())?
-            .ok_or("the project of this session no longer exists")?;
-        Ok(serde_json::json!({ "id": project.id, "name": project.name }))
-    };
-    let task = match &caller.task {
-        Some(task) => {
-            serde_json::json!({ "key": task.key, "project": project(&task.project_id)? })
-        }
-        None => Value::Null,
-    };
-    Ok(serde_json::json!({
-        "session_id": caller.session_id,
-        "project": project(&caller.project_id)?,
-        "task": task,
-        "auto_approve": caller.auto_approve,
-    }))
-}
-
-#[derive(Deserialize)]
-struct ToolCallResult {
-    text: String,
-    #[serde(default)]
-    is_error: bool,
-}
-
-/// What the agent reads back from a `tool.call`.
-fn tool_output(
-    plugin_id: &str,
-    timeout: Duration,
-    result: Result<Value, PluginRpcError>,
-) -> planeai::mcp::tools::ToolOutput {
-    use planeai::mcp::tools::ToolOutput;
-    let failure = |message: String| ToolOutput::error(&format!("plugin {plugin_id}: {message}"));
-    match result {
-        Ok(value) => match serde_json::from_value::<ToolCallResult>(value) {
-            Ok(ToolCallResult { text, is_error }) => ToolOutput { text, is_error },
-            Err(error) => failure(format!("invalid tool.call result: {error}")),
-        },
-        Err(PluginRpcError::Rpc { code: -32800, .. }) => failure(format!(
-            "no answer within {} ms; the call was cancelled",
-            timeout.as_millis()
-        )),
-        Err(PluginRpcError::Rpc { message, .. }) => failure(message),
-        Err(error) => failure(error.to_string()),
     }
 }
 
@@ -5192,131 +5110,6 @@ mod tests {
             .validate()
             .unwrap_err()
             .contains("longer than 50 characters"));
-    }
-
-    #[test]
-    fn a_declared_tool_is_served_under_its_plugin_with_its_effect() {
-        let tool = |annotations: Value| -> PluginTool {
-            serde_json::from_value(serde_json::json!({
-                "name": "show",
-                "description": "Show an issue.",
-                "inputSchema": { "type": "object" },
-                "annotations": annotations,
-            }))
-            .unwrap()
-        };
-        let served = |annotations: Value| {
-            let def = plugin_tool_def("issues", &tool(annotations), |_, _| {
-                Box::pin(async { planeai::mcp::tools::ToolOutput::error("unused") })
-            })
-            .unwrap()
-            .tool();
-            let hints = def.annotations.unwrap();
-            (
-                def.name.to_string(),
-                hints.read_only_hint.unwrap(),
-                hints.destructive_hint.unwrap(),
-                hints.idempotent_hint.unwrap(),
-                hints.open_world_hint.unwrap(),
-            )
-        };
-        assert_eq!(
-            served(serde_json::json!({ "readOnlyHint": true, "openWorldHint": false })),
-            ("issues_show".into(), true, false, true, false)
-        );
-        assert_eq!(
-            served(serde_json::json!({ "destructiveHint": false })),
-            ("issues_show".into(), false, false, false, true)
-        );
-        assert_eq!(
-            served(serde_json::json!({})),
-            ("issues_show".into(), false, true, true, true)
-        );
-        assert_eq!(
-            tool_timeout(&tool(serde_json::json!({}))),
-            Duration::from_secs(30)
-        );
-    }
-
-    #[test]
-    fn tool_call_describes_the_calling_session_with_project_names() {
-        let (conn, _dir, project) = task_database();
-        let other = crate::db::create_project(&conn, "other", "/tmp/other").unwrap();
-        let mut caller = planeai_core::mcp::McpCaller {
-            session_id: "aaaaaaaa-1111-2222-3333-444444444444".into(),
-            project_id: project.id.clone(),
-            task: Some(planeai_core::mcp::CallerTask {
-                key: "OTH-3".into(),
-                project_id: other.id.clone(),
-            }),
-            auto_approve: true,
-        };
-        assert_eq!(
-            tool_caller(&conn, &caller).unwrap(),
-            serde_json::json!({
-                "session_id": "aaaaaaaa-1111-2222-3333-444444444444",
-                "project": { "id": project.id, "name": project.name },
-                "task": { "key": "OTH-3", "project": { "id": other.id, "name": "other" } },
-                "auto_approve": true,
-            })
-        );
-        caller.task = None;
-        assert_eq!(tool_caller(&conn, &caller).unwrap()["task"], Value::Null);
-    }
-
-    #[test]
-    fn every_tool_call_outcome_reaches_the_agent() {
-        use planeai::mcp::tools::ToolOutput;
-        let timeout = Duration::from_millis(2500);
-        let output = |result| tool_output("issues", timeout, result);
-        assert_eq!(
-            output(Ok(serde_json::json!({ "text": "issue: ISS-1" }))),
-            ToolOutput {
-                text: "issue: ISS-1".into(),
-                is_error: false
-            }
-        );
-        assert_eq!(
-            output(Ok(
-                serde_json::json!({ "text": "no such issue", "is_error": true })
-            )),
-            ToolOutput {
-                text: "no such issue".into(),
-                is_error: true
-            }
-        );
-        for (result, message) in [
-            (
-                Ok(serde_json::json!({ "content": [] })),
-                "plugin issues: invalid tool.call result: missing field `text`",
-            ),
-            (
-                Err(PluginRpcError::Rpc {
-                    code: -32800,
-                    message: "request cancelled".into(),
-                }),
-                "plugin issues: no answer within 2500 ms; the call was cancelled",
-            ),
-            (
-                Err(timed_out_request_error("tool.call")),
-                "plugin issues: plugin RPC tool.call timed out",
-            ),
-            (
-                Err(PluginRpcError::NotRunning(
-                    "plugin issues is not running".into(),
-                )),
-                "plugin issues: plugin issues is not running",
-            ),
-            (
-                Err(PluginRpcError::Rpc {
-                    code: -32602,
-                    message: "key is required".into(),
-                }),
-                "plugin issues: key is required",
-            ),
-        ] {
-            assert_eq!(output(result), ToolOutput::error(message), "{message}");
-        }
     }
 
     #[test]

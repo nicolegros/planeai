@@ -636,20 +636,47 @@ fn a_launch_outside_the_app_approves_the_running_plugins_tools_but_deletes() {
         super::launch_from_inventory(&conn, url()),
         planeai_core::mcp::McpLaunch::new(url())
     );
-    conn.execute_batch(
-        r#"CREATE TABLE plugin_inventory (id TEXT, capabilities TEXT, tools TEXT, runtime_state TEXT);
-        INSERT INTO plugin_inventory VALUES
-            ('fixture', '["providers","tools"]',
-             '[{"name":"echo","annotations":{"readOnlyHint":true}},{"name":"note","annotations":{"destructiveHint":false}},{"name":"forget"}]',
-             'running'),
-            ('stopped', '["tools"]', '[{"name":"echo","annotations":{"readOnlyHint":true}}]', 'disabled'),
-            ('undeclared', '[]', '[{"name":"echo","annotations":{"readOnlyHint":true}}]', 'running');"#,
-    )
-    .unwrap();
+    let tool = |name: &str, annotations: &str| {
+        format!(
+            r#"{{"name":"{name}","description":"d","inputSchema":{{"type":"object"}},"annotations":{annotations}}}"#
+        )
+    };
+    let fixture = format!(
+        "[{},{},{}]",
+        tool("echo", r#"{"readOnlyHint":true}"#),
+        tool("note", r#"{"destructiveHint":false}"#),
+        tool("forget", "{}")
+    );
+    conn.execute_batch("CREATE TABLE plugin_inventory (id TEXT, tools TEXT, runtime_state TEXT);")
+        .unwrap();
+    for (id, tools, state) in [
+        ("fixture", fixture.as_str(), "running"),
+        ("stopped", fixture.as_str(), "disabled"),
+    ] {
+        conn.execute(
+            "INSERT INTO plugin_inventory VALUES (?1, ?2, ?3)",
+            [id, tools, state],
+        )
+        .unwrap();
+    }
 
     assert_eq!(
         super::launch_from_inventory(&conn, url()).approved_plugin_tools,
         ["fixture_echo", "fixture_note"]
+    );
+
+    conn.execute(
+        "INSERT INTO plugin_inventory VALUES ('broken', ?1, 'running')",
+        [format!(
+            "[{}]",
+            tool("both", r#"{"readOnlyHint":true,"destructiveHint":true}"#)
+        )
+        .as_str()],
+    )
+    .unwrap();
+    assert_eq!(
+        super::launch_from_inventory(&conn, url()),
+        planeai_core::mcp::McpLaunch::new(url())
     );
 }
 

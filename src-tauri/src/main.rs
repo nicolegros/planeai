@@ -20,6 +20,7 @@ mod paths;
 mod plugin_packages;
 mod plugin_providers;
 mod plugin_rpc;
+mod plugin_tools;
 mod plugins;
 mod pty;
 mod pty_planeai_core_adapter;

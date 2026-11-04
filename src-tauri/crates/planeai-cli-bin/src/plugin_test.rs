@@ -137,34 +137,30 @@ fn call_tool(
         .into_iter()
         .find(|declared| declared["name"] == tool)
         .ok_or_else(|| anyhow!("the scenario calls a tool the manifest does not declare"))?;
-    let timeout = Duration::from_millis(
-        declared["timeoutMs"]
-            .as_u64()
-            .unwrap_or(planeai_plugin_contract::DEFAULT_TOOL_TIMEOUT_MS),
-    );
+    let timeout = planeai_plugin_contract::tool_timeout(declared["timeoutMs"].as_u64());
+    let Value::Object(arguments) = arguments else {
+        bail!("scenario tool arguments must be a JSON object");
+    };
+    let params = planeai_plugin_contract::ToolCallParams {
+        tool: tool.to_string(),
+        arguments,
+        caller: planeai_plugin_contract::ToolCaller {
+            session_id: uuid::Uuid::new_v4().to_string(),
+            project: planeai_plugin_contract::ToolProject {
+                id: "plugin-test".into(),
+                name: "plugin-test".into(),
+            },
+            task: None,
+            auto_approve: false,
+        },
+    };
     let result = process.call_within(
         planeai_plugin_contract::TOOL_CALL,
-        json!({
-            "tool": tool,
-            "arguments": arguments,
-            "caller": {
-                "session_id": uuid::Uuid::new_v4().to_string(),
-                "project": { "id": "plugin-test", "name": "plugin-test" },
-                "task": Value::Null,
-                "auto_approve": false,
-            },
-        }),
+        serde_json::to_value(params)?,
         timeout,
     )?;
-    let text = result
-        .get("text")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("tool.call must return {{ text, is_error? }}"))?;
-    let is_error = match result.get("is_error") {
-        None => false,
-        Some(Value::Bool(is_error)) => *is_error,
-        Some(_) => bail!("tool.call is_error must be a boolean"),
-    };
+    let planeai_plugin_contract::ToolCallResult { text, is_error } =
+        serde_json::from_value(result).context("tool.call must return { text, is_error? }")?;
     println!("tool.call {tool} (is_error: {is_error}): {text}");
     Ok(())
 }

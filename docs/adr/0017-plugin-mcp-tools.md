@@ -34,7 +34,8 @@ Agents should call them like PlaneAI's own tools: same server, same token, same 
   An invalid result, a JSON-RPC error, a plugin that is not running and a timeout all reach the agent as an error result, never as a protocol failure.
   `tool.call` is host-controlled like `provider.*`, so plugin UI cannot forge a caller.
 - **Timeouts.** `timeoutMs` bounds a call, from 1 to 120000 milliseconds, 30000 by default.
-  On expiry the host sends `$/cancelRequest` (ADR-0011); a plugin that acknowledges keeps running and the agent reads that the call was cancelled, one that does not is stopped.
+  On expiry the host sends `$/cancelRequest` (ADR-0011).
+  A plugin that acknowledges keeps running, and the agent reads that the plugin gave no answer within the timeout and the call was cancelled; one that does not acknowledge is stopped, and the agent reads that `tool.call` timed out.
   The HTTP request ends with the call either way, and the sidecar request lane is shared, so a slow tool delays the plugin's other requests.
 - **Approvals.** Plugin tools follow ADR-0016's effect rule: reads and writes run without asking, deletes ask.
   A launch from the app fills `{mcp_allowed_tools}` and `{mcp_codex_approved_tools}` with PlaneAI's approved tools plus the read and write tools of the plugins running at that moment, read from the registry the server lists.
@@ -42,7 +43,7 @@ Agents should call them like PlaneAI's own tools: same server, same token, same 
   Codex's template moves from approving by default with `prompt` overrides to asking by default with `approve` overrides, so on both agents a tool missing from the launch list, a delete or one from a plugin enabled later, asks.
   The placeholder is renamed from `{mcp_codex_prompted_tools}` to `{mcp_codex_approved_tools}` to match.
   v1.113 to v1.114 shipped the old template, and a saved config may hold it: loading the config upgrades it (the shipped template becomes the current one, and a custom one has its `approve` default and old placeholder replaced), and the launch applies the same upgrade, so the old placeholder never reaches an agent's arguments.
-  Sessions started through `planeai-cli` or the `session_create` tool, which do not reach the registry, read the same set from the plugin inventory: the declared tools of plugins whose row says `running`, which the supervisor writes right after publishing and right before retiring.
+  Sessions started through `planeai-cli` or the `session_create` tool, which do not reach the registry, read the same set from the plugin inventory: the declared tools of plugins whose row says `running`, which the supervisor writes after publishing the plugin's tools and before retiring them, so the row never says running for a set the registry no longer serves.
   While the app is closed no row says `running`, and such agents cannot connect anyway.
   A session revived at app startup gets PlaneAI's tools only, as plugins start after revival.
   Pre-approving plugin tools by declared effect trusts the plugin's annotations, which is consistent with plugins being trusted code.
@@ -53,5 +54,6 @@ Agents should call them like PlaneAI's own tools: same server, same token, same 
 ## Consequences
 
 - `planeai-cli plugin test` and installation reject the same manifests, since both validate through `planeai-plugin-contract`; installation also checks the served names against PlaneAI's tool table.
+- The `tool.call` shapes (`ToolCallParams`, `ToolCaller`, `ToolCallResult`) and the timeout default live in `planeai-plugin-contract`, used by the host and `planeai-cli plugin test` alike; the effect and approval rule lives once in `planeai::mcp::plugin_tool`, for the registry and for launches reading the inventory.
 - `planeai-cli plugin test` sends `tool.call` for scenario lines `{ tool, arguments }` and checks the result shape; the local fixture declares a read tool and a destructive one and `make test-plugin-fixture` calls both.
 - A plugin keeps declaring tools in its manifest; PlaneAI never learns tools from the sidecar at runtime, so the inventory knows a plugin's tools before it starts.

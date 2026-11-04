@@ -75,6 +75,51 @@ pub const TOOL_CALL: &str = "tool.call";
 pub const DEFAULT_TOOL_TIMEOUT_MS: u64 = 30_000;
 pub const MAX_TOOL_TIMEOUT_MS: u64 = 120_000;
 
+/// How long the host waits for a tool declaring `timeoutMs`.
+pub fn tool_timeout(timeout_ms: Option<u64>) -> std::time::Duration {
+    std::time::Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS))
+}
+
+/// `tool.call` params: the tool by its manifest name, the agent's arguments, and the session
+/// the agent runs in.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ToolCallParams {
+    pub tool: String,
+    pub arguments: Map<String, Value>,
+    pub caller: ToolCaller,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ToolCaller {
+    pub session_id: String,
+    pub project: ToolProject,
+    /// The session's task, `null` when it has none.
+    pub task: Option<ToolTask>,
+    /// The session runs without permission prompts.
+    pub auto_approve: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ToolProject {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ToolTask {
+    pub key: String,
+    /// The project owning the task, which may differ from the session's.
+    pub project: ToolProject,
+}
+
+/// A `tool.call` result, what the agent reads.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ToolCallResult {
+    pub text: String,
+    #[serde(default)]
+    pub is_error: bool,
+}
+
 /// What a tool call does, from its MCP annotations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolEffect {
@@ -930,6 +975,52 @@ mod tests {
                     json!({ "readOnlyHint": true, "destructiveHint": true })
             }),
             "tool issue_show cannot be both read-only and destructive"
+        );
+    }
+
+    #[test]
+    fn tool_call_messages_keep_their_wire_shape() {
+        let params = ToolCallParams {
+            tool: "show".into(),
+            arguments: json!({ "key": "ISS-1" }).as_object().unwrap().clone(),
+            caller: ToolCaller {
+                session_id: "s1".into(),
+                project: ToolProject {
+                    id: "p1".into(),
+                    name: "demo".into(),
+                },
+                task: None,
+                auto_approve: false,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&params).unwrap(),
+            json!({
+                "tool": "show",
+                "arguments": { "key": "ISS-1" },
+                "caller": {
+                    "session_id": "s1",
+                    "project": { "id": "p1", "name": "demo" },
+                    "task": null,
+                    "auto_approve": false
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<ToolCallResult>(json!({ "text": "ok" })).unwrap(),
+            ToolCallResult {
+                text: "ok".into(),
+                is_error: false
+            }
+        );
+        assert!(
+            serde_json::from_value::<ToolCallResult>(json!({ "text": "x", "is_error": "no" }))
+                .is_err()
+        );
+        assert_eq!(tool_timeout(None), std::time::Duration::from_secs(30));
+        assert_eq!(
+            tool_timeout(Some(250)),
+            std::time::Duration::from_millis(250)
         );
     }
 

@@ -360,8 +360,9 @@ The agent reads `text` as the tool's whole result, so keep it compact (PlaneAI's
 Report a failure the agent should read, such as an unknown key, with `is_error: true`.
 A JSON-RPC error answer also reaches the agent as an error with its message.
 
-PlaneAI waits `timeoutMs`, then cancels the request as described in [Native sidecar protocol](#native-sidecar-protocol), and the agent reads that the call timed out.
-A plugin that does not acknowledge the cancellation is stopped.
+PlaneAI waits `timeoutMs`, then cancels the request as described in [Native sidecar protocol](#native-sidecar-protocol).
+A plugin that acknowledges the cancellation keeps running, and the agent reads that the plugin gave no answer within the timeout and the call was cancelled.
+A plugin that does not acknowledge it is stopped, and the agent reads that `tool.call` timed out.
 PlaneAI sends a plugin one request at a time, so a slow tool delays the plugin's other requests.
 `tool.call` is reserved for PlaneAI: plugin UI cannot call it, and `planeai-cli plugin test` scenarios send it only through a tool line.
 
