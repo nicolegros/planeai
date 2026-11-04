@@ -152,8 +152,8 @@ pub fn read_pane_after(
     planeai_core::capture_cursor::read_after(CURSOR_LABEL, &captured, cursor, max_bytes)
 }
 
-/// The pane of a terminal tab, found by its window name as a spawn adopts it.
-pub fn find_tab_resource(
+/// The live pane hosting `pty_key`, found by its window name as a spawn adopts it.
+pub fn find_resource(
     workspace: &WorkspaceName,
     pty_key: &str,
 ) -> Result<Option<ResourceHandle>, String> {
