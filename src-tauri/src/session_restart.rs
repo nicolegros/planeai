@@ -832,8 +832,10 @@ mod tests {
         .unwrap();
 
         let command = ops.daemon_calls.borrow()[0].1.clone();
+        // Quoting is per platform; Windows wraps the JSON in escaped double quotes.
         assert!(
-            command.starts_with("claude --resume --mcp-config '{\"mcpServers\":{\"planeai\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:47437/mcp\""),
+            command.starts_with("claude --resume --mcp-config ")
+                && command.contains("http://127.0.0.1:47437/mcp"),
             "{command}"
         );
         let endpoint = ops.daemon_mcp.borrow()[0].clone().unwrap();
