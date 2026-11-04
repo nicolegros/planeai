@@ -85,6 +85,8 @@ describe("task moves", () => {
 
   beforeEach(async () => {
     vi.useFakeTimers();
+    // The snooze clock reads the time when it is imported; the snooze tests count from this date.
+    vi.setSystemTime(new Date(2026, 10, 3, 10, 0));
     vi.resetModules();
     localStorage.clear();
     listAllFails.value = false;
