@@ -495,8 +495,7 @@ fn main() {
                     parent_session_id,
                 };
 
-                match planeai::cli::create_session(&conn, opts, planeai::cli::McpServer::Configured)
-                {
+                match planeai::cli::create_session(&conn, opts, planeai::cli::McpUrl::Configured) {
                     Ok(session) => {
                         let output = serde_json::to_string(&session).unwrap();
                         if pretty {
@@ -539,7 +538,7 @@ fn main() {
                     &conn,
                     &parent_session_id,
                     opts,
-                    planeai::cli::McpServer::Configured,
+                    planeai::cli::McpUrl::Configured,
                 ) {
                     Ok(session) => {
                         let output = serde_json::to_string(&session).unwrap();
@@ -1092,7 +1091,7 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                 parent_session_id,
             };
 
-            match planeai::cli::create_session(conn, opts, planeai::cli::McpServer::Configured) {
+            match planeai::cli::create_session(conn, opts, planeai::cli::McpUrl::Configured) {
                 Ok(session) => planeai::axi::session_create_output(&session),
                 Err(e) => return emit_axi_error(&e),
             }
@@ -1121,7 +1120,7 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                 conn,
                 &parent_session_id,
                 opts,
-                planeai::cli::McpServer::Configured,
+                planeai::cli::McpUrl::Configured,
             ) {
                 Ok(session) => planeai::axi::session_create_output(&session),
                 Err(error) => return emit_axi_error(&error),
@@ -1159,8 +1158,6 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
     code
 }
 
-/// Agents the CLI launches connect to the configured server; while the app is not running
-/// their MCP connection fails and they work without PlaneAI tools.
 fn emit_axi_error(msg: &str) -> i32 {
     let output = planeai_toon::render(&[planeai_toon::field("error", planeai_toon::str_val(msg))]);
     print!("{output}");

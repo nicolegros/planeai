@@ -92,7 +92,7 @@ A provider's `mcp_args` is appended to its command, with `{mcp_url}` replaced by
 Claude Code and Codex come with templates that pre-approve every tool except `task_delete`, which still asks.
 They also pre-approve the read and write tools of the plugins running when the agent launches; destructive plugin tools, and tools of plugins enabled later, ask.
 A Codex `mcp_args` saved by v1.114 or earlier, which approved every tool through `{mcp_codex_prompted_tools}`, is upgraded to this scheme when the config loads.
-A custom template that uses `{mcp_codex_prompted_tools}` without the exact `mcp_servers.planeai.default_tools_approval_mode="approve"` is left unchanged, the app logs a warning, and its agent gets no PlaneAI tools until you replace it with the current template.
+A custom template that uses `{mcp_codex_prompted_tools}` without the exact `mcp_servers.planeai.default_tools_approval_mode="approve"` is left unchanged, the app logs a notice when it loads the config, and its agent gets no PlaneAI tools until you replace it with the current template.
 Kiro and Copilot come with none.
 Set `mcp_args` to `""` to keep an agent off the tools, or edit it under **Preferences → Agents** with the pencil button.
 

@@ -317,12 +317,20 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     serde_json::to_string(&session).map_err(|e| e.to_string())
 }
 
-/// The MCP server a created session's agent connects to.
-pub enum McpServer {
-    /// The configured port, as for a session the CLI starts.
+/// Where a created session's agent finds the MCP server.
+pub enum McpUrl {
+    /// The configured port. Agents the CLI launches connect to it; while the app is not
+    /// running their MCP connection fails and they work without PlaneAI tools.
     Configured,
-    /// The server the caller runs, `None` while it is not listening.
-    Running(Option<String>),
+    /// The URL of a server the caller runs, `None` while it is not listening.
+    Known(Option<String>),
+}
+
+fn resolve_mcp_url(source: McpUrl, cfg: &config::Config) -> Option<String> {
+    match source {
+        McpUrl::Configured => cfg.mcp_listen_port().map(planeai_core::mcp::server_url),
+        McpUrl::Known(url) => url,
+    }
 }
 
 /// Shared session creation orchestration used by both the JSON CLI and the AXI
@@ -331,15 +339,12 @@ pub enum McpServer {
 pub fn create_session(
     conn: &Connection,
     opts: SessionCreateOpts,
-    mcp_server: McpServer,
+    mcp_url: McpUrl,
 ) -> Result<db::Session, String> {
     let cfg_dir = config::config_dir("planeai");
     let (cfg, _) = config::load(&cfg_dir);
     let backend = config::resolve_backend(&cfg).to_string();
-    let mcp_url = match mcp_server {
-        McpServer::Configured => cfg.mcp_listen_port().map(planeai_core::mcp::server_url),
-        McpServer::Running(url) => url,
-    };
+    let mcp_url = resolve_mcp_url(mcp_url, &cfg);
 
     let env = Env {
         backend,
@@ -403,7 +408,7 @@ pub fn create_workspace_sibling(
     conn: &Connection,
     parent_session_id: &str,
     opts: WorkspaceSiblingOpts,
-    mcp_server: McpServer,
+    mcp_url: McpUrl,
 ) -> Result<db::Session, String> {
     let parent = parent_session(conn, parent_session_id)?;
     let task_key = parent
@@ -427,7 +432,7 @@ pub fn create_workspace_sibling(
             prompt: opts.prompt,
             parent_session_id: Some(parent.id),
         },
-        mcp_server,
+        mcp_url,
     )
 }
 
@@ -451,7 +456,7 @@ pub fn create_child_session(
     conn: &Connection,
     parent_session_id: &str,
     opts: ChildSessionOpts,
-    mcp_server: McpServer,
+    mcp_url: McpUrl,
 ) -> Result<db::Session, String> {
     let parent = parent_session(conn, parent_session_id)?;
     let project = match opts.project {
@@ -475,7 +480,7 @@ pub fn create_child_session(
             prompt: opts.prompt,
             parent_session_id: Some(parent.id),
         },
-        mcp_server,
+        mcp_url,
     )
 }
 
@@ -752,6 +757,26 @@ mod tests {
 
         assert_eq!(endpoint.map(|endpoint| endpoint.url).as_deref(), Some(url));
         assert!(open_db(&dir.path().join("fresh.db")).is_ok());
+    }
+
+    #[test]
+    fn the_mcp_url_comes_from_the_config_only_when_configured() {
+        let enabled = config::Config::default();
+        let disabled = config::Config {
+            mcp_enabled: Some(false),
+            ..config::Config::default()
+        };
+        let known = "http://127.0.0.1:1/mcp".to_string();
+        assert_eq!(
+            resolve_mcp_url(McpUrl::Configured, &enabled),
+            Some("http://127.0.0.1:47437/mcp".to_string())
+        );
+        assert_eq!(resolve_mcp_url(McpUrl::Configured, &disabled), None);
+        assert_eq!(
+            resolve_mcp_url(McpUrl::Known(Some(known.clone())), &enabled),
+            Some(known)
+        );
+        assert_eq!(resolve_mcp_url(McpUrl::Known(None), &enabled), None);
     }
 
     #[test]

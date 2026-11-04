@@ -120,7 +120,7 @@ fn load_merges_with_defaults_when_fields_missing() {
 }
 
 #[test]
-fn load_returns_defaults_with_warning_on_invalid_json() {
+fn load_returns_defaults_with_error_on_invalid_json() {
     let dir = tempfile::tempdir().unwrap();
     let config_dir = dir.path();
 
@@ -830,7 +830,7 @@ fn editor_validation_rejects_invalid_non_embedded_settings() {
 }
 
 #[test]
-fn load_returns_defaults_with_warning_for_malformed_editor_shape() {
+fn load_returns_defaults_with_error_for_malformed_editor_shape() {
     let dir = tempfile::tempdir().unwrap();
     let config_dir = dir.path();
     fs::write(config_dir.join("config.json"), r#"{ "editor": "code" }"#).unwrap();

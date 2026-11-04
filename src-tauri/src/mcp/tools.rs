@@ -712,7 +712,7 @@ fn session_create(
                     provider: input.provider,
                     prompt: input.prompt,
                 },
-                crate::cli::McpServer::Running(context.mcp_url.clone()),
+                crate::cli::McpUrl::Known(context.mcp_url.clone()),
             )?
         }
         SessionMode::Child => crate::cli::create_child_session(
@@ -730,7 +730,7 @@ fn session_create(
                 task_project: input.task_project,
                 prompt: input.prompt,
             },
-            crate::cli::McpServer::Running(context.mcp_url.clone()),
+            crate::cli::McpUrl::Known(context.mcp_url.clone()),
         )?,
     };
     Ok(axi::session_create_output(&session).into())

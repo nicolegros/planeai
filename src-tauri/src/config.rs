@@ -967,7 +967,7 @@ fn detect_provider_binaries_in(config: &Config, path: &str) -> HashMap<String, O
         .collect()
 }
 
-/// Re-read config from disk. On success returns the new config; on any warning/error returns Err
+/// Re-read config from disk. On success returns the new config; on any error returns Err
 /// (caller should keep the previous config).
 pub fn refresh(config_dir: &Path) -> Result<Config, String> {
     let (config, errors) = load(config_dir);

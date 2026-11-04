@@ -44,7 +44,7 @@ Agents should call them like PlaneAI's own tools: same server, same token, same 
   The placeholder is renamed from `{mcp_codex_prompted_tools}` to `{mcp_codex_approved_tools}` to match.
   v1.113 to v1.114 shipped the old template, and a saved config may hold it.
   The shipped template becomes the current one; a custom one is upgraded only when it holds `mcp_servers.planeai.default_tools_approval_mode="approve"`, which becomes `"prompt"` as its placeholder is renamed.
-  Any other template using the old placeholder is left as is and its agent launches without PlaneAI tools, with a warning, since renaming the placeholder alone would approve every unlisted tool.
+  Any other template using the old placeholder is left as is and its agent launches without PlaneAI tools, with a notice (logged on load), since renaming the placeholder alone would approve every unlisted tool.
   Loading the config applies the upgrade and saves it, and every launch applies it again, because a Settings save and the Jira migration import publish a config that never went through its load; so the old placeholder never reaches an agent's arguments.
   Sessions started through `planeai-cli` or the `session_create` tool, which do not reach the registry, read the same set from the plugin inventory: the declared tools of plugins whose row says `running`, which the supervisor writes after publishing the plugin's tools and before retiring them, so the row never says running for a set the registry no longer serves.
   While the app is closed no row says `running`, and such agents cannot connect anyway.
