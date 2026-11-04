@@ -1,0 +1,38 @@
+name: CI Docs
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**/*.md"
+      - "**/*.mdx"
+      - "docs/**"
+      - "skills/**"
+      - ".oxfmtignore"
+      - ".github/workflows/ci-docs.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.28.2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            docs/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm fmt:check
+
+      - name: Build the docs site
+        run: pnpm --ignore-workspace install --frozen-lockfile && pnpm --ignore-workspace build
+        working-directory: docs
