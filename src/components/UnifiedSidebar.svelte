@@ -16,11 +16,13 @@
   import { AlarmClock, ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, Lightbulb, Settings, TriangleAlert } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
   import SessionRenameInput from "./sidebar/SessionRenameInput.svelte";
+  import JumpHintBadge from "./sidebar/JumpHintBadge.svelte";
   import SidebarCardsList from "./sidebar/SidebarCardsList.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { isTextEntryElement, MOD_LABEL } from "../lib/keyboard";
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
+  import { installJumpHints, jumpHintFor } from "../lib/jump-hints.svelte";
   import { showToast } from "../lib/toasts.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
@@ -123,6 +125,8 @@
     { value: "in_review", label: "In Review" },
     { value: "done", label: "Done" },
   ] as const;
+
+  $effect(installJumpHints);
 
   // Auto-mode per project
   let projectAutoMode = $state<Record<string, boolean>>({});
@@ -556,6 +560,7 @@
         {@const isSelected = zone === 'sidebar' && globalIndex === getSelectedIndex()}
         {@const isPreviewing = session.id === previewSessionId}
         {@const orphanRow: SidebarRow = { kind: "session", session, project }}
+        {@const hint = jumpHintFor(session.id)}
         <li class="transition-opacity duration-200 {fadingSessionIds.has(session.id) ? 'opacity-0' : 'opacity-100'}">
           {#if renamingSessionId === session.id}
             <SessionRenameInput bind:value={renameValue} onCommit={() => commitRename(session.id)} onCancel={() => onStartRename("")} />
@@ -573,11 +578,11 @@
               {@render projectLabel(project)}
               <span class="truncate font-medium text-t1">{session.name || session.branch}</span>
               <span class="ml-auto shrink-0 flex items-center gap-1.5">
-                {@render activityIndicator(rowActivity(orphanRow, agentStates, unreadSessions, now), orphanRow)}
+                {#if hint}<JumpHintBadge label={hint} />{:else}{@render activityIndicator(rowActivity(orphanRow, agentStates, unreadSessions, now), orphanRow)}{/if}
               </span>
             </button>
             {#each sessionIndicatorContributions as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
-              <div class="absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 pointer-events-none" data-plugin-session-indicator={session.id}>
+              <div class="absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 pointer-events-none {hint ? 'hidden' : ''}" data-plugin-session-indicator={session.id}>
                 <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={pluginSessionContext(session)} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} />
               </div>
             {/each}
@@ -598,6 +603,7 @@
       {@const taskNavIdx = flatNavIndex.get(navKey.task(project.id, task.key)) ?? -1}
       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
       {@const isPreviewing = (linked?.id === previewSessionId) || (previewTaskWorkspace?.projectId === project.id && previewTaskWorkspace.taskKey === task.key)}
+      {@const hint = jumpHintFor(navKey.task(project.id, task.key))}
       <li class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
         <div class="session-row relative flex items-center gap-1.5">
           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
@@ -616,13 +622,15 @@
           {#if showTaskKeys && task.parent_key && !showProjectLabels}<span class="shrink-0 font-mono text-[10px] text-t3">{task.parent_key} ›</span>{/if}
           {#if showTaskKeys}<span class="shrink-0 font-mono text-[10px] {linked ? 'text-accent/70' : 'text-t3'}">{task.key}</span>{/if}
           <span class="truncate text-[12.5px] {task.status === 'done' ? 'line-through text-t3' : 'text-t1'}">{task.title}</span>
-          {#if activity}
+          {#if hint}
+            <span class="ml-auto shrink-0 flex items-center"><JumpHintBadge label={hint} /></span>
+          {:else if activity}
             <span class="ml-auto shrink-0 flex items-center gap-1.5">{@render activityIndicator(activity, row)}</span>
           {/if}
         </button>
         {#if linked}
           {#each sessionIndicatorContributions as item (`${linked.id}:${item.plugin.id}:${item.contribution.id}`)}
-            <div class="absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 pointer-events-none" data-plugin-session-indicator={linked.id}>
+            <div class="absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 pointer-events-none {hint ? 'hidden' : ''}" data-plugin-session-indicator={linked.id}>
               <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={pluginSessionContext(linked)} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} />
             </div>
           {/each}
@@ -834,7 +842,7 @@
 {/if}
 
 <style>
-  :global(.session-row:has([data-plugin-indicator-visible="true"]) > button) {
+  :global(.session-row:has([data-plugin-indicator-visible="true"]):not(:has([data-jump-hint])) > button) {
     padding-right: 1.75rem;
   }
 </style>

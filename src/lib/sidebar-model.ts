@@ -545,6 +545,11 @@ export function taskHeaderNavKeys(
   return [];
 }
 
+/** Navigation ID of a row, as sidebarNavigationOrder lists it. */
+export function sidebarRowTargetId(row: SidebarRow): string {
+  return row.kind === "task" ? toTaskWorkspaceId(row.project.id, row.task.key) : row.session.id;
+}
+
 /**
  * Navigation IDs in sidebar display order, by default ignoring collapse state.
  * Unlinked sessions are bare session IDs, tasks are task workspace IDs.
@@ -557,7 +562,7 @@ export function sidebarNavigationOrder(
 ): string[] {
   return sidebarNavItems(sections, isCollapsed, shownPages, isOpen).flatMap((item) => {
     if (item.type === "orphan") return [item.session.id];
-    if (item.type === "task") return [toTaskWorkspaceId(item.row.project.id, item.row.task.key)];
+    if (item.type === "task") return [sidebarRowTargetId(item.row)];
     return [];
   });
 }

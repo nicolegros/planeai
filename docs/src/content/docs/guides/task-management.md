@@ -107,6 +107,7 @@ Done and Snoozed sections start collapsed, and the sidebar remembers which secti
 ### Finding a task from the keyboard
 
 **⌘1**-**⌘9** / **Ctrl+1**-**Ctrl+9** open the sidebar row at that position, counting from the top and skipping rows inside collapsed sections.
+Hold **⌘** / **Ctrl** on its own for a moment to see each row's shortcut in place of its status; the hints disappear as soon as you release it or press another key.
 **⌘}** and **⌘{** / **Ctrl+}** and **Ctrl+{** step through the same rows, top to bottom, and open the highlighted one when you release the modifier.
 
 Open the command menu (**⌘K** / **Ctrl+K**) and start typing a task key or title. Tasks from every project are searchable, so you do not need an active session in the right project first. Selecting a task does the same thing as clicking it in the sidebar.

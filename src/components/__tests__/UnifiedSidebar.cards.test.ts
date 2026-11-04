@@ -82,6 +82,7 @@ import { commitPendingDone } from "../../lib/task-moves";
 import { loadSettings } from "../../lib/settings.svelte";
 import { setLayoutWidth } from "../../lib/layout-state";
 import { syncSnoozeClock } from "../../lib/snooze-clock.svelte";
+import { IS_MAC, MOD_LABEL } from "../../lib/keyboard";
 
 const alpha: Project = {
   id: "alpha",
@@ -210,6 +211,30 @@ function rowOf(root: HTMLElement, title: string): HTMLElement {
 function clickAction(root: HTMLElement, title: string, action: string): void {
   rowOf(root, title).querySelector<HTMLButtonElement>(`button[aria-label="${action}"]`)!.click();
   flushSync();
+}
+
+const modifierKey = IS_MAC ? "Meta" : "Control";
+
+function holdModifier(): void {
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", { key: modifierKey, [IS_MAC ? "metaKey" : "ctrlKey"]: true }),
+  );
+}
+
+function releaseModifier(): void {
+  window.dispatchEvent(new KeyboardEvent("keyup", { key: modifierKey }));
+  flushSync();
+}
+
+/** [row label, hint] for each jump hint, top to bottom; rows are labelled as before the hold. */
+function jumpHints(root: HTMLElement, labels: Map<HTMLElement, string>): [string, string][] {
+  return [...root.querySelectorAll<HTMLElement>("nav [data-jump-hint]")].map((hint) => {
+    const row =
+      hint.closest<HTMLElement>("[data-nav-index]") ??
+      hint.closest(".group")!.querySelector<HTMLElement>("[data-nav-index]")!;
+    const announced = hint.getAttribute("aria-hidden") === "true" ? "" : " (announced)";
+    return [labels.get(row)!, `${hint.textContent}${announced}`];
+  });
 }
 
 function press(key: string): void {
@@ -816,5 +841,53 @@ describe("UnifiedSidebar in the Cards layout", () => {
       "task:alpha:A-1",
       ...done(1, 26),
     ]);
+  });
+
+  describe("jump hints", () => {
+    afterEach(() => vi.useRealTimers());
+
+    async function holdAndRead(config: Record<string, unknown>) {
+      mounted = await mountSidebar(config);
+      const root = mounted.target;
+      const labels = new Map(navButtons(root).map((b) => [b, labelOf(b).replace(/\s+/g, " ")]));
+      vi.useFakeTimers();
+      holdModifier();
+      vi.advanceTimersByTime(199);
+      flushSync();
+      const early = jumpHints(root, labels);
+      vi.advanceTimersByTime(1);
+      flushSync();
+      const held = jumpHints(root, labels);
+      releaseModifier();
+      return { early, held, released: jumpHints(root, labels) };
+    }
+
+    it("label the visible rows with their shortcut after a 200ms hold, in Cards", async () => {
+      expect(await holdAndRead({ sidebar_group_by: "status" })).toEqual({
+        early: [],
+        held: [
+          ["scratch", `${MOD_LABEL}1`],
+          ["Title B-2", `${MOD_LABEL}2`],
+          ["Title B-1", `${MOD_LABEL}3`],
+          ["Title A-1", `${MOD_LABEL}4`],
+          ["Title A-2", `${MOD_LABEL}5`],
+        ],
+        released: [],
+      });
+    });
+
+    it("label the visible rows with their shortcut after a 200ms hold, in Classic", async () => {
+      expect(await holdAndRead({ sidebar_layout: "classic", sidebar_group_by: "status" })).toEqual({
+        early: [],
+        held: [
+          ["beta-service scratch", `${MOD_LABEL}1`],
+          ["beta-service B-1 Title B-1", `${MOD_LABEL}2`],
+          ["alpha A-1 Title A-1", `${MOD_LABEL}3`],
+          ["beta-service B-2 Title B-2", `${MOD_LABEL}4`],
+          ["alpha A-2 Title A-2", `${MOD_LABEL}5`],
+        ],
+        released: [],
+      });
+    });
   });
 });

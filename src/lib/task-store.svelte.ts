@@ -5,7 +5,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { tasks as tasksApi } from "./api";
 import { isTaskUnread } from "./task-unread";
-import { snoozeOf, withNewerSnooze } from "./task-snooze";
+import { withNewerSnooze } from "./task-snooze";
 import type { StoredSnooze, TaskItem, TaskSnooze, TaskVisit } from "./types";
 
 let tasksByProject = $state<Record<string, TaskItem[]>>({});
