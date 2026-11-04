@@ -42,20 +42,23 @@ Agents should call them like PlaneAI's own tools: same server, same token, same 
   This is the simplest option that keeps both properties: Claude Code and Codex list tools when they connect, so what an agent sees is what was running at its launch, and its approvals match.
   Codex's template moves from approving by default with `prompt` overrides to asking by default with `approve` overrides, so on both agents a tool missing from the launch list, a delete or one from a plugin enabled later, asks.
   The placeholder is renamed from `{mcp_codex_prompted_tools}` to `{mcp_codex_approved_tools}` to match.
-  v1.113 to v1.114 shipped the old template, and a saved config may hold it: loading the config upgrades it (the shipped template becomes the current one, and a custom one has its `approve` default and old placeholder replaced), and the launch applies the same upgrade, so the old placeholder never reaches an agent's arguments.
+  v1.113 to v1.114 shipped the old template, and a saved config may hold it.
+  The shipped template becomes the current one; a custom one is upgraded only when it holds `mcp_servers.planeai.default_tools_approval_mode="approve"`, which becomes `"prompt"` as its placeholder is renamed.
+  Any other template using the old placeholder is left as is and its agent launches without PlaneAI tools, with a warning, since renaming the placeholder alone would approve every unlisted tool.
+  Loading the config applies the upgrade and saves it, and every launch applies it again, because a Settings save and the Jira migration import publish a config that never went through its load; so the old placeholder never reaches an agent's arguments.
   Sessions started through `planeai-cli` or the `session_create` tool, which do not reach the registry, read the same set from the plugin inventory: the declared tools of plugins whose row says `running`, which the supervisor writes after publishing the plugin's tools and before retiring them, so the row never says running for a set the registry no longer serves.
   While the app is closed no row says `running`, and such agents cannot connect anyway.
   A session revived at app startup gets PlaneAI's tools only, as plugins start after revival.
   Pre-approving plugin tools by declared effect trusts the plugin's annotations, which is consistent with plugins being trusted code.
   Agents hold approvals by served name for their whole run, so a plugin upgraded while they run could turn an approved write into a delete.
-  Each session token therefore records the plugin tools its launch approved, and the server refuses a call to one whose effect now asks, telling the agent to restart; the check fails closed and costs one lookup in the token row the server already reads.
+  Each session token therefore records the plugin tools its launch approved, and a plugin tool's handler refuses a call when its effect now asks but the launch approved it, telling the session to restart; the check fails closed and costs one lookup in the token row the server already reads.
   Rejected: leaving every plugin tool asking, which makes a read-only plugin tool cost a prompt per call and breaks non-interactive agents.
 - **Escalation.** ADR-0016's guard stays in PlaneAI's tools.
   A plugin receives `auto_approve` so it can apply the same rule to what its tools start; plugins are trusted code (ADR-0011), so the host does not enforce it for them.
 
 ## Consequences
 
-- `planeai-cli plugin test` and installation reject the same manifests, since both validate through `planeai-plugin-contract`; installation also checks the served names against PlaneAI's tool table.
+- `planeai-cli plugin test` and installation reject the same manifests: both validate through `planeai-plugin-contract` and check the served names against PlaneAI's tool table.
 - The `tool.call` shapes (`ToolCallParams`, `ToolCaller`, `ToolCallResult`) and the timeout default live in `planeai-plugin-contract`, used by the host and `planeai-cli plugin test` alike; the effect and approval rule lives once in `planeai::mcp::plugin_tool`, for the registry and for launches reading the inventory.
 - `planeai-cli plugin test` sends `tool.call` for scenario lines `{ tool, arguments }` and checks the result shape; the local fixture declares a read tool and a destructive one and `make test-plugin-fixture` calls both.
 - A plugin keeps declaring tools in its manifest; PlaneAI never learns tools from the sidecar at runtime, so the inventory knows a plugin's tools before it starts.

@@ -318,7 +318,7 @@ impl PluginManifest {
                 planeai_plugin_contract::validate_local_manifest(&manifest, platform)
                     .map_err(|error| error.to_string())?;
                 for tool in &self.tools {
-                    planeai_core::mcp::plugin_tool_name(&self.id, &tool.name)?;
+                    tool.served_name(&self.id)?;
                 }
                 return Ok(());
             }

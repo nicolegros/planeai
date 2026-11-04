@@ -80,20 +80,31 @@ const CODEX_MCP_ARGS: &str = r#"-c mcp_servers.planeai.url="{mcp_url}" -c mcp_se
 /// prompted through `{mcp_codex_prompted_tools}`; configs may still hold it.
 const V1_114_CODEX_MCP_ARGS: &str = r#"-c mcp_servers.planeai.url="{mcp_url}" -c mcp_servers.planeai.bearer_token_env_var="PLANEAI_MCP_TOKEN" -c mcp_servers.planeai.default_tools_approval_mode="approve" {mcp_codex_prompted_tools}"#;
 const V1_114_CODEX_PLACEHOLDER: &str = "{mcp_codex_prompted_tools}";
+const V1_114_CODEX_DEFAULT: &str = r#"mcp_servers.planeai.default_tools_approval_mode="approve""#;
 
 /// `mcp_args` with the v1.114 Codex approval scheme replaced by the current one: asking by
-/// default and approving the listed tools. `None` when there is nothing to upgrade.
-pub fn upgrade_mcp_args(args: &str) -> Option<String> {
+/// default and approving the listed tools. `Ok(None)` when there is nothing to upgrade, and
+/// an error for a template whose approve-by-default PlaneAI cannot find to switch, which
+/// must not launch: renaming its placeholder alone would approve every unlisted tool.
+pub fn upgrade_mcp_args(args: &str) -> Result<Option<String>, String> {
     if args == V1_114_CODEX_MCP_ARGS {
-        return Some(CODEX_MCP_ARGS.to_string());
+        return Ok(Some(CODEX_MCP_ARGS.to_string()));
     }
-    args.contains(V1_114_CODEX_PLACEHOLDER).then(|| {
+    if !args.contains(V1_114_CODEX_PLACEHOLDER) {
+        return Ok(None);
+    }
+    if !args.contains(V1_114_CODEX_DEFAULT) {
+        return Err(format!(
+            "mcp_args uses {V1_114_CODEX_PLACEHOLDER} without {V1_114_CODEX_DEFAULT}; replace them with the current Codex template"
+        ));
+    }
+    Ok(Some(
         args.replace(
-            r#"default_tools_approval_mode="approve""#,
-            r#"default_tools_approval_mode="prompt""#,
+            V1_114_CODEX_DEFAULT,
+            r#"mcp_servers.planeai.default_tools_approval_mode="prompt""#,
         )
-        .replace(V1_114_CODEX_PLACEHOLDER, "{mcp_codex_approved_tools}")
-    })
+        .replace(V1_114_CODEX_PLACEHOLDER, "{mcp_codex_approved_tools}"),
+    ))
 }
 
 pub const BUILTIN_PROVIDERS: [BuiltinProvider; 4] = [
@@ -355,7 +366,10 @@ pub fn mcp_launch_args(
     if template.is_empty() {
         return None;
     }
-    let upgraded = upgrade_mcp_args(template);
+    // Settings saves and the Jira import publish a config that never went through its load.
+    let upgraded = upgrade_mcp_args(template)
+        .inspect_err(|error| tracing::warn!(%error, "agent launched without PlaneAI tools"))
+        .ok()?;
     let template = upgraded.as_deref().unwrap_or(template);
     let allowed: Vec<String> = mcp
         .approved_tools()
@@ -757,8 +771,11 @@ mod tests {
     #[test]
     fn a_v1_114_codex_template_launches_with_the_current_approvals() {
         let codex = builtin("codex").mcp_args.unwrap();
-        assert_eq!(upgrade_mcp_args(V1_114_CODEX_MCP_ARGS), Some(codex.clone()));
-        assert_eq!(upgrade_mcp_args(&codex), None);
+        assert_eq!(
+            upgrade_mcp_args(V1_114_CODEX_MCP_ARGS),
+            Ok(Some(codex.clone()))
+        );
+        assert_eq!(upgrade_mcp_args(&codex), Ok(None));
         assert_eq!(
             mcp_launch_args(Some(V1_114_CODEX_MCP_ARGS), Some(&server())),
             mcp_launch_args(Some(&codex), Some(&server()))
@@ -769,6 +786,30 @@ mod tests {
             r#"--profile x -c mcp_servers.planeai.default_tools_approval_mode="prompt" -c mcp_servers.planeai.tools.task_list.approval_mode="approve""#
         ));
         assert!(!launched.contains('{'));
+    }
+
+    #[test]
+    fn a_v1_114_template_whose_default_cannot_be_switched_launches_without_tools() {
+        for custom in [
+            "-c mcp_servers.planeai.default_tools_approval_mode='approve' {mcp_codex_prompted_tools}",
+            "-c mcp_servers.planeai.default_tools_approval_mode=approve {mcp_codex_prompted_tools}",
+            "{mcp_codex_prompted_tools}",
+        ] {
+            assert!(upgrade_mcp_args(custom).is_err(), "{custom}");
+            assert_eq!(mcp_launch_args(Some(custom), Some(&server())), None, "{custom}");
+        }
+    }
+
+    #[test]
+    fn the_upgrade_switches_only_planeais_default() {
+        let custom = r#"-c mcp_servers.other.default_tools_approval_mode="approve" -c mcp_servers.planeai.default_tools_approval_mode="approve" {mcp_codex_prompted_tools}"#;
+        assert_eq!(
+            upgrade_mcp_args(custom),
+            Ok(Some(
+                r#"-c mcp_servers.other.default_tools_approval_mode="approve" -c mcp_servers.planeai.default_tools_approval_mode="prompt" {mcp_codex_approved_tools}"#
+                    .to_string()
+            ))
+        );
     }
 
     #[test]

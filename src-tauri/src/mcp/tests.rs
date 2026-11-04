@@ -346,7 +346,7 @@ fn a_tool_its_launch_approved_that_now_asks_is_refused() {
 
     assert_eq!(
         f.call("fixture_forget", json!({})),
-        err("error: \"fixture_forget became destructive after this agent started, so its launch let it run without asking; restart the agent to use it\"\n")
+        err("error: \"fixture_forget now asks before running, but this session's launch approved it; restart the session to use it\"\n")
     );
     assert!(!f.call("fixture_echo", json!({ "text": "hi" })).is_error);
 }

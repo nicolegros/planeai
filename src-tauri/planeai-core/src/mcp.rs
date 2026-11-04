@@ -230,18 +230,17 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         AFTER DELETE ON sessions
         BEGIN DELETE FROM mcp_tokens WHERE session_id = OLD.id; END;",
     )?;
-    let has_approvals = conn
-        .prepare("PRAGMA table_info(mcp_tokens)")?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<rusqlite::Result<Vec<_>>>()?
-        .iter()
-        .any(|column| column == "approved_plugin_tools");
-    if !has_approvals {
-        conn.execute_batch(
-            "ALTER TABLE mcp_tokens ADD COLUMN approved_plugin_tools TEXT NOT NULL DEFAULT '[]'",
-        )?;
+    // The app and the CLI may migrate at once, so whoever adds the column second succeeds too.
+    match conn.execute_batch(
+        "ALTER TABLE mcp_tokens ADD COLUMN approved_plugin_tools TEXT NOT NULL DEFAULT '[]'",
+    ) {
+        Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+            if message.starts_with("duplicate column name") =>
+        {
+            Ok(())
+        }
+        result => result,
     }
-    Ok(())
 }
 
 /// Mint a token for the session's next agent process, replacing any earlier one. It keeps
@@ -450,7 +449,33 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(again.approved_plugin_tools.is_empty());
-        crate::mcp::migrate(&conn).unwrap();
+    }
+
+    #[test]
+    fn a_v1_114_token_table_gains_empty_approvals_and_migrates_again_unchanged() {
+        let conn = db();
+        let (id, _) = session(&conn, None);
+        conn.execute_batch(
+            "DROP TABLE mcp_tokens;
+             CREATE TABLE mcp_tokens (
+                 session_id TEXT PRIMARY KEY,
+                 token_hash TEXT NOT NULL UNIQUE,
+                 created_at TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO mcp_tokens VALUES (?1, ?2, '2026-10-01T00:00:00Z')",
+            params![id, hash("v1.114-token")],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+
+        let caller = resolve(&conn, "v1.114-token").unwrap().unwrap();
+        assert_eq!(caller.session_id, id);
+        assert!(caller.approved_plugin_tools.is_empty());
     }
 
     #[test]

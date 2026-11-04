@@ -517,20 +517,25 @@ pub fn backfill_provider_defaults(config: &mut Config) {
 }
 
 /// Upgrade providers' stored `mcp_args` from the v1.114 Codex approval scheme (ADR-0017).
-/// Returns `true` if any provider changed.
-fn upgrade_mcp_args(config: &mut Config) -> bool {
+/// Returns whether any provider changed, and a warning per template left as is, which
+/// launches its agent without PlaneAI tools.
+fn upgrade_provider_mcp_args(config: &mut Config) -> (bool, Vec<String>) {
     let mut upgraded = false;
-    for provider in config.providers.values_mut() {
-        if let Some(args) = provider
-            .mcp_args
-            .as_deref()
-            .and_then(planeai_core::session_launch::upgrade_mcp_args)
-        {
-            provider.mcp_args = Some(args);
-            upgraded = true;
+    let mut warnings = Vec::new();
+    for (key, provider) in &mut config.providers {
+        let Some(args) = provider.mcp_args.as_deref() else {
+            continue;
+        };
+        match planeai_core::session_launch::upgrade_mcp_args(args) {
+            Ok(Some(args)) => {
+                provider.mcp_args = Some(args);
+                upgraded = true;
+            }
+            Ok(None) => {}
+            Err(error) => warnings.push(format!("Agent {key} runs without PlaneAI tools: {error}")),
         }
     }
-    upgraded
+    (upgraded, warnings)
 }
 
 /// Migrate `autonomous_prompt_template` from providers to `auto_dispatch`.
@@ -674,7 +679,8 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         config.onboarding_completed.get_or_insert(true);
         let unmigrated = config.clone();
         let migrated = migrate_autonomous_prompt_template(&mut config);
-        let migrated = upgrade_mcp_args(&mut config) || migrated;
+        let (upgraded, warnings) = upgrade_provider_mcp_args(&mut config);
+        let migrated = upgraded || migrated;
         if let Some(Err(error)) = config.editor.as_ref().map(validate_editor_config) {
             config.editor = Some(invalid_editor_config());
             return (config, vec![format!("Invalid config.json: {error}")]);
@@ -683,7 +689,7 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
             // Persist the migration so the file reflects the new structure
             save(config_dir, &unmigrated, &config).ok();
         }
-        return (config, vec![]);
+        return (config, warnings);
     }
     let config = Config {
         onboarding_completed: Some(false),

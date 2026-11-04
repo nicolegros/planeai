@@ -149,6 +149,7 @@ impl ToolDef {
         open_world: bool,
         run: impl Fn(McpCaller, JsonObject) -> ToolFuture + Send + Sync + 'static,
     ) -> Self {
+        let served = name.clone();
         Self {
             name,
             description,
@@ -156,7 +157,14 @@ impl ToolDef {
             open_world,
             refreshes_tasks: false,
             input_schema: Arc::new(input_schema),
-            handler: Box::new(move |_context, caller, arguments| run(caller, arguments)),
+            handler: Box::new(move |_context, caller, arguments| {
+                // A tool that asks must not run under an approval its launch granted.
+                if !effect.pre_approved() && caller.approved_plugin_tools.contains(&served) {
+                    let message = format!("{served} now asks before running, but this session's launch approved it; restart the session to use it");
+                    return Box::pin(async move { ToolOutput::error(&message) });
+                }
+                run(caller, arguments)
+            }),
         }
     }
 
@@ -182,13 +190,6 @@ impl ToolDef {
         caller: &McpCaller,
         arguments: JsonObject,
     ) -> ToolOutput {
-        // Agents approve by name at launch; a plugin upgrade may since have made it a delete.
-        if !self.effect.pre_approved() && caller.approved_plugin_tools.contains(&self.name) {
-            return ToolOutput::error(&format!(
-                "{} became destructive after this agent started, so its launch let it run without asking; restart the agent to use it",
-                self.name
-            ));
-        }
         let output = (self.handler)(context.clone(), caller.clone(), arguments).await;
         if self.refreshes_tasks {
             context.events.tasks_changed();

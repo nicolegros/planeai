@@ -1627,3 +1627,23 @@ fn a_v1_114_codex_config_loads_with_the_current_approval_template() {
     assert!(saved.contains("{mcp_codex_approved_tools}"), "{saved}");
     assert!(!saved.contains("{mcp_codex_prompted_tools}"), "{saved}");
 }
+
+#[test]
+fn a_v1_114_codex_template_that_cannot_be_upgraded_is_kept_with_a_warning() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let args =
+        "-c mcp_servers.planeai.default_tools_approval_mode=approve {mcp_codex_prompted_tools}";
+    std::fs::write(
+        dir.path().join("config.json"),
+        format!(
+            r#"{{ "providers": {{ "codex": {{ "command": "codex", "mcp_args": "{args}" }} }} }}"#
+        ),
+    )
+    .unwrap();
+
+    let (config, warnings) = load(dir.path());
+
+    assert_eq!(config.providers["codex"].mcp_args.as_deref(), Some(args));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].starts_with("Agent codex runs without PlaneAI tools: "));
+}
