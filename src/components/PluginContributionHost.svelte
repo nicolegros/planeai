@@ -5,7 +5,7 @@
   import { jiraDepartedInteractionEntrypoint, jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
   import { plugins, projects as projectsApi, tasks as tasksApi } from "../lib/api";
   import { frameFailure } from "../lib/provider-session-error";
-  import { showToast } from "../lib/toasts.svelte";
+  import { dismissToast, showToast } from "../lib/toasts.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import { getAllTasks } from "../lib/task-store.svelte";
   import { openPluginModal, openProjectForm } from "../lib/plugin-modal-manager";
@@ -807,6 +807,8 @@
       host.interaction = {
         openModal: openPluginModal,
         openProjectForm,
+        showToast,
+        dismissToast,
       };
       const cleanup = entrypoint.mount(root, { plugin, contribution, session: sessionContext, host });
       if (typeof cleanup !== "function") {
@@ -906,9 +908,4 @@
   data-plugin-ui-contribution={`${plugin.id}:${contribution.id}`}
   data-plugin-sidebar-contribution={contribution.placement.startsWith("sidebar.") ? "" : undefined}
   bind:this={container}
-  onfocus={() => {
-    if (contribution.placement === "interaction") {
-      container?.shadowRoot?.querySelector<HTMLElement>("[data-plugin-interaction]")?.focus();
-    }
-  }}
 ></div>

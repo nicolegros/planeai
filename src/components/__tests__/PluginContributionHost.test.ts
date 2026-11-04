@@ -44,6 +44,7 @@ vi.mock("../../lib/api", () => ({
 
 vi.mock("../../lib/toasts.svelte", () => ({
   showToast,
+  dismissToast: vi.fn(),
 }));
 
 vi.mock("../../lib/settings.svelte", () => ({
@@ -146,13 +147,12 @@ describe("PluginContributionHost", () => {
 
     const host = await vi.waitFor(() => {
       const next = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");
-      expect(next?.shadowRoot?.querySelector("[data-plugin-interaction]")).toBeTruthy();
+      expect(next?.shadowRoot).toBeTruthy();
       return next!;
     });
 
     expect(host.className).toContain("pointer-events-none");
-    expect(host.shadowRoot?.querySelector("style")?.textContent).toContain(".interaction");
-    expect(host.shadowRoot?.querySelector("style")?.textContent).toContain("pointer-events:auto");
+    expect(host.shadowRoot?.childNodes).toHaveLength(0);
   });
 
   it("isolates local UI bundles in an opaque, script-only iframe with a message bridge", async () => {
