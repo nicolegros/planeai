@@ -39,14 +39,14 @@ Good titles start with a verb and are specific enough to act on without reading 
 
 ### 2. Decide on metadata
 
-| Tool field (`task_create`) | CLI flag       | When to use it                                                                                                                                          |
-| -------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `description`              | `--desc`       | **Always.** Why this task exists, what to build, which modules and files are involved, acceptance criteria, and any decisions or rejected alternatives. |
-| `priority`                 | `--priority`   | Only on a real urgency signal ("urgent", "critical", "before the release"). Higher number = higher priority; 0 is the default.                          |
-| `tags`                     | `--tags`       | When the user names a domain, component or category. Lowercase alphanumerics and hyphens, max 30 characters. The CLI takes them comma-separated.        |
-| `blocked_by`               | `--blocked-by` | Only when the user names a task key that blocks this one (e.g. "this depends on PLA-5").                                                                |
-| `parent`                   | `--parent`     | Only when the user says this is a subtask of an existing task.                                                                                          |
-| `project`                  | `--project`    | Only when the user names another project, or context makes it clear the task belongs elsewhere.                                                         |
+| Tool field (`task_create`) | CLI flag       | When to use it                                                                                                                                              |
+| -------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `description`              | `--desc`       | **Always.** Why this task exists, what to build, which modules and files are involved, acceptance criteria, and any decisions or rejected alternatives.     |
+| `priority`                 | `--priority`   | Only on a real urgency signal ("urgent", "critical", "before the release"). Higher number = higher priority; 0 is the default.                              |
+| `tags`                     | `--tags`       | When the user names a domain, component or category. Prefer short lowercase words joined by hyphens (e.g. `tech-debt`). The CLI takes them comma-separated. |
+| `blocked_by`               | `--blocked-by` | Only when the user names a task key that blocks this one (e.g. "this depends on PLA-5").                                                                    |
+| `parent`                   | `--parent`     | Only when the user says this is a subtask of an existing task.                                                                                              |
+| `project`                  | `--project`    | Only when the user names another project, or context makes it clear the task belongs elsewhere.                                                             |
 
 Don't force metadata that isn't there: a title alone is fine.
 Without `project`, the tool uses the project of your session's task and the CLI resolves the project from the current directory.

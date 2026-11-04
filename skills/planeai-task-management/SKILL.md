@@ -11,7 +11,8 @@ View, update, move and delete existing tasks, and start sibling agent sessions.
 
 - **PlaneAI tools available** (`mcp__planeai__*`, as in Claude Code and Codex sessions started by PlaneAI): use them.
   They may be deferred: load them with your tool search first.
-  Inside a session, `key` and `project` default to your session's own task.
+  `task_show` and `task_update` default `key` to your session's own task, and `project` defaults to that task's project.
+  `task_delete` always needs a `key`.
 - **Otherwise**: use `planeai-cli`.
 
 | Operation     | PlaneAI tool                                                                        | CLI                                                                                                                                |
