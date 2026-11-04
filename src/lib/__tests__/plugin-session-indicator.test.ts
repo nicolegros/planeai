@@ -42,7 +42,7 @@ describe("plugin session indicators", () => {
     );
     expect(sidebar).toContain("pr-2");
     expect(sidebar).toContain(
-      ':global(.session-row:has([data-plugin-indicator-visible="true"]) > button)',
+      ':global(.session-row:has([data-plugin-indicator-visible="true"]):not(:has([data-jump-hint])) > button)',
     );
   });
 
