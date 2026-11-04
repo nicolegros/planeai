@@ -19,6 +19,9 @@ pub struct Task {
     pub subtasks: Vec<String>,
     #[serde(default = "default_base_branch")]
     pub base_branch: String,
+    /// Snoozed when it was listed: kept out of auto-dispatch until it wakes.
+    #[serde(default)]
+    pub snoozed: bool,
 }
 
 fn default_base_branch() -> String {

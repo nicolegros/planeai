@@ -417,6 +417,7 @@ impl TaskSource for SqliteTaskSource {
 
 fn into_core_task(t: planeai_tasks::model::Task, subtasks: Vec<String>) -> Task {
     Task {
+        snoozed: t.is_snoozed(chrono::Utc::now()),
         key: t.key,
         title: t.title,
         status: t.status.as_str().to_string(),
@@ -730,5 +731,46 @@ mod tests {
         let c2 = tasks.iter().find(|t| t.key == child2.key).unwrap();
         assert!(c1.subtasks.is_empty());
         assert!(c2.subtasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn auto_dispatch_skips_a_snoozed_task_until_it_wakes() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("tasks.db");
+        let repo = SqliteRepository::open(path.to_str().unwrap(), "AUTO").unwrap();
+        repo.create(planeai_tasks::model::CreateParams {
+            title: "later".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let dispatcher = planeai_core::dispatch::TaskDispatcher::new(std::sync::Arc::new(
+            SqliteTaskSource::new(repo, vec!["done".into()], "project".into(), "AUTO".into()),
+        ));
+        let dispatchable = || async {
+            dispatcher
+                .fetch_dispatchable_tasks(&HashSet::new())
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|task| task.key)
+                .collect::<Vec<_>>()
+        };
+        let now = chrono::Utc::now();
+        planeai_tasks::sqlite::snooze(
+            &conn,
+            "AUTO",
+            "AUTO-1",
+            now + chrono::Duration::hours(1),
+            now,
+        )
+        .unwrap();
+
+        let while_snoozed = dispatchable().await;
+        planeai_tasks::sqlite::wake_early(&conn, "AUTO", "AUTO-1", chrono::Utc::now()).unwrap();
+        let once_woken = dispatchable().await;
+
+        assert_eq!(while_snoozed, Vec::<String>::new());
+        assert_eq!(once_woken, vec!["AUTO-1".to_string()]);
     }
 }

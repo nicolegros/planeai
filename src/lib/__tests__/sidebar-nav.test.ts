@@ -93,6 +93,10 @@ describe("sidebar-nav", () => {
       expect(handleSidebarKey(key({ key: "u" }), 5)).toEqual({ type: "toggle_unread" });
     });
 
+    it("z snoozes or wakes", () => {
+      expect(handleSidebarKey(key({ key: "z" }), 5)).toEqual({ type: "snooze" });
+    });
+
     it("a returns archive", () => {
       const action = handleSidebarKey(key({ key: "a" }), 5);
       expect(action).toEqual({ type: "archive" });
@@ -262,5 +266,17 @@ describe("plugin sidebar focus", () => {
     sidebarContribution.dataset.pluginSidebarContribution = "";
 
     expect(shouldBypassSidebarKeyboard(sidebarContribution)).toBe(false);
+  });
+
+  it("leaves chords with Cmd, Ctrl or Option to the app, so Mod+Z undoes instead of snoozing", () => {
+    const chords = [{ metaKey: true }, { ctrlKey: true }, { altKey: true }].map((mod) =>
+      handleSidebarKey(key({ key: "z", ...mod }), 3),
+    );
+    expect([...chords, handleSidebarKey(key({ key: "z" }), 3)]).toEqual([
+      null,
+      null,
+      null,
+      { type: "snooze" },
+    ]);
   });
 });

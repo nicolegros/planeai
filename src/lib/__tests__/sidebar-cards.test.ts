@@ -39,10 +39,7 @@ function taskRow(
   key: string,
   status: string,
   linkedSession?: Session,
-  visit: Pick<TaskItem, "last_visited_at" | "last_activity_at"> = {
-    last_visited_at: null,
-    last_activity_at: null,
-  },
+  visit: Partial<TaskItem> = {},
 ): SidebarRow {
   const task: TaskItem = {
     key,
@@ -55,6 +52,13 @@ function taskRow(
     parent_key: null,
     url: null,
     base_branch: "main",
+    last_visited_at: null,
+    last_activity_at: null,
+    snoozed_until: null,
+    snoozed_at: null,
+    woke_at: null,
+    snooze_rev: 0,
+    created_at: "2026-11-01T09:00:00.000Z",
     ...visit,
   };
   return { kind: "task", task, project, linkedSession };
@@ -67,7 +71,8 @@ function sessionRow(s: Session): SidebarRow {
 describe("rowActivity", () => {
   const states = { busy: "Busy", idle: "Idle", "busy-gone": "Busy" };
   const unreadSessions = { busy: true, finished: true, "finished-gone": true, linked: true };
-  const activityOf = (row: SidebarRow) => rowActivity(row, states, unreadSessions);
+  const NOW = Date.parse("2026-11-03T12:00:00Z");
+  const activityOf = (row: SidebarRow) => rowActivity(row, states, unreadSessions, NOW);
 
   it("ranks a busy agent over unread over exited for sessions, and shows nothing when idle", () => {
     expect(
@@ -97,6 +102,22 @@ describe("rowActivity", () => {
       activityOf(taskRow("A-7", "done", undefined, unseen)),
     ]).toEqual(["working", null, "unread", "unread", "exited", null, null]);
   });
+
+  it("shows a snoozed task as snoozed only, and a woken one as Woke over anything else until visited", () => {
+    const snoozedAt = "2026-11-03T09:00:00Z";
+    const unseen = { last_activity_at: "2026-11-03T11:00:00Z", last_visited_at: null };
+    const asleep = { ...unseen, snoozed_until: "2026-11-03T13:00:00Z", snoozed_at: snoozedAt };
+    const wokeEarly = { ...asleep, woke_at: "2026-11-03T11:00:00Z" };
+    const wokeOnTime = { snoozed_until: "2026-11-03T12:00:00Z", snoozed_at: snoozedAt };
+    const visitedSince = { ...wokeEarly, last_visited_at: "2026-11-03T11:30:00Z" };
+    expect([
+      activityOf(taskRow("A-1", "in_progress", session("busy"), asleep)),
+      activityOf(taskRow("A-2", "in_progress", session("busy"), wokeEarly)),
+      activityOf(taskRow("A-3", "in_review", session("gone", "exited"), wokeOnTime)),
+      activityOf(taskRow("A-4", "in_review", session("gone", "exited"), visitedSince)),
+      activityOf(taskRow("A-5", "done", undefined, wokeEarly)),
+    ]).toEqual(["snoozed", "woke", "woke", "exited", null]);
+  });
 });
 
 describe("rowActions", () => {
@@ -107,7 +128,17 @@ describe("rowActions", () => {
       rowActions(taskRow("A-2", "in_review")),
       rowActions(taskRow("A-3", "todo"), "todo"),
       rowActions(taskRow("A-4", "done", session("old")), "done"),
-    ]).toEqual([["review", "archive"], ["restart", "done"], ["done"], ["start"], ["reopen"]]);
+      rowActions(taskRow("A-5", "in_progress", session("live")), "snoozed"),
+      rowActions(taskRow("A-6", "todo"), "todo", "woke"),
+    ]).toEqual([
+      ["review", "archive"],
+      ["restart", "done"],
+      ["done"],
+      ["start"],
+      ["reopen"],
+      ["wake"],
+      ["seen", "start"],
+    ]);
   });
 });
 
@@ -117,6 +148,7 @@ describe("folderUrgency", () => {
     unread: "unread",
     exited: "exited",
     idle: null,
+    woke: "woke",
   };
   const activityOf = (row: SidebarRow) =>
     row.kind === "session" ? activities[row.session.id] : null;
@@ -129,7 +161,8 @@ describe("folderUrgency", () => {
       folderUrgency([sessionRow(session("idle")), sessionRow(session("busy"))], activityOf),
       folderUrgency([sessionRow(session("idle"))], activityOf),
       folderUrgency([], activityOf),
-    ]).toEqual(["exited", "review", "review", "running", null, null]);
+      folderUrgency([sessionRow(session("busy")), sessionRow(session("woke"))], activityOf),
+    ]).toEqual(["exited", "review", "review", "running", null, null, "review"]);
   });
 });
 

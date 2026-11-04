@@ -7,13 +7,13 @@
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard, activatesItselfOnEnter, focusedSidebarControl } from "../lib/sidebar-nav.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
-  import { TASK_STATUS_DOT_CLASSES, TASK_STATUS_LABELS, navKey, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarRow, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
-  import { rowActivity, rowSession, type RowAction, type RowActivity } from "../lib/sidebar-cards";
-  import { getSidebarModel, isCollapsed, setCollapsed, shownPages, showMore } from "../lib/sidebar-model-store.svelte";
+  import { LANES, navKey, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarRow, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
+  import { rowActivity, rowSession, WOKE_TITLE, type RowAction, type RowActivity } from "../lib/sidebar-cards";
+  import { getSidebarModel, isCollapsed, isOpenRow, setCollapsed, shownPages, showMore } from "../lib/sidebar-model-store.svelte";
   import { sidebarViewMenuItems } from "../lib/sidebar-view-menu";
   import { projectContextMenuItems } from "../lib/project-context-menu";
   import { locateProjectFolder } from "../lib/locate-project";
-  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, Lightbulb, Settings, TriangleAlert } from "@lucide/svelte";
+  import { AlarmClock, ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, Lightbulb, Settings, TriangleAlert } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
   import SessionRenameInput from "./sidebar/SessionRenameInput.svelte";
   import SidebarCardsList from "./sidebar/SidebarCardsList.svelte";
@@ -25,7 +25,10 @@
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
-  import { changeTaskStatus } from "../lib/task-moves";
+  import { changeTaskStatus, wakeTask } from "../lib/task-moves";
+  import { getLaneNow } from "../lib/snooze-clock.svelte";
+  import SnoozeCountdown from "./sidebar/SnoozeCountdown.svelte";
+  import { snoozeAnchor, snoozeMenuEntry, snoozeOrWake } from "../lib/snooze-picker.svelte";
   import { isTaskUnread } from "../lib/task-unread";
   import { getPluginSidebarRows, type PluginSidebarNavRow } from "../lib/plugin-sidebar-navigation.svelte";
   import { pluginPreferencesLocation, type SettingsLocation } from "../lib/settings-registry";
@@ -48,7 +51,6 @@
     onCreateSession?: () => void;
     onSessionsChanged?: () => void;
     onToggleDiff?: () => void;
-    selectedTaskWorkspace?: { projectId: string; taskKey: string } | null;
     pluginContributions?: PluginSlot[];
     sessionIndicatorContributions?: PluginSlot[];
     /** Rendered on Cards rows only; Classic rows have no room for them. */
@@ -61,7 +63,7 @@
     onOpenPluginSessionPanel?: (sessionId: string, pluginId: string, contributionId: string) => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onToggleDiff, selectedTaskWorkspace = null, pluginContributions = [], sessionIndicatorContributions = [], sessionMetaContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose, onOpenPluginSessionPanel }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onToggleDiff, pluginContributions = [], sessionIndicatorContributions = [], sessionMetaContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose, onOpenPluginSessionPanel }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
   function pluginContributionKey(item: PluginSlot): string {
@@ -96,6 +98,7 @@
   const activeSessionId = $derived(orchestrator.getActiveSessionId());
   const agentStates = $derived(orchestrator.getAgentStates());
   const unreadSessions = $derived(orchestrator.getUnreadSessions());
+  const now = $derived(getLaneNow());
   const zone = $derived(getActiveZone());
   const sections = $derived(getSidebarModel());
   const groupBy = $derived(resolveSidebarGroupBy(getSettings()));
@@ -211,11 +214,6 @@
     else onContextMenu(e, row.session);
   }
 
-  function isRowActive(row: SidebarRow): boolean {
-    if (row.kind === "session") return row.session.id === activeSessionId;
-    return (selectedTaskWorkspace?.projectId === row.project.id && selectedTaskWorkspace.taskKey === row.task.key) || row.linkedSession?.id === activeSessionId;
-  }
-
   function isRowPreviewing(row: SidebarRow): boolean {
     if (row.kind === "session") return row.session.id === previewSessionId;
     return row.linkedSession?.id === previewSessionId || (previewTaskWorkspace?.projectId === row.project.id && previewTaskWorkspace.taskKey === row.task.key);
@@ -234,6 +232,8 @@
     else if (action === "archive" && row.kind === "session") fadeOutThenAct(row.session.id, () => onArchiveSession(row.session));
     else if (action === "start" && row.kind === "task") onPickTask(row.task, row.project.path);
     else if (action === "reopen" && row.kind === "task") moveTask(row, "todo");
+    else if (action === "wake" && row.kind === "task") void wakeTask(row.task, row.project);
+    else if (action === "seen" && row.kind === "task") void taskStore.markTaskVisited(row.project.id, row.task.key).catch(reportUnreadFailure);
   }
 
   function fadeOutThenAct(sessionId: string, action: () => void | Promise<void>) {
@@ -276,7 +276,7 @@
   // Flat nav list for keyboard navigation
   type NavItem = SidebarNavItem | { type: "plugin"; contributionKey: string; row: PluginSidebarNavRow };
   const flatNav = $derived.by(() => {
-    const result: NavItem[] = sidebarNavItems(sections, isCollapsed, shownPages);
+    const result: NavItem[] = sidebarNavItems(sections, isCollapsed, shownPages, isOpenRow);
     for (const contribution of activePluginContributions.filter((item) => item.contribution.placement === "sidebar.section")) {
       const contributionKey = `${contribution.plugin.id}:${contribution.contribution.id}`;
       for (const row of getPluginSidebarRows(contributionKey)) {
@@ -322,6 +322,7 @@
   });
 
   $effect(() => { clampIndex(flatNav.length); });
+
 
   // Scroll selected item into view on keyboard navigation
   $effect(() => {
@@ -471,6 +472,7 @@
       else if (action.type === "delete") { if (linked) onDeleteSession(linked); }
       else if (action.type === "restart") { if (linked) onRestartSession(linked); }
       else if (action.type === "toggle_unread") toggleUnread(current.row);
+      else if (action.type === "snooze") snoozeOrWake({ task, project });
     } else if (current.type === "plugin" && action.type === "select") {
       current.row.onSelect?.();
     }
@@ -531,11 +533,15 @@
   {/if}
 {/snippet}
 
-{#snippet activityIndicator(activity: RowActivity | null, kind: SidebarRow["kind"])}
-  {#if activity === "working"}
+{#snippet activityIndicator(activity: RowActivity | null, row: SidebarRow)}
+  {#if activity === "snoozed"}
+    <SnoozeCountdown snoozedUntil={row.kind === "task" ? row.task.snoozed_until : null} class="font-mono text-[10px]" />
+  {:else if activity === "woke"}
+    <span class="flex" role="img" aria-label="Woke" title={WOKE_TITLE}><AlarmClock class="size-3.5 text-status-review" /></span>
+  {:else if activity === "working"}
     <LoaderCircle class="size-3 animate-spin text-t2" />
   {:else if activity === "unread"}
-    <span class="flex" title="Unread: the agent finished since you last opened this {kind}"><Lightbulb class="size-3.5 text-status-review animate-pulse" /></span>
+    <span class="flex" title="Unread: the agent finished since you last opened this {row.kind}"><Lightbulb class="size-3.5 text-status-review animate-pulse" /></span>
   {:else if activity === "exited"}
     <span class="font-mono text-[9px] text-t3 bg-panel-hi rounded px-[5px] py-[1px]">exited</span>
   {/if}
@@ -549,6 +555,7 @@
         {@const isActive = session.id === activeSessionId}
         {@const isSelected = zone === 'sidebar' && globalIndex === getSelectedIndex()}
         {@const isPreviewing = session.id === previewSessionId}
+        {@const orphanRow: SidebarRow = { kind: "session", session, project }}
         <li class="transition-opacity duration-200 {fadingSessionIds.has(session.id) ? 'opacity-0' : 'opacity-100'}">
           {#if renamingSessionId === session.id}
             <SessionRenameInput bind:value={renameValue} onCommit={() => commitRename(session.id)} onCancel={() => onStartRename("")} />
@@ -566,7 +573,7 @@
               {@render projectLabel(project)}
               <span class="truncate font-medium text-t1">{session.name || session.branch}</span>
               <span class="ml-auto shrink-0 flex items-center gap-1.5">
-                {@render activityIndicator(rowActivity({ kind: "session", session, project }, agentStates, unreadSessions), "session")}
+                {@render activityIndicator(rowActivity(orphanRow, agentStates, unreadSessions, now), orphanRow)}
               </span>
             </button>
             {#each sessionIndicatorContributions as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
@@ -586,8 +593,8 @@
   <ul class="space-y-0.5">
     {#each rows as row (`${row.project.id}:${row.task.key}`)}
       {@const { task, project, linkedSession: linked } = row}
-      {@const activity = rowActivity(row, agentStates, unreadSessions)}
-      {@const isActive = (selectedTaskWorkspace?.projectId === project.id && selectedTaskWorkspace.taskKey === task.key) || linked?.id === activeSessionId}
+      {@const activity = rowActivity(row, agentStates, unreadSessions, now)}
+      {@const isActive = isOpenRow(row)}
       {@const taskNavIdx = flatNavIndex.get(navKey.task(project.id, task.key)) ?? -1}
       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
       {@const isPreviewing = (linked?.id === previewSessionId) || (previewTaskWorkspace?.projectId === project.id && previewTaskWorkspace.taskKey === task.key)}
@@ -596,6 +603,7 @@
           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
           <button
             data-nav-index={taskNavIdx}
+            data-snooze-anchor={snoozeAnchor(project.id, task.key)}
             class="flex-1 min-w-0 text-left py-[6px] pl-4 pr-2 flex items-center gap-1.5 transition-colors rounded-lg
               {isActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
               {isPreviewing ? 'ring-2 ring-accent' : isSelected ? 'ring-2 ring-accent' : ''}"
@@ -609,7 +617,7 @@
           {#if showTaskKeys}<span class="shrink-0 font-mono text-[10px] {linked ? 'text-accent/70' : 'text-t3'}">{task.key}</span>{/if}
           <span class="truncate text-[12.5px] {task.status === 'done' ? 'line-through text-t3' : 'text-t1'}">{task.title}</span>
           {#if activity}
-            <span class="ml-auto shrink-0 flex items-center gap-1.5">{@render activityIndicator(activity, "task")}</span>
+            <span class="ml-auto shrink-0 flex items-center gap-1.5">{@render activityIndicator(activity, row)}</span>
           {/if}
         </button>
         {#if linked}
@@ -683,7 +691,7 @@
         onToggle={toggleSection}
         {shownPages}
         onShowMore={showMore}
-        isActive={isRowActive}
+        isActive={isOpenRow}
         isPreviewing={isRowPreviewing}
         isFading={isRowFading}
         rename={{
@@ -735,7 +743,7 @@
               {@render orphanList(section.orphans)}
               {#each section.groups as group (group.key)}
                 <div>
-                  {@render groupHeader(group.key, group.defaultCollapsed, TASK_STATUS_LABELS[group.status], group.rows.length, TASK_STATUS_DOT_CLASSES[group.status], "sub")}
+                  {@render groupHeader(group.key, group.defaultCollapsed, LANES[group.lane].label, group.rows.length, LANES[group.lane].dotClass, "sub")}
                   {#if !isCollapsed(group.key, group.defaultCollapsed)}{@render taskList(group.rows)}{/if}
                 </div>
               {/each}
@@ -753,7 +761,7 @@
           </div>
         {:else if section.kind === "status"}
           <div>
-            {@render groupHeader(section.key, section.defaultCollapsed, TASK_STATUS_LABELS[section.group.status], section.group.rows.length, TASK_STATUS_DOT_CLASSES[section.group.status], "top")}
+            {@render groupHeader(section.key, section.defaultCollapsed, LANES[section.group.lane].label, section.group.rows.length, LANES[section.group.lane].dotClass, "top")}
             {#if !isCollapsed(section.key, section.defaultCollapsed)}{@render taskList(section.group.rows)}{/if}
           </div>
         {/if}
@@ -861,6 +869,7 @@
     .filter(s => s.value !== menuTask.status)
     .map(s => ({ label: s.label, onSelect: () => moveTask(menuRow, s.value) }))}
   {@const readToggle = unreadToggle(menuRow)}
+  {@const snoozeEntry = snoozeMenuEntry({ task: menuTask, project: menuRow.project })}
   <ContextMenu
     x={taskContextMenu.x}
     y={taskContextMenu.y}
@@ -872,6 +881,7 @@
       ...(readToggle ? [readToggle] : []),
       { label: "Edit task", onSelect: () => onEditTask(menuTask, menuRow.project) },
       { label: "Change status", children: statusChildren },
+      ...(snoozeEntry ? [snoozeEntry] : []),
       ...(linkedSession
         ? [
             ...(linkedSession.status === 'exited' ? [{ label: "Restart session", onSelect: () => onRestartSession(linkedSession) }] : []),

@@ -219,6 +219,21 @@ enum AxiTaskAction {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Hide a task from the active lists until a time
+    Snooze {
+        key: String,
+        /// RFC 3339 time, or an amount from now like 90m, 3h or 2d
+        #[arg(long)]
+        until: String,
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Wake a snoozed task now
+    Wake {
+        key: String,
+        #[arg(long)]
+        project: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -343,6 +358,25 @@ enum TaskAction {
     Move {
         key: String,
         status: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Hide a task from the active lists until a time
+    Snooze {
+        key: String,
+        /// RFC 3339 time, or an amount from now like 90m, 3h or 2d
+        #[arg(long)]
+        until: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Wake a snoozed task now
+    Wake {
+        key: String,
         #[arg(long)]
         project: Option<String>,
         #[arg(long)]
@@ -720,6 +754,8 @@ fn main() {
                 | TaskAction::Show { project, .. }
                 | TaskAction::List { project, .. }
                 | TaskAction::Move { project, .. }
+                | TaskAction::Snooze { project, .. }
+                | TaskAction::Wake { project, .. }
                 | TaskAction::Edit { project, .. }
                 | TaskAction::Delete { project, .. } => project.as_deref(),
             };
@@ -815,6 +851,16 @@ fn main() {
                         &status,
                         &lifecycle_context,
                     );
+                    (r, pretty, Some(key))
+                }
+                TaskAction::Snooze {
+                    key, until, pretty, ..
+                } => {
+                    let r = planeai::task_cli::run_task_snooze(&conn, &repo, &prefix, &key, &until);
+                    (r, pretty, Some(key))
+                }
+                TaskAction::Wake { key, pretty, .. } => {
+                    let r = planeai::task_cli::run_task_wake(&conn, &repo, &prefix, &key);
                     (r, pretty, Some(key))
                 }
                 TaskAction::Edit {
@@ -919,7 +965,9 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
         AxiTaskAction::List { project, .. }
         | AxiTaskAction::Show { project, .. }
         | AxiTaskAction::Add { project, .. }
-        | AxiTaskAction::Move { project, .. } => project.as_deref(),
+        | AxiTaskAction::Move { project, .. }
+        | AxiTaskAction::Snooze { project, .. }
+        | AxiTaskAction::Wake { project, .. } => project.as_deref(),
     };
 
     let prefix = match planeai::task_cli::resolve_prefix(conn, project_flag, cwd) {
@@ -1005,6 +1053,20 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
         AxiTaskAction::Move { key, status, .. } => {
             let result =
                 planeai::axi::task_move_with_lifecycle(&repo, &key, &status, &lifecycle_context);
+            if code_of(&result) == 0 {
+                planeai::task_cli::notify_task_changed(&key);
+            }
+            result
+        }
+        AxiTaskAction::Snooze { key, until, .. } => {
+            let result = planeai::axi::task_snooze(conn, &repo, &prefix, &key, &until);
+            if code_of(&result) == 0 {
+                planeai::task_cli::notify_task_changed(&key);
+            }
+            result
+        }
+        AxiTaskAction::Wake { key, .. } => {
+            let result = planeai::axi::task_wake(conn, &repo, &prefix, &key);
             if code_of(&result) == 0 {
                 planeai::task_cli::notify_task_changed(&key);
             }

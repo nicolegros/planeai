@@ -500,6 +500,7 @@ fn task_detail_shows_visit_and_activity_once_set() {
         updated_at: at("2026-11-01T09:00:00Z"),
         last_visited_at: None,
         last_activity_at: None,
+        snooze: Default::default(),
     };
     let render_task = |task: &planeai_tasks::model::Task| {
         planeai_toon::render(&[planeai_toon::field(
@@ -522,4 +523,52 @@ fn task_detail_shows_visit_and_activity_once_set() {
         visited.contains("last_activity_at: \"2026-11-03T10:00:00.250+00:00\""),
         "output:\n{visited}"
     );
+}
+
+#[test]
+fn task_detail_shows_snoozed_until_only_while_snoozed() {
+    let at = |text: &str| {
+        chrono::DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    };
+    let mut task = planeai_tasks::model::Task {
+        key: "TST-1".into(),
+        title: "Later".into(),
+        description: String::new(),
+        status: Status::InProgress,
+        priority: 0,
+        parent_key: None,
+        blocked_by: vec![],
+        tags: vec![],
+        base_branch: "main".into(),
+        created_at: at("2026-11-01T09:00:00Z"),
+        updated_at: at("2026-11-01T09:00:00Z"),
+        last_visited_at: None,
+        last_activity_at: None,
+        snooze: planeai_tasks::model::StoredSnooze {
+            times: planeai_tasks::model::Snooze {
+                snoozed_until: Some(at("2099-01-05T09:00:00Z")),
+                snoozed_at: Some(at("2026-11-03T10:00:00Z")),
+                woke_at: None,
+            },
+            snooze_rev: 1,
+        },
+    };
+    let render_task = |task: &planeai_tasks::model::Task| {
+        planeai_toon::render(&[planeai_toon::field(
+            "task",
+            super::helpers::task_detail_object(task),
+        )])
+    };
+
+    let snoozed = render_task(&task);
+    task.snooze.times.woke_at = Some(at("2026-11-03T11:00:00Z"));
+    let woken = render_task(&task);
+
+    assert!(
+        snoozed.contains("snoozed_until: \"2099-01-05T09:00:00+00:00\""),
+        "output:\n{snoozed}"
+    );
+    assert!(!woken.contains("snoozed_until"), "output:\n{woken}");
 }

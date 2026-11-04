@@ -93,6 +93,59 @@ pub fn run_task_move(repo: &dyn TaskProvider, key: &str, status: &str) -> Result
     serde_json::to_string(&task).map_err(|e| e.to_string())
 }
 
+const UNTIL_HELP: &str =
+    "invalid --until: expected an RFC 3339 time or an amount from now like 90m, 3h or 2d";
+
+/// Parses `--until`: an RFC 3339 time, or an amount from `now` such as `90m`, `3h` or `2d`.
+pub fn parse_snooze_until(
+    text: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    let text = text.trim();
+    if let Ok(at) = chrono::DateTime::parse_from_rfc3339(text) {
+        return Ok(at.with_timezone(&chrono::Utc));
+    }
+    let unit_at = text.len().checked_sub(1).ok_or(UNTIL_HELP)?;
+    let (amount, unit) = text.split_at_checked(unit_at).ok_or(UNTIL_HELP)?;
+    let minutes_per_unit = match unit {
+        "m" => 1,
+        "h" => 60,
+        "d" => 24 * 60,
+        _ => return Err(UNTIL_HELP.into()),
+    };
+    amount
+        .parse::<i64>()
+        .ok()
+        .and_then(|amount| amount.checked_mul(minutes_per_unit))
+        .and_then(chrono::TimeDelta::try_minutes)
+        .and_then(|delta| now.checked_add_signed(delta))
+        .ok_or_else(|| UNTIL_HELP.into())
+}
+
+/// Snoozes the task in the project of `prefix`, which `repo` must be scoped to.
+pub fn run_task_snooze(
+    conn: &Connection,
+    repo: &dyn TaskProvider,
+    prefix: &str,
+    key: &str,
+    until: &str,
+) -> Result<String, String> {
+    let now = chrono::Utc::now();
+    let until = parse_snooze_until(until, now)?;
+    planeai_tasks::sqlite::snooze(conn, prefix, key, until, now).map_err(|e| e.to_string())?;
+    run_task_show(repo, key)
+}
+
+pub fn run_task_wake(
+    conn: &Connection,
+    repo: &dyn TaskProvider,
+    prefix: &str,
+    key: &str,
+) -> Result<String, String> {
+    planeai_tasks::sqlite::wake(conn, prefix, key).map_err(|e| e.to_string())?;
+    run_task_show(repo, key)
+}
+
 pub struct EditParams<'a> {
     pub key: &'a str,
     pub title: Option<&'a str>,
@@ -202,6 +255,95 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    fn at(text: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn snooze_until_takes_a_time_or_an_amount_from_now() {
+        let now = at("2026-11-03T10:00:00Z");
+        let parse = |text| parse_snooze_until(text, now);
+
+        assert_eq!(parse("90m"), Ok(at("2026-11-03T11:30:00Z")));
+        assert_eq!(parse("3h"), Ok(at("2026-11-03T13:00:00Z")));
+        assert_eq!(parse("2d"), Ok(at("2026-11-05T10:00:00Z")));
+        assert_eq!(
+            parse("2026-11-04T09:00:00-05:00"),
+            Ok(at("2026-11-04T14:00:00Z"))
+        );
+        for invalid in ["", "h", "3w", "tomorrow", "1.5h", "99999999999999999d"] {
+            assert_eq!(parse(invalid), Err(UNTIL_HELP.to_string()), "{invalid:?}");
+        }
+    }
+
+    /// The app DB and a repository on it, as the CLI opens them.
+    fn shared() -> (tempfile::TempDir, Connection, SqliteRepository) {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("planeai.db");
+        let repo = SqliteRepository::open(path.to_str().unwrap(), "PLA").unwrap();
+        add(&repo, "Later");
+        let conn = Connection::open(&path).unwrap();
+        (directory, conn, repo)
+    }
+
+    #[test]
+    fn snoozing_and_waking_from_the_cli_report_the_task() {
+        let (_directory, conn, repo) = shared();
+
+        let snoozed: serde_json::Value =
+            serde_json::from_str(&run_task_snooze(&conn, &repo, "PLA", "PLA-1", "3h").unwrap())
+                .unwrap();
+        let woken: serde_json::Value =
+            serde_json::from_str(&run_task_wake(&conn, &repo, "PLA", "PLA-1").unwrap()).unwrap();
+
+        assert!(snoozed["snoozed_until"].is_string(), "{snoozed}");
+        assert!(snoozed["snoozed_at"].is_string(), "{snoozed}");
+        assert_eq!(snoozed["woke_at"], serde_json::Value::Null);
+        assert_eq!(
+            (&snoozed["snooze_rev"], &woken["snooze_rev"]),
+            (&1.into(), &2.into())
+        );
+        assert_eq!(
+            (
+                &woken["snoozed_until"],
+                &woken["snoozed_at"],
+                &woken["woke_at"]
+            ),
+            (
+                &serde_json::Value::Null,
+                &serde_json::Value::Null,
+                &serde_json::Value::Null
+            )
+        );
+    }
+
+    #[test]
+    fn the_cli_refuses_a_past_snooze_and_a_done_task() {
+        let (_directory, conn, repo) = shared();
+
+        let past = run_task_snooze(&conn, &repo, "PLA", "PLA-1", "2020-01-01T00:00:00Z");
+        run_task_move(&repo, "PLA-1", "done").unwrap();
+        let done = run_task_snooze(&conn, &repo, "PLA", "PLA-1", "3h");
+
+        assert_eq!(past, Err("the snooze time has passed".to_string()));
+        assert_eq!(done, Err("a done task cannot be snoozed".to_string()));
+    }
+
+    #[test]
+    fn the_cli_refuses_a_snooze_past_the_year_9999() {
+        let (_directory, conn, repo) = shared();
+
+        let far = run_task_snooze(&conn, &repo, "PLA", "PLA-1", "3000000d");
+
+        assert_eq!(far, Err("the snooze time is too far ahead".to_string()));
+        assert_eq!(
+            run_task_show(&repo, "PLA-1").map(|shown| shown.contains("\"snoozed_until\":null")),
+            Ok(true)
+        );
     }
 
     #[test]

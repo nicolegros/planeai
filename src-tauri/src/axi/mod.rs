@@ -15,6 +15,7 @@ pub use session::{
 };
 pub use task::{
     task_add, task_add_with_lifecycle, task_ls, task_move, task_move_with_lifecycle, task_show,
+    task_snooze, task_wake,
 };
 
 #[cfg(test)]

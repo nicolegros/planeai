@@ -1,9 +1,11 @@
-use chrono::{DateTime, SecondsFormat, SubsecRound, Utc};
+use chrono::{DateTime, Datelike, SecondsFormat, SubsecRound, Utc};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::model::{CreateParams, ListFilter, Status, Task, UpdateParams, DEFAULT_BASE_BRANCH};
+use crate::model::{
+    CreateParams, ListFilter, Snooze, Status, StoredSnooze, Task, UpdateParams, DEFAULT_BASE_BRANCH,
+};
 use crate::provider::{Error, TaskProvider};
 
 /// A task `insert_task` wrote, or found under the explicit key it was given.
@@ -124,6 +126,10 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
         "ALTER TABLE tasks ADD COLUMN base_branch TEXT;",
         "ALTER TABLE tasks ADD COLUMN last_visited_at TEXT;
          ALTER TABLE tasks ADD COLUMN last_activity_at TEXT;",
+        "ALTER TABLE tasks ADD COLUMN snoozed_until TEXT;
+         ALTER TABLE tasks ADD COLUMN snoozed_at TEXT;
+         ALTER TABLE tasks ADD COLUMN woke_at TEXT;",
+        "ALTER TABLE tasks ADD COLUMN snooze_rev INTEGER NOT NULL DEFAULT 0;",
     ];
 
     for (i, sql) in migrations.iter().enumerate() {
@@ -243,6 +249,143 @@ pub fn mark_unread(conn: &Connection, prefix: &str, key: &str) -> Result<Visit, 
         ),
         None => Ok(visit),
     }
+}
+
+fn read_stored_snooze(conn: &Connection, prefix: &str, key: &str) -> Result<StoredSnooze, Error> {
+    let (until, at, woke, rev) = conn
+        .query_row(
+            "SELECT snoozed_until, snoozed_at, woke_at, snooze_rev FROM tasks WHERE key = ?1 AND project_prefix = ?2",
+            params![key, prefix],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get::<_, i64>(3)?)),
+        )
+        .optional()
+        .map_err(|e| Error::Storage(e.to_string()))?
+        .ok_or(Error::NotFound)?;
+    Ok(StoredSnooze {
+        times: snooze_from_columns(until, at, woke),
+        snooze_rev: rev,
+    })
+}
+
+fn read_status(conn: &Connection, prefix: &str, key: &str) -> Result<Status, Error> {
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM tasks WHERE key = ?1 AND project_prefix = ?2",
+            params![key, prefix],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| Error::Storage(e.to_string()))?
+        .ok_or(Error::NotFound)?;
+    Status::parse(&status).ok_or(Error::InvalidStatus(status))
+}
+
+fn snooze_from_columns(until: Option<String>, at: Option<String>, woke: Option<String>) -> Snooze {
+    Snooze {
+        snoozed_until: until.as_deref().and_then(parse_time),
+        snoozed_at: at.as_deref().and_then(parse_time),
+        woke_at: woke.as_deref().and_then(parse_time),
+    }
+}
+
+fn write_snooze(
+    conn: &Connection,
+    prefix: &str,
+    key: &str,
+    snooze: Snooze,
+) -> Result<StoredSnooze, Error> {
+    let times = [snooze.snoozed_until, snooze.snoozed_at, snooze.woke_at];
+    // Times are stored as fixed-width RFC 3339 text, which only holds four-digit years.
+    if times.into_iter().flatten().any(|at| at.year() > 9999) {
+        return Err(Error::Rejected("the snooze time is too far ahead".into()));
+    }
+    let format = |at: Option<DateTime<Utc>>| at.map(|at| format_time(at.trunc_subsecs(3)));
+    // A Done task is finished business and never sleeps. The check sits in the UPDATE because a
+    // move to Done can come from another connection between a separate check and this write.
+    let written = conn
+        .execute(
+            "UPDATE tasks SET snoozed_until = ?1, snoozed_at = ?2, woke_at = ?3, snooze_rev = snooze_rev + 1
+             WHERE key = ?4 AND project_prefix = ?5 AND (?6 OR status != 'done')",
+            params![
+                format(snooze.snoozed_until),
+                format(snooze.snoozed_at),
+                format(snooze.woke_at),
+                key,
+                prefix,
+                snooze == Snooze::default()
+            ],
+        )
+        .map_err(|e| Error::Storage(e.to_string()))?;
+    if written == 0 {
+        return Err(match read_status(conn, prefix, key)? {
+            Status::Done => Error::Rejected("a done task cannot be snoozed".into()),
+            _ => Error::NotFound,
+        });
+    }
+    read_stored_snooze(conn, prefix, key)
+}
+
+/// Hides the task until `until`; its status and agents are left alone.
+pub fn snooze(
+    conn: &Connection,
+    prefix: &str,
+    key: &str,
+    until: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<StoredSnooze, Error> {
+    if until <= now {
+        return Err(Error::Rejected("the snooze time has passed".into()));
+    }
+    write_snooze(
+        conn,
+        prefix,
+        key,
+        Snooze {
+            snoozed_until: Some(until),
+            snoozed_at: Some(now),
+            woke_at: None,
+        },
+    )
+}
+
+/// The user woke the task: no trace of the snooze is left.
+pub fn wake(conn: &Connection, prefix: &str, key: &str) -> Result<StoredSnooze, Error> {
+    write_snooze(conn, prefix, key, Snooze::default())
+}
+
+/// Puts back a snooze exactly as it was, to undo a snooze or a wake; as a new write, it gets a new
+/// revision.
+pub fn restore_snooze(
+    conn: &Connection,
+    prefix: &str,
+    key: &str,
+    snooze: Snooze,
+) -> Result<StoredSnooze, Error> {
+    write_snooze(conn, prefix, key, snooze)
+}
+
+/// Wakes a snoozed task before its time because an agent needs the user, returning the woken
+/// snooze; `None`, with nothing written, when the task was not snoozed at `at` or was snoozed after it.
+pub fn wake_early(
+    conn: &Connection,
+    prefix: &str,
+    key: &str,
+    at: DateTime<Utc>,
+) -> Result<Option<StoredSnooze>, Error> {
+    let at = format_time(at.trunc_subsecs(3));
+    // Every time column has the same fixed width, so text order is time order.
+    let woke = conn
+        .execute(
+            "UPDATE tasks SET woke_at = ?1, snooze_rev = snooze_rev + 1
+             WHERE key = ?2 AND project_prefix = ?3 AND status != 'done'
+               AND woke_at IS NULL AND snoozed_at < ?1 AND snoozed_until > ?1",
+            params![at, key, prefix],
+        )
+        .map_err(|e| Error::Storage(e.to_string()))?;
+    if woke == 0 {
+        return Ok(None);
+    }
+    read_stored_snooze(conn, prefix, key).map(Some)
 }
 
 /// Derive a project prefix from a project name.
@@ -496,6 +639,10 @@ impl SqliteRepository {
             updated_at: parse_time(&row.updated_at).unwrap_or_else(Utc::now),
             last_visited_at: row.last_visited_at.as_deref().and_then(parse_time),
             last_activity_at: row.last_activity_at.as_deref().and_then(parse_time),
+            snooze: StoredSnooze {
+                times: snooze_from_columns(row.snoozed_until, row.snoozed_at, row.woke_at),
+                snooze_rev: row.snooze_rev,
+            },
         })
     }
 
@@ -526,7 +673,7 @@ impl SqliteRepository {
 }
 
 /// Columns `TaskRow::read` expects, in order.
-const TASK_COLUMNS: &str = "key, title, description, status, priority, parent_key, base_branch, created_at, updated_at, last_visited_at, last_activity_at";
+const TASK_COLUMNS: &str = "key, title, description, status, priority, parent_key, base_branch, created_at, updated_at, last_visited_at, last_activity_at, snoozed_until, snoozed_at, woke_at, snooze_rev";
 
 struct TaskRow {
     key: String,
@@ -540,6 +687,10 @@ struct TaskRow {
     updated_at: String,
     last_visited_at: Option<String>,
     last_activity_at: Option<String>,
+    snoozed_until: Option<String>,
+    snoozed_at: Option<String>,
+    woke_at: Option<String>,
+    snooze_rev: i64,
 }
 
 impl TaskRow {
@@ -556,6 +707,10 @@ impl TaskRow {
             updated_at: row.get(8)?,
             last_visited_at: row.get(9)?,
             last_activity_at: row.get(10)?,
+            snoozed_until: row.get(11)?,
+            snoozed_at: row.get(12)?,
+            woke_at: row.get(13)?,
+            snooze_rev: row.get(14)?,
         })
     }
 }
@@ -732,8 +887,14 @@ impl TaskProvider for SqliteRepository {
             .unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string());
         let now = Utc::now().to_rfc3339();
 
+        // Every status write lands here, so this is where Done ends a snooze.
         conn.execute(
-            "UPDATE tasks SET title = ?1, description = ?2, status = ?3, priority = ?4, parent_key = ?5, base_branch = ?6, updated_at = ?7 WHERE key = ?8",
+            "UPDATE tasks SET title = ?1, description = ?2, status = ?3, priority = ?4, parent_key = ?5, base_branch = ?6, updated_at = ?7,
+               snoozed_until = CASE WHEN ?3 = 'done' THEN NULL ELSE snoozed_until END,
+               snoozed_at = CASE WHEN ?3 = 'done' THEN NULL ELSE snoozed_at END,
+               woke_at = CASE WHEN ?3 = 'done' THEN NULL ELSE woke_at END,
+               snooze_rev = snooze_rev + CASE WHEN ?3 = 'done' THEN 1 ELSE 0 END
+             WHERE key = ?8",
             rusqlite::params![title, description, status_str, priority, parent_key, base_branch, now, key],
         ).map_err(|e| Error::Storage(e.to_string()))?;
 

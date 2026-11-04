@@ -701,6 +701,7 @@ mod tests {
             updated_at: chrono::Utc::now(),
             last_visited_at: None,
             last_activity_at: None,
+            snooze: Default::default(),
         }
     }
 
@@ -786,6 +787,7 @@ mod tests {
                 updated_at: chrono::Utc::now(),
                 last_visited_at: None,
                 last_activity_at: None,
+                snooze: Default::default(),
             };
             let templates: Option<TaskManagerTemplates> =
                 serde_json::from_value(case["templates"].clone()).unwrap();

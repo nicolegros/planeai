@@ -15,6 +15,7 @@ export type SidebarNavAction =
   | { type: "expand" }
   | { type: "status"; status: string }
   | { type: "toggle_unread" }
+  | { type: "snooze" }
   | { type: "start_session" };
 
 let selectedIndex = $state(0);
@@ -61,7 +62,8 @@ export function activatesItselfOnEnter(e: KeyboardEvent, control: HTMLElement | 
  * The caller should check if zone === "sidebar" before calling.
  */
 export function handleSidebarKey(e: KeyboardEvent, listLength: number): SidebarNavAction | null {
-  if (listLength === 0) return null;
+  // Chords belong to the app router, which listens on the same window: Mod+Z must undo, not snooze.
+  if (listLength === 0 || e.metaKey || e.ctrlKey || e.altKey) return null;
 
   const key = e.key;
 
@@ -148,6 +150,11 @@ export function handleSidebarKey(e: KeyboardEvent, listLength: number): SidebarN
   if (key === "u") {
     e.preventDefault();
     return { type: "toggle_unread" };
+  }
+
+  if (key === "z") {
+    e.preventDefault();
+    return { type: "snooze" };
   }
 
   // Start multi-key sequences

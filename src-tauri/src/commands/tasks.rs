@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
+use planeai_tasks::model::{Snooze, StoredSnooze};
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::{SqliteRepository, Visit};
 
@@ -32,6 +33,10 @@ pub struct TaskItem {
     pub base_branch: String,
     pub last_visited_at: Option<chrono::DateTime<chrono::Utc>>,
     pub last_activity_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(flatten, default)]
+    pub snooze: StoredSnooze,
+    /// Tells a task apart from an earlier one created under the same key.
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl From<planeai_tasks::model::Task> for TaskItem {
@@ -49,6 +54,8 @@ impl From<planeai_tasks::model::Task> for TaskItem {
             base_branch: t.base_branch,
             last_visited_at: t.last_visited_at,
             last_activity_at: t.last_activity_at,
+            snooze: t.snooze,
+            created_at: t.created_at,
         }
     }
 }
@@ -232,7 +239,7 @@ pub async fn mark_task_visited(
     project_id: String,
     key: String,
 ) -> Result<Visit, String> {
-    write_visit(db_state, project_id, key, |conn, prefix, key| {
+    with_task_conn(db_state, project_id, key, |conn, prefix, key| {
         planeai_tasks::sqlite::mark_visited(conn, prefix, key, chrono::Utc::now())
     })
     .await
@@ -245,7 +252,7 @@ pub async fn mark_task_unread(
     project_id: String,
     key: String,
 ) -> Result<Visit, String> {
-    write_visit(
+    with_task_conn(
         db_state,
         project_id,
         key,
@@ -254,19 +261,56 @@ pub async fn mark_task_unread(
     .await
 }
 
-async fn write_visit(
+/// Hides the task from the active lists until `until`.
+#[tauri::command]
+pub async fn snooze_task(
     db_state: State<'_, DbState>,
     project_id: String,
     key: String,
-    write: impl FnOnce(&rusqlite::Connection, &str, &str) -> Result<Visit, planeai_tasks::provider::Error>
+    until: chrono::DateTime<chrono::Utc>,
+) -> Result<StoredSnooze, String> {
+    with_task_conn(db_state, project_id, key, move |conn, prefix, key| {
+        planeai_tasks::sqlite::snooze(conn, prefix, key, until, chrono::Utc::now())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn wake_task(
+    db_state: State<'_, DbState>,
+    project_id: String,
+    key: String,
+) -> Result<StoredSnooze, String> {
+    with_task_conn(db_state, project_id, key, planeai_tasks::sqlite::wake).await
+}
+
+/// Puts a snooze back as it was, to undo a snooze or a wake.
+#[tauri::command]
+pub async fn restore_task_snooze(
+    db_state: State<'_, DbState>,
+    project_id: String,
+    key: String,
+    snooze: Snooze,
+) -> Result<StoredSnooze, String> {
+    with_task_conn(db_state, project_id, key, move |conn, prefix, key| {
+        planeai_tasks::sqlite::restore_snooze(conn, prefix, key, snooze)
+    })
+    .await
+}
+
+async fn with_task_conn<T: Send + 'static>(
+    db_state: State<'_, DbState>,
+    project_id: String,
+    key: String,
+    run: impl FnOnce(&rusqlite::Connection, &str, &str) -> Result<T, planeai_tasks::provider::Error>
         + Send
         + 'static,
-) -> Result<Visit, String> {
+) -> Result<T, String> {
     let db = db_state.0.clone();
     super::blocking(move || {
         let conn = db.lock().map_err(|e| e.to_string())?;
         let prefix = crate::task_activity::project_prefix(&conn, &project_id)?;
-        write(&conn, &prefix, &key).map_err(|e| e.to_string())
+        run(&conn, &prefix, &key).map_err(|e| e.to_string())
     })
     .await
 }

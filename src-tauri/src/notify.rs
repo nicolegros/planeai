@@ -4,6 +4,8 @@ use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::task_activity::Activity;
+
 use planeai::ipc::{Channel, IpcListener};
 
 // Re-export shared types from planeai-core
@@ -75,7 +77,12 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
             }
             tracing::debug!(raw_line = %line, "socket message received");
             let msg = parse_notify_message(&line);
-            if msg.session_id.is_empty() && !matches!(msg.event, NotifyEvent::TaskLifecycle) {
+            if msg.session_id.is_empty()
+                && !matches!(
+                    msg.event,
+                    NotifyEvent::TaskLifecycle | NotifyEvent::TaskChanged
+                )
+            {
                 continue;
             }
             dispatch_message(&msg, &state, &app);
@@ -128,7 +135,7 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
             };
             if fired {
                 emit_state_change(app, &msg.session_id, AgentState::Idle);
-                agent_settled(app, &msg.session_id, state);
+                agent_settled(app, &msg.session_id, state, Activity::NeedsAttention);
             }
         }
         NotifyEvent::Stop => {
@@ -147,7 +154,7 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 drop(s);
                 if fired {
                     emit_state_change(app, &msg.session_id, AgentState::Idle);
-                    agent_settled(app, &msg.session_id, state);
+                    agent_settled(app, &msg.session_id, state, Activity::Finished);
                 }
             }
         }
@@ -162,6 +169,9 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 .dispatch_task_lifecycle(batch);
             // Completing a task archives its sessions from whichever process moved it.
             reconcile_provider_sessions(app);
+        }
+        NotifyEvent::TaskChanged => {
+            let _ = app.emit("tasks-changed", ());
         }
         NotifyEvent::SendPrompt => {
             let Some(text) = msg.text.clone() else {
@@ -283,7 +293,12 @@ pub fn apply_provider_status(
             let fired = state.lock().unwrap().provider_settled(session_id);
             if fired {
                 emit_state_change(app, session_id, AgentState::Idle);
-                agent_settled(app, session_id, &state);
+                let activity = if matches!(status, ProviderSessionStatus::NeedsAttention) {
+                    Activity::NeedsAttention
+                } else {
+                    Activity::Finished
+                };
+                agent_settled(app, session_id, &state, activity);
             }
         }
         ProviderSessionStatus::Exited => {
@@ -321,7 +336,7 @@ fn mark_provider_session_exited(app: &AppHandle, session_id: &str) {
         .await;
         match exited {
             Ok(Some(event)) => {
-                crate::task_activity::record(&app, &session_id);
+                crate::task_activity::record(&app, &session_id, Activity::Exited);
                 let _ = app.emit("pty-exited", serde_json::json!({ "pty_key": session_id }));
                 let _ = app.emit("sessions-changed", ());
                 app.state::<crate::plugins::PluginRuntimeHandle>()
@@ -368,7 +383,7 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
                     .unwrap_or_else(|| "?".into())
             };
             tracing::info!(%session_id, %name, "idle timeout, firing notification");
-            agent_settled(&app, &session_id, &state);
+            agent_settled(&app, &session_id, &state, Activity::Finished);
         }
     });
 }
@@ -389,8 +404,8 @@ fn emit_state_change(app: &AppHandle, session_id: &str, state: AgentState) {
 }
 
 /// The agent finished its turn or asks for attention.
-fn agent_settled(app: &AppHandle, session_id: &str, state: &SharedNotifyState) {
-    crate::task_activity::record(app, session_id);
+fn agent_settled(app: &AppHandle, session_id: &str, state: &SharedNotifyState, activity: Activity) {
+    crate::task_activity::record(app, session_id, activity);
     fire_notification(app, session_id, state);
 }
 
@@ -524,6 +539,13 @@ mod tests {
         let msg = parse_notify_message(r#"{"session_id":"abc123","event":"notification"}"#);
         assert_eq!(msg.session_id, "abc123");
         assert_eq!(msg.event, NotifyEvent::Notification);
+    }
+
+    #[test]
+    fn parse_cli_task_changed_event_without_a_session() {
+        let msg = parse_notify_message(r#"{"event":"task_changed","key":"PLA-1"}"#);
+        assert_eq!(msg.session_id, "");
+        assert_eq!(msg.event, NotifyEvent::TaskChanged);
     }
 
     #[test]

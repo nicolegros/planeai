@@ -17,6 +17,7 @@ const {
   taskMove,
   taskMarkVisited,
   taskMarkUnread,
+  taskWake,
 } = vi.hoisted(() => ({
   configGet: vi.fn(),
   configUpdate: vi.fn(),
@@ -26,6 +27,7 @@ const {
   taskMove: vi.fn(),
   taskMarkVisited: vi.fn(),
   taskMarkUnread: vi.fn(),
+  taskWake: vi.fn(),
 }));
 
 vi.mock("../../lib/api", () => ({
@@ -50,6 +52,7 @@ vi.mock("../../lib/api", () => ({
     move: taskMove,
     markVisited: taskMarkVisited,
     markUnread: taskMarkUnread,
+    wake: taskWake,
   },
 }));
 
@@ -72,11 +75,13 @@ import { getSelectedIndex, setSelectedIndex } from "../../lib/sidebar-nav.svelte
 import {
   _resetForTests as resetSidebarView,
   getVisibleNavigationOrder,
+  setOpenTaskWorkspace,
 } from "../../lib/sidebar-model-store.svelte";
 import { loadTasks } from "../../lib/task-store.svelte";
 import { commitPendingDone } from "../../lib/task-moves";
 import { loadSettings } from "../../lib/settings.svelte";
 import { setLayoutWidth } from "../../lib/layout-state";
+import { syncSnoozeClock } from "../../lib/snooze-clock.svelte";
 
 const alpha: Project = {
   id: "alpha",
@@ -107,6 +112,11 @@ function task(key: string, status: string, priority = 0): TaskItem {
     base_branch: "main",
     last_visited_at: null,
     last_activity_at: null,
+    snoozed_until: null,
+    snoozed_at: null,
+    woke_at: null,
+    snooze_rev: 0,
+    created_at: "2026-11-01T09:00:00.000Z",
   };
 }
 
@@ -347,6 +357,107 @@ describe("UnifiedSidebar in the Cards layout", () => {
       [["alpha", "A-2"]],
       [["alpha", "A-1"]],
     ]);
+  });
+
+  it("sets snoozed tasks aside in a collapsed shelf, counting down, and keeps the open one listed", async () => {
+    const snoozedUntil = (ms: number) => ({
+      snoozed_until: new Date(Date.now() + ms).toISOString(),
+      snoozed_at: new Date(Date.now() - 60_000).toISOString(),
+    });
+    tasksByPath[alpha.path] = [
+      { ...task("A-1", "in_progress", 1), ...snoozedUntil(3 * 3_600_000 + 30_000) },
+      { ...task("A-2", "todo"), ...snoozedUntil(45 * 60_000 + 30_000) },
+      task("A-3", "done"),
+    ];
+    tasksByPath[beta.path] = [{ ...task("B-2", "in_review"), ...snoozedUntil(3_600_000) }];
+    // App starts the clock at launch, which reads the time.
+    syncSnoozeClock();
+    setOpenTaskWorkspace({ projectId: "alpha", taskKey: "A-1" });
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const root = mounted.target;
+
+    expect(navLabels(root)).toEqual(["scratch", "[Snoozed 3]", "Title A-1", "[Done 1]"]);
+    expect(getVisibleNavigationOrder()).toEqual(["scratch", "task:alpha:A-1"]);
+    expect(rowOf(root, "Title A-1").textContent).toContain("3h");
+
+    root.querySelector<HTMLButtonElement>("button[aria-expanded='false']")!.click();
+    flushSync();
+
+    expect(navLabels(root).slice(1, 5)).toEqual([
+      "[Snoozed 3]",
+      "Title A-2",
+      "Title B-2",
+      "Title A-1",
+    ]);
+    const countdown = rowOf(root, "Title A-2").querySelector("[title^='Wakes ']")!;
+    expect(countdown.textContent).toBe("45m");
+  });
+
+  it("wakes a snoozed task from its hover action, back to its status", async () => {
+    const snooze = {
+      snoozed_until: new Date(Date.now() + 3_600_000).toISOString(),
+      snoozed_at: new Date(Date.now() - 60_000).toISOString(),
+    };
+    tasksByPath[alpha.path] = [{ ...task("A-2", "todo"), ...snooze }];
+    tasksByPath[beta.path] = [];
+    taskWake.mockResolvedValue({
+      snoozed_until: null,
+      snoozed_at: null,
+      woke_at: null,
+      snooze_rev: 1,
+    });
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const root = mounted.target;
+    root.querySelector<HTMLButtonElement>("button[aria-expanded='false']")!.click();
+    flushSync();
+
+    clickAction(root, "Title A-2", "Wake now");
+    await vi.waitFor(() => expect(navLabels(root)).toEqual(["scratch", "[To do 1]", "Title A-2"]));
+    expect(taskWake.mock.calls).toEqual([["alpha", "A-2"]]);
+  });
+
+  it("offers Snooze or Wake in the task menu, and z wakes a snoozed row", async () => {
+    tasksByPath[alpha.path] = [
+      task("A-1", "in_progress", 1),
+      {
+        ...task("A-2", "todo"),
+        snoozed_until: new Date(Date.now() + 3_600_000).toISOString(),
+        snoozed_at: new Date(Date.now() - 60_000).toISOString(),
+      },
+    ];
+    tasksByPath[beta.path] = [];
+    taskWake.mockResolvedValue({
+      snoozed_until: null,
+      snoozed_at: null,
+      woke_at: null,
+      snooze_rev: 1,
+    });
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const root = mounted.target;
+    root.querySelector<HTMLButtonElement>("button[aria-expanded='false']")!.click();
+    flushSync();
+    const menuOf = (title: string) => {
+      navButtons(root)
+        .find((button) => labelOf(button) === title)!
+        .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      flushSync();
+      const labels = [...document.querySelectorAll<HTMLElement>("[role='menuitem']")].map((el) =>
+        el.textContent!.replace("›", "").trim(),
+      );
+      document
+        .querySelector("[role='menu']")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      flushSync();
+      return labels.filter((label) => label === "Snooze" || label === "Wake");
+    };
+
+    expect([menuOf("Title A-1"), menuOf("Title A-2")]).toEqual([["Snooze"], ["Wake"]]);
+
+    focusSidebar();
+    setSelectedIndex(navLabels(root).indexOf("Title A-2"));
+    press("z");
+
+    await vi.waitFor(() => expect(taskWake.mock.calls).toEqual([["alpha", "A-2"]]));
   });
 
   it("is the default, with sessions and review tasks on top and shelves in status order", async () => {

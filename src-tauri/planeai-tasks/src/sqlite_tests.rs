@@ -791,3 +791,329 @@ fn editing_a_task_keeps_its_visit_and_activity() {
         )
     );
 }
+
+#[test]
+fn migration_adds_snooze_columns_to_a_database_with_visits() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE task_schema_version (version INTEGER NOT NULL);
+         INSERT INTO task_schema_version (version) VALUES (3);
+         CREATE TABLE task_projects (prefix TEXT PRIMARY KEY, next_seq INTEGER NOT NULL DEFAULT 1);
+         INSERT INTO task_projects (prefix, next_seq) VALUES ('OLD', 2);
+         CREATE TABLE tasks (
+            key TEXT PRIMARY KEY,
+            project_prefix TEXT NOT NULL REFERENCES task_projects(prefix),
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'todo',
+            priority INTEGER NOT NULL DEFAULT 0,
+            parent_key TEXT REFERENCES tasks(key) ON DELETE CASCADE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            base_branch TEXT,
+            last_visited_at TEXT,
+            last_activity_at TEXT
+         );
+         CREATE TABLE task_blockers (task_key TEXT NOT NULL, blocked_by_key TEXT NOT NULL);
+         CREATE TABLE task_tags (task_key TEXT NOT NULL, tag TEXT NOT NULL);
+         INSERT INTO tasks (key, project_prefix, title, created_at, updated_at, last_visited_at)
+            VALUES ('OLD-1', 'OLD', 'from before', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', '2026-11-03T10:00:00.000+00:00');",
+    )
+    .unwrap();
+
+    let repo = SqliteRepository::new(conn, "OLD").unwrap();
+    let task = repo.get("OLD-1").unwrap();
+
+    assert_eq!(task.last_visited_at, Some(at("2026-11-03T10:00:00Z")));
+    assert_eq!(task.snooze.times, Snooze::default());
+}
+
+#[test]
+fn migration_starts_the_snooze_revision_of_an_existing_snooze_at_zero() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE task_schema_version (version INTEGER NOT NULL);
+         INSERT INTO task_schema_version (version) VALUES (4);
+         CREATE TABLE task_projects (prefix TEXT PRIMARY KEY, next_seq INTEGER NOT NULL DEFAULT 1);
+         INSERT INTO task_projects (prefix, next_seq) VALUES ('OLD', 2);
+         CREATE TABLE tasks (
+            key TEXT PRIMARY KEY,
+            project_prefix TEXT NOT NULL REFERENCES task_projects(prefix),
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'todo',
+            priority INTEGER NOT NULL DEFAULT 0,
+            parent_key TEXT REFERENCES tasks(key) ON DELETE CASCADE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            base_branch TEXT,
+            last_visited_at TEXT,
+            last_activity_at TEXT,
+            snoozed_until TEXT,
+            snoozed_at TEXT,
+            woke_at TEXT
+         );
+         CREATE TABLE task_blockers (task_key TEXT NOT NULL, blocked_by_key TEXT NOT NULL);
+         CREATE TABLE task_tags (task_key TEXT NOT NULL, tag TEXT NOT NULL);
+         INSERT INTO tasks (key, project_prefix, title, created_at, updated_at, snoozed_until, snoozed_at)
+            VALUES ('OLD-1', 'OLD', 'from before', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', '2026-11-04T09:00:00.000+00:00', '2026-11-03T10:00:00.000+00:00');",
+    )
+    .unwrap();
+
+    let repo = SqliteRepository::new(conn, "OLD").unwrap();
+    let task = repo.get("OLD-1").unwrap();
+
+    assert_eq!(
+        (task.snooze.times, task.snooze.snooze_rev),
+        (
+            Snooze {
+                snoozed_until: Some(at("2026-11-04T09:00:00Z")),
+                snoozed_at: Some(at("2026-11-03T10:00:00Z")),
+                woke_at: None,
+            },
+            0
+        )
+    );
+}
+
+fn stored_snooze_of(repo: &SqliteRepository) -> StoredSnooze {
+    let task = repo.get("TEST-1").unwrap();
+    task.snooze
+}
+
+fn snooze_tomorrow(conn: &Connection) {
+    snooze(
+        conn,
+        "TEST",
+        "TEST-1",
+        at("2026-11-04T09:00:00Z"),
+        at("2026-11-03T10:00:00Z"),
+    )
+    .unwrap();
+}
+
+fn tomorrow() -> Snooze {
+    Snooze {
+        snoozed_until: Some(at("2026-11-04T09:00:00Z")),
+        snoozed_at: Some(at("2026-11-03T10:00:00Z")),
+        woke_at: None,
+    }
+}
+
+#[test]
+fn a_new_task_starts_at_snooze_revision_zero() {
+    let (_directory, repo, _conn) = shared_db();
+
+    assert_eq!(stored_snooze_of(&repo), StoredSnooze::default());
+}
+
+#[test]
+fn snoozing_records_when_and_until_and_bumps_the_revision() {
+    let (_directory, repo, conn) = shared_db();
+
+    let snooze = snooze(
+        &conn,
+        "TEST",
+        "TEST-1",
+        at("2026-11-04T09:00:00Z"),
+        at("2026-11-03T10:00:00.123456Z"),
+    )
+    .unwrap();
+
+    let expected = StoredSnooze {
+        times: Snooze {
+            snoozed_until: Some(at("2026-11-04T09:00:00Z")),
+            snoozed_at: Some(at("2026-11-03T10:00:00.123Z")),
+            woke_at: None,
+        },
+        snooze_rev: 1,
+    };
+    assert_eq!(snooze, expected);
+    assert_eq!(stored_snooze_of(&repo), expected);
+    assert_eq!(repo.get("TEST-1").unwrap().status, Status::Todo);
+}
+
+#[test]
+fn snoozing_into_the_past_or_a_done_task_is_rejected() {
+    let (_directory, repo, conn) = shared_db();
+
+    let past = snooze(
+        &conn,
+        "TEST",
+        "TEST-1",
+        at("2026-11-03T10:00:00Z"),
+        at("2026-11-03T10:00:00Z"),
+    );
+    repo.update(
+        "TEST-1",
+        UpdateParams {
+            status: Some(Status::Done),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let done = snooze(
+        &conn,
+        "TEST",
+        "TEST-1",
+        at("2026-11-04T09:00:00Z"),
+        at("2026-11-03T10:00:00Z"),
+    );
+
+    assert_eq!(past.unwrap_err().to_string(), "the snooze time has passed");
+    assert_eq!(
+        done.unwrap_err().to_string(),
+        "a done task cannot be snoozed"
+    );
+    assert_eq!(repo.get("TEST-1").unwrap().snooze.times, Snooze::default());
+}
+
+#[test]
+fn a_snooze_past_the_year_9999_is_rejected() {
+    let (_directory, repo, conn) = shared_db();
+    let far = at("9999-12-31T23:59:59Z") + chrono::Duration::seconds(1);
+
+    let snoozed = snooze(&conn, "TEST", "TEST-1", far, at("2026-11-03T10:00:00Z"));
+    let restored = restore_snooze(
+        &conn,
+        "TEST",
+        "TEST-1",
+        Snooze {
+            snoozed_until: Some(far),
+            ..tomorrow()
+        },
+    );
+
+    assert_eq!(
+        snoozed.unwrap_err().to_string(),
+        "the snooze time is too far ahead"
+    );
+    assert_eq!(
+        restored.unwrap_err().to_string(),
+        "the snooze time is too far ahead"
+    );
+    assert_eq!(stored_snooze_of(&repo), StoredSnooze::default());
+}
+
+#[test]
+fn a_snooze_in_the_year_9999_is_kept() {
+    let (_directory, repo, conn) = shared_db();
+
+    snooze(
+        &conn,
+        "TEST",
+        "TEST-1",
+        at("9999-12-31T23:59:59Z"),
+        at("2026-11-03T10:00:00Z"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        repo.get("TEST-1").unwrap().snooze.times.snoozed_until,
+        Some(at("9999-12-31T23:59:59Z"))
+    );
+}
+
+#[test]
+fn waking_by_hand_clears_the_snooze_and_bumps_the_revision() {
+    let (_directory, repo, conn) = shared_db();
+    snooze_tomorrow(&conn);
+
+    let expected = StoredSnooze {
+        times: Snooze::default(),
+        snooze_rev: 2,
+    };
+    assert_eq!(wake(&conn, "TEST", "TEST-1").unwrap(), expected);
+    assert_eq!(stored_snooze_of(&repo), expected);
+}
+
+#[test]
+fn restoring_puts_back_the_exact_snooze_and_bumps_the_revision() {
+    let (_directory, repo, conn) = shared_db();
+    snooze_tomorrow(&conn);
+    let previous = Snooze {
+        woke_at: Some(at("2026-11-03T11:00:00Z")),
+        ..tomorrow()
+    };
+
+    let expected = StoredSnooze {
+        times: previous,
+        snooze_rev: 2,
+    };
+    assert_eq!(
+        restore_snooze(&conn, "TEST", "TEST-1", previous).unwrap(),
+        expected
+    );
+    assert_eq!(stored_snooze_of(&repo), expected);
+}
+
+#[test]
+fn moving_to_done_ends_the_snooze_and_bumps_the_revision_and_other_moves_keep_both() {
+    let (_directory, repo, conn) = shared_db();
+    snooze_tomorrow(&conn);
+    let move_to = |status| {
+        let task = repo
+            .update(
+                "TEST-1",
+                UpdateParams {
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        (task.snooze.times, task.snooze.snooze_rev)
+    };
+
+    assert_eq!(move_to(Status::InReview), (tomorrow(), 1));
+    assert_eq!(move_to(Status::Done), (Snooze::default(), 2));
+}
+
+#[test]
+fn an_agent_wakes_a_snoozed_task_early_only_while_it_sleeps() {
+    let (_directory, repo, conn) = shared_db();
+    snooze_tomorrow(&conn);
+
+    let before_snooze = wake_early(&conn, "TEST", "TEST-1", at("2026-11-03T09:59:59Z")).unwrap();
+    let after_wake_time = wake_early(&conn, "TEST", "TEST-1", at("2026-11-04T09:00:00Z")).unwrap();
+    let woke = wake_early(&conn, "TEST", "TEST-1", at("2026-11-03T12:00:00Z")).unwrap();
+    let again = wake_early(&conn, "TEST", "TEST-1", at("2026-11-03T13:00:00Z")).unwrap();
+
+    assert_eq!((before_snooze, after_wake_time), (None, None));
+    let expected = StoredSnooze {
+        times: Snooze {
+            woke_at: Some(at("2026-11-03T12:00:00Z")),
+            ..tomorrow()
+        },
+        snooze_rev: 2,
+    };
+    assert_eq!(woke, Some(expected));
+    assert_eq!(again, None);
+    assert_eq!(stored_snooze_of(&repo), expected);
+}
+
+#[test]
+fn a_task_never_snoozed_does_not_wake() {
+    let (_directory, repo, conn) = shared_db();
+
+    let woke = wake_early(&conn, "TEST", "TEST-1", at("2026-11-03T12:00:00Z")).unwrap();
+
+    assert_eq!(woke, None);
+    assert_eq!(stored_snooze_of(&repo), StoredSnooze::default());
+}
+
+#[test]
+fn a_task_is_snoozed_until_the_instant_it_wakes() {
+    let (_directory, repo, conn) = shared_db();
+    snooze(
+        &conn,
+        "TEST",
+        "TEST-1",
+        at("2026-11-04T09:00:00Z"),
+        at("2026-11-03T10:00:00Z"),
+    )
+    .unwrap();
+    let task = repo.get("TEST-1").unwrap();
+
+    assert!(task.is_snoozed(at("2026-11-04T08:59:59.999Z")));
+    assert!(!task.is_snoozed(at("2026-11-04T09:00:00Z")));
+}

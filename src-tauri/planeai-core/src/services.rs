@@ -1139,6 +1139,7 @@ impl TaskService {
             updated_at: chrono::Utc::now(),
             last_visited_at: None,
             last_activity_at: None,
+            snooze: Default::default(),
         };
 
         let prompt = Self::resolve_task_prompt(&task, prompt_template);

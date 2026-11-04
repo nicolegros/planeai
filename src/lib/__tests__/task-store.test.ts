@@ -1,18 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskItem } from "../types";
 
-const { listAll, move, markVisited, markUnread } = vi.hoisted(() => ({
+const { listAll, move, markVisited, markUnread, snoozeApi, wakeApi } = vi.hoisted(() => ({
   listAll: vi.fn(),
   move: vi.fn(),
   markVisited: vi.fn(),
   markUnread: vi.fn(),
+  snoozeApi: vi.fn(),
+  wakeApi: vi.fn(),
 }));
 
 const { listeners } = vi.hoisted(() => ({
   listeners: new Map<string, (event?: { payload: unknown }) => void>(),
 }));
 
-vi.mock("../api", () => ({ tasks: { listAll, move, markVisited, markUnread } }));
+vi.mock("../api", () => ({
+  tasks: { listAll, move, markVisited, markUnread, snooze: snoozeApi, wake: wakeApi },
+}));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((event: string, handler: (event?: { payload: unknown }) => void) => {
     listeners.set(event, handler);
@@ -35,6 +39,11 @@ const task = (key: string, parentKey: string | null = null): TaskItem => ({
   base_branch: "main",
   last_visited_at: null,
   last_activity_at: null,
+  snoozed_until: null,
+  snoozed_at: null,
+  woke_at: null,
+  snooze_rev: 0,
+  created_at: "2026-11-01T09:00:00.000Z",
 });
 
 describe("task store", () => {
@@ -189,6 +198,9 @@ describe("task visits", () => {
     listAll.mockReset();
     markVisited.mockReset();
     markUnread.mockReset();
+    snoozeApi.mockReset();
+    wakeApi.mockReset();
+    await taskStore.refresh([]);
     listAll.mockResolvedValue([task("PLA-1"), task("PLA-2")]);
     await taskStore.loadTasks(["/repo"]);
     listAll.mockClear();
@@ -202,6 +214,9 @@ describe("task visits", () => {
         task_key: "PLA-1",
         last_visited_at: null,
         last_activity_at: "2026-11-03T10:00:00.000Z",
+        snoozed_until: null,
+        snoozed_at: null,
+        woke_at: null,
       },
     });
     await Promise.resolve();
@@ -211,6 +226,154 @@ describe("task visits", () => {
       { last_visited_at: null, last_activity_at: null },
     ]);
     expect(listAll).not.toHaveBeenCalled();
+    stop();
+  });
+
+  const snoozed = {
+    snoozed_until: "2026-11-04T09:00:00.000Z",
+    snoozed_at: "2026-11-03T09:00:00.000Z",
+    woke_at: null,
+    snooze_rev: 1,
+  };
+  const woken = { ...snoozed, woke_at: "2026-11-03T10:00:00.000Z", snooze_rev: 2 };
+  const resnoozed = {
+    snoozed_until: "2026-11-05T09:00:00.000Z",
+    snoozed_at: "2026-11-03T10:00:00.500Z",
+    woke_at: null,
+    snooze_rev: 3,
+  };
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((done, fail) => ((resolve = done), (reject = fail)));
+    return { promise, resolve, reject };
+  }
+
+  function activity(woke: typeof woken | null): void {
+    listeners.get("task-activity")?.({
+      payload: {
+        project_id: "p1",
+        task_key: "PLA-1",
+        last_visited_at: null,
+        last_activity_at: "2026-11-03T10:00:01.000Z",
+        woke,
+      },
+    });
+  }
+
+  const snoozeInStore = () => {
+    const { snoozed_until, snoozed_at, woke_at, snooze_rev } = taskStore.findTask(
+      "/repo",
+      "PLA-1",
+    )!;
+    return { snoozed_until, snoozed_at, woke_at, snooze_rev };
+  };
+
+  const snoozeTomorrow = (reply: Promise<typeof snoozed>) => {
+    snoozeApi.mockReturnValueOnce(reply);
+    return taskStore.snoozeTask("p1", "PLA-1", new Date(snoozed.snoozed_until));
+  };
+
+  it("shows an early wake its event carries, without reloading", async () => {
+    const stop = taskStore.startTaskActivityListener(() => false);
+    await snoozeTomorrow(Promise.resolve(snoozed));
+
+    activity(woken);
+
+    expect(snoozeInStore()).toEqual(woken);
+    expect(listAll).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("keeps an early wake whose event beats the reply to the snooze it woke", async () => {
+    const stop = taskStore.startTaskActivityListener(() => false);
+    const reply = deferred<typeof snoozed>();
+    const snoozing = snoozeTomorrow(reply.promise);
+
+    activity(woken);
+    reply.resolve(snoozed);
+
+    await expect(snoozing).resolves.toEqual(snoozed);
+    expect(snoozeInStore()).toEqual(woken);
+    stop();
+  });
+
+  it("keeps a snooze made after an early wake whose event comes late", async () => {
+    const stop = taskStore.startTaskActivityListener(() => false);
+    await snoozeTomorrow(Promise.resolve(snoozed));
+    snoozeApi.mockResolvedValueOnce(resnoozed);
+    await taskStore.snoozeTask("p1", "PLA-1", new Date(resnoozed.snoozed_until));
+
+    activity(woken);
+
+    expect(snoozeInStore()).toEqual(resnoozed);
+    stop();
+  });
+
+  it("keeps an early wake over a reload that read the database before it", async () => {
+    const stop = taskStore.startTaskActivityListener(() => false);
+    await snoozeTomorrow(Promise.resolve(snoozed));
+    const reload = deferred<TaskItem[]>();
+    listAll.mockReturnValueOnce(reload.promise);
+
+    const reloading = taskStore.refresh(["/repo"]);
+    activity(woken);
+    reload.resolve([{ ...task("PLA-1"), ...snoozed, title: "renamed" }, task("PLA-2")]);
+    await reloading;
+
+    expect(snoozeInStore()).toEqual(woken);
+    expect(taskStore.findTask("/repo", "PLA-1")?.title).toBe("renamed");
+    stop();
+  });
+
+  it("takes a newer snooze from a reload, such as a wake from the CLI", async () => {
+    await snoozeTomorrow(Promise.resolve(snoozed));
+    const wokenFromCli = { snoozed_until: null, snoozed_at: null, woke_at: null, snooze_rev: 2 };
+    listAll.mockResolvedValueOnce([{ ...task("PLA-1"), ...wokenFromCli }, task("PLA-2")]);
+
+    await taskStore.loadTasks(["/repo"]);
+
+    expect(snoozeInStore()).toEqual(wokenFromCli);
+  });
+
+  it("shows a task recreated under the same key as the new row, not the old row's snooze", async () => {
+    await snoozeTomorrow(Promise.resolve(snoozed));
+    const recreated = { ...task("PLA-1"), created_at: "2026-11-03T12:00:00.000Z" };
+    listAll.mockResolvedValueOnce([recreated, task("PLA-2")]);
+
+    await taskStore.loadTasks(["/repo"]);
+
+    expect(snoozeInStore()).toEqual({
+      snoozed_until: null,
+      snoozed_at: null,
+      woke_at: null,
+      snooze_rev: 0,
+    });
+  });
+
+  it("stays on the newest snooze it saw when a write fails", async () => {
+    const stop = taskStore.startTaskActivityListener(() => false);
+    await snoozeTomorrow(Promise.resolve(snoozed));
+    const reply = deferred<typeof snoozed>();
+    wakeApi.mockReturnValueOnce(reply.promise);
+
+    const waking = taskStore.wakeTask("p1", "PLA-1");
+    activity(woken);
+    reply.reject(new Error("database is locked"));
+
+    await expect(waking).rejects.toThrow("database is locked");
+    expect(snoozeInStore()).toEqual(woken);
+    stop();
+  });
+
+  it("leaves the snooze alone on activity that woke nothing", async () => {
+    const stop = taskStore.startTaskActivityListener(() => false);
+    await snoozeTomorrow(Promise.resolve(snoozed));
+
+    activity(null);
+
+    expect(snoozeInStore()).toEqual(snoozed);
     stop();
   });
 
@@ -228,6 +391,9 @@ describe("task visits", () => {
         task_key: "PLA-1",
         last_visited_at: null,
         last_activity_at: "2026-11-03T10:00:00.000Z",
+        snoozed_until: null,
+        snoozed_at: null,
+        woke_at: null,
       },
     });
     await vi.waitFor(() =>

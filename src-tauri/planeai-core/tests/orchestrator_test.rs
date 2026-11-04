@@ -135,6 +135,7 @@ async fn orchestrator_polls_dispatches_and_stops_on_channel_command() {
             blocked_by: vec![],
             subtasks: vec![],
             base_branch: "main".to_string(),
+            snoozed: false,
         }],
         vec!["done".into(), "cancelled".into()],
     ));
@@ -189,6 +190,7 @@ async fn orchestrator_skips_projects_whose_folder_is_missing() {
         blocked_by: vec![],
         subtasks: vec![],
         base_branch: "main".to_string(),
+        snoozed: false,
     };
     let project = |id: &str, key: &str| AutoProject {
         project_id: id.to_string(),
@@ -242,6 +244,7 @@ async fn orchestrator_kills_session_when_task_becomes_terminal() {
             blocked_by: vec![],
             subtasks: vec![],
             base_branch: "main".to_string(),
+            snoozed: false,
         }],
         vec!["done".into()],
     ));

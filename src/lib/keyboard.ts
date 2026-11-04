@@ -51,6 +51,7 @@ export type KeyboardAction =
   | { type: "focus_toast" }
   | { type: "refresh_tasks" }
   | { type: "complete_task" }
+  | { type: "snooze_task" }
   | { type: "undo" }
   | { type: "open_file" }
   | { type: "save_file" }
@@ -175,7 +176,19 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "complete_task" };
   }
 
-  // Mod+Z - revert the last task move, outside text fields
+  // Mod+Option+Z - snooze or wake the current task, matched like Mod+Option+S.
+  if (
+    mod &&
+    e.altKey &&
+    !e.shiftKey &&
+    !otherMod &&
+    e.code === "KeyZ" &&
+    !e.getModifierState?.("AltGraph")
+  ) {
+    return { type: "snooze_task" };
+  }
+
+  // Mod+Z - revert the last task change, outside text fields
   if (mod && !e.shiftKey && !e.altKey && !otherMod && key === "z") {
     return { type: "undo" };
   }
@@ -298,6 +311,7 @@ export function installKeyboardRouter(
     "tab_switch_reverse",
     "save_file",
     "complete_task",
+    "snooze_task",
     "close_tab",
     "new_tab",
     "next_tab",

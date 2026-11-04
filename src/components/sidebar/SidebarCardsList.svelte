@@ -3,7 +3,7 @@
   import { flip } from "svelte/animate";
   import { cubicOut } from "svelte/easing";
   import { crossfade } from "svelte/transition";
-  import { Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, GitBranch, GitCompare, Play, RotateCcw, TriangleAlert, Undo2, Zap, type LucideIcon } from "@lucide/svelte";
+  import { AlarmClock, AlarmClockOff, Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, GitBranch, GitCompare, Play, RotateCcw, TriangleAlert, Undo2, Zap, type LucideIcon } from "@lucide/svelte";
   import PluginContributionHost from "../PluginContributionHost.svelte";
   import SessionMetaSlot from "./SessionMetaSlot.svelte";
   import SessionRenameInput from "./SessionRenameInput.svelte";
@@ -11,8 +11,11 @@
   import { getSelectedIndex } from "../../lib/sidebar-nav.svelte";
   import { locateProjectFolder } from "../../lib/locate-project";
   import * as orchestrator from "../../lib/session-orchestrator.svelte";
-  import { SHELVES, TASK_STATUS_LABELS, navKey, shelfPage, sidebarRowNavKey, type IsCollapsed, type ShelfStatus, type ShownPages, type SidebarFolderSection, type SidebarRow, type SidebarSection, type SidebarShelfSection } from "../../lib/sidebar-model";
-  import { folderUrgency, rowActions, rowActivity, rowSession, splitBranch, type FolderUrgency, type RowAction, type RowActivity } from "../../lib/sidebar-cards";
+  import { LANES, SHELVES, navKey, shelfPage, sidebarRowNavKey, type IsCollapsed, type ShelfLane, type ShownPages, type SidebarFolderSection, type SidebarRow, type SidebarSection, type SidebarShelfSection } from "../../lib/sidebar-model";
+  import { folderUrgency, isQuiet, rowActions, rowActivity, rowSession, splitBranch, WOKE_TITLE, type FolderUrgency, type RowAction, type RowActivity } from "../../lib/sidebar-cards";
+  import { snoozeAnchor } from "../../lib/snooze-picker.svelte";
+  import { getLaneNow } from "../../lib/snooze-clock.svelte";
+  import SnoozeCountdown from "./SnoozeCountdown.svelte";
   import type { PluginSessionContext } from "../../lib/plugin-sdk";
   import type { PluginSlot, Project, Session } from "../../lib/types";
 
@@ -58,19 +61,22 @@
     isActive, isPreviewing, isFading, rename, projectAutoMode, onSelectRow, onRowAction, onRowContextMenu, onProjectContextMenu, plugins,
   }: Props = $props();
 
-  const ACTIVITY_SLOTS: Record<RowActivity, { icon: LucideIcon; label: string; class: string }> = {
+  const ACTIVITY_SLOTS: Record<Exclude<RowActivity, "snoozed">, { icon: LucideIcon; label: string; class: string }> = {
+    woke: { icon: AlarmClock, label: "Woke", class: "text-status-review" },
     working: { icon: CircleDashed, label: "Working", class: "text-status-working" },
     unread: { icon: CircleCheck, label: "Unread", class: "text-status-review" },
     exited: { icon: CircleAlert, label: "Exited", class: "text-status-exited" },
   };
 
-  const ACTIONS: Record<RowAction, { icon: LucideIcon; label: string; text?: string }> = {
+  const ACTIONS: Record<RowAction, { icon: LucideIcon; label: string; text?: string; class?: string }> = {
+    seen: { icon: AlarmClock, label: "Woke: mark as seen", text: "Woke", class: "text-status-review" },
     review: { icon: GitCompare, label: "Review diff" },
     restart: { icon: RotateCcw, label: "Restart session" },
     done: { icon: Check, label: "Mark done", text: "Done" },
     archive: { icon: Check, label: "Archive session", text: "Done" },
     start: { icon: Play, label: "Start session", text: "Start" },
     reopen: { icon: Undo2, label: "Reopen", text: "Reopen" },
+    wake: { icon: AlarmClockOff, label: "Wake now", text: "Wake" },
   };
 
   const URGENCY_DOTS: Record<FolderUrgency, { class: string; label: string }> = {
@@ -84,12 +90,14 @@
   const agentStates = $derived(orchestrator.getAgentStates());
   const unreadSessions = $derived(orchestrator.getUnreadSessions());
 
-  const activityOf = (row: SidebarRow) => rowActivity(row, agentStates, unreadSessions);
+  const now = $derived(getLaneNow());
+  const activityOf = (row: SidebarRow) => rowActivity(row, agentStates, unreadSessions, now);
   // The status slot gives way to hover actions, so the row itself explains an unread.
   function rowTitle(row: SidebarRow, activity: RowActivity | null): string | undefined {
     const lines = [
       row.kind === "task" && !showTaskKeys ? row.task.key : null,
       activity === "unread" ? `Unread: the agent finished since you last opened this ${row.kind}` : null,
+      activity === "woke" ? WOKE_TITLE : null,
     ].filter((line) => line !== null);
     return lines.length > 0 ? lines.join("\n") : undefined;
   }
@@ -120,7 +128,7 @@
   <PluginContributionHost plugin={item.plugin} contribution={item.contribution} session={plugins.sessionContext(session)} onNavigate={plugins.onNavigate ?? (() => {})} onClose={plugins.onClose ?? (() => {})} />
 {/snippet}
 
-{#snippet trailing(session: Session | undefined, activity: RowActivity | null)}
+{#snippet trailing(row: SidebarRow, session: Session | undefined, activity: RowActivity | null)}
   {#if session}
     {#each plugins.indicators as item (`${session.id}:${item.plugin.id}:${item.contribution.id}`)}
       <span class="flex size-4 shrink-0 has-[[data-plugin-indicator-visible=false]]:hidden" data-plugin-session-indicator={session.id}>
@@ -128,7 +136,9 @@
       </span>
     {/each}
   {/if}
-  {#if activity}
+  {#if activity === "snoozed"}
+    <SnoozeCountdown snoozedUntil={row.kind === "task" ? row.task.snoozed_until : null} class="shrink-0 text-xs transition-opacity group-focus-within:opacity-0 group-hover:opacity-0" />
+  {:else if activity}
     {@const slot = ACTIVITY_SLOTS[activity]}
     <span class="flex shrink-0 items-center gap-1 text-xs tabular-nums transition-opacity group-focus-within:opacity-0 group-hover:opacity-0 {slot.class}">
       <slot.icon class="size-3.5" />{slot.label}
@@ -136,15 +146,15 @@
   {/if}
 {/snippet}
 
-{#snippet hoverActions(row: SidebarRow, shelf: ShelfStatus | undefined, active: boolean, position: string)}
+{#snippet hoverActions(row: SidebarRow, shelf: ShelfLane | undefined, activity: RowActivity | null, active: boolean, position: string)}
   <div class="pointer-events-none absolute right-2.5 flex h-6 items-center rounded-md bg-sidebar opacity-0 transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 {position}">
     <!-- Layered over an opaque base so the actions cover the row content with the row's own background. -->
     <div class="flex h-full items-center gap-0.5 rounded-md {active ? 'bg-sidebar-row-active' : 'bg-sidebar-row-hover'}">
-      {#each rowActions(row, shelf) as action (action)}
+      {#each rowActions(row, shelf, activity) as action (action)}
         {@const spec = ACTIONS[action]}
         <button
           type="button"
-          class="flex items-center rounded-md text-t2 hover:bg-sidebar-row-hover hover:text-t1 {spec.text ? 'h-6 gap-1 px-1.5 text-xs' : 'size-6 justify-center'}"
+          class="flex items-center rounded-md hover:bg-sidebar-row-hover {spec.class ?? 'text-t2 hover:text-t1'} {spec.text ? 'h-6 gap-1 px-1.5 text-xs' : 'size-6 justify-center'}"
           aria-label={spec.label}
           title={spec.label}
           onclick={(e) => { e.stopPropagation(); onRowAction(action, row); }}
@@ -168,7 +178,7 @@
   {@const navIdx = navIndex(sidebarRowNavKey(row))}
   {@const selected = isSelected(navIdx)}
   {@const active = isActive(row)}
-  {@const receded = (activity === null || activity === "exited") && !active && !selected}
+  {@const receded = isQuiet(activity) && !active && !selected}
   {#if row.kind === "session" && rename.sessionId === row.session.id}
     {@const id = row.session.id}
     <SessionRenameInput bind:value={() => rename.value, rename.onInput} onCommit={() => rename.onCommit(id)} onCancel={rename.onCancel} />
@@ -179,6 +189,7 @@
     <div class="group relative" onclick={() => onSelectRow(row)} oncontextmenu={(e) => onRowContextMenu(e, row)}>
       <button
         data-nav-index={navIdx}
+        data-snooze-anchor={row.kind === "task" ? snoozeAnchor(row.project.id, row.task.key) : undefined}
         class="absolute inset-0 rounded-md transition-colors {rowStateClass(active, selected, selected || isPreviewing(row))}"
         aria-labelledby={labelId}
       ></button>
@@ -190,13 +201,13 @@
           {#if showProjects && !inFolder}
             <span class="flex h-5 items-center gap-1.5">
               <span class="min-w-0 flex-1 truncate text-xs text-t2" title={row.project.path}>{row.project.name}</span>
-              {@render trailing(session, activity)}
+              {@render trailing(row, session, activity)}
             </span>
             <span class="flex min-w-0 items-center gap-1.5">{@render titleParts(row, receded)}</span>
           {:else}
             <span class="flex h-5 items-center gap-1.5">
               {@render titleParts(row, receded)}
-              {@render trailing(session, activity)}
+              {@render trailing(row, session, activity)}
             </span>
           {/if}
           {#if session}
@@ -213,21 +224,22 @@
             </span>
           {/if}
       </div>
-      {@render hoverActions(row, undefined, active, "top-1.5")}
+      {@render hoverActions(row, undefined, activity, active, "top-1.5")}
     </div>
   {/if}
 {/snippet}
 
-{#snippet slim(row: SidebarRow, shelf: ShelfStatus)}
+{#snippet slim(row: SidebarRow, shelf: ShelfLane)}
   {@const session = rowSession(row)}
   {@const activity = activityOf(row)}
   {@const navIdx = navIndex(sidebarRowNavKey(row))}
   {@const selected = isSelected(navIdx)}
   {@const active = isActive(row)}
-  {@const receded = (shelf === "done" || activity === null || activity === "exited") && !active && !selected}
+  {@const receded = (shelf === "done" || isQuiet(activity)) && !active && !selected}
   <div class="group relative">
     <button
       data-nav-index={navIdx}
+      data-snooze-anchor={row.kind === "task" ? snoozeAnchor(row.project.id, row.task.key) : undefined}
       class="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left transition-colors {rowStateClass(active, selected, selected || isPreviewing(row))}"
       title={rowTitle(row, activity)}
       onclick={() => onSelectRow(row)}
@@ -238,9 +250,9 @@
         {#if row.kind === "task" && showTaskKeys}<span class="shrink-0 font-mono text-[10px] text-t3">{row.task.key}</span>{/if}
         <span class="min-w-0 truncate text-[13px] {shelf === 'done' ? 'text-t3' : 'text-t1'}">{row.kind === "task" ? row.task.title : row.session.name || row.session.branch}</span>
       </span>
-      {#if session || activity}<span class="flex h-6 shrink-0 items-center justify-end gap-1.5">{@render trailing(session, activity)}</span>{/if}
+      {#if session || activity}<span class="flex h-6 shrink-0 items-center justify-end gap-1.5">{@render trailing(row, session, activity)}</span>{/if}
     </button>
-    {@render hoverActions(row, shelf, active, "top-1")}
+    {@render hoverActions(row, shelf, activity, active, "top-1")}
   </div>
 {/snippet}
 
@@ -291,7 +303,7 @@
 {#snippet shelfSection(section: SidebarShelfSection)}
   {@const navIdx = navIndex(navKey.group(section.key))}
   {@const collapsed = isCollapsed(section.key, section.defaultCollapsed)}
-  {@const page = shelfPage(section, shownPages(section.key))}
+  {@const page = shelfPage(section, shownPages(section.key), collapsed, isActive)}
   {@const moreIdx = navIndex(navKey.more(section.key))}
   <section>
     <button
@@ -300,17 +312,17 @@
       aria-expanded={!collapsed}
       onclick={() => onToggle(section.key, section.defaultCollapsed)}
     >
-      <span class="shrink-0">{TASK_STATUS_LABELS[section.status]}</span>
+      <span class="shrink-0">{LANES[section.lane].label}</span>
       <span class="h-px flex-1 bg-border"></span>
       <span class="font-normal tabular-nums text-t3">{section.rows.length}</span>
       {@render chevron(collapsed)}
     </button>
-    {#if !collapsed}
+    {#if page.rows.length > 0 || page.more > 0}
       <ul class="flex flex-col gap-0.5">
         {#each page.rows as row (sidebarRowNavKey(row))}
           {@const key = sidebarRowNavKey(row)}
           <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key }} out:send={{ key }} class={rowItemClass(row)}>
-            {#if SHELVES[section.status].variant === "card"}{@render card(row, false)}{:else}{@render slim(row, section.status)}{/if}
+            {#if SHELVES[section.lane].variant === "card"}{@render card(row, false)}{:else}{@render slim(row, section.lane)}{/if}
           </li>
         {/each}
         {#if page.more > 0}
