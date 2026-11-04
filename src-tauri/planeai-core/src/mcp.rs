@@ -230,7 +230,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         AFTER DELETE ON sessions
         BEGIN DELETE FROM mcp_tokens WHERE session_id = OLD.id; END;",
     )?;
-    // The app and the CLI may migrate at once, so whoever adds the column second succeeds too.
+    // Already added, by an earlier run or a concurrent app/CLI migrate.
     match conn.execute_batch(
         "ALTER TABLE mcp_tokens ADD COLUMN approved_plugin_tools TEXT NOT NULL DEFAULT '[]'",
     ) {

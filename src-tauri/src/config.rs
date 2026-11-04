@@ -517,7 +517,7 @@ pub fn backfill_provider_defaults(config: &mut Config) {
 }
 
 /// Upgrade providers' stored `mcp_args` from the v1.114 Codex approval scheme (ADR-0017).
-/// Returns whether any provider changed, and a warning per template left as is, which
+/// Returns whether any provider changed, and a notice per template left as is, which
 /// launches its agent without PlaneAI tools.
 fn upgrade_provider_mcp_args(config: &mut Config) -> (bool, Vec<String>) {
     let mut upgraded = false;
@@ -649,7 +649,18 @@ fn invalid_config_fallback() -> Config {
     }
 }
 
+/// `load_with_notices`, logging the notices: they never stop a config from loading.
 pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
+    let (config, errors, notices) = load_with_notices(config_dir);
+    for notice in &notices {
+        tracing::warn!(%notice, "config loaded with a notice");
+    }
+    (config, errors)
+}
+
+/// The config, its errors, and notices about parts it ignores, such as an agent launched
+/// without PlaneAI tools.
+pub fn load_with_notices(config_dir: &Path) -> (Config, Vec<String>, Vec<String>) {
     let config_path = config_dir.join("config.json");
     if config_path.exists() {
         let content = std::fs::read_to_string(&config_path).unwrap();
@@ -657,7 +668,11 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
             Ok(v) => v,
             Err(e) => {
                 let config = invalid_config_fallback();
-                return (config, vec![format!("Failed to parse config.json: {e}")]);
+                return (
+                    config,
+                    vec![format!("Failed to parse config.json: {e}")],
+                    vec![],
+                );
             }
         };
         // Migrate legacy task_managers → task_management
@@ -672,6 +687,7 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
                 return (
                     config,
                     vec![format!("Failed to deserialize config.json: {error}")],
+                    vec![],
                 );
             }
         };
@@ -679,24 +695,28 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         config.onboarding_completed.get_or_insert(true);
         let unmigrated = config.clone();
         let migrated = migrate_autonomous_prompt_template(&mut config);
-        let (upgraded, warnings) = upgrade_provider_mcp_args(&mut config);
+        let (upgraded, notices) = upgrade_provider_mcp_args(&mut config);
         let migrated = upgraded || migrated;
         if let Some(Err(error)) = config.editor.as_ref().map(validate_editor_config) {
             config.editor = Some(invalid_editor_config());
-            return (config, vec![format!("Invalid config.json: {error}")]);
+            return (
+                config,
+                vec![format!("Invalid config.json: {error}")],
+                notices,
+            );
         }
         if migrated {
             // Persist the migration so the file reflects the new structure
             save(config_dir, &unmigrated, &config).ok();
         }
-        return (config, warnings);
+        return (config, vec![], notices);
     }
     let config = Config {
         onboarding_completed: Some(false),
         ..Config::default()
     };
     write_whole(config_dir, &config).ok();
-    (config, vec![])
+    (config, vec![], vec![])
 }
 
 /// Writes only what differs between `before` and `after` into config.json, so comments,

@@ -165,7 +165,10 @@ fn main() {
             if let Ok(settings) = db::get_settings(&conn) {
                 let _ = config::migrate_from_db(&config_dir, &settings);
             }
-            let (cfg, _warnings) = config::load(&config_dir);
+            let (cfg, warnings) = config::load(&config_dir);
+            for warning in &warnings {
+                tracing::warn!(%warning, "config loaded with an error");
+            }
             jira_migration::initialize(&conn, &cfg)
                 .expect("failed to initialize Jira migration state");
             github_migration::initialize(&conn, &app_dir, &config_dir.join("config.json"))

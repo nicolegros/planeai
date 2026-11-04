@@ -1628,22 +1628,60 @@ fn a_v1_114_codex_config_loads_with_the_current_approval_template() {
     assert!(!saved.contains("{mcp_codex_prompted_tools}"), "{saved}");
 }
 
-#[test]
-fn a_v1_114_codex_template_that_cannot_be_upgraded_is_kept_with_a_warning() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let args =
-        "-c mcp_servers.planeai.default_tools_approval_mode=approve {mcp_codex_prompted_tools}";
+const UNSWITCHABLE_CODEX_ARGS: &str =
+    "-c mcp_servers.planeai.default_tools_approval_mode=approve {mcp_codex_prompted_tools}";
+
+fn write_codex_args(dir: &std::path::Path, editor: &str) {
     std::fs::write(
-        dir.path().join("config.json"),
+        dir.join("config.json"),
         format!(
-            r#"{{ "providers": {{ "codex": {{ "command": "codex", "mcp_args": "{args}" }} }} }}"#
+            r#"{{ {editor} "providers": {{ "codex": {{ "command": "codex", "mcp_args": "{UNSWITCHABLE_CODEX_ARGS}" }} }} }}"#
         ),
     )
     .unwrap();
+}
 
-    let (config, warnings) = load(dir.path());
+#[test]
+fn a_v1_114_codex_template_that_cannot_be_upgraded_is_kept_with_a_notice() {
+    let dir = tempfile::TempDir::new().unwrap();
+    write_codex_args(dir.path(), "");
 
-    assert_eq!(config.providers["codex"].mcp_args.as_deref(), Some(args));
-    assert_eq!(warnings.len(), 1, "{warnings:?}");
-    assert!(warnings[0].starts_with("Agent codex runs without PlaneAI tools: "));
+    let (config, errors, notices) = load_with_notices(dir.path());
+
+    assert_eq!(
+        config.providers["codex"].mcp_args.as_deref(),
+        Some(UNSWITCHABLE_CODEX_ARGS)
+    );
+    assert_eq!(errors, Vec::<String>::new());
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].starts_with("Agent codex runs without PlaneAI tools: "));
+}
+
+#[test]
+fn a_reload_with_a_codex_template_that_cannot_be_upgraded_succeeds() {
+    let dir = tempfile::TempDir::new().unwrap();
+    write_codex_args(dir.path(), "");
+
+    let config = refresh(dir.path()).unwrap();
+
+    assert_eq!(
+        config.providers["codex"].mcp_args.as_deref(),
+        Some(UNSWITCHABLE_CODEX_ARGS)
+    );
+}
+
+#[test]
+fn an_invalid_editor_keeps_the_codex_template_notice() {
+    let dir = tempfile::TempDir::new().unwrap();
+    write_codex_args(
+        dir.path(),
+        r#""editor": { "mode": "terminal", "command": "", "args": [] },"#,
+    );
+
+    let (_, errors, notices) = load_with_notices(dir.path());
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("Editor executable is required"));
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].starts_with("Agent codex runs without PlaneAI tools: "));
 }
