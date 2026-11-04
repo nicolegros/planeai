@@ -145,6 +145,23 @@ pub struct SessionStatusParams {
     pub status: ProviderSessionStatus,
 }
 
+/// The PlaneAI MCP server a provider's agent connects to (ADR-0017), sent as `mcp` with
+/// `provider.session.start`, `provider.session.resume` and `provider.session.handback`
+/// while the server listens. The token authenticates as the session.
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ProviderMcp {
+    pub url: String,
+    pub token: String,
+}
+
+impl std::fmt::Debug for ProviderMcp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderMcp")
+            .field("url", &self.url)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct HandoffResponse {
     pub argv: Vec<String>,
@@ -308,6 +325,19 @@ mod tests {
             serde_json::json!({ "session_id": "s", "seq": 1 })
         )
         .is_err());
+    }
+
+    #[test]
+    fn the_mcp_server_travels_as_url_and_token_and_never_prints_its_token() {
+        let mcp = ProviderMcp {
+            url: "http://127.0.0.1:47437/mcp".into(),
+            token: "secret".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&mcp).unwrap(),
+            serde_json::json!({ "url": "http://127.0.0.1:47437/mcp", "token": "secret" })
+        );
+        assert!(!format!("{mcp:?}").contains("secret"));
     }
 
     #[test]

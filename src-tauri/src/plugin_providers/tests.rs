@@ -543,3 +543,43 @@ async fn ended_sessions_are_those_ended_or_gone() {
     .await;
     assert_eq!(ended, ["done", "deleted"]);
 }
+
+fn mcp_of(runtime: &FakeRuntime, method: &str) -> Value {
+    runtime.params.lock().unwrap()[method]
+        .get("mcp")
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+#[tokio::test]
+async fn a_start_hands_the_agent_its_sessions_mcp_server_while_it_listens() {
+    let runtime = FakeRuntime::running(&[]).listening();
+    start(&runtime, &context("s1"), None).await.unwrap();
+    assert_eq!(
+        mcp_of(&runtime, protocol::START),
+        serde_json::json!({ "url": FAKE_MCP_URL, "token": "token-1" })
+    );
+    assert_eq!(*runtime.minted.lock().unwrap(), ["s1"]);
+
+    let quiet = FakeRuntime::running(&[]);
+    start(&quiet, &context("s1"), None).await.unwrap();
+    assert!(quiet.params.lock().unwrap()[protocol::START]
+        .get("mcp")
+        .is_none());
+}
+
+#[tokio::test]
+async fn a_resume_mints_a_token_unless_a_handoff_terminal_holds_the_live_one() {
+    let runtime = FakeRuntime::running(&[("s1", "active")]).listening();
+    ensure(&runtime, "s1").await.unwrap();
+    assert_eq!(mcp_of(&runtime, protocol::RESUME)["token"], "token-1");
+
+    handoff(&runtime, "s1").await.unwrap();
+    *runtime.instance.lock().unwrap() = Some(2);
+    ensure(&runtime, "s1").await.unwrap();
+    assert_eq!(mcp_of(&runtime, protocol::RESUME), Value::Null);
+    assert_eq!(*runtime.minted.lock().unwrap(), ["s1"]);
+
+    handback(&runtime, "s1").await.unwrap();
+    assert_eq!(mcp_of(&runtime, protocol::HANDBACK)["token"], "token-2");
+}

@@ -53,6 +53,12 @@ Agents should call them like PlaneAI's own tools: same server, same token, same 
   Agents hold approvals by served name for their whole run, so a plugin upgraded while they run could turn an approved write into a delete.
   Each session token therefore records the plugin tools its launch approved, and a plugin tool's handler refuses a call when its effect now asks but the launch approved it, telling the session to restart; the check fails closed and costs one lookup in the token row the server already reads.
   Rejected: leaving every plugin tool asking, which makes a read-only plugin tool cost a prompt per call and breaks non-interactive agents.
+- **Provider sessions.** A plugin runtime provider's agent (ADR-0014) reaches the same server as a PTY agent.
+  `provider.session.start`, `provider.session.resume` and `provider.session.handback` carry `mcp: { url, token }` while the server listens, minted like a PTY launch's token, with the launch's approved plugin tools recorded on it; otherwise the field is absent.
+  It is an optional field old providers ignore, so the host API version does not change.
+  Minting revokes the session's previous token, so a resume of a handed-off session sends none: the handoff terminal's agent holds the live token, as a restart that adopts a live rmux pane keeps its agent's token, and the handback that ends the handoff mints the next one.
+  The program a handoff runs gets `PLANEAI_MCP_URL` and `PLANEAI_MCP_TOKEN` in its environment, never in its argv, which the UI receives.
+  The token is never logged: `ProviderMcp`'s debug output omits it.
 - **Escalation.** ADR-0016's guard stays in PlaneAI's tools.
   A plugin receives `auto_approve` so it can apply the same rule to what its tools start; plugins are trusted code (ADR-0011), so the host does not enforce it for them.
 

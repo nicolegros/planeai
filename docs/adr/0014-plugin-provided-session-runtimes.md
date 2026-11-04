@@ -38,6 +38,7 @@ A trusted local plugin can provide **session runtimes**, which PlaneAI offers as
 - **Errors.** Provider methods answer with JSON-RPC codes the host acts on: `-32010` for a session the plugin does not know, which the host resumes once and retries, `-32011` handed off, `-32012` prompt too large and `-32013` agent unavailable.
   The session UI receives refusals with a matching `code`.
 - **Environment.** Start and resume carry the session's working directory and an `env` with `PLANEAI_SESSION_ID`, `PLANEAI_SOCKET` and the augmented `PATH`, so the agent can still spawn sub-sessions and manage tasks.
+  While PlaneAI's MCP server listens, start, resume and handback also carry `mcp: { url, token }` for the agent (ADR-0017).
 - **Sidecar to host.** A JSON-RPC notification `host.providerSession.status { session_id, status }` with `busy`, `idle`, `needs_attention` or `exited`, and `host.providerSession.event { session_id, seq, payload }`.
   The host forwards `payload` opaquely to the session's mounted UI.
   `seq` is an integer from 1 to 2^53 - 1 that strictly increases for the session's whole lifetime, across sidecar restarts, gaps allowed; the host drops an event that breaks this.

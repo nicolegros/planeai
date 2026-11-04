@@ -203,20 +203,27 @@ PlaneAI calls these sidecar methods.
 Each must return promptly and do its work asynchronously; `send` means the input is accepted and queued, not that the turn ran.
 Results are JSON objects, and PlaneAI ignores fields it does not know.
 
-| Method                        | Params                                                                               | Meaning                                                                                                                                 |
-| ----------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `provider.session.start`      | `session_id`, `provider_id`, `cwd`, `env`, `auto_approve`, optional `initial_prompt` | A new session was created. Run the agent in `cwd` with `env`.                                                                           |
-| `provider.session.resume`     | `session_id`, `provider_id`, `cwd`, `env`, `auto_approve`, `handed_off`              | The current sidecar does not drive this existing session yet, after an app restart or plugin reload. Restore it; do not replay prompts. |
-| `provider.session.send`       | `session_id`, `text`                                                                 | Input from the chat UI, the CLI, or another plugin's `sessions.prompt`.                                                                 |
-| `provider.session.interrupt`  | `session_id`                                                                         | Stop the current turn.                                                                                                                  |
-| `provider.session.stop`       | `session_id`, `reason` (`archive`, `destroy` or `exit`)                              | The session ended. Release its process; on `destroy`, delete its data.                                                                  |
-| `provider.session.handoff`    | `session_id`                                                                         | With `handoff` only. Stop driving the session and return `{ "argv": [...] }`, the command that continues it in a terminal.              |
-| `provider.session.handback`   | `session_id`                                                                         | With `handoff` only. The terminal tab closed, or the handoff answer had no runnable `argv`; drive the session again.                    |
-| `provider.sessions.reconcile` | `sessions`: `[{ "session_id", "provider_id", "status" }]`                            | Sent once after the handshake. The plugin's sessions that still exist; see [Lifecycle](#lifecycle).                                     |
+| Method                        | Params                                                                                               | Meaning                                                                                                                                 |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider.session.start`      | `session_id`, `provider_id`, `cwd`, `env`, `auto_approve`, optional `initial_prompt`, optional `mcp` | A new session was created. Run the agent in `cwd` with `env`.                                                                           |
+| `provider.session.resume`     | `session_id`, `provider_id`, `cwd`, `env`, `auto_approve`, `handed_off`, optional `mcp`              | The current sidecar does not drive this existing session yet, after an app restart or plugin reload. Restore it; do not replay prompts. |
+| `provider.session.send`       | `session_id`, `text`                                                                                 | Input from the chat UI, the CLI, or another plugin's `sessions.prompt`.                                                                 |
+| `provider.session.interrupt`  | `session_id`                                                                                         | Stop the current turn.                                                                                                                  |
+| `provider.session.stop`       | `session_id`, `reason` (`archive`, `destroy` or `exit`)                                              | The session ended. Release its process; on `destroy`, delete its data.                                                                  |
+| `provider.session.handoff`    | `session_id`                                                                                         | With `handoff` only. Stop driving the session and return `{ "argv": [...] }`, the command that continues it in a terminal.              |
+| `provider.session.handback`   | `session_id`, optional `mcp`                                                                         | With `handoff` only. The terminal tab closed, or the handoff answer had no runnable `argv`; drive the session again.                    |
+| `provider.sessions.reconcile` | `sessions`: `[{ "session_id", "provider_id", "status" }]`                                            | Sent once after the handshake. The plugin's sessions that still exist; see [Lifecycle](#lifecycle).                                     |
 
 `session_id` is a lowercase UUID.
 `cwd` is the session's worktree, or its project's root for a session without one.
 `env` is an overlay on the sidecar's own environment: `PLANEAI_SESSION_ID`, `PLANEAI_SOCKET` and the augmented `PATH`, so the agent can still spawn sub-sessions and manage tasks.
+
+`mcp` is `{ "url", "token" }`: PlaneAI's MCP server and a bearer token that authenticates as the session, so the agent can call PlaneAI's tools and those of running plugins (ADR-0017).
+It is present while the server listens and absent otherwise; older providers can ignore it.
+Each one is a fresh token that revokes the session's previous one, so connect the agent you start or restore with the latest you received.
+A `resume` of a handed-off session carries none, because the terminal's agent still uses the current token; the `handback` that follows brings a new one.
+Treat the token as a secret: keep it out of logs, argv, and the UI, and hand it to the agent through its environment or its MCP client configuration.
+The program a handoff runs gets the session's URL and a token as `PLANEAI_MCP_URL` and `PLANEAI_MCP_TOKEN` in its environment, never in its argv, which reaches PlaneAI's UI; reference the variable instead, as in Claude Code's `--mcp-config` header `Bearer ${PLANEAI_MCP_TOKEN}`.
 
 Start, resume, handoff and handback have a 30-second deadline, since they may launch the agent; every other provider method has five seconds.
 On expiry PlaneAI cancels the request as described above.

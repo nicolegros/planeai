@@ -201,6 +201,8 @@ fn session_params(
             "PATH": std::env::var("PATH").unwrap_or_default(),
         },
         "auto_approve": false,
+        // As the host sends while its MCP server listens; nothing listens on port 9.
+        "mcp": { "url": "http://127.0.0.1:9/mcp", "token": "plugin-test-token" },
     });
     let Value::Object(params) = params else {
         unreachable!("session params are an object")

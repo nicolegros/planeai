@@ -180,6 +180,7 @@ async fn start_launching<R: ProviderRuntime>(
         ));
     }
     let mut params = context.params(&resolved.provider);
+    insert_mcp(runtime, &context.session_id, &mut params).await?;
     if let Some(prompt) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
         check_prompt_size(prompt).map_err(ProviderError::too_large)?;
         params.insert("initial_prompt".into(), prompt.into());
@@ -227,12 +228,35 @@ pub async fn ensure<R: ProviderRuntime>(
     let mut params = context.params(&resolved.provider);
     // The host's record wins: a sidecar restarted during a handoff must not forget it,
     // and one an app restart ended is over, its terminal gone with the app.
-    params.insert(
-        "handed_off".into(),
-        runtime.sessions().is_handed_off(session_id).into(),
-    );
+    let handed_off = runtime.sessions().is_handed_off(session_id);
+    params.insert("handed_off".into(), handed_off.into());
+    // A handoff terminal's live agent holds the session's token; handback brings a new one.
+    if !handed_off {
+        insert_mcp(runtime, session_id, &mut params).await?;
+    }
     bind_and_request(runtime, session_id, &resolved, protocol::RESUME, params).await?;
     Ok(resolved)
+}
+
+/// Add `mcp` to params that launch the provider's agent, while the server listens.
+async fn insert_mcp<R: ProviderRuntime>(
+    runtime: &R,
+    session_id: &str,
+    params: &mut serde_json::Map<String, Value>,
+) -> Result<(), ProviderError> {
+    if let Some(mcp) = runtime
+        .mcp_endpoint(session_id)
+        .await
+        .map_err(ProviderError::not_running)?
+    {
+        params.insert(
+            "mcp".into(),
+            serde_json::to_value(mcp).map_err(|error| {
+                ProviderError::new(ProviderErrorCode::PluginError, error.to_string())
+            })?,
+        );
+    }
+    Ok(())
 }
 
 async fn bind_and_request<R: ProviderRuntime>(
@@ -377,11 +401,14 @@ pub async fn handback<R: ProviderRuntime>(
     if runtime.session_context(session_id).await.is_err() {
         return Ok(());
     }
+    let mut params = serde_json::Map::new();
+    params.insert("session_id".into(), session_id.into());
+    insert_mcp(runtime, session_id, &mut params).await?;
     request_session(
         runtime,
         session_id,
         protocol::HANDBACK,
-        serde_json::json!({ "session_id": session_id }),
+        Value::Object(params),
     )
     .await
     .map(|_| ())
