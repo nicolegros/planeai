@@ -676,7 +676,7 @@ mod tests {
             other => panic!("expected a shell target, got {other:?}"),
         };
         assert!(
-            command.starts_with("claude --mcp-config '{"),
+            command.starts_with("claude --mcp-config ") && command.contains(MCP_URL),
             "the agent is told where the server is: {command}"
         );
         let env = mcp_env(&started);
