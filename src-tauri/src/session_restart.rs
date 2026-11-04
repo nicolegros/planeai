@@ -68,9 +68,10 @@ pub fn restart(
         project.require_folder()?;
     }
 
-    // Provider sessions resume through their plugin when next used (ADR-0014).
+    // Provider sessions resume through their plugin when next used (ADR-0014), so nothing
+    // runs yet; `on_resume` moves the task once it does.
     if session.backend == crate::session_ops::PLUGIN_BACKEND {
-        return relaunched(conn, id, config, restart_ops);
+        return reattach(conn, id);
     }
 
     let provider_key = session
@@ -207,10 +208,13 @@ pub fn real_restart_ops() -> impl RestartOps {
             workspace: &planeai_rmux::WorkspaceName,
             pty_key: &str,
         ) -> bool {
-            matches!(
-                crate::rmux_ops::find_resource(workspace, pty_key),
-                Ok(Some(_))
-            )
+            match crate::rmux_ops::find_resource(workspace, pty_key) {
+                Ok(pane) => pane.is_some(),
+                Err(error) => {
+                    tracing::warn!(%error, pty_key, "rmux liveness probe failed; relaunching");
+                    false
+                }
+            }
         }
 
         fn tmux_session_alive(&self, tmux_name: &str) -> bool {
