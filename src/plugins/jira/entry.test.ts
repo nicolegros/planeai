@@ -5,6 +5,14 @@ import {
   jiraSidebarSectionEntrypoint,
 } from "./entry";
 import type { PluginUiContext } from "../../lib/plugin-sdk";
+import {
+  _resetForTests,
+  dismissToast,
+  getToasts,
+  requestDismissToast,
+  runToastAction,
+  showToast,
+} from "../../lib/toasts.svelte";
 
 type Settings = {
   site: string;
@@ -855,31 +863,36 @@ describe("jiraSidebarSectionEntrypoint", () => {
 });
 
 describe("jiraDepartedInteractionEntrypoint", () => {
-  let host: HTMLElement | undefined;
+  let dispose: (() => void) | undefined;
 
-  afterEach(() => host?.remove());
+  afterEach(() => {
+    dispose?.();
+    _resetForTests();
+  });
 
   function mountInteraction(
     resolve: () => Promise<unknown> = () => Promise.resolve({ dequeued: true }),
   ) {
-    host = document.createElement("div");
-    const root = host.attachShadow({ mode: "open" });
-    let items = [{ key: "PLA-42", summary: "A departed issue" }];
-    const notify = vi.fn();
-    const call = vi.fn(async (method: string) => {
+    const root = document.createElement("div").attachShadow({ mode: "open" });
+    let items = [
+      { key: "PLA-42", summary: "A departed issue" },
+      { key: "PLA-43", summary: "Another departed issue" },
+    ];
+    const notify = vi.fn((message: string) => showToast(message));
+    const call = vi.fn(async (method: string, params?: { key: string }) => {
       if (method === "jira.departures.list") return { items };
       if (method === "jira.departures.resolve") {
         await resolve();
-        items = [];
+        items = items.filter((item) => item.key !== params?.key);
         return { dequeued: true };
       }
       if (method === "jira.departures.dequeue") {
-        items = [];
+        items = items.filter((item) => item.key !== params?.key);
         return { dequeued: true };
       }
       throw new Error(`unexpected Jira call: ${method}`);
     });
-    jiraDepartedInteractionEntrypoint.mount(root, {
+    dispose = jiraDepartedInteractionEntrypoint.mount(root, {
       plugin: { id: "jira" },
       contribution: { id: "departed-interaction" },
       host: {
@@ -887,37 +900,82 @@ describe("jiraDepartedInteractionEntrypoint", () => {
         navigation: { open: vi.fn(), close: vi.fn(), openPreferences: vi.fn() },
         sidebar: { register: vi.fn(() => () => {}), select: vi.fn() },
         data: { changed: vi.fn(), notify },
+        interaction: { openModal: vi.fn(), openProjectForm: vi.fn(), showToast, dismissToast },
       },
     } as unknown as PluginUiContext);
     return { root, call, notify };
   }
 
-  it("does not steal focus and resolves D through the sidecar", async () => {
-    const before = document.activeElement;
+  const departedToasts = () =>
+    getToasts()
+      .filter((toast) => toast.kind === "warning")
+      .map(({ message, detail, actions, dismissLabel }) => ({
+        message,
+        detail,
+        actions: actions.map(({ key, label }) => ({ key, label })),
+        dismissLabel,
+      }));
+
+  it("shows the next departed issue in the app toast stack, not its own surface", async () => {
     const interaction = mountInteraction();
-    await vi.waitFor(() => expect(interaction.root.textContent).toContain("PLA-42"));
-    expect(document.activeElement).toBe(before);
-    const surface = interaction.root.querySelector<HTMLElement>(".interaction")!;
-    surface.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true }));
     await vi.waitFor(() =>
-      expect(interaction.call).toHaveBeenCalledWith("jira.departures.resolve", { key: "PLA-42" }),
+      expect(departedToasts()).toEqual([
+        {
+          message: "PLA-42 left your Jira query",
+          detail: "A departed issue",
+          actions: [{ key: "Enter", label: "Done" }],
+          dismissLabel: "Dismiss",
+        },
+      ]),
     );
-    await vi.waitFor(() => expect(interaction.root.textContent).not.toContain("PLA-42"));
-    expect(surface.hidden).toBe(true);
+    expect(interaction.root.textContent).toBe("");
   });
 
-  it("keeps the item queued when Done fails, while N and Escape dismiss it", async () => {
-    const failed = mountInteraction(() => Promise.reject(new Error("task update failed")));
-    await vi.waitFor(() => expect(failed.root.textContent).toContain("PLA-42"));
-    const surface = failed.root.querySelector<HTMLElement>(".interaction")!;
-    surface.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true }));
+  it("resolves through the sidecar on Done, then shows the next issue", async () => {
+    const interaction = mountInteraction();
+    await vi.waitFor(() => expect(departedToasts()).toHaveLength(1));
+    runToastAction(getToasts()[0].id, "Enter");
     await vi.waitFor(() =>
-      expect(failed.notify).toHaveBeenCalledWith(expect.stringContaining("task update failed")),
+      expect(departedToasts().map((toast) => toast.message)).toEqual([
+        "PLA-43 left your Jira query",
+      ]),
+    );
+    expect(interaction.call).toHaveBeenCalledWith("jira.departures.resolve", { key: "PLA-42" });
+  });
+
+  it("keeps the issue queued when Done fails, and dequeues it on dismiss", async () => {
+    const failed = mountInteraction(() => Promise.reject(new Error("task update failed")));
+    await vi.waitFor(() => expect(departedToasts()).toHaveLength(1));
+    runToastAction(getToasts()[0].id, "Enter");
+    await vi.waitFor(() =>
+      expect(failed.notify).toHaveBeenCalledWith(
+        "Could not mark PLA-42 done: Error: task update failed",
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(departedToasts().map((toast) => toast.message)).toEqual([
+        "PLA-42 left your Jira query",
+      ]),
     );
     expect(failed.call).not.toHaveBeenCalledWith("jira.departures.dequeue", expect.anything());
-    surface.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    const departed = getToasts().find((toast) => toast.kind === "warning")!;
+    requestDismissToast(departed.id);
     await vi.waitFor(() =>
       expect(failed.call).toHaveBeenCalledWith("jira.departures.dequeue", { key: "PLA-42" }),
     );
+    await vi.waitFor(() =>
+      expect(departedToasts().map((toast) => toast.message)).toEqual([
+        "PLA-43 left your Jira query",
+      ]),
+    );
+  });
+
+  it("removes its toast when unmounted", async () => {
+    mountInteraction();
+    await vi.waitFor(() => expect(departedToasts()).toHaveLength(1));
+    dispose?.();
+    dispose = undefined;
+    expect(departedToasts()).toEqual([]);
   });
 });
