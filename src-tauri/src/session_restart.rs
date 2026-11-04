@@ -8,6 +8,11 @@ use planeai_core::mcp::McpEndpoint;
 pub trait RestartOps {
     fn tmux_session_alive(&self, tmux_name: &str) -> bool;
 
+    fn rmux_resource_alive(&self, workspace: &planeai_rmux::WorkspaceName, pty_key: &str) -> bool;
+
+    /// Fires the task's `on_restart` hook.
+    fn task_restarted(&self, config: &Config, session: &Session, conn: &Connection);
+
     fn create_tmux_session(
         &self,
         tmux_name: &str,
@@ -63,9 +68,10 @@ pub fn restart(
         project.require_folder()?;
     }
 
-    // Provider sessions resume through their plugin when next used (ADR-0014).
+    // Provider sessions resume through their plugin when next used (ADR-0014), so nothing
+    // runs yet; `on_resume` moves the task once it does.
     if session.backend == crate::session_ops::PLUGIN_BACKEND {
-        return restore(conn, id, config);
+        return reattach(conn, id);
     }
 
     let provider_key = session
@@ -121,11 +127,19 @@ pub fn restart(
                 tmux_name = tn,
                 "restart: tmux session still alive, reattaching"
             );
-            return restore(conn, id, config);
+            return reattach(conn, id);
         }
     }
     let rmux_workspace = session.rmux_workspace();
-    let mcp = planeai_core::mcp::launch_endpoint(conn, mcp_url, id, &session.backend)?;
+    // The spawn below adopts a live pane, which relaunches nothing. Like a live tmux agent,
+    // it keeps its token: minting would revoke it.
+    let agent_alive = session.backend == planeai_rmux::BACKEND
+        && restart_ops.rmux_resource_alive(&rmux_workspace, id);
+    let mcp = if agent_alive {
+        None
+    } else {
+        planeai_core::mcp::launch_endpoint(conn, mcp_url, id, &session.backend)?
+    };
     let mcp = mcp.as_ref();
     let try_spawn = |cmd: &str| -> Result<(), String> {
         match session.backend.as_str() {
@@ -153,18 +167,29 @@ pub fn restart(
     };
 
     spawn_result?;
-    restore(conn, id, config)
+    if agent_alive {
+        return reattach(conn, id);
+    }
+    relaunched(conn, id, config, restart_ops)
 }
 
-fn restore(conn: &Connection, id: &str, config: &Config) -> Result<Session, String> {
+/// Marks the session active again without firing `on_restart`: its agent never stopped.
+fn reattach(conn: &Connection, id: &str) -> Result<Session, String> {
     db::restore_session(conn, id).map_err(|e| e.to_string())?;
-    let updated = db::get_session(conn, id)
+    db::get_session(conn, id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("session not found after restore: {id}"))?;
+        .ok_or_else(|| format!("session not found after restore: {id}"))
+}
 
-    // Fire task hook after restore
+fn relaunched(
+    conn: &Connection,
+    id: &str,
+    config: &Config,
+    restart_ops: &dyn RestartOps,
+) -> Result<Session, String> {
+    let updated = reattach(conn, id)?;
     if updated.task_key.is_some() {
-        fire_task_hook(config, &updated, "on_restart", conn);
+        restart_ops.task_restarted(config, &updated, conn);
     }
 
     Ok(updated)
@@ -174,6 +199,24 @@ fn restore(conn: &Connection, id: &str, config: &Config) -> Result<Session, Stri
 pub fn real_restart_ops() -> impl RestartOps {
     struct RealRestartOps;
     impl RestartOps for RealRestartOps {
+        fn task_restarted(&self, config: &Config, session: &Session, conn: &Connection) {
+            fire_task_hook(config, session, "on_restart", conn);
+        }
+
+        fn rmux_resource_alive(
+            &self,
+            workspace: &planeai_rmux::WorkspaceName,
+            pty_key: &str,
+        ) -> bool {
+            match crate::rmux_ops::find_resource(workspace, pty_key) {
+                Ok(pane) => pane.is_some(),
+                Err(error) => {
+                    tracing::warn!(%error, pty_key, "rmux liveness probe failed; relaunching");
+                    false
+                }
+            }
+        }
+
         fn tmux_session_alive(&self, tmux_name: &str) -> bool {
             #[cfg(not(windows))]
             return crate::tmux::has_session(tmux_name);
@@ -306,8 +349,10 @@ mod tests {
         rmux_calls: RefCell<Vec<(String, String, String)>>,
         rmux_workspaces: RefCell<Vec<String>>,
         daemon_mcp: RefCell<Vec<Option<McpEndpoint>>>,
+        restarted_tasks: RefCell<Vec<String>>,
         fail_resume: bool,
         tmux_alive: bool,
+        rmux_alive: bool,
     }
 
     impl MockRestartOps {
@@ -318,8 +363,10 @@ mod tests {
                 rmux_calls: RefCell::new(vec![]),
                 rmux_workspaces: RefCell::new(vec![]),
                 daemon_mcp: RefCell::new(vec![]),
+                restarted_tasks: RefCell::new(vec![]),
                 fail_resume: false,
                 tmux_alive: false,
+                rmux_alive: false,
             }
         }
 
@@ -330,15 +377,29 @@ mod tests {
                 rmux_calls: RefCell::new(vec![]),
                 rmux_workspaces: RefCell::new(vec![]),
                 daemon_mcp: RefCell::new(vec![]),
+                restarted_tasks: RefCell::new(vec![]),
                 fail_resume: true,
                 tmux_alive: false,
+                rmux_alive: false,
             }
         }
     }
 
     impl RestartOps for MockRestartOps {
+        fn task_restarted(&self, _config: &Config, session: &Session, _conn: &Connection) {
+            self.restarted_tasks
+                .borrow_mut()
+                .push(session.task_key.clone().unwrap_or_default());
+        }
         fn tmux_session_alive(&self, _tmux_name: &str) -> bool {
             self.tmux_alive
+        }
+        fn rmux_resource_alive(
+            &self,
+            _workspace: &planeai_rmux::WorkspaceName,
+            _pty_key: &str,
+        ) -> bool {
+            self.rmux_alive
         }
         fn spawn_rmux_session(
             &self,
@@ -921,5 +982,103 @@ mod tests {
                 .map(|caller| caller.session_id),
             Some(id.to_string())
         );
+    }
+
+    #[test]
+    fn a_restart_that_adopts_a_live_rmux_pane_keeps_its_agents_token() {
+        let conn = setup_db();
+        let id = exited_task_session(&conn, planeai_rmux::BACKEND);
+        let url = "http://127.0.0.1:47437/mcp";
+        let running = planeai_core::mcp::issue(&conn, &id, url).unwrap();
+        let ops = MockRestartOps {
+            rmux_alive: true,
+            ..MockRestartOps::new()
+        };
+
+        restart(&conn, &id, &Config::default(), Some(url), &ops).unwrap();
+
+        let [_, (_, token)] = running.env();
+        assert_eq!(
+            planeai_core::mcp::resolve(&conn, token)
+                .unwrap()
+                .map(|caller| caller.session_id),
+            Some(id)
+        );
+    }
+
+    fn exited_task_session(conn: &Connection, backend: &str) -> String {
+        let project = db::create_project(conn, "myapp", &existing_project_dir()).unwrap();
+        let id = "dddd3333-4444-5555-6666-777788889999";
+        db::create_session_with_params(
+            conn,
+            &planeai_core::services::CreateSessionParams {
+                id: id.to_string(),
+                project_id: project.id.to_string(),
+                name: "agent".to_string(),
+                branch: "main".to_string(),
+                tmux_name: Some("planeai-myapp-ddd".to_string()),
+                backend: backend.to_string(),
+                task_key: Some("APP-1".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        db::mark_session_exited(conn, id).unwrap();
+        id.to_string()
+    }
+
+    #[test]
+    fn relaunching_the_agent_fires_on_restart() {
+        let conn = setup_db();
+        let id = exited_task_session(&conn, planeai_rmux::BACKEND);
+        let ops = MockRestartOps::new();
+
+        restart(&conn, &id, &Config::default(), None, &ops).unwrap();
+
+        assert_eq!(*ops.restarted_tasks.borrow(), vec!["APP-1".to_string()]);
+    }
+
+    #[test]
+    fn rejoining_a_still_running_rmux_agent_does_not_fire_on_restart() {
+        let conn = setup_db();
+        let id = exited_task_session(&conn, planeai_rmux::BACKEND);
+        let ops = MockRestartOps {
+            rmux_alive: true,
+            ..MockRestartOps::new()
+        };
+
+        let updated = restart(&conn, &id, &Config::default(), None, &ops).unwrap();
+
+        assert_eq!(updated.status, "active");
+        assert!(ops.restarted_tasks.borrow().is_empty());
+        // The spawn adopts the pane and records its handle for attach.
+        assert_eq!(ops.rmux_calls.borrow().len(), 1);
+    }
+
+    #[test]
+    fn restoring_a_provider_session_does_not_fire_on_restart() {
+        let conn = setup_db();
+        let id = exited_task_session(&conn, crate::session_ops::PLUGIN_BACKEND);
+        let ops = MockRestartOps::new();
+
+        let updated = restart(&conn, &id, &Config::default(), None, &ops).unwrap();
+
+        assert_eq!(updated.status, "active");
+        assert!(ops.restarted_tasks.borrow().is_empty());
+    }
+
+    #[test]
+    fn rejoining_a_still_running_tmux_agent_does_not_fire_on_restart() {
+        let conn = setup_db();
+        let id = exited_task_session(&conn, "tmux");
+        let ops = MockRestartOps {
+            tmux_alive: true,
+            ..MockRestartOps::new()
+        };
+
+        let updated = restart(&conn, &id, &Config::default(), None, &ops).unwrap();
+
+        assert_eq!(updated.status, "active");
+        assert!(ops.restarted_tasks.borrow().is_empty());
     }
 }

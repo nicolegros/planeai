@@ -70,33 +70,29 @@ pub fn list_archived_sessions(state: State<DbState>) -> Result<Vec<db::Session>,
 }
 
 #[tauri::command]
-pub fn restore_session(
-    state: State<DbState>,
-    notify: State<NotifyHandle>,
-    config_state: State<ConfigState>,
-    runtime: State<PluginRuntimeHandle>,
-    mcp: State<McpServerState>,
+pub async fn restore_session(
+    state: State<'_, DbState>,
+    notify: State<'_, NotifyHandle>,
+    config_state: State<'_, ConfigState>,
+    runtime: State<'_, PluginRuntimeHandle>,
+    mcp: State<'_, McpServerState>,
     id: String,
 ) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let previous = db::get_session(&conn, &id)
-        .map_err(|e| e.to_string())?
-        .ok_or("session not found")?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
-
-    // Restart relaunches the agent process and sets status to active
-    let ops = crate::session_restart::real_restart_ops();
-    let session = crate::session_restart::restart(&conn, &id, &cfg, mcp.0.url().as_deref(), &ops)?;
+    let (previous_status, session) =
+        super::lifecycle::restart_blocking(state.0.clone(), cfg.clone(), mcp.0.url(), id).await?;
     runtime
         .0
-        .dispatch_session_lifecycle(session_transition(&session, &previous.status, "active"));
+        .dispatch_session_lifecycle(session_transition(&session, &previous_status, "active"));
 
-    // Register in NotifyState when restoring
-    let project_name = db::get_project(&conn, &session.project_id)
-        .ok()
-        .flatten()
-        .map(|p| p.name)
-        .unwrap_or_else(|| "unknown".to_string());
+    let project_name = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        db::get_project(&conn, &session.project_id)
+            .ok()
+            .flatten()
+            .map(|p| p.name)
+            .unwrap_or_else(|| "unknown".to_string())
+    };
     let mut ns = notify.0.lock().unwrap();
     register_notify_session(&mut ns, &session, &project_name, &cfg);
 
