@@ -40,7 +40,8 @@ Agents should call them like PlaneAI's own tools: same server, same token, same 
   A launch from the app fills `{mcp_allowed_tools}` and `{mcp_codex_approved_tools}` with PlaneAI's approved tools plus the read and write tools of the plugins running at that moment, read from the registry the server lists.
   This is the simplest option that keeps both properties: Claude Code and Codex list tools when they connect, so what an agent sees is what was running at its launch, and its approvals match.
   Codex's template moves from approving by default with `prompt` overrides to asking by default with `approve` overrides, so on both agents a tool missing from the launch list, a delete or one from a plugin enabled later, asks.
-  The placeholder is renamed from `{mcp_codex_prompted_tools}` to `{mcp_codex_approved_tools}` to match; ADR-0016's templates were never released.
+  The placeholder is renamed from `{mcp_codex_prompted_tools}` to `{mcp_codex_approved_tools}` to match.
+  v1.113 to v1.114 shipped the old template, and a saved config may hold it: loading the config upgrades it (the shipped template becomes the current one, and a custom one has its `approve` default and old placeholder replaced), and the launch applies the same upgrade, so the old placeholder never reaches an agent's arguments.
   Sessions started through `planeai-cli` or the `session_create` tool, which do not reach the registry, read the same set from the plugin inventory: the declared tools of plugins whose row says `running`, which the supervisor writes right after publishing and right before retiring.
   While the app is closed no row says `running`, and such agents cannot connect anyway.
   A session revived at app startup gets PlaneAI's tools only, as plugins start after revival.

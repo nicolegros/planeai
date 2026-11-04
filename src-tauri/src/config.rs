@@ -516,6 +516,23 @@ pub fn backfill_provider_defaults(config: &mut Config) {
     }
 }
 
+/// Upgrade providers' stored `mcp_args` from the v1.114 Codex approval scheme (ADR-0017).
+/// Returns `true` if any provider changed.
+fn upgrade_mcp_args(config: &mut Config) -> bool {
+    let mut upgraded = false;
+    for provider in config.providers.values_mut() {
+        if let Some(args) = provider
+            .mcp_args
+            .as_deref()
+            .and_then(planeai_core::session_launch::upgrade_mcp_args)
+        {
+            provider.mcp_args = Some(args);
+            upgraded = true;
+        }
+    }
+    upgraded
+}
+
 /// Migrate `autonomous_prompt_template` from providers to `auto_dispatch`.
 /// Takes the value from the auto_dispatch provider (or default provider) — first non-null wins.
 /// Clears the deprecated field from all providers after migration.
@@ -657,6 +674,7 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         config.onboarding_completed.get_or_insert(true);
         let unmigrated = config.clone();
         let migrated = migrate_autonomous_prompt_template(&mut config);
+        let migrated = upgrade_mcp_args(&mut config) || migrated;
         if let Some(Err(error)) = config.editor.as_ref().map(validate_editor_config) {
             config.editor = Some(invalid_editor_config());
             return (config, vec![format!("Invalid config.json: {error}")]);

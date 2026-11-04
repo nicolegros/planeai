@@ -1599,3 +1599,31 @@ fn a_restarted_agent_reconnects_to_the_mcp_server() {
         "agent --resume"
     );
 }
+
+#[test]
+fn a_v1_114_codex_config_loads_with_the_current_approval_template() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("config.json"),
+        r#"{
+  "providers": {
+    "codex": {
+      "command": "codex",
+      "mcp_args": "-c mcp_servers.planeai.url=\"{mcp_url}\" -c mcp_servers.planeai.bearer_token_env_var=\"PLANEAI_MCP_TOKEN\" -c mcp_servers.planeai.default_tools_approval_mode=\"approve\" {mcp_codex_prompted_tools}"
+    }
+  }
+}"#,
+    )
+    .unwrap();
+
+    let (config, warnings) = load(dir.path());
+
+    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(
+        config.providers["codex"].mcp_args,
+        Config::default().providers["codex"].mcp_args
+    );
+    let saved = std::fs::read_to_string(dir.path().join("config.json")).unwrap();
+    assert!(saved.contains("{mcp_codex_approved_tools}"), "{saved}");
+    assert!(!saved.contains("{mcp_codex_prompted_tools}"), "{saved}");
+}

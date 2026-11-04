@@ -91,6 +91,7 @@ A provider's `mcp_args` is appended to its command, with `{mcp_url}` replaced by
 `{mcp_allowed_tools}` becomes Claude Code's comma-separated names of the tools that run without asking, and `{mcp_codex_approved_tools}` the Codex `-c` overrides that approve the same tools; every other tool asks.
 Claude Code and Codex come with templates that pre-approve every tool except `task_delete`, which still asks.
 They also pre-approve the read and write tools of the plugins running when the agent launches; destructive plugin tools, and tools of plugins enabled later, ask.
+A Codex `mcp_args` saved by v1.114 or earlier, which approved every tool through `{mcp_codex_prompted_tools}`, is upgraded to this scheme when the config loads.
 Kiro and Copilot come with none.
 Set `mcp_args` to `""` to keep an agent off the tools, or edit it under **Preferences → Agents** with the pencil button.
 
