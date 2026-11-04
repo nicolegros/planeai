@@ -870,15 +870,17 @@ describe("jiraDepartedInteractionEntrypoint", () => {
     _resetForTests();
   });
 
-  function mountInteraction(
-    resolve: () => Promise<unknown> = () => Promise.resolve({ dequeued: true }),
-  ) {
+  function mountInteraction({
+    resolve = () => Promise.resolve(),
+    dequeue = () => Promise.resolve(),
+  }: { resolve?: () => Promise<unknown>; dequeue?: () => Promise<unknown> } = {}) {
     const root = document.createElement("div").attachShadow({ mode: "open" });
     let items = [
       { key: "PLA-42", summary: "A departed issue" },
       { key: "PLA-43", summary: "Another departed issue" },
     ];
     const notify = vi.fn((message: string) => showToast(message));
+    let dataChanged = () => {};
     const call = vi.fn(async (method: string, params?: { key: string }) => {
       if (method === "jira.departures.list") return { items };
       if (method === "jira.departures.resolve") {
@@ -887,6 +889,7 @@ describe("jiraDepartedInteractionEntrypoint", () => {
         return { dequeued: true };
       }
       if (method === "jira.departures.dequeue") {
+        await dequeue();
         items = items.filter((item) => item.key !== params?.key);
         return { dequeued: true };
       }
@@ -899,11 +902,18 @@ describe("jiraDepartedInteractionEntrypoint", () => {
         call,
         navigation: { open: vi.fn(), close: vi.fn(), openPreferences: vi.fn() },
         sidebar: { register: vi.fn(() => () => {}), select: vi.fn() },
-        data: { changed: vi.fn(), notify },
+        data: {
+          changed: vi.fn(),
+          notify,
+          onChanged: (listener: () => void) => {
+            dataChanged = listener;
+            return () => {};
+          },
+        },
         interaction: { openModal: vi.fn(), openProjectForm: vi.fn(), showToast, dismissToast },
       },
     } as unknown as PluginUiContext);
-    return { root, call, notify };
+    return { root, call, notify, dataChanged: () => dataChanged() };
   }
 
   const departedToasts = () =>
@@ -944,7 +954,9 @@ describe("jiraDepartedInteractionEntrypoint", () => {
   });
 
   it("keeps the issue queued when Done fails, and dequeues it on dismiss", async () => {
-    const failed = mountInteraction(() => Promise.reject(new Error("task update failed")));
+    const failed = mountInteraction({
+      resolve: () => Promise.reject(new Error("task update failed")),
+    });
     await vi.waitFor(() => expect(departedToasts()).toHaveLength(1));
     runToastAction(getToasts()[0].id, "Enter");
     await vi.waitFor(() =>
@@ -967,6 +979,59 @@ describe("jiraDepartedInteractionEntrypoint", () => {
     await vi.waitFor(() =>
       expect(departedToasts().map((toast) => toast.message)).toEqual([
         "PLA-43 left your Jira query",
+      ]),
+    );
+  });
+
+  it("shows progress while Done runs and ignores data refreshes until it settles", async () => {
+    let finish = () => {};
+    const interaction = mountInteraction({
+      resolve: () => new Promise<void>((done) => (finish = done)),
+    });
+    await vi.waitFor(() => expect(departedToasts()).toHaveLength(1));
+    runToastAction("jira:departed", "Enter");
+    const marking = {
+      message: "Marking PLA-42 done…",
+      detail: "A departed issue",
+      actions: [],
+      dismissLabel: "Dismiss",
+    };
+    expect(departedToasts()).toEqual([marking]);
+    expect(requestDismissToast("jira:departed")).toBe(false);
+
+    interaction.dataChanged();
+    await vi.waitFor(() =>
+      expect(
+        interaction.call.mock.calls.filter(([method]) => method === "jira.departures.list"),
+      ).toHaveLength(2),
+    );
+    expect(departedToasts()).toEqual([marking]);
+
+    finish();
+    await vi.waitFor(() =>
+      expect(departedToasts().map((toast) => toast.message)).toEqual([
+        "PLA-43 left your Jira query",
+      ]),
+    );
+    expect(
+      interaction.call.mock.calls.filter(([method]) => method === "jira.departures.resolve"),
+    ).toHaveLength(1);
+  });
+
+  it("brings the issue back with context when dismiss fails", async () => {
+    const failed = mountInteraction({
+      dequeue: () => Promise.reject(new Error("sidecar unavailable")),
+    });
+    await vi.waitFor(() => expect(departedToasts()).toHaveLength(1));
+    requestDismissToast("jira:departed");
+    await vi.waitFor(() =>
+      expect(failed.notify).toHaveBeenCalledWith(
+        "Could not dismiss PLA-42: Error: sidecar unavailable",
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(departedToasts().map((toast) => toast.message)).toEqual([
+        "PLA-42 left your Jira query",
       ]),
     );
   });
