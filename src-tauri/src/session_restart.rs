@@ -1047,6 +1047,20 @@ mod tests {
 
         assert_eq!(updated.status, "active");
         assert!(ops.restarted_tasks.borrow().is_empty());
+        // The spawn adopts the pane and records its handle for attach.
+        assert_eq!(ops.rmux_calls.borrow().len(), 1);
+    }
+
+    #[test]
+    fn restoring_a_provider_session_does_not_fire_on_restart() {
+        let conn = setup_db();
+        let id = exited_task_session(&conn, crate::session_ops::PLUGIN_BACKEND);
+        let ops = MockRestartOps::new();
+
+        let updated = restart(&conn, &id, &Config::default(), None, &ops).unwrap();
+
+        assert_eq!(updated.status, "active");
+        assert!(ops.restarted_tasks.borrow().is_empty());
     }
 
     #[test]
