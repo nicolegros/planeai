@@ -317,17 +317,29 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     serde_json::to_string(&session).map_err(|e| e.to_string())
 }
 
+/// The MCP server a created session's agent connects to.
+pub enum McpServer {
+    /// The configured port, as for a session the CLI starts.
+    Configured,
+    /// The server the caller runs, `None` while it is not listening.
+    Running(Option<String>),
+}
+
 /// Shared session creation orchestration used by both the JSON CLI and the AXI
 /// interface. Loads config, resolves the project, builds a plan, and executes it.
 /// Returns the created `Session` on success.
 pub fn create_session(
     conn: &Connection,
     opts: SessionCreateOpts,
-    mcp_url: Option<String>,
+    mcp_server: McpServer,
 ) -> Result<db::Session, String> {
     let cfg_dir = config::config_dir("planeai");
     let (cfg, _) = config::load(&cfg_dir);
     let backend = config::resolve_backend(&cfg).to_string();
+    let mcp_url = match mcp_server {
+        McpServer::Configured => cfg.mcp_listen_port().map(planeai_core::mcp::server_url),
+        McpServer::Running(url) => url,
+    };
 
     let env = Env {
         backend,
@@ -391,7 +403,7 @@ pub fn create_workspace_sibling(
     conn: &Connection,
     parent_session_id: &str,
     opts: WorkspaceSiblingOpts,
-    mcp_url: Option<String>,
+    mcp_server: McpServer,
 ) -> Result<db::Session, String> {
     let parent = parent_session(conn, parent_session_id)?;
     let task_key = parent
@@ -415,7 +427,7 @@ pub fn create_workspace_sibling(
             prompt: opts.prompt,
             parent_session_id: Some(parent.id),
         },
-        mcp_url,
+        mcp_server,
     )
 }
 
@@ -439,7 +451,7 @@ pub fn create_child_session(
     conn: &Connection,
     parent_session_id: &str,
     opts: ChildSessionOpts,
-    mcp_url: Option<String>,
+    mcp_server: McpServer,
 ) -> Result<db::Session, String> {
     let parent = parent_session(conn, parent_session_id)?;
     let project = match opts.project {
@@ -463,7 +475,7 @@ pub fn create_child_session(
             prompt: opts.prompt,
             parent_session_id: Some(parent.id),
         },
-        mcp_url,
+        mcp_server,
     )
 }
 

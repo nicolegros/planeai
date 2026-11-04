@@ -521,7 +521,7 @@ pub fn backfill_provider_defaults(config: &mut Config) {
 /// launches its agent without PlaneAI tools.
 fn upgrade_provider_mcp_args(config: &mut Config) -> (bool, Vec<String>) {
     let mut upgraded = false;
-    let mut warnings = Vec::new();
+    let mut notices = Vec::new();
     for (key, provider) in &mut config.providers {
         let Some(args) = provider.mcp_args.as_deref() else {
             continue;
@@ -532,10 +532,10 @@ fn upgrade_provider_mcp_args(config: &mut Config) -> (bool, Vec<String>) {
                 upgraded = true;
             }
             Ok(None) => {}
-            Err(error) => warnings.push(format!("Agent {key} runs without PlaneAI tools: {error}")),
+            Err(error) => notices.push(format!("Agent {key} runs without PlaneAI tools: {error}")),
         }
     }
-    (upgraded, warnings)
+    (upgraded, notices)
 }
 
 /// Migrate `autonomous_prompt_template` from providers to `auto_dispatch`.
@@ -649,7 +649,7 @@ fn invalid_config_fallback() -> Config {
     }
 }
 
-/// `load_with_notices`, logging the notices: they never stop a config from loading.
+/// Like `load_with_notices`, but logs the notices.
 pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
     let (config, errors, notices) = load_with_notices(config_dir);
     for notice in &notices {
@@ -659,8 +659,8 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
 }
 
 /// The config, its errors, and notices about parts it ignores, such as an agent launched
-/// without PlaneAI tools.
-pub fn load_with_notices(config_dir: &Path) -> (Config, Vec<String>, Vec<String>) {
+/// without PlaneAI tools. Notices never stop a config from loading.
+fn load_with_notices(config_dir: &Path) -> (Config, Vec<String>, Vec<String>) {
     let config_path = config_dir.join("config.json");
     if config_path.exists() {
         let content = std::fs::read_to_string(&config_path).unwrap();
@@ -970,9 +970,9 @@ fn detect_provider_binaries_in(config: &Config, path: &str) -> HashMap<String, O
 /// Re-read config from disk. On success returns the new config; on any warning/error returns Err
 /// (caller should keep the previous config).
 pub fn refresh(config_dir: &Path) -> Result<Config, String> {
-    let (config, warnings) = load(config_dir);
-    if let Some(w) = warnings.into_iter().next() {
-        return Err(w);
+    let (config, errors) = load(config_dir);
+    if let Some(error) = errors.into_iter().next() {
+        return Err(error);
     }
     Ok(config)
 }

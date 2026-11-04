@@ -495,7 +495,8 @@ fn main() {
                     parent_session_id,
                 };
 
-                match planeai::cli::create_session(&conn, opts, configured_mcp_url()) {
+                match planeai::cli::create_session(&conn, opts, planeai::cli::McpServer::Configured)
+                {
                     Ok(session) => {
                         let output = serde_json::to_string(&session).unwrap();
                         if pretty {
@@ -538,7 +539,7 @@ fn main() {
                     &conn,
                     &parent_session_id,
                     opts,
-                    configured_mcp_url(),
+                    planeai::cli::McpServer::Configured,
                 ) {
                     Ok(session) => {
                         let output = serde_json::to_string(&session).unwrap();
@@ -1091,7 +1092,7 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                 parent_session_id,
             };
 
-            match planeai::cli::create_session(conn, opts, configured_mcp_url()) {
+            match planeai::cli::create_session(conn, opts, planeai::cli::McpServer::Configured) {
                 Ok(session) => planeai::axi::session_create_output(&session),
                 Err(e) => return emit_axi_error(&e),
             }
@@ -1120,7 +1121,7 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                 conn,
                 &parent_session_id,
                 opts,
-                configured_mcp_url(),
+                planeai::cli::McpServer::Configured,
             ) {
                 Ok(session) => planeai::axi::session_create_output(&session),
                 Err(error) => return emit_axi_error(&error),
@@ -1160,13 +1161,6 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
 
 /// Agents the CLI launches connect to the configured server; while the app is not running
 /// their MCP connection fails and they work without PlaneAI tools.
-fn configured_mcp_url() -> Option<String> {
-    planeai::config::load(&planeai::config::config_dir("planeai"))
-        .0
-        .mcp_listen_port()
-        .map(planeai_core::mcp::server_url)
-}
-
 fn emit_axi_error(msg: &str) -> i32 {
     let output = planeai_toon::render(&[planeai_toon::field("error", planeai_toon::str_val(msg))]);
     print!("{output}");
