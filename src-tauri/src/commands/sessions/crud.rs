@@ -86,7 +86,7 @@ pub fn restore_session(
 
     // Restart relaunches the agent process and sets status to active
     let ops = crate::session_restart::real_restart_ops();
-    let session = crate::session_restart::restart(&conn, &id, &cfg, mcp.0.url().as_deref(), &ops)?;
+    let session = crate::session_restart::restart(&conn, &id, &cfg, mcp.0.launch().as_ref(), &ops)?;
     runtime
         .0
         .dispatch_session_lifecycle(session_transition(&session, &previous.status, "active"));

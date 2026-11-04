@@ -38,7 +38,7 @@ Claude Code and Codex both speak MCP natively, show its tools by name, and let a
   Kiro and Copilot ship empty, because neither has a verified per-launch way to add an MCP server; users can fill in their own.
 - Every tool carries MCP annotations derived from its effect: read, write (idempotent or not) or delete.
   The templates pre-approve reads, creates and updates, and leave `task_delete` to prompt.
-  They do not list tools: `{mcp_allowed_tools}` (Claude Code's `mcp__planeai__<tool>` names) and `{mcp_codex_prompted_tools}` (Codex's per-tool `approval_mode="prompt"` overrides) are filled at launch from the tool table in `planeai-core`, which the app's registry must match, as a test checks.
+  They do not list tools: `{mcp_allowed_tools}` (Claude Code's `mcp__planeai__<tool>` names) and `{mcp_codex_approved_tools}` (Codex's per-tool `approval_mode="approve"` overrides over a `prompt` default) are filled at launch from the tool table in `planeai-core`, which the app's registry must match, as a test checks, and from the running plugins' tools (ADR-0017).
 - The tools are `task_list`, `task_show`, `task_create`, `task_update`, `task_delete`, `session_list`, `session_tree`, `session_read`, `session_create`, `session_prompt` and `project_list`.
   They default to the caller: `task_show` and `task_update` without a key act on the session's task, task tools work in the project of that task, `session_tree` starts from the calling session, and `session_create` makes a child of it.
 - A session never reaches more permissions through the tools than it has.

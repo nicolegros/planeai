@@ -270,12 +270,12 @@ impl Provider {
     }
 
     /// The command a new session's agent starts with, carrying the task prompt if any.
-    /// `mcp_url` is the URL of the MCP server while it is listening.
+    /// `mcp` is the MCP server while it is listening.
     pub fn first_launch_command(
         &self,
         auto_approve: bool,
         task_prompt: Option<&str>,
-        mcp_url: Option<&str>,
+        mcp: Option<&planeai_core::mcp::McpLaunch>,
     ) -> String {
         planeai_core::session_launch::build_provider_launch_command(
             &self.launch_config(),
@@ -283,7 +283,7 @@ impl Provider {
             task_prompt,
             false,
             None,
-            mcp_url,
+            mcp,
         )
         .command
     }
@@ -800,12 +800,15 @@ pub fn normalize_base_path(raw: &str) -> String {
 }
 
 /// Build the command for restarting a session: use interactive resume if available, otherwise fresh launch.
-pub fn restart_command_for_provider(provider: &Provider, mcp_url: Option<&str>) -> String {
+pub fn restart_command_for_provider(
+    provider: &Provider,
+    mcp: Option<&planeai_core::mcp::McpLaunch>,
+) -> String {
     let command = provider
         .resume_command
         .as_ref()
         .unwrap_or(&provider.command);
-    match planeai_core::session_launch::mcp_launch_args(provider.mcp_args.as_deref(), mcp_url) {
+    match planeai_core::session_launch::mcp_launch_args(provider.mcp_args.as_deref(), mcp) {
         Some(args) => format!("{command} {args}"),
         None => command.clone(),
     }

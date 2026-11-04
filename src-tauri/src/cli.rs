@@ -112,7 +112,10 @@ pub fn build_session_plan(
     let cmd = provider_def.first_launch_command(
         opts.yolo,
         opts.prompt.as_deref(),
-        env.mcp_url.as_deref(),
+        env.mcp_url
+            .as_deref()
+            .map(planeai_core::mcp::McpLaunch::new)
+            .as_ref(),
     );
 
     let short_id = &session_id.replace('-', "")[..8];
@@ -744,9 +747,15 @@ mod tests {
         let mut opts = task_opts(None, None);
         opts.provider = Some("codex".into());
         let plan = build_session_plan("abcd1234-0000", &opts, &env, &test_project()).unwrap();
+        let approvals = planeai_core::mcp::McpLaunch::new("")
+            .approved_tools()
+            .map(|tool| format!(r#" -c mcp_servers.planeai.tools.{tool}.approval_mode="approve""#))
+            .collect::<String>();
         assert_eq!(
             plan.command,
-            r#"codex -c mcp_servers.planeai.url="http://127.0.0.1:47437/mcp" -c mcp_servers.planeai.bearer_token_env_var="PLANEAI_MCP_TOKEN" -c mcp_servers.planeai.default_tools_approval_mode="approve" -c mcp_servers.planeai.tools.task_delete.approval_mode="prompt""#
+            format!(
+                r#"codex -c mcp_servers.planeai.url="http://127.0.0.1:47437/mcp" -c mcp_servers.planeai.bearer_token_env_var="PLANEAI_MCP_TOKEN" -c mcp_servers.planeai.default_tools_approval_mode="prompt"{approvals}"#
+            )
         );
 
         env.mcp_url = None;

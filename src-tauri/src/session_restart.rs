@@ -42,13 +42,13 @@ pub trait RestartOps {
     ) -> Result<(), String>;
 }
 
-/// `mcp_url` is the MCP server's URL while it is listening.
+/// `mcp` is the MCP server while it is listening.
 #[tracing::instrument(skip(conn, config, restart_ops), fields(session_id = id))]
 pub fn restart(
     conn: &Connection,
     id: &str,
     config: &Config,
-    mcp_url: Option<&str>,
+    mcp: Option<&planeai_core::mcp::McpLaunch>,
     restart_ops: &dyn RestartOps,
 ) -> Result<Session, String> {
     let session = db::get_session(conn, id)
@@ -80,12 +80,12 @@ pub fn restart(
     let resume_cmd = if has_resume_command {
         Some(crate::config::restart_command_for_provider(
             provider_def,
-            mcp_url,
+            mcp,
         ))
     } else {
         None
     };
-    let fresh_cmd = provider_def.first_launch_command(session.auto_approve, None, mcp_url);
+    let fresh_cmd = provider_def.first_launch_command(session.auto_approve, None, mcp);
 
     tracing::info!(
         backend = %session.backend,
@@ -125,6 +125,7 @@ pub fn restart(
         }
     }
     let rmux_workspace = session.rmux_workspace();
+    let mcp_url = mcp.map(|mcp| mcp.url.as_str());
     let mcp = planeai_core::mcp::launch_endpoint(conn, mcp_url, id, &session.backend)?;
     let mcp = mcp.as_ref();
     let try_spawn = |cmd: &str| -> Result<(), String> {
@@ -826,7 +827,9 @@ mod tests {
             &conn,
             id,
             &Config::default(),
-            Some("http://127.0.0.1:47437/mcp"),
+            Some(&planeai_core::mcp::McpLaunch::new(
+                "http://127.0.0.1:47437/mcp",
+            )),
             &ops,
         )
         .unwrap();
@@ -910,7 +913,14 @@ mod tests {
             ..MockRestartOps::new()
         };
 
-        let updated = restart(&conn, id, &Config::default(), Some(url), &ops).unwrap();
+        let updated = restart(
+            &conn,
+            id,
+            &Config::default(),
+            Some(&planeai_core::mcp::McpLaunch::new(url)),
+            &ops,
+        )
+        .unwrap();
 
         assert_eq!(updated.status, "active");
         assert!(ops.calls.borrow().is_empty());

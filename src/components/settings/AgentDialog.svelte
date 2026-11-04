@@ -72,7 +72,7 @@
     {#if editing}
       {@render field("agent-resume", "Resume command (optional)", "Run when restarting an exited session on focus. Falls back to the command when empty.", resumeCommand, (v) => (resumeCommand = v), "e.g. claude --resume")}
       {@render field("agent-prompt", "Prompt arguments (optional)", "{prompt} is replaced with the rendered task prompt.", promptCommand, (v) => (promptCommand = v), "{prompt} or -p {prompt}")}
-      {@render field("agent-mcp", "PlaneAI tools arguments (optional)", "Connects the agent to PlaneAI's MCP server. {mcp_url} is replaced with its URL, {mcp_allowed_tools} with Claude Code's pre-approved tools and {mcp_codex_prompted_tools} with Codex's prompting overrides; the token arrives in PLANEAI_MCP_TOKEN. Empty leaves the agent unconnected.", mcpArgs, (v) => (mcpArgs = v), "--mcp-config {mcp_url}")}
+      {@render field("agent-mcp", "PlaneAI tools arguments (optional)", "Connects the agent to PlaneAI's MCP server. {mcp_url} is replaced with its URL, {mcp_allowed_tools} with Claude Code's pre-approved tools and {mcp_codex_approved_tools} with Codex's approving overrides; the token arrives in PLANEAI_MCP_TOKEN. Empty leaves the agent unconnected.", mcpArgs, (v) => (mcpArgs = v), "--mcp-config {mcp_url}")}
     {/if}
     {#if error}<p class="text-[12px] text-status-exited" role="alert">{error}</p>{/if}
     <div class="flex justify-end gap-2 pt-1">

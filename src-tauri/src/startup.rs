@@ -10,11 +10,11 @@ use crate::state::{ConfigState, DbState};
 
 /// Revive sessions on startup: recreate dead tmux sessions.
 /// Daemon sessions are managed by the daemon process and don't need reviving here.
-/// `mcp_url` is the MCP server's URL while it is listening.
+/// `mcp` is the MCP server while it is listening.
 pub fn revive_sessions<F, G>(
     conn: &rusqlite::Connection,
     cfg: &config::Config,
-    mcp_url: Option<&str>,
+    mcp: Option<&planeai_core::mcp::McpLaunch>,
     has_tmux_session: F,
     create_tmux: G,
 ) -> Vec<String>
@@ -50,7 +50,7 @@ where
         }
         let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
         let cmd = match cfg.providers.get(provider_key) {
-            Some(provider_def) => config::restart_command_for_provider(provider_def, mcp_url),
+            Some(provider_def) => config::restart_command_for_provider(provider_def, mcp),
             None => continue,
         };
         let project_path = projects
@@ -60,8 +60,9 @@ where
             .unwrap_or("/");
         let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
 
-        let mcp = match planeai_core::mcp::endpoint(conn, mcp_url, &session.id) {
-            Ok(mcp) => mcp,
+        let mcp_url = mcp.map(|mcp| mcp.url.as_str());
+        let endpoint = match planeai_core::mcp::endpoint(conn, mcp_url, &session.id) {
+            Ok(endpoint) => endpoint,
             Err(error) => {
                 tracing::warn!(session_id = %session.id, %error, "[revive] reviving without MCP");
                 None
@@ -73,7 +74,7 @@ where
             &cmd,
             &session.id,
             &extra_path_dirs,
-            mcp.as_ref(),
+            endpoint.as_ref(),
         ) {
             Ok(()) => {
                 if session.status == "exited" {

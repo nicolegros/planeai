@@ -55,8 +55,8 @@ pub trait Backend: Send + Sync {
     /// The project's current folder, read live so a relinked project dispatches into its
     /// new folder. None while the folder is missing on disk.
     fn project_folder(&self, project_id: &str) -> Option<String>;
-    /// The MCP server's URL while it is listening; agents dispatched now connect to it.
-    fn mcp_url(&self) -> Option<String> {
+    /// The MCP server while it is listening; agents dispatched now connect to it.
+    fn mcp(&self) -> Option<crate::mcp::McpLaunch> {
         None
     }
 }
@@ -150,7 +150,8 @@ impl SessionDispatcher {
             .as_deref()
             .map(|tpl| vars.render(tpl));
 
-        let mcp_url = backend.mcp_url();
+        let mcp = backend.mcp();
+        let mcp_url = mcp.as_ref().map(|mcp| mcp.url.clone());
         let provider_config = crate::session_launch::ProviderConfig {
             command: self.dispatch_config.provider_command.clone(),
             yolo_flag: self.dispatch_config.yolo_flag.clone(),
@@ -163,7 +164,7 @@ impl SessionDispatcher {
             rendered_prompt.as_deref(),
             true, // autonomous: auto-dispatched sessions always use autonomous template
             self.dispatch_config.prompt_wrapper.as_deref(),
-            mcp_url.as_deref(),
+            mcp.as_ref(),
         );
         let cmd = launch_result.command;
         // The prompt is task content: log its size, never its text.

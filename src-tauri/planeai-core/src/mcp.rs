@@ -111,6 +111,33 @@ pub fn plugin_tool_name(plugin_id: &str, tool: &str) -> Result<String, String> {
     Ok(name)
 }
 
+/// The server a launch connects its agent to, with the plugin tools it serves now that the
+/// agent may run without asking (ADR-0017).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpLaunch {
+    pub url: String,
+    pub approved_plugin_tools: Vec<String>,
+}
+
+impl McpLaunch {
+    /// A server serving no plugin tools, as the CLI, which runs none, sees it.
+    pub fn new(url: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            approved_plugin_tools: Vec::new(),
+        }
+    }
+
+    /// Every tool an agent launched now may run without asking.
+    pub fn approved_tools(&self) -> impl Iterator<Item = &str> {
+        TOOLS
+            .iter()
+            .filter(|tool| tool.effect.pre_approved())
+            .map(|tool| tool.name)
+            .chain(self.approved_plugin_tools.iter().map(String::as_str))
+    }
+}
+
 /// What an agent process needs to reach the MCP server as its session.
 #[derive(Clone, PartialEq, Eq)]
 pub struct McpEndpoint {

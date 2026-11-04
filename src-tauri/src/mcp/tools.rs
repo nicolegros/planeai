@@ -250,6 +250,16 @@ impl Registry {
         Ok(())
     }
 
+    /// Served plugin tools agents may run without asking: every effect but deletes.
+    pub fn approved_plugin_tools(&self) -> Vec<String> {
+        self.plugins()
+            .values()
+            .flatten()
+            .filter(|tool| tool.effect.pre_approved())
+            .map(|tool| tool.name.clone())
+            .collect()
+    }
+
     pub fn retire_plugin(&self, plugin_id: &str) {
         self.plugins
             .write()

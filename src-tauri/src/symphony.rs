@@ -355,11 +355,11 @@ impl Backend for TauriBackend {
         })
     }
 
-    fn mcp_url(&self) -> Option<String> {
+    fn mcp(&self) -> Option<planeai_core::mcp::McpLaunch> {
         self.app_handle
             .state::<crate::state::McpServerState>()
             .0
-            .url()
+            .launch()
     }
 
     fn project_folder(&self, project_id: &str) -> Option<String> {

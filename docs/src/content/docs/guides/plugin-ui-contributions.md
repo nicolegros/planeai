@@ -325,6 +325,8 @@ See ADR-0017.
   A tool cannot be both read-only and destructive.
 - `timeoutMs` is how long PlaneAI waits for the tool, from 1 to 120000; the default is 30000.
 
+Effects decide approval as for PlaneAI's own tools: an agent PlaneAI launches runs the read and write tools of the plugins running at its launch without asking, and asks before a destructive one or the tool of a plugin enabled later.
+
 Unknown fields in a tool or its annotations are rejected.
 
 ### Calls

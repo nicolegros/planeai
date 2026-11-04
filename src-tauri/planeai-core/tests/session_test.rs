@@ -46,7 +46,7 @@ struct RecordingBackend {
     gui_notified: Mutex<Vec<String>>,
     fetches: Mutex<Vec<(String, String)>>,
     spawn_mcp_urls: Mutex<Vec<Option<String>>>,
-    /// URLs `mcp_url` hands out, one per read, as a server that stops listening would.
+    /// URLs `mcp` hands out, one per read, as a server that stops listening would.
     mcp_urls: Mutex<Vec<String>>,
 }
 
@@ -160,9 +160,9 @@ impl Backend for RecordingBackend {
     fn project_folder(&self, _: &str) -> Option<String> {
         Some("/tmp/testproj".to_string())
     }
-    fn mcp_url(&self) -> Option<String> {
+    fn mcp(&self) -> Option<planeai_core::mcp::McpLaunch> {
         let mut urls = self.mcp_urls.lock().unwrap();
-        (!urls.is_empty()).then(|| urls.remove(0))
+        (!urls.is_empty()).then(|| planeai_core::mcp::McpLaunch::new(urls.remove(0)))
     }
 }
 

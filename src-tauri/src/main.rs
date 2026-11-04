@@ -186,7 +186,7 @@ fn main() {
                 ),
             );
             tauri::async_runtime::block_on(mcp_server.apply(cfg.mcp_listen_port()));
-            let mcp_url = mcp_server.url();
+            let mcp = mcp_server.launch();
             app.manage(McpServerState(mcp_server));
 
             // Revive sessions
@@ -194,7 +194,7 @@ fn main() {
             let _ = startup::revive_sessions(
                 &conn,
                 &cfg,
-                mcp_url.as_deref(),
+                mcp.as_ref(),
                 tmux::has_session,
                 tmux::create_session_with_cmd_and_path,
             );
@@ -202,7 +202,7 @@ fn main() {
             let _ = startup::revive_sessions(
                 &conn,
                 &cfg,
-                mcp_url.as_deref(),
+                mcp.as_ref(),
                 |_| false,
                 |_, _, _, _, _, _| Err("tmux not available".to_string()),
             );

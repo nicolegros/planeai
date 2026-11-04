@@ -831,6 +831,34 @@ mod http {
     }
 
     #[tokio::test]
+    async fn agents_launched_now_may_run_the_running_plugins_tools_but_deletes() {
+        let f = Fixture::new();
+        let registry = Arc::new(Registry::core());
+        let server = McpServer::new(registry.clone(), f.context.clone());
+        registry
+            .publish_plugin("fixture", fixture_plugin_tools())
+            .unwrap();
+        assert_eq!(server.launch(), None);
+
+        let McpStatus::Listening { port, url } = server.apply(Some(0)).await else {
+            panic!("server did not start");
+        };
+        assert_eq!(
+            server.launch(),
+            Some(planeai_core::mcp::McpLaunch {
+                url: format!("http://127.0.0.1:{port}/mcp"),
+                approved_plugin_tools: vec!["fixture_echo".into()],
+            })
+        );
+        registry.retire_plugin("fixture");
+        assert_eq!(
+            server.launch(),
+            Some(planeai_core::mcp::McpLaunch::new(url))
+        );
+        assert_eq!(server.apply(None).await, McpStatus::Off);
+    }
+
+    #[tokio::test]
     async fn a_request_without_a_valid_session_token_is_unauthorized() {
         let f = Fixture::new();
         let (_server, port) = serve(&f).await;

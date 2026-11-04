@@ -1569,7 +1569,9 @@ fn load_backfills_mcp_args_for_built_in_agents_but_keeps_an_explicit_opt_out() {
         config.providers["codex"].first_launch_command(
             false,
             None,
-            Some("http://127.0.0.1:47437/mcp")
+            Some(&planeai_core::mcp::McpLaunch::new(
+                "http://127.0.0.1:47437/mcp"
+            ))
         ),
         "codex"
     );
@@ -1584,7 +1586,12 @@ fn a_restarted_agent_reconnects_to_the_mcp_server() {
         ..Default::default()
     };
     assert_eq!(
-        restart_command_for_provider(&provider, Some("http://127.0.0.1:47437/mcp")),
+        restart_command_for_provider(
+            &provider,
+            Some(&planeai_core::mcp::McpLaunch::new(
+                "http://127.0.0.1:47437/mcp"
+            ))
+        ),
         "agent --resume --mcp http://127.0.0.1:47437/mcp"
     );
     assert_eq!(

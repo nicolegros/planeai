@@ -73,7 +73,8 @@ const CLAUDE_MCP_ARGS: &str = if cfg!(windows) {
 
 // Codex reads `-c` values as TOML and falls back to a plain string, so the quotes are
 // optional for both shells.
-const CODEX_MCP_ARGS: &str = r#"-c mcp_servers.planeai.url="{mcp_url}" -c mcp_servers.planeai.bearer_token_env_var="PLANEAI_MCP_TOKEN" -c mcp_servers.planeai.default_tools_approval_mode="approve" {mcp_codex_prompted_tools}"#;
+// Codex asks by default, so a tool the server starts serving after the launch asks too.
+const CODEX_MCP_ARGS: &str = r#"-c mcp_servers.planeai.url="{mcp_url}" -c mcp_servers.planeai.bearer_token_env_var="PLANEAI_MCP_TOKEN" -c mcp_servers.planeai.default_tools_approval_mode="prompt" {mcp_codex_approved_tools}"#;
 
 pub const BUILTIN_PROVIDERS: [BuiltinProvider; 4] = [
     BuiltinProvider {
@@ -267,14 +268,14 @@ pub fn check_task_prompt(prompt: &str) -> Result<(), String> {
 ///
 /// `autonomous` controls whether `autonomous_prompt_template` is applied.
 /// Manual task launches should pass `false`; auto-dispatched launches pass `true`.
-/// `mcp_url` is the MCP server's URL, `None` when the server is disabled.
+/// `mcp` is the MCP server the agent connects to, `None` when the server is disabled.
 pub fn build_provider_launch_command(
     provider: &ProviderConfig,
     auto_approve: bool,
     task_prompt: Option<&str>,
     autonomous: bool,
     autonomous_prompt_template: Option<&str>,
-    mcp_url: Option<&str>,
+    mcp: Option<&crate::mcp::McpLaunch>,
 ) -> ProviderLaunchCommand {
     let mut cmd = provider.command.clone();
     let mut auto_approve_was_applied = false;
@@ -288,7 +289,7 @@ pub fn build_provider_launch_command(
     }
 
     // Before the prompt, which follows `--`.
-    if let Some(args) = mcp_launch_args(provider.mcp_args.as_deref(), mcp_url) {
+    if let Some(args) = mcp_launch_args(provider.mcp_args.as_deref(), mcp) {
         cmd = format!("{cmd} {args}");
     }
 
@@ -322,35 +323,32 @@ pub fn build_provider_launch_command(
 
 /// A provider's `mcp_args` with its placeholders filled in, or `None` when the server is
 /// not listening or the provider has no arguments for it. `{mcp_url}` is the server URL,
-/// `{mcp_allowed_tools}` Claude Code's names of the pre-approved tools, and
-/// `{mcp_codex_prompted_tools}` the Codex overrides that keep the others prompting.
-pub fn mcp_launch_args(template: Option<&str>, mcp_url: Option<&str>) -> Option<String> {
-    use crate::mcp::{SERVER_NAME, TOOLS};
-    let (template, mcp_url) = (template?.trim(), mcp_url?);
+/// and `{mcp_allowed_tools}` (Claude Code's tool names) and `{mcp_codex_approved_tools}`
+/// (Codex's per-tool overrides) list the tools that run without asking; every other tool
+/// asks.
+pub fn mcp_launch_args(
+    template: Option<&str>,
+    mcp: Option<&crate::mcp::McpLaunch>,
+) -> Option<String> {
+    use crate::mcp::SERVER_NAME;
+    let (template, mcp) = (template?.trim(), mcp?);
     if template.is_empty() {
         return None;
     }
-    let allowed: Vec<String> = TOOLS
-        .iter()
-        .filter(|tool| tool.effect.pre_approved())
-        .map(|tool| format!("mcp__{SERVER_NAME}__{}", tool.name))
+    let allowed: Vec<String> = mcp
+        .approved_tools()
+        .map(|tool| format!("mcp__{SERVER_NAME}__{tool}"))
         .collect();
-    let prompted: Vec<String> = TOOLS
-        .iter()
-        .filter(|tool| !tool.effect.pre_approved())
-        .map(|tool| {
-            format!(
-                r#"-c mcp_servers.{SERVER_NAME}.tools.{}.approval_mode="prompt""#,
-                tool.name
-            )
-        })
+    let approved: Vec<String> = mcp
+        .approved_tools()
+        .map(|tool| format!(r#"-c mcp_servers.{SERVER_NAME}.tools.{tool}.approval_mode="approve""#))
         .collect();
     // Not `template::render`: it would also blank `${PLANEAI_MCP_TOKEN}`.
     Some(
         template
-            .replace("{mcp_url}", mcp_url)
+            .replace("{mcp_url}", &mcp.url)
             .replace("{mcp_allowed_tools}", &allowed.join(","))
-            .replace("{mcp_codex_prompted_tools}", &prompted.join(" "))
+            .replace("{mcp_codex_approved_tools}", &approved.join(" "))
             .trim()
             .to_string(),
     )
@@ -654,12 +652,16 @@ mod tests {
 
     const MCP_URL: &str = "http://127.0.0.1:47437/mcp";
 
+    fn server() -> crate::mcp::McpLaunch {
+        crate::mcp::McpLaunch::new(MCP_URL)
+    }
+
     #[test]
     fn mcp_args_fill_in_the_url_and_keep_the_token_reference_for_the_agent() {
         assert_eq!(
             mcp_launch_args(
                 Some("--url {mcp_url} --token ${PLANEAI_MCP_TOKEN}"),
-                Some(MCP_URL)
+                Some(&server())
             ),
             Some(format!("--url {MCP_URL} --token ${{PLANEAI_MCP_TOKEN}}"))
         );
@@ -668,8 +670,8 @@ mod tests {
     #[test]
     fn mcp_args_are_skipped_when_the_server_is_off_or_the_template_is_empty() {
         assert_eq!(mcp_launch_args(Some("--url {mcp_url}"), None), None);
-        assert_eq!(mcp_launch_args(Some("  "), Some(MCP_URL)), None);
-        assert_eq!(mcp_launch_args(None, Some(MCP_URL)), None);
+        assert_eq!(mcp_launch_args(Some("  "), Some(&server())), None);
+        assert_eq!(mcp_launch_args(None, Some(&server())), None);
     }
 
     #[test]
@@ -680,8 +682,14 @@ mod tests {
             prompt_command: Some("-- {prompt}".into()),
             mcp_args: Some("--mcp {mcp_url}".into()),
         };
-        let launch =
-            build_provider_launch_command(&provider, true, Some("hi"), false, None, Some(MCP_URL));
+        let launch = build_provider_launch_command(
+            &provider,
+            true,
+            Some("hi"),
+            false,
+            None,
+            Some(&server()),
+        );
         assert_eq!(
             launch.command,
             format!("agent --yolo --mcp {MCP_URL} -- 'hi'")
@@ -691,14 +699,36 @@ mod tests {
     }
 
     #[test]
-    fn the_approval_placeholders_follow_each_tools_effect() {
+    fn the_approval_placeholders_list_every_tool_but_deletes() {
+        let mut server = server();
+        server.approved_plugin_tools = vec!["local-fixture_echo".into()];
+        let names = [
+            "task_list",
+            "task_show",
+            "task_create",
+            "task_update",
+            "session_list",
+            "session_tree",
+            "session_read",
+            "session_create",
+            "session_prompt",
+            "project_list",
+            "local-fixture_echo",
+        ];
         assert_eq!(
-            mcp_launch_args(
-                Some("--allow {mcp_allowed_tools} {mcp_codex_prompted_tools}"),
-                Some(MCP_URL)
+            mcp_launch_args(Some("--allow {mcp_allowed_tools}"), Some(&server)).unwrap(),
+            format!(
+                "--allow {}",
+                names.map(|name| format!("mcp__planeai__{name}")).join(",")
             )
-            .unwrap(),
-            "--allow mcp__planeai__task_list,mcp__planeai__task_show,mcp__planeai__task_create,mcp__planeai__task_update,mcp__planeai__session_list,mcp__planeai__session_tree,mcp__planeai__session_read,mcp__planeai__session_create,mcp__planeai__session_prompt,mcp__planeai__project_list -c mcp_servers.planeai.tools.task_delete.approval_mode=\"prompt\""
+        );
+        assert_eq!(
+            mcp_launch_args(Some("{mcp_codex_approved_tools}"), Some(&server)).unwrap(),
+            names
+                .map(|name| format!(
+                    "-c mcp_servers.planeai.tools.{name}.approval_mode=\"approve\""
+                ))
+                .join(" ")
         );
     }
 
@@ -711,7 +741,7 @@ mod tests {
         assert!(builtin("codex")
             .mcp_args
             .unwrap()
-            .ends_with(" {mcp_codex_prompted_tools}"));
+            .ends_with(r#"default_tools_approval_mode="prompt" {mcp_codex_approved_tools}"#));
     }
 
     #[test]
@@ -728,7 +758,7 @@ mod tests {
         let mut provider = builtin(provider_key);
         provider.command = "printf '%s\\n'".into();
         let cmd =
-            build_provider_launch_command(&provider, false, prompt, false, None, Some(MCP_URL))
+            build_provider_launch_command(&provider, false, prompt, false, None, Some(&server()))
                 .command;
         let (program, args) = shell_args(&cmd);
         let output = std::process::Command::new(program)
@@ -780,19 +810,20 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn codex_receives_its_mcp_server_as_config_overrides_through_the_shell() {
+        let argv = shell_argv("codex", None);
         assert_eq!(
-            shell_argv("codex", None),
+            argv[..6],
             [
                 "-c",
                 "mcp_servers.planeai.url=http://127.0.0.1:47437/mcp",
                 "-c",
                 "mcp_servers.planeai.bearer_token_env_var=PLANEAI_MCP_TOKEN",
                 "-c",
-                "mcp_servers.planeai.default_tools_approval_mode=approve",
-                "-c",
-                "mcp_servers.planeai.tools.task_delete.approval_mode=prompt",
+                "mcp_servers.planeai.default_tools_approval_mode=prompt",
             ]
         );
+        assert!(argv.contains(&"mcp_servers.planeai.tools.task_list.approval_mode=approve".into()));
+        assert!(!argv.iter().any(|arg| arg.contains("task_delete")));
     }
 
     #[test]

@@ -81,7 +81,7 @@ pub fn restart_session(
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     let ops = crate::session_restart::real_restart_ops();
     let session =
-        crate::session_restart::restart(&conn, &session_id, &cfg, mcp.0.url().as_deref(), &ops)?;
+        crate::session_restart::restart(&conn, &session_id, &cfg, mcp.0.launch().as_ref(), &ops)?;
     runtime
         .0
         .dispatch_session_lifecycle(session_transition(&session, &previous.status, "active"));

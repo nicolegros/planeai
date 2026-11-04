@@ -36,6 +36,14 @@ Agents should call them like PlaneAI's own tools: same server, same token, same 
 - **Timeouts.** `timeoutMs` bounds a call, from 1 to 120000 milliseconds, 30000 by default.
   On expiry the host sends `$/cancelRequest` (ADR-0011); a plugin that acknowledges keeps running and the agent reads that the call was cancelled, one that does not is stopped.
   The HTTP request ends with the call either way, and the sidecar request lane is shared, so a slow tool delays the plugin's other requests.
+- **Approvals.** Plugin tools follow ADR-0016's effect rule: reads and writes run without asking, deletes ask.
+  A launch from the app fills `{mcp_allowed_tools}` and `{mcp_codex_approved_tools}` with PlaneAI's approved tools plus the read and write tools of the plugins running at that moment, read from the registry the server lists.
+  This is the simplest option that keeps both properties: Claude Code and Codex list tools when they connect, so what an agent sees is what was running at its launch, and its approvals match.
+  Codex's template moves from approving by default with `prompt` overrides to asking by default with `approve` overrides, so on both agents a tool missing from the launch list, a delete or one from a plugin enabled later, asks.
+  The placeholder is renamed from `{mcp_codex_prompted_tools}` to `{mcp_codex_approved_tools}` to match; ADR-0016's templates were never released.
+  Launches from `planeai-cli`, which runs no plugins, approve PlaneAI's tools only, so plugin tools ask there; a session revived at app startup also gets none, as plugins start after revival.
+  Pre-approving plugin tools by declared effect trusts the plugin's annotations, which is consistent with plugins being trusted code.
+  Rejected: leaving every plugin tool asking, which makes a read-only plugin tool cost a prompt per call and breaks non-interactive agents.
 - **Escalation.** ADR-0016's guard stays in PlaneAI's tools.
   A plugin receives `auto_approve` so it can apply the same rule to what its tools start; plugins are trusted code (ADR-0011), so the host does not enforce it for them.
 

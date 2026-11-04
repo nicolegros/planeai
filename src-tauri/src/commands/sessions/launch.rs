@@ -156,7 +156,8 @@ pub(crate) async fn launch(
         _ => None,
     };
     // Snapshotted once, so the command's MCP arguments and the minted token agree.
-    let mcp_url = app.state::<McpServerState>().0.url();
+    let mcp = app.state::<McpServerState>().0.launch();
+    let mcp_url = mcp.as_ref().map(|mcp| mcp.url.clone());
     // Phase 1: gather params from config (holding config lock briefly)
     let (cmd, provider_key, backend, scrollback_bytes, extra_path_dirs) = if let Some(key) =
         runtime_provider
@@ -177,11 +178,8 @@ pub(crate) async fn launch(
             .get(&pk)
             .ok_or_else(|| format!("Unknown provider: {pk}"))?;
 
-        let c = provider_def.first_launch_command(
-            auto_approve,
-            task_prompt.as_deref(),
-            mcp_url.as_deref(),
-        );
+        let c =
+            provider_def.first_launch_command(auto_approve, task_prompt.as_deref(), mcp.as_ref());
         tracing::info!(provider_command = %provider_def.command, auto_approve, prompt_chars = ?prompt_chars, "launch command built");
 
         let be = config::resolve_backend(&cfg).to_string();
