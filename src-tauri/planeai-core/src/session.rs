@@ -14,21 +14,21 @@ pub trait Backend: Send + Sync {
         branch: &str,
         base: &str,
     ) -> Result<(), String>;
-    /// `mcp_url` is the URL the agent's command was built with; the agent's token is minted for it.
+    /// `mcp` is the server the agent's command was built for; the agent's token is minted for it.
     fn create_tmux_session(
         &self,
         name: &str,
         cwd: &str,
         cmd: &str,
         session_id: &str,
-        mcp_url: Option<&str>,
+        mcp: Option<&crate::mcp::McpLaunch>,
     ) -> Result<(), String>;
     fn create_daemon_session(
         &self,
         session_id: &str,
         cmd: &str,
         cwd: &str,
-        mcp_url: Option<&str>,
+        mcp: Option<&crate::mcp::McpLaunch>,
     ) -> Result<(), String>;
     /// Spawn the agent in PlaneAI's private rmux daemon.
     ///
@@ -40,7 +40,7 @@ pub trait Backend: Send + Sync {
         workspace: &str,
         cmd: &str,
         cwd: &str,
-        mcp_url: Option<&str>,
+        mcp: Option<&crate::mcp::McpLaunch>,
     ) -> Result<(), String>;
     fn insert_session(&self, session: &NewSession) -> Result<(), String>;
     fn notify_gui(&self, session_id: &str) -> Result<(), String>;
@@ -151,7 +151,6 @@ impl SessionDispatcher {
             .map(|tpl| vars.render(tpl));
 
         let mcp = backend.mcp();
-        let mcp_url = mcp.as_ref().map(|mcp| mcp.url.clone());
         let provider_config = crate::session_launch::ProviderConfig {
             command: self.dispatch_config.provider_command.clone(),
             yolo_flag: self.dispatch_config.yolo_flag.clone(),
@@ -187,11 +186,9 @@ impl SessionDispatcher {
                 &wt_path,
                 &cmd,
                 &session_id,
-                mcp_url.as_deref(),
+                mcp.as_ref(),
             )?,
-            "daemon" => {
-                backend.create_daemon_session(&session_id, &cmd, &wt_path, mcp_url.as_deref())?
-            }
+            "daemon" => backend.create_daemon_session(&session_id, &cmd, &wt_path, mcp.as_ref())?,
             "rmux" => {
                 let workspace = rmux_workspace_name(&self.project_id, &task.key);
                 backend.create_rmux_session(
@@ -199,7 +196,7 @@ impl SessionDispatcher {
                     &workspace,
                     &cmd,
                     &wt_path,
-                    mcp_url.as_deref(),
+                    mcp.as_ref(),
                 )?
             }
             // `local` sessions spawn their PTY on attach.

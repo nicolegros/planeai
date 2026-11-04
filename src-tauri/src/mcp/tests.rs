@@ -78,7 +78,12 @@ impl Fixture {
             )
             .unwrap();
         }
-        let token = planeai_core::mcp::issue(&conn, CALLER_ID, "http://127.0.0.1:1/mcp").unwrap();
+        let token = planeai_core::mcp::issue(
+            &conn,
+            CALLER_ID,
+            &planeai_core::mcp::McpLaunch::new("http://127.0.0.1:1/mcp"),
+        )
+        .unwrap();
         let token = token.env()[1].1.to_string();
         let caller = planeai_core::mcp::resolve(&conn, &token).unwrap().unwrap();
         let events = Arc::new(RecordedEvents::default());
@@ -329,6 +334,21 @@ fn a_plugin_tool_runs_as_the_calling_session() {
         err("error: nothing to forget\n")
     );
     assert_eq!(*f.events.tasks_changed.lock().unwrap(), 0);
+}
+
+#[test]
+fn a_tool_its_launch_approved_that_now_asks_is_refused() {
+    let mut f = Fixture::new();
+    f.registry
+        .publish_plugin("fixture", fixture_plugin_tools())
+        .unwrap();
+    f.caller.approved_plugin_tools = vec!["fixture_echo".into(), "fixture_forget".into()];
+
+    assert_eq!(
+        f.call("fixture_forget", json!({})),
+        err("error: \"fixture_forget became destructive after this agent started, so its launch let it run without asking; restart the agent to use it\"\n")
+    );
+    assert!(!f.call("fixture_echo", json!({ "text": "hi" })).is_error);
 }
 
 #[test]

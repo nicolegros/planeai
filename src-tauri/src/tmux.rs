@@ -212,8 +212,12 @@ mod tests {
     fn the_mcp_token_reaches_the_agent_through_one_command_any_default_shell_runs() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         planeai_core::services::migrate(&conn).unwrap();
-        let endpoint =
-            planeai_core::mcp::issue(&conn, "session-1", "http://127.0.0.1:47437/mcp").unwrap();
+        let endpoint = planeai_core::mcp::issue(
+            &conn,
+            "session-1",
+            &planeai_core::mcp::McpLaunch::new("http://127.0.0.1:47437/mcp"),
+        )
+        .unwrap();
         let [_, (_, token)] = endpoint.env();
         let shells = [
             "/bin/sh",

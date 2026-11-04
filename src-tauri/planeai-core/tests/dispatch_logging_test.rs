@@ -35,7 +35,7 @@ impl Backend for AcceptingBackend {
         _: &str,
         _: &str,
         _: &str,
-        _: Option<&str>,
+        _: Option<&planeai_core::mcp::McpLaunch>,
     ) -> Result<(), String> {
         Ok(())
     }
@@ -44,7 +44,7 @@ impl Backend for AcceptingBackend {
         _: &str,
         _: &str,
         _: &str,
-        _: Option<&str>,
+        _: Option<&planeai_core::mcp::McpLaunch>,
     ) -> Result<(), String> {
         Ok(())
     }
@@ -54,7 +54,7 @@ impl Backend for AcceptingBackend {
         _: &str,
         _: &str,
         _: &str,
-        _: Option<&str>,
+        _: Option<&planeai_core::mcp::McpLaunch>,
     ) -> Result<(), String> {
         Ok(())
     }

@@ -162,9 +162,8 @@ pub fn claim_attach_plan(
     agent_running: bool,
 ) -> Result<AttachPlan, String> {
     let mut plan = resolve_attach_plan(conn, cfg, mcp, session_id, dark_mode)?;
-    let mcp_url = mcp.map(|mcp| mcp.url.as_str());
     if !agent_running && matches!(plan.pty_target, pty::PtyTarget::Shell { .. }) {
-        if let Some(endpoint) = planeai_core::mcp::endpoint(conn, mcp_url, session_id)? {
+        if let Some(endpoint) = planeai_core::mcp::endpoint(conn, mcp, session_id)? {
             plan.env.extend(endpoint.owned_env());
         }
     }

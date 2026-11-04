@@ -182,6 +182,13 @@ impl ToolDef {
         caller: &McpCaller,
         arguments: JsonObject,
     ) -> ToolOutput {
+        // Agents approve by name at launch; a plugin upgrade may since have made it a delete.
+        if !self.effect.pre_approved() && caller.approved_plugin_tools.contains(&self.name) {
+            return ToolOutput::error(&format!(
+                "{} became destructive after this agent started, so its launch let it run without asking; restart the agent to use it",
+                self.name
+            ));
+        }
         let output = (self.handler)(context.clone(), caller.clone(), arguments).await;
         if self.refreshes_tasks {
             context.events.tasks_changed();

@@ -75,7 +75,7 @@ impl Backend for TestBackend {
         _: &str,
         _: &str,
         _: &str,
-        _: Option<&str>,
+        _: Option<&planeai_core::mcp::McpLaunch>,
     ) -> Result<(), String> {
         Ok(())
     }
@@ -84,7 +84,7 @@ impl Backend for TestBackend {
         _: &str,
         _: &str,
         _: &str,
-        _: Option<&str>,
+        _: Option<&planeai_core::mcp::McpLaunch>,
     ) -> Result<(), String> {
         Ok(())
     }
@@ -95,7 +95,7 @@ impl Backend for TestBackend {
         _: &str,
         _: &str,
         _: &str,
-        _: Option<&str>,
+        _: Option<&planeai_core::mcp::McpLaunch>,
     ) -> Result<(), String> {
         Ok(())
     }
@@ -287,7 +287,7 @@ async fn orchestrator_kills_session_when_task_becomes_terminal() {
             _: &str,
             _: &str,
             _: &str,
-            _: Option<&str>,
+            _: Option<&planeai_core::mcp::McpLaunch>,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -296,7 +296,7 @@ async fn orchestrator_kills_session_when_task_becomes_terminal() {
             _: &str,
             _: &str,
             _: &str,
-            _: Option<&str>,
+            _: Option<&planeai_core::mcp::McpLaunch>,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -307,7 +307,7 @@ async fn orchestrator_kills_session_when_task_becomes_terminal() {
             _: &str,
             _: &str,
             _: &str,
-            _: Option<&str>,
+            _: Option<&planeai_core::mcp::McpLaunch>,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -441,7 +441,7 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
             _: &str,
             _: &str,
             _: &str,
-            _: Option<&str>,
+            _: Option<&planeai_core::mcp::McpLaunch>,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -450,7 +450,7 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
             _: &str,
             _: &str,
             _: &str,
-            _: Option<&str>,
+            _: Option<&planeai_core::mcp::McpLaunch>,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -461,7 +461,7 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
             _: &str,
             _: &str,
             _: &str,
-            _: Option<&str>,
+            _: Option<&planeai_core::mcp::McpLaunch>,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -594,7 +594,7 @@ async fn orchestrator_does_not_redispatch_task_with_exited_session() {
             _: &str,
             _: &str,
             _: &str,
-            _: Option<&str>,
+            _: Option<&planeai_core::mcp::McpLaunch>,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -603,7 +603,7 @@ async fn orchestrator_does_not_redispatch_task_with_exited_session() {
             _: &str,
             _: &str,
             _: &str,
-            _: Option<&str>,
+            _: Option<&planeai_core::mcp::McpLaunch>,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -614,7 +614,7 @@ async fn orchestrator_does_not_redispatch_task_with_exited_session() {
             _: &str,
             _: &str,
             _: &str,
-            _: Option<&str>,
+            _: Option<&planeai_core::mcp::McpLaunch>,
         ) -> Result<(), String> {
             Ok(())
         }

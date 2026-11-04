@@ -47,6 +47,8 @@ Agents should call them like PlaneAI's own tools: same server, same token, same 
   While the app is closed no row says `running`, and such agents cannot connect anyway.
   A session revived at app startup gets PlaneAI's tools only, as plugins start after revival.
   Pre-approving plugin tools by declared effect trusts the plugin's annotations, which is consistent with plugins being trusted code.
+  Agents hold approvals by served name for their whole run, so a plugin upgraded while they run could turn an approved write into a delete.
+  Each session token therefore records the plugin tools its launch approved, and the server refuses a call to one whose effect now asks, telling the agent to restart; the check fails closed and costs one lookup in the token row the server already reads.
   Rejected: leaving every plugin tool asking, which makes a read-only plugin tool cost a prompt per call and breaks non-interactive agents.
 - **Escalation.** ADR-0016's guard stays in PlaneAI's tools.
   A plugin receives `auto_approve` so it can apply the same rule to what its tools start; plugins are trusted code (ADR-0011), so the host does not enforce it for them.

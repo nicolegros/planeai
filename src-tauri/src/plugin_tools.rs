@@ -137,6 +137,7 @@ mod tests {
                 project_id: other.id.clone(),
             }),
             auto_approve: true,
+            approved_plugin_tools: Vec::new(),
         };
         assert_eq!(
             serde_json::to_value(tool_caller(&conn, &caller).unwrap()).unwrap(),

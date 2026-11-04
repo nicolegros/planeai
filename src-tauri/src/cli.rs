@@ -213,7 +213,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     let worktree_path = checkout.worktree_path(repo);
     let mcp = planeai_core::mcp::launch_endpoint(
         conn,
-        env.mcp.as_ref().map(|mcp| mcp.url.as_str()),
+        env.mcp.as_ref(),
         &plan.session_id,
         &plan.backend,
     )?;
@@ -730,8 +730,13 @@ mod tests {
         let url = "http://127.0.0.1:47437/mcp";
 
         let conn = open_db(&path).unwrap();
-        let endpoint =
-            planeai_core::mcp::launch_endpoint(&conn, Some(url), "session-1", "daemon").unwrap();
+        let endpoint = planeai_core::mcp::launch_endpoint(
+            &conn,
+            Some(&planeai_core::mcp::McpLaunch::new(url)),
+            "session-1",
+            "daemon",
+        )
+        .unwrap();
 
         assert_eq!(endpoint.map(|endpoint| endpoint.url).as_deref(), Some(url));
         assert!(open_db(&dir.path().join("fresh.db")).is_ok());

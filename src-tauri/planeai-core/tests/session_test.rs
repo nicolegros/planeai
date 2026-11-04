@@ -72,12 +72,12 @@ impl Backend for RecordingBackend {
         cwd: &str,
         cmd: &str,
         session_id: &str,
-        mcp_url: Option<&str>,
+        mcp: Option<&planeai_core::mcp::McpLaunch>,
     ) -> Result<(), String> {
         self.spawn_mcp_urls
             .lock()
             .unwrap()
-            .push(mcp_url.map(str::to_string));
+            .push(mcp.map(|mcp| mcp.url.clone()));
         self.tmux_sessions.lock().unwrap().push((
             name.to_string(),
             cwd.to_string(),
@@ -91,12 +91,12 @@ impl Backend for RecordingBackend {
         session_id: &str,
         cmd: &str,
         cwd: &str,
-        mcp_url: Option<&str>,
+        mcp: Option<&planeai_core::mcp::McpLaunch>,
     ) -> Result<(), String> {
         self.spawn_mcp_urls
             .lock()
             .unwrap()
-            .push(mcp_url.map(str::to_string));
+            .push(mcp.map(|mcp| mcp.url.clone()));
         self.daemon_sessions.lock().unwrap().push((
             session_id.to_string(),
             cmd.to_string(),
@@ -110,12 +110,12 @@ impl Backend for RecordingBackend {
         workspace: &str,
         cmd: &str,
         cwd: &str,
-        mcp_url: Option<&str>,
+        mcp: Option<&planeai_core::mcp::McpLaunch>,
     ) -> Result<(), String> {
         self.spawn_mcp_urls
             .lock()
             .unwrap()
-            .push(mcp_url.map(str::to_string));
+            .push(mcp.map(|mcp| mcp.url.clone()));
         self.rmux_sessions.lock().unwrap().push((
             session_id.to_string(),
             cmd.to_string(),

@@ -157,7 +157,6 @@ pub(crate) async fn launch(
     };
     // Snapshotted once, so the command's MCP arguments and the minted token agree.
     let mcp = app.state::<McpServerState>().0.launch();
-    let mcp_url = mcp.as_ref().map(|mcp| mcp.url.clone());
     // Phase 1: gather params from config (holding config lock briefly)
     let (cmd, provider_key, backend, scrollback_bytes, extra_path_dirs) = if let Some(key) =
         runtime_provider
@@ -195,7 +194,7 @@ pub(crate) async fn launch(
         let backend = backend.clone();
         move || {
             let conn = conn.lock().map_err(|e| e.to_string())?;
-            planeai_core::mcp::launch_endpoint(&conn, mcp_url.as_deref(), &session_id, &backend)
+            planeai_core::mcp::launch_endpoint(&conn, mcp.as_ref(), &session_id, &backend)
         }
     })
     .await?;

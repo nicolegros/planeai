@@ -125,8 +125,7 @@ pub fn restart(
         }
     }
     let rmux_workspace = session.rmux_workspace();
-    let mcp_url = mcp.map(|mcp| mcp.url.as_str());
-    let mcp = planeai_core::mcp::launch_endpoint(conn, mcp_url, id, &session.backend)?;
+    let mcp = planeai_core::mcp::launch_endpoint(conn, mcp, id, &session.backend)?;
     let mcp = mcp.as_ref();
     let try_spawn = |cmd: &str| -> Result<(), String> {
         match session.backend.as_str() {
@@ -906,7 +905,8 @@ mod tests {
         )
         .unwrap();
         let url = "http://127.0.0.1:47437/mcp";
-        let running = planeai_core::mcp::issue(&conn, id, url).unwrap();
+        let running =
+            planeai_core::mcp::issue(&conn, id, &planeai_core::mcp::McpLaunch::new(url)).unwrap();
         db::mark_session_exited(&conn, id).unwrap();
         let ops = MockRestartOps {
             tmux_alive: true,
