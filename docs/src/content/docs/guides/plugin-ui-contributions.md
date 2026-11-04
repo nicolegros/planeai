@@ -38,7 +38,7 @@ After each successful call, PlaneAI tells the plugin's UI its data changed, unle
   "id": "local-fixture",
   "name": "Local Fixture",
   "version": "0.1.0",
-  "host_api_version": "planeai.plugin-host.v3",
+  "host_api_version": "planeai.plugin-host.v6",
   "source_kind": "local",
   "backend_entrypoints": {
     "macos-arm64": "bin/macos-arm64/planeai-plugin-fixture",
@@ -56,7 +56,8 @@ After each successful call, PlaneAI tells the plugin's UI its data changed, unle
     "tasks.create",
     "task-events",
     "session-events",
-    "providers"
+    "providers",
+    "tools"
   ],
   "ui_contributions": [
     {
@@ -72,6 +73,19 @@ After each successful call, PlaneAI tells the plugin's UI its data changed, unle
       "label": "Echo (fixture)",
       "entrypoint": "ui/chat.js",
       "supports": ["auto_approve"]
+    }
+  ],
+  "tools": [
+    {
+      "name": "echo",
+      "description": "Echo a text back with the session and project that called the tool.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "text": { "type": "string" } },
+        "required": ["text"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "timeoutMs": 5000
     }
   ]
 }
@@ -313,6 +327,42 @@ See ADR-0017.
 
 Unknown fields in a tool or its annotations are rejected.
 
+### Calls
+
+PlaneAI lists a plugin's tools while the plugin is running: enabling it adds them, and disabling, reloading or a crash removes them, without restarting the app.
+The MCP server runs in stateless mode, so it cannot notify connected agents; they see the change on their next `tools/list`, which Claude Code and Codex make when they connect.
+A call of a tool whose plugin stopped meanwhile answers the agent with an error.
+
+When an agent calls the tool, PlaneAI sends the sidecar a `tool.call` request:
+
+```json
+{
+  "tool": "echo",
+  "arguments": { "text": "hi" },
+  "caller": {
+    "session_id": "1b4e28ba-2fa1-11d2-883f-0016d3cca427",
+    "project": { "id": "4f6c...", "name": "planeai" },
+    "task": { "key": "PLA-12", "project": { "id": "4f6c...", "name": "planeai" } },
+    "auto_approve": false
+  }
+}
+```
+
+`tool` is the name from the manifest, without the plugin prefix.
+`arguments` is what the agent sent; PlaneAI does not check it against `inputSchema`, so validate it.
+`caller` is the session the agent runs in, taken from its MCP token: its project, its task when it has one (`null` otherwise) with the project owning that task, and whether it runs without permission prompts.
+A plugin must not give a session more than it has: when `auto_approve` is `false`, do not do on the agent's behalf what its user has not approved, as PlaneAI's own tools refuse to start a `yolo` session for it.
+
+Answer `{ "text": "...", "is_error": false }`; `is_error` defaults to `false`.
+The agent reads `text` as the tool's whole result, so keep it compact (PlaneAI's own tools answer in TOON) and within the 64 KiB frame.
+Report a failure the agent should read, such as an unknown key, with `is_error: true`.
+A JSON-RPC error answer also reaches the agent as an error with its message.
+
+PlaneAI waits `timeoutMs`, then cancels the request as described in [Native sidecar protocol](#native-sidecar-protocol), and the agent reads that the call timed out.
+A plugin that does not acknowledge the cancellation is stopped.
+PlaneAI sends a plugin one request at a time, so a slow tool delays the plugin's other requests.
+`tool.call` is reserved for PlaneAI: plugin UI cannot call it, and `planeai-cli plugin test` scenarios send it only through a tool line.
+
 ## UI contributions
 
 An optional UI entrypoint is a self-contained browser ESM module default-exporting an object with `mount`:
@@ -445,13 +495,19 @@ planeai-cli plugin test \
   --package src-tauri/plugins/local-fixture \
   --scenario src-tauri/plugins/local-fixture/scenarios/cancellation.jsonl
 
+# Call declared tools as an agent in a session would.
+planeai-cli plugin test \
+  --package src-tauri/plugins/local-fixture \
+  --scenario src-tauri/plugins/local-fixture/scenarios/tool-call.jsonl
+
 # Run one provider turn: send a prompt and require busy, an event, then idle.
 planeai-cli plugin test \
   --package src-tauri/plugins/local-fixture \
   --provider-turn "hello"
 ```
 
-The command validates every declared local backend path and the current-platform executable, creates temporary host-owned `PLANEAI_PLUGIN_DATA_DIR` and `PLANEAI_PLUGIN_SECRETS_DIR` directories, forwards only manifest-granted host capabilities during handshake, delivers a task lifecycle batch only when both sides opt in, rejects malformed or mismatched JSON-RPC output, and verifies clean shutdown. A scenario is newline-delimited JSON objects containing `method`, optional `params`, and optional `timeout_ms`. A positive `timeout_ms` (at most 5000) makes the harness send `$/cancelRequest` when the call remains pending and requires the original request to finish with error code `-32800`. Use the checked-in scenarios as executable examples. For a plugin that declares providers, the harness sends `provider.sessions.reconcile` after the handshake and, for every provider, checks the session contract with the parameters PlaneAI sends: start, a repeated stop, an interrupt of the stopped session answering `-32010`, a resume of a session the plugin never saw, and a stop of an unknown session. It validates every provider notification (known session, `seq` in range and increasing, documented status). When a provider supports `handoff`, it also checks that a repeated `provider.session.handoff` returns a runnable argv and that a repeated `provider.session.handback` succeeds. `--provider-turn <text>` additionally sends one prompt and requires a `busy` then `idle` turn with at least one event; skip it for providers that call a real model. Browser UI lifecycle remains covered by your own DOM test using the documented `mount` context and disposer.
+The command validates every declared local backend path and the current-platform executable, creates temporary host-owned `PLANEAI_PLUGIN_DATA_DIR` and `PLANEAI_PLUGIN_SECRETS_DIR` directories, forwards only manifest-granted host capabilities during handshake, delivers a task lifecycle batch only when both sides opt in, rejects malformed or mismatched JSON-RPC output, and verifies clean shutdown. A scenario is newline-delimited JSON objects containing `method`, optional `params`, and optional `timeout_ms`. A positive `timeout_ms` (at most 5000) makes the harness send `$/cancelRequest` when the call remains pending and requires the original request to finish with error code `-32800`. A line `{ "tool": "echo", "arguments": { ... } }` instead sends `tool.call` for that declared tool, with a stand-in caller and the tool's timeout, and requires a `{ text, is_error? }` result, which it prints.
+Use the checked-in scenarios as executable examples. For a plugin that declares providers, the harness sends `provider.sessions.reconcile` after the handshake and, for every provider, checks the session contract with the parameters PlaneAI sends: start, a repeated stop, an interrupt of the stopped session answering `-32010`, a resume of a session the plugin never saw, and a stop of an unknown session. It validates every provider notification (known session, `seq` in range and increasing, documented status). When a provider supports `handoff`, it also checks that a repeated `provider.session.handoff` returns a runnable argv and that a repeated `provider.session.handback` succeeds. `--provider-turn <text>` additionally sends one prompt and requires a `busy` then `idle` turn with at least one event; skip it for providers that call a real model. Browser UI lifecycle remains covered by your own DOM test using the documented `mount` context and disposer.
 
 ## v1 limitations and author checklist
 

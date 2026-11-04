@@ -287,6 +287,7 @@ fn main() {
             app.manage(plugins::PluginRuntimeHandle::new(
                 db_arc.clone(),
                 app.handle().clone(),
+                mcp_tools,
             ));
 
             // Notification system

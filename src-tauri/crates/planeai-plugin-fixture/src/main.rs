@@ -7,7 +7,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines, Stdin, Stdout}
 const PLUGIN_ID: &str = "local-fixture";
 const PLUGIN_NAME: &str = "Local Fixture";
 const PLUGIN_VERSION: &str = "0.1.0";
-const HOST_API_VERSION: &str = "planeai.plugin-host.v3";
+const HOST_API_VERSION: &str = "planeai.plugin-host.v6";
 const SETTINGS_GET_ID: &str = "fixture-settings-get";
 const SETTINGS_REPLACE_ID: &str = "fixture-settings-replace";
 /// The provider contract's error for a session the plugin does not know.
@@ -238,10 +238,34 @@ fn dispatch(request: &Value) -> (Value, bool) {
             success(id, json!({ "received": true }))
         }
         "plugin.sessionLifecycle" => success(id, json!({ "received": true })),
+        "tool.call" => {
+            eprintln!("{PLUGIN_ID} received tool.call: {}", request["params"]);
+            success(id, call_tool(&request["params"]))
+        }
         "plugin.shutdown" => success(id, json!({ "stopping": true })),
         _ => error(id, -32601, "method not found"),
     };
     (response, method == "plugin.shutdown")
+}
+
+/// `echo` reads its text back with the calling session; `forget` only says what it would delete.
+fn call_tool(params: &Value) -> Value {
+    let caller = &params["caller"];
+    let argument = |name: &str| params["arguments"][name].as_str().map(str::to_owned);
+    match (params["tool"].as_str(), argument("text"), argument("key")) {
+        (Some("echo"), Some(text), _) => json!({
+            "text": format!(
+                "echo: {text} (session {}, project {})",
+                caller["session_id"].as_str().unwrap_or("?"),
+                caller["project"]["name"].as_str().unwrap_or("?"),
+            ),
+        }),
+        (Some("forget"), _, Some(key)) => json!({ "text": format!("forgot {key}") }),
+        (Some(tool @ ("echo" | "forget")), _, _) => {
+            json!({ "text": format!("{tool}: missing argument"), "is_error": true })
+        }
+        (tool, _, _) => json!({ "text": format!("unknown tool: {tool:?}"), "is_error": true }),
+    }
 }
 
 /// Echo provider: every prompt becomes a user event, an `echo:` reply and a busy→idle turn.
@@ -559,6 +583,45 @@ mod tests {
             json!({ "session_id": "s1", "reason": "destroy" }),
         ));
         assert_eq!(response["result"]["stopped"], true);
+    }
+
+    #[test]
+    fn tools_answer_with_text_and_an_error_flag() {
+        let call = |tool: &str, arguments: Value| {
+            dispatch(&json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tool.call",
+                "params": {
+                    "tool": tool,
+                    "arguments": arguments,
+                    "caller": {
+                        "session_id": "s1",
+                        "project": { "id": "p1", "name": "demo" },
+                        "task": null,
+                        "auto_approve": false
+                    }
+                },
+            }))
+            .0["result"]
+                .clone()
+        };
+        assert_eq!(
+            call("echo", json!({ "text": "hi" })),
+            json!({ "text": "echo: hi (session s1, project demo)" })
+        );
+        assert_eq!(
+            call("forget", json!({ "key": "k" })),
+            json!({ "text": "forgot k" })
+        );
+        assert_eq!(
+            call("echo", json!({})),
+            json!({ "text": "echo: missing argument", "is_error": true })
+        );
+        assert_eq!(
+            call("nope", json!({})),
+            json!({ "text": "unknown tool: Some(\"nope\")", "is_error": true })
+        );
     }
 
     #[test]
