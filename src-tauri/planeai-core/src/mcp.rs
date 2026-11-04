@@ -164,6 +164,11 @@ impl McpEndpoint {
         Ok(file)
     }
 
+    /// The bearer token, for a client PlaneAI hands it to other than through an environment.
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
     pub fn owned_env(&self) -> impl Iterator<Item = (String, String)> + '_ {
         self.env()
             .into_iter()
@@ -543,7 +548,7 @@ mod tests {
         let env = endpoint.env();
 
         assert_eq!(env[0], ("PLANEAI_MCP_URL", URL));
-        assert_eq!(env[1].0, "PLANEAI_MCP_TOKEN");
+        assert_eq!(env[1], ("PLANEAI_MCP_TOKEN", endpoint.token()));
         assert!(!format!("{endpoint:?}").contains(env[1].1));
     }
 

@@ -583,3 +583,46 @@ async fn a_resume_mints_a_token_unless_a_handoff_terminal_holds_the_live_one() {
     handback(&runtime, "s1").await.unwrap();
     assert_eq!(mcp_of(&runtime, protocol::HANDBACK)["token"], "token-2");
 }
+
+fn last_minted_token(runtime: &FakeRuntime) -> String {
+    format!("token-{}", runtime.minted.lock().unwrap().len())
+}
+
+#[tokio::test]
+async fn a_handback_after_a_sidecar_restart_carries_the_last_minted_token() {
+    let runtime = FakeRuntime::running(&[("s1", "active")]).listening();
+    handoff(&runtime, "s1").await.unwrap();
+    *runtime.instance.lock().unwrap() = Some(2);
+
+    handback(&runtime, "s1").await.unwrap();
+
+    let params = runtime.params.lock().unwrap();
+    // The restarted sidecar resumes the session as still handed off, without a token the
+    // handback would revoke.
+    assert_eq!(params[protocol::RESUME]["handed_off"], true);
+    assert_eq!(params[protocol::RESUME].get("mcp"), None);
+    drop(params);
+    assert_eq!(
+        mcp_of(&runtime, protocol::HANDBACK)["token"],
+        last_minted_token(&runtime)
+    );
+    assert!(!runtime.sessions.is_handed_off("s1"));
+}
+
+#[tokio::test]
+async fn a_retried_handback_mints_again_after_the_resume_it_needed() {
+    let runtime = FakeRuntime::running(&[("s1", "active")]).listening();
+    handoff(&runtime, "s1").await.unwrap();
+    *runtime.loses_session_on.lock().unwrap() = Some(protocol::HANDBACK);
+
+    handback(&runtime, "s1").await.unwrap();
+
+    assert_eq!(
+        runtime.sent()[runtime.sent().len() - 3..],
+        [protocol::HANDBACK, protocol::RESUME, protocol::HANDBACK]
+    );
+    assert_eq!(
+        mcp_of(&runtime, protocol::HANDBACK)["token"],
+        last_minted_token(&runtime)
+    );
+}

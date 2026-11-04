@@ -7,6 +7,7 @@ use super::registry::Binding;
 use super::runtime::ProviderRuntime;
 use super::sink::ProviderStatus;
 use crate::db;
+use crate::plugin_rpc::PluginRpcError;
 use crate::plugins::{PluginProvider, ProviderFeature};
 use crate::session_ops::PLUGIN_BACKEND;
 use planeai_plugin_contract::provider::{
@@ -394,24 +395,49 @@ pub async fn handback<R: ProviderRuntime>(
     runtime: &R,
     session_id: &str,
 ) -> Result<(), ProviderError> {
-    // The terminal is gone, so prompts go to the provider again.
-    runtime.sessions().set_handed_off(session_id, false);
-    // Ended sessions need nothing; a sidecar restarted during the handoff is resumed first,
-    // handed off, and hears the terminal closed through this handback.
+    // Ended sessions need nothing; the terminal is gone, so prompts go to the provider again.
     if runtime.session_context(session_id).await.is_err() {
+        runtime.sessions().set_handed_off(session_id, false);
         return Ok(());
     }
+    // Still handed off while ensuring: a sidecar restarted during the handoff is resumed as
+    // handed off, without a token, and hears the terminal closed through this handback.
+    let ensured = ensure(runtime, session_id).await;
+    runtime.sessions().set_handed_off(session_id, false);
+    let resolved = ensured?;
+    match request_handback(runtime, session_id, &resolved).await {
+        Err(error) if error.code() == Some(error_code::SESSION_NOT_FOUND) => {
+            tracing::info!(session_id, "provider lost the session; resuming it");
+            runtime.sessions().unbind(session_id);
+            let resolved = ensure(runtime, session_id).await?;
+            request_handback(runtime, session_id, &resolved)
+                .await
+                .map_err(ProviderError::from)
+        }
+        result => result.map_err(ProviderError::from),
+    }
+}
+
+/// `provider.session.handback` with a token minted just before it, so it carries the
+/// session's latest one.
+async fn request_handback<R: ProviderRuntime>(
+    runtime: &R,
+    session_id: &str,
+    resolved: &ResolvedProvider,
+) -> Result<(), PluginRpcError> {
     let mut params = serde_json::Map::new();
     params.insert("session_id".into(), session_id.into());
-    insert_mcp(runtime, session_id, &mut params).await?;
-    request_session(
-        runtime,
-        session_id,
-        protocol::HANDBACK,
-        Value::Object(params),
-    )
-    .await
-    .map(|_| ())
+    insert_mcp(runtime, session_id, &mut params)
+        .await
+        .map_err(|error| PluginRpcError::NotSent(error.message))?;
+    runtime
+        .request(
+            &resolved.plugin_id,
+            protocol::HANDBACK,
+            Value::Object(params),
+        )
+        .await
+        .map(|_| ())
 }
 
 /// A provider session to stop, and the plugin that hears of it.

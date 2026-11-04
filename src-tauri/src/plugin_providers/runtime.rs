@@ -20,12 +20,9 @@ pub(super) fn provider_mcp(
     session_id: &str,
 ) -> Result<Option<ProviderMcp>, String> {
     Ok(
-        planeai_core::mcp::endpoint(conn, launch, session_id)?.map(|endpoint| {
-            let [(_, url), (_, token)] = endpoint.env();
-            ProviderMcp {
-                url: url.to_string(),
-                token: token.to_string(),
-            }
+        planeai_core::mcp::endpoint(conn, launch, session_id)?.map(|endpoint| ProviderMcp {
+            token: endpoint.token().to_string(),
+            url: endpoint.url,
         }),
     )
 }
