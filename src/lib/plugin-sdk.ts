@@ -6,6 +6,7 @@ import type {
   TaskItem,
 } from "./types";
 import type { PluginSidebarNavRow } from "./plugin-sidebar-navigation.svelte";
+import type { ToastOptions } from "./toasts.svelte";
 
 export interface PluginModalControls {
   close(): void;
@@ -80,6 +81,8 @@ export interface PluginUiHost {
   interaction?: {
     openModal(options: PluginModalOptions): PluginModalControls;
     openProjectForm(): Promise<Project | null>;
+    showToast(options: ToastOptions): string;
+    dismissToast(id: string): void;
   };
   /**
    * Present only for a provider's session UI. Input goes through the host so the CLI
