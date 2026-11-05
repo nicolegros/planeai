@@ -312,6 +312,9 @@ fn validate_downloads(object: &Map<String, Value>) -> Result<()> {
     let Some(value) = object.get("downloads") else {
         return Ok(());
     };
+    if value.is_null() {
+        return Ok(());
+    }
     let downloads = value.as_object().ok_or_else(|| {
         anyhow!("plugin manifest downloads must be an object of platform keys to https URLs")
     })?;
