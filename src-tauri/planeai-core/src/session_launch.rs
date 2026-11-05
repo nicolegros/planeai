@@ -320,7 +320,7 @@ pub fn build_provider_launch_command(
     }
 
     // Before the prompt, which follows `--`.
-    if let Some(args) = mcp_launch_args(provider.mcp_args.as_deref(), mcp) {
+    if let Some(args) = agent_launch_args(&provider.command, provider.mcp_args.as_deref(), mcp) {
         cmd = format!("{cmd} {args}");
     }
 
@@ -350,6 +350,23 @@ pub fn build_provider_launch_command(
         prompt_was_injected,
         auto_approve_was_applied,
     }
+}
+
+/// What PlaneAI adds to an agent's launch or resume command: Claude's hooks, then the MCP
+/// arguments; `None` when there is nothing to add.
+pub fn agent_launch_args(
+    command: &str,
+    mcp_args: Option<&str>,
+    mcp: Option<&crate::mcp::McpLaunch>,
+) -> Option<String> {
+    let hooks = (crate::agent_hooks::AgentKind::from_command(command)
+        == Some(crate::agent_hooks::AgentKind::Claude))
+    .then(|| crate::agent_hooks::claude_launch_args(&crate::app_data_dir()));
+    let args: Vec<String> = hooks
+        .into_iter()
+        .chain(mcp_launch_args(mcp_args, mcp))
+        .collect();
+    (!args.is_empty()).then(|| args.join(" "))
 }
 
 /// A provider's `mcp_args` with its placeholders filled in, or `None` when the server is
@@ -708,6 +725,29 @@ mod tests {
         assert_eq!(mcp_launch_args(Some("--url {mcp_url}"), None), None);
         assert_eq!(mcp_launch_args(Some("  "), Some(&server())), None);
         assert_eq!(mcp_launch_args(None, Some(&server())), None);
+    }
+
+    #[test]
+    fn claude_launches_load_planeais_hooks_before_the_mcp_arguments() {
+        let hooks = crate::agent_hooks::claude_launch_args(&crate::app_data_dir());
+        assert_eq!(
+            agent_launch_args(
+                "/opt/homebrew/bin/claude --resume",
+                Some("--mcp {mcp_url}"),
+                Some(&server())
+            ),
+            Some(format!("{hooks} --mcp http://127.0.0.1:47437/mcp"))
+        );
+        assert_eq!(agent_launch_args("claude", None, None), Some(hooks));
+        assert_eq!(agent_launch_args("codex", None, None), None);
+        assert_eq!(
+            agent_launch_args(
+                "my-claude-wrapper",
+                Some("--mcp {mcp_url}"),
+                Some(&server())
+            ),
+            Some("--mcp http://127.0.0.1:47437/mcp".into())
+        );
     }
 
     #[test]

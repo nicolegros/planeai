@@ -478,6 +478,11 @@ fn default_config_kiro_provider_has_resume_fields() {
     );
 }
 
+/// The `--settings` argument loading PlaneAI's hooks into every Claude launch.
+fn claude_hooks() -> String {
+    planeai_core::agent_hooks::claude_launch_args(&planeai_core::app_data_dir())
+}
+
 /// The command each built-in provider starts with on every backend: `launch` runs it on
 /// daemon, rmux and tmux, and a local session's first attach runs it.
 #[test]
@@ -492,7 +497,10 @@ fn every_default_provider_starts_an_interactive_session_on_the_task_prompt() {
     );
     assert_eq!(
         first_launch("claude"),
-        "claude --dangerously-skip-permissions -- '- Fix the user'\\''s login'"
+        format!(
+            "claude --dangerously-skip-permissions {} -- '- Fix the user'\\''s login'",
+            claude_hooks()
+        )
     );
     assert_eq!(
         first_launch("copilot"),
@@ -515,10 +523,10 @@ fn every_default_provider_restarts_by_resuming() {
     assert_eq!(
         ["kiro", "claude", "copilot", "codex"].map(restart),
         [
-            "kiro-cli chat --resume",
-            "claude --resume",
-            "copilot --continue",
-            "codex resume --last"
+            "kiro-cli chat --resume".to_string(),
+            format!("claude --resume {}", claude_hooks()),
+            "copilot --continue".to_string(),
+            "codex resume --last".to_string()
         ]
     );
 }
@@ -542,7 +550,10 @@ fn load_keeps_stored_provider_commands_as_written() {
 
     assert!(errors.is_empty(), "{errors:?}");
     let launch = |key: &str| config.providers[key].first_launch_command(false, Some("Go"), None);
-    assert_eq!(launch("claude"), "claude -p 'Go'");
+    assert_eq!(
+        launch("claude"),
+        format!("claude {} -p 'Go'", claude_hooks())
+    );
     assert_eq!(launch("copilot"), "copilot --resume 'Go'");
 }
 

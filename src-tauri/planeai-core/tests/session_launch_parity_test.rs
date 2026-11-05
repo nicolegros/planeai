@@ -471,10 +471,18 @@ fn kiro_auto_approve_includes_yolo_flag() {
     assert!(!result.prompt_was_injected);
 }
 
+/// The `--settings` argument loading PlaneAI's hooks into every Claude launch.
+fn claude_hooks() -> String {
+    planeai_core::agent_hooks::claude_launch_args(&planeai_core::app_data_dir())
+}
+
 #[test]
 fn claude_auto_approve_includes_yolo_flag() {
     let result = build_provider_launch_command(&claude_provider(), true, None, false, None, None);
-    assert_eq!(result.command, "claude --dangerously-skip-permissions");
+    assert_eq!(
+        result.command,
+        format!("claude --dangerously-skip-permissions {}", claude_hooks())
+    );
     assert!(result.auto_approve_was_applied);
 }
 
@@ -531,7 +539,10 @@ fn claude_task_prompt_starts_an_interactive_session() {
         None,
         None,
     );
-    assert_eq!(result.command, "claude -- '- Fix the login bug'");
+    assert_eq!(
+        result.command,
+        format!("claude {} -- '- Fix the login bug'", claude_hooks())
+    );
     assert!(result.prompt_was_injected);
 }
 

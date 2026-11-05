@@ -30,7 +30,7 @@ pub async fn install_notify_hook(config_state: State<'_, ConfigState>) -> Result
         let home = config::home_dir();
         let result = kinds
             .into_iter()
-            .try_for_each(|kind| kind.install_hook(&home));
+            .try_for_each(|kind| kind.install_hook(&home, &planeai_paths::app_data_dir()));
         invalidate_hook_cache();
         result
     })

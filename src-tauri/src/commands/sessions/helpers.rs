@@ -75,7 +75,9 @@ pub(crate) fn is_hook_installed(kind: AgentKind) -> bool {
     *cache
         .get_or_insert_with(HashMap::new)
         .entry(kind)
-        .or_insert_with(|| kind.is_hook_installed(&config::home_dir()))
+        .or_insert_with(|| {
+            kind.is_hook_installed(&config::home_dir(), &planeai_paths::app_data_dir())
+        })
 }
 
 /// Build the canonical PTY environment for a local/tmux session via `prepare_session()`.
