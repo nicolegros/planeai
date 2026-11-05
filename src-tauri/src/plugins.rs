@@ -3153,11 +3153,7 @@ impl PluginRuntimeSupervisor {
     }
 
     pub async fn install_local(&self, source_path: String) -> Result<PluginInventory, String> {
-        let provenance = PackageProvenance::Folder {
-            original_display_path: source_path.clone(),
-        };
-        self.install_package(PathBuf::from(source_path), provenance)
-            .await
+        self.install_package(PathBuf::from(source_path), None).await
     }
 
     /// Installs a staged Discovery package and enables it (ADR-0018).
@@ -3166,14 +3162,14 @@ impl PluginRuntimeSupervisor {
         package_root: PathBuf,
         origin: RemoteOrigin,
     ) -> Result<PluginInventory, String> {
-        self.install_package(package_root, PackageProvenance::Remote(origin))
-            .await
+        self.install_package(package_root, Some(origin)).await
     }
 
+    /// Imports `source` under `remote_origin`, or as a folder install of its resolved path.
     async fn install_package(
         &self,
         source: PathBuf,
-        provenance: PackageProvenance,
+        remote_origin: Option<RemoteOrigin>,
     ) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
         let app = self.app.clone();
@@ -3186,6 +3182,12 @@ impl PluginRuntimeSupervisor {
             crate::plugin_packages::import_local_package(&app_data, &source)
         })
         .await?;
+        let provenance = match remote_origin {
+            Some(origin) => PackageProvenance::Remote(origin),
+            None => PackageProvenance::Folder {
+                original_display_path: imported.source.display().to_string(),
+            },
+        };
         let manifest = imported.manifest.clone();
         let backend = imported.backend_entrypoint.clone();
         let hash = imported.content_hash.clone();

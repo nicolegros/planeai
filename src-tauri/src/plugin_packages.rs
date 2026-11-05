@@ -12,6 +12,8 @@ pub const MANIFEST_FILE: &str = "planeai-plugin.json";
 
 #[derive(Debug, Clone)]
 pub struct ImportedLocalPackage {
+    /// The canonical directory the package was copied from.
+    pub source: PathBuf,
     pub manifest: PluginManifest,
     pub backend_entrypoint: String,
     pub content_hash: String,
@@ -89,6 +91,7 @@ pub fn import_local_package(
     };
 
     Ok(ImportedLocalPackage {
+        source,
         manifest,
         backend_entrypoint,
         content_hash,
@@ -470,6 +473,23 @@ mod tests {
             fs::read(imported.package_dir.join("data.txt")).unwrap(),
             b"original"
         );
+        assert!(imported.package_dir.join("bin/plugin").is_file());
+    }
+
+    /// The inventory shows this path as the install's origin, so it names the real directory.
+    #[cfg(unix)]
+    #[test]
+    fn records_the_resolved_directory_behind_a_symlinked_package() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        write_package(&source, "fixture");
+        let link = temp.path().join("link");
+        std::os::unix::fs::symlink(&source, &link).unwrap();
+
+        let imported = import_local_package(&temp.path().join("app"), &link).unwrap();
+
+        assert_eq!(imported.source, source.canonicalize().unwrap());
+        assert_ne!(imported.source, link);
         assert!(imported.package_dir.join("bin/plugin").is_file());
     }
 
