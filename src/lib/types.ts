@@ -228,7 +228,13 @@ export type DiscoveryCardState =
   | { kind: "up_to_date"; installed_version: string }
   | { kind: "update"; installed_version: string; latest_version: string }
   | { kind: "reinstall"; installed_version: string }
-  | { kind: "installed_locally"; installed_version: string; latest_version: string | null };
+  | { kind: "installed_locally"; installed_version: string; latest_version: string | null }
+  | {
+      kind: "installed_from_other_repo";
+      repo: string;
+      installed_version: string;
+      latest_version: string | null;
+    };
 
 export type PackageIntegrity =
   | { kind: "verified"; sha256: string }
@@ -237,6 +243,7 @@ export type PackageIntegrity =
 export type StagedPluginReplacement =
   | { kind: "none" }
   | { kind: "repo"; installed_version: string }
+  | { kind: "other_repo"; repo: string; installed_version: string }
   | { kind: "local"; installed_version: string; original_display_path: string | null };
 
 /** A manifest tool declaration as the backend serializes it (camelCase, ADR-0017). */

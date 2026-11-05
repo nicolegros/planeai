@@ -13,6 +13,9 @@
     if (!staged) return null;
     const { replaces } = staged;
     if (replaces.kind === "repo") return `Updates v${replaces.installed_version} to v${staged.manifest.version}.`;
+    if (replaces.kind === "other_repo") {
+      return `Replaces v${replaces.installed_version} installed from github.com/${replaces.repo}. Data and settings are kept.`;
+    }
     if (replaces.kind === "local") {
       const build = `your local build v${replaces.installed_version}`;
       return replaces.original_display_path

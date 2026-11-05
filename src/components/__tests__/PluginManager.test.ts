@@ -356,6 +356,18 @@ describe("PluginManager", () => {
         installed_version: "0.9.0",
         latest_version: "1.2.0",
       },
+      "acme/elsewhere": {
+        kind: "installed_from_other_repo",
+        repo: "fork/planeai-plugin-acme",
+        installed_version: "1.0.0",
+        latest_version: "1.2.0",
+      },
+      "acme/elsewhere-untagged": {
+        kind: "installed_from_other_repo",
+        repo: "fork/planeai-plugin-acme",
+        installed_version: "1.0.0",
+        latest_version: null,
+      },
       "acme/unavailable": {
         kind: "unavailable",
         reason: "Not available for macos-arm64: the latest release ships no matching asset.",
@@ -389,6 +401,11 @@ describe("PluginManager", () => {
     expect(card("acme/reinstall")?.textContent).toContain("Installed v1.0.0");
     expect(cardButtons("acme/local")).toEqual(["Replace with v1.2.0", "Open repository"]);
     expect(card("acme/local")?.textContent).toContain("Installed locally (v0.9.0)");
+    expect(cardButtons("acme/elsewhere")).toEqual(["Replace with v1.2.0", "Open repository"]);
+    expect(card("acme/elsewhere")?.textContent).toContain(
+      "Installed from github.com/fork/planeai-plugin-acme (v1.0.0)",
+    );
+    expect(cardButtons("acme/elsewhere-untagged")).toEqual(["Replace", "Open repository"]);
     expect(cardButtons("acme/unavailable")).toEqual(["Open repository"]);
     expect(card("acme/unavailable")?.textContent).toContain(
       "Not available for macos-arm64: the latest release ships no matching asset.",
@@ -403,7 +420,7 @@ describe("PluginManager", () => {
     const candidates = () => target.querySelector("section[aria-busy]");
     expect(candidates()?.getAttribute("aria-busy")).toBe("true");
     expect(candidates()?.getAttribute("aria-live")).toBeNull();
-    expect(target.querySelector('[role="status"]')?.textContent).toBe("Checking 1 of 8 plugins…");
+    expect(target.querySelector('[role="status"]')?.textContent).toBe("Checking 1 of 10 plugins…");
 
     settlePending({ kind: "install", latest_version: null });
     await vi.waitFor(() =>

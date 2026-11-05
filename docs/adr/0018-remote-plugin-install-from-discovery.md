@@ -41,6 +41,7 @@ What changes is who performs the mechanical steps, not who decides to trust the 
   Latest is the release tag without a leading `v`, parsed as semver; an update is offered when it is greater than the installed manifest version, also semver.
   A repository-installed plugin whose versions do not both parse, or whose repository has no release, is offered "Reinstall latest".
   A plugin installed from a folder is shown as installed locally with "Replace", never as a plain install.
+  A plugin with the same id installed from a different repository is shown with that repository and "Replace", and its review says what it replaces, so another author's package never reads as an update.
   A bundled id is unavailable.
   The review also warns when the staged manifest version differs from the release tag the archive came from.
 - **Scope.** Update awareness lives in Discovery only: no polling, no background checks, no automatic updates.

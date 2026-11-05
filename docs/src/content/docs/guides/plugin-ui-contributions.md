@@ -507,6 +507,7 @@ Right after discovery returns, every card checks what the repository offers for 
 - **Update to vY** beside the installed version when the latest release is newer than the installed manifest version, or **Up to date (vY)** when it is not.
 - **Reinstall latest** beside the installed version for a repository-installed plugin whose versions cannot be compared.
 - **Installed locally (vY)** with **Replace with vX** when a plugin with the same `id` was installed from a folder.
+- **Installed from github.com/<other repository> (vY)** with **Replace with vX** when a plugin with the same `id` was installed from a different repository, so another author's package is never offered as an update.
 - A sentence explaining why nothing can be installed, for example no archive for your platform or an `id` reserved by a bundled plugin.
 
 Choosing the action downloads the archive into a staging directory, verifies it against the release asset digest when it is a release asset, extracts and validates it, and opens a review.

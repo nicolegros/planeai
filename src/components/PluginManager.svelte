@@ -127,9 +127,19 @@
         return {
           note: `Installed locally (v${state.installed_version})`,
           tone: "muted",
-          action: state.latest_version ? `Replace with v${state.latest_version}` : "Replace",
+          action: replaceAction(state.latest_version),
+        };
+      case "installed_from_other_repo":
+        return {
+          note: `Installed from github.com/${state.repo} (v${state.installed_version})`,
+          tone: "muted",
+          action: replaceAction(state.latest_version),
         };
     }
+  }
+
+  function replaceAction(latestVersion: string | null): string {
+    return latestVersion ? `Replace with v${latestVersion}` : "Replace";
   }
 
   async function stageRemote(repo: string) {

@@ -83,6 +83,12 @@ pub(crate) enum DiscoveryCardState {
         installed_version: String,
         latest_version: Option<String>,
     },
+    /// The same id came from another repository, so this card replaces another author's code.
+    InstalledFromOtherRepo {
+        repo: String,
+        installed_version: String,
+        latest_version: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -97,6 +103,10 @@ pub(crate) enum PackageIntegrity {
 pub(crate) enum StagedReplacement {
     None,
     Repo {
+        installed_version: String,
+    },
+    OtherRepo {
+        repo: String,
         installed_version: String,
     },
     Local {
@@ -357,11 +367,21 @@ impl RemoteRepo {
             return DiscoveryCardState::Unavailable { reason };
         }
         let installed_version = installed.version.clone();
-        if installed.remote_origin.is_none() {
-            return DiscoveryCardState::InstalledLocally {
-                installed_version,
-                latest_version: latest_label,
-            };
+        match &installed.remote_origin {
+            None => {
+                return DiscoveryCardState::InstalledLocally {
+                    installed_version,
+                    latest_version: latest_label,
+                }
+            }
+            Some(origin) if origin.repo != self.repo.as_str() => {
+                return DiscoveryCardState::InstalledFromOtherRepo {
+                    repo: origin.repo.clone(),
+                    installed_version,
+                    latest_version: latest_label,
+                }
+            }
+            Some(_) => {}
         }
         match (
             semver::Version::parse(&installed_version).ok(),
@@ -377,21 +397,28 @@ impl RemoteRepo {
     }
 }
 
-/// What a staged package replaces, from the installed plugin with the staged manifest's id.
+/// What a staged package from `staging_repo` replaces, from the installed plugin with the
+/// staged manifest's id.
 fn replacement(
     inventory: &[PluginInventory],
     manifest_id: &str,
+    staging_repo: &RepoFullName,
 ) -> Result<StagedReplacement, String> {
     let Some(installed) = inventory.iter().find(|plugin| plugin.id == manifest_id) else {
         return Ok(StagedReplacement::None);
     };
     installed.ensure_replaceable()?;
-    Ok(match installed.remote_origin {
-        Some(_) => StagedReplacement::Repo {
-            installed_version: installed.version.clone(),
+    let installed_version = installed.version.clone();
+    Ok(match &installed.remote_origin {
+        Some(origin) if origin.repo == staging_repo.as_str() => {
+            StagedReplacement::Repo { installed_version }
+        }
+        Some(origin) => StagedReplacement::OtherRepo {
+            repo: origin.repo.clone(),
+            installed_version,
         },
         None => StagedReplacement::Local {
-            installed_version: installed.version.clone(),
+            installed_version,
             original_display_path: installed.original_display_path.clone(),
         },
     })
@@ -969,7 +996,7 @@ pub(crate) async fn stage_package(
         release_tag: source.release_tag.clone(),
         integrity,
         manifest: StagedManifest::from(&inspected.manifest),
-        replaces: replacement(inventory, &inspected.manifest.id)?,
+        replaces: replacement(inventory, &inspected.manifest.id, repo)?,
         version_mismatch: version_mismatch(
             source.release_tag.as_deref(),
             &inspected.manifest.version,
@@ -1374,6 +1401,16 @@ mod tests {
                 },
             ),
             (
+                "same id installed from another repo is a replacement, not an update",
+                remote.clone(),
+                vec![inventory("acme", "1.0.0", Some(origin("other/planeai-plugin-other")))],
+                DiscoveryCardState::InstalledFromOtherRepo {
+                    repo: "other/planeai-plugin-other".to_string(),
+                    installed_version: "1.0.0".to_string(),
+                    latest_version: Some("1.2.0".to_string()),
+                },
+            ),
+            (
                 "installed but the platform is no longer served",
                 RemoteRepo {
                     latest_release: None,
@@ -1412,7 +1449,7 @@ mod tests {
     }
 
     #[test]
-    fn replacement_is_derived_from_the_staged_manifest_id() {
+    fn replacement_is_derived_from_the_staged_manifest_id_and_the_staging_repo() {
         let plugins = vec![
             inventory("local-one", "0.5.0", None),
             inventory(
@@ -1420,32 +1457,50 @@ mod tests {
                 "1.0.0",
                 Some(origin("acme/planeai-plugin-acme")),
             ),
+            inventory(
+                "remote-other",
+                "1.1.0",
+                Some(origin("other/planeai-plugin-other")),
+            ),
             PluginInventory {
                 source_kind: PluginSourceKind::Builtin,
                 ..inventory("jira", "0.1.0", None)
             },
         ];
-        assert_eq!(
-            replacement(&plugins, "new").unwrap(),
-            StagedReplacement::None
-        );
-        assert_eq!(
-            replacement(&plugins, "local-one").unwrap(),
-            StagedReplacement::Local {
-                installed_version: "0.5.0".to_string(),
-                original_display_path: Some("/Users/me/acme".to_string()),
-            }
-        );
-        assert_eq!(
-            replacement(&plugins, "remote-one").unwrap(),
-            StagedReplacement::Repo {
-                installed_version: "1.0.0".to_string(),
-            }
-        );
-        assert_eq!(
-            replacement(&plugins, "jira").unwrap_err(),
-            "plugin id is reserved by a bundled plugin: jira"
-        );
+        let cases: Vec<(&str, Result<StagedReplacement, String>)> = vec![
+            ("new", Ok(StagedReplacement::None)),
+            (
+                "local-one",
+                Ok(StagedReplacement::Local {
+                    installed_version: "0.5.0".to_string(),
+                    original_display_path: Some("/Users/me/acme".to_string()),
+                }),
+            ),
+            (
+                "remote-one",
+                Ok(StagedReplacement::Repo {
+                    installed_version: "1.0.0".to_string(),
+                }),
+            ),
+            (
+                "remote-other",
+                Ok(StagedReplacement::OtherRepo {
+                    repo: "other/planeai-plugin-other".to_string(),
+                    installed_version: "1.1.0".to_string(),
+                }),
+            ),
+            (
+                "jira",
+                Err("plugin id is reserved by a bundled plugin: jira".to_string()),
+            ),
+        ];
+        for (manifest_id, expected) in cases {
+            assert_eq!(
+                replacement(&plugins, manifest_id, &repo()),
+                expected,
+                "{manifest_id}"
+            );
+        }
     }
 
     #[test]

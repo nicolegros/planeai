@@ -132,6 +132,20 @@ describe("PluginInstallReviewDialog", () => {
     expect(content.textContent).toContain("Updates v1.0.0 to v1.2.0.");
   });
 
+  it("explains a replacement of the same id installed from another repository", async () => {
+    const content = await open({
+      replaces: {
+        kind: "other_repo",
+        repo: "fork/planeai-plugin-acme",
+        installed_version: "1.0.0",
+      },
+    });
+    expect(content.textContent).toContain(
+      "Replaces v1.0.0 installed from github.com/fork/planeai-plugin-acme. Data and settings are kept.",
+    );
+    expect(content.textContent).not.toContain("Updates v");
+  });
+
   it("warns when the release tag and the manifest version disagree", async () => {
     const content = await open({
       release_tag: "v1.3.0",
