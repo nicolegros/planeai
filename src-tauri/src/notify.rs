@@ -11,8 +11,7 @@ use planeai::ipc::{Channel, IpcListener};
 // Re-export shared types from planeai-core
 #[cfg(test)]
 use planeai_core::agent_hooks::{
-    install_claude_hook_at, install_copilot_hook_at, is_claude_hook_installed_at,
-    is_copilot_hook_installed_at, is_kiro_hook_installed_at,
+    install_copilot_hook_at, is_copilot_hook_installed_at, is_kiro_hook_installed_at,
 };
 pub use planeai_core::notify::{
     parse_notify_message, AgentState, NotifyEvent, NotifyMessage, NotifyState, SharedNotifyState,
@@ -619,38 +618,6 @@ mod tests {
     // ─── Hook detection tests ────────────────────────────────────────────────
 
     #[test]
-    fn detect_claude_hook_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-        std::fs::write(&settings_path, r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/path/to/planeai-stop-notify-claude.sh"}]}],"StopFailure":[{}],"Notification":[{}],"UserPromptSubmit":[{}]}}"#).unwrap();
-        assert!(is_claude_hook_installed_at(&settings_path));
-    }
-
-    #[test]
-    fn detect_claude_hook_not_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-        std::fs::write(&settings_path, r#"{"hooks":{}}"#).unwrap();
-        assert!(!is_claude_hook_installed_at(&settings_path));
-    }
-
-    #[test]
-    fn detect_claude_hook_missing_event_triggers_reinstall() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-        std::fs::write(&settings_path, r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/path/to/planeai-stop-notify-claude.sh"}]}],"StopFailure":[{}],"Notification":[{}]}}"#).unwrap();
-        assert!(!is_claude_hook_installed_at(&settings_path));
-    }
-
-    #[test]
-    fn detect_claude_hook_missing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!is_claude_hook_installed_at(
-            &dir.path().join("settings.json")
-        ));
-    }
-
-    #[test]
     fn detect_copilot_hook_installed() {
         let dir = tempfile::tempdir().unwrap();
         let hooks_dir = dir.path().join("hooks");
@@ -723,62 +690,6 @@ mod tests {
             std::fs::read_to_string(dir.path().join("hooks/planeai-notify.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert_eq!(v["hooks"]["agentStop"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn install_claude_hook_creates_correct_structure() {
-        let dir = tempfile::tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        install_claude_hook_at(
-            &claude_dir,
-            "/home/user/.claude/hooks/planeai-stop-notify-claude.sh",
-        )
-        .unwrap();
-        let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
-        )
-        .unwrap();
-        assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .contains("planeai-stop-notify"));
-        assert_eq!(
-            settings["hooks"]["Notification"][0]["matcher"],
-            "idle_prompt|permission_prompt"
-        );
-    }
-
-    #[test]
-    fn install_claude_hook_merges_with_existing_settings() {
-        let dir = tempfile::tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
-        let existing = serde_json::json!({
-            "permissions": {"allow": ["Read"]},
-            "hooks": {
-                "PostToolUse": [{"matcher": "Write", "hooks": [{"type": "command", "command": "lint.sh"}]}]
-            }
-        });
-        std::fs::write(
-            claude_dir.join("settings.json"),
-            serde_json::to_string_pretty(&existing).unwrap(),
-        )
-        .unwrap();
-        install_claude_hook_at(
-            &claude_dir,
-            "/home/user/.claude/hooks/planeai-stop-notify-claude.sh",
-        )
-        .unwrap();
-        let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(settings["permissions"]["allow"][0], "Read");
-        assert_eq!(settings["hooks"]["PostToolUse"][0]["matcher"], "Write");
-        assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .contains("planeai-stop-notify"));
     }
 
     #[test]

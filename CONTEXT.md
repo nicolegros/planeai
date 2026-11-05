@@ -131,13 +131,18 @@ The notify socket (`notify.sock` / `\\.\pipe\planeai-notify`) accepts JSONL mess
 
 ### Agent notification hooks
 
-planeai installs a small notify script into each supported agent's own config so the agent reports `busy`, `stop` and `notification` instead of relying on silence detection.
+planeai gives each supported agent a small notify script so the agent reports `busy`, `stop` and `notification` instead of relying on silence detection.
+Claude gets it per launch: its launch and resume commands carry `--settings <app data>/hooks/claude-hooks.json`, a settings file planeai writes at startup next to the script, so the user's own Claude settings stay untouched and only planeai sessions report.
+Older versions added these hooks to `~/.claude/settings.json`, and Claude Code applies changes to it live, so removing them would silence every agent started before the upgrade.
+planeai keeps them, and their script in `~/.claude/hooks` current, until a startup finds no running `claude` process launched without `claude-hooks.json`; it then removes only its own entries, keeping the user's.
+On Windows the check does not run yet, so the legacy entries stay until removed by hand, and each Claude signal arrives twice.
+The other agents get it in their own config.
 `AgentKind` (`planeai-core/src/agent_hooks.rs`) identifies the agent from a provider command's executable name and owns detection, installation and the startup script refresh.
 
 | Agent   | Config written                                | Events -> signal                                                                                       |
 | ------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | Kiro    | `~/.kiro/agents/default.json`                 | `userPromptSubmit` -> busy, `stop` -> stop                                                             |
-| Claude  | `~/.claude/settings.json`                     | `UserPromptSubmit`/`PostToolUse` -> busy, `Stop` -> stop, `Notification`/`StopFailure` -> notification |
+| Claude  | `--settings` per launch (planeai app data)    | `UserPromptSubmit`/`PostToolUse` -> busy, `Stop` -> stop, `Notification`/`StopFailure` -> notification |
 | Copilot | `$COPILOT_HOME/hooks/planeai-notify.json`     | `userPromptSubmitted` -> busy, `agentStop` -> stop, `errorOccurred` -> notification                    |
 | Codex   | `$CODEX_HOME/hooks.json` (default `~/.codex`) | `UserPromptSubmit`/`PostToolUse` -> busy, `Stop` -> stop                                               |
 

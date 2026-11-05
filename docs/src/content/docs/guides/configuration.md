@@ -98,14 +98,20 @@ Set `mcp_args` to `""` to keep an agent off the tools, or edit it under **Prefer
 
 ### Notification hooks
 
-For Kiro, Claude Code, Copilot and Codex, planeai can install a notification hook into the agent's own config.
+For Kiro, Claude Code, Copilot and Codex, planeai uses a notification hook.
 The hook tells planeai the moment the agent starts working, finishes, or needs your attention, instead of waiting for 5 seconds of terminal silence.
-planeai offers to install missing hooks in a banner at startup and keeps installed hook scripts up to date on every launch.
+
+Claude Code gets its hooks with each launch: planeai starts it with `--settings` pointing to a settings file in planeai's data folder, so your `~/.claude/settings.json` stays untouched and Claude runs outside planeai never call planeai's hooks.
+Older versions of planeai added the hooks to `~/.claude/settings.json`; planeai removes its own entries there once no Claude agent started before the upgrade is still running, and leaves your hooks in place.
+On Windows those entries stay until you remove them yourself; they only make planeai receive each signal twice.
+
+For the other agents, planeai installs the hook into the agent's own config.
+It offers to install missing hooks in a banner at startup and keeps installed hook scripts up to date on every launch.
 
 | Agent       | Hook config                                              |
 | ----------- | -------------------------------------------------------- |
+| Claude Code | `--settings` with each launch (planeai's data folder)    |
 | Kiro        | `~/.kiro/agents/default.json`                            |
-| Claude Code | `~/.claude/settings.json`                                |
 | Copilot     | `$COPILOT_HOME/hooks/planeai-notify.json` (`~/.copilot`) |
 | Codex       | `$CODEX_HOME/hooks.json` (`~/.codex`)                    |
 

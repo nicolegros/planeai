@@ -387,7 +387,14 @@ fn dispatch_renders_name_and_prompt_with_every_task_variable() {
 
     assert_eq!(
         (session.name.as_str(), session.command.as_str()),
-        ("T-1 p1 main", "claude -- 'fix-bug after T-0 (todo)'")
+        (
+            "T-1 p1 main",
+            format!(
+                "claude {} -- 'fix-bug after T-0 (todo)'",
+                planeai_core::agent_hooks::installed_claude_launch_args()
+            )
+            .as_str()
+        )
     );
 }
 
@@ -621,7 +628,10 @@ fn dispatch_spawns_the_agent_for_the_mcp_url_its_command_names() {
 
     assert_eq!(
         backend.daemon_sessions.lock().unwrap()[0].1,
-        "claude --mcp http://127.0.0.1:47437/mcp"
+        format!(
+            "claude {} --mcp http://127.0.0.1:47437/mcp",
+            planeai_core::agent_hooks::installed_claude_launch_args()
+        )
     );
     assert_eq!(
         *backend.spawn_mcp_urls.lock().unwrap(),

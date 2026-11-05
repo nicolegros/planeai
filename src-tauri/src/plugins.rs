@@ -1795,18 +1795,10 @@ fn replace_plugin_settings(data_dir: &Path, settings: Value) -> Result<Value, St
 }
 
 fn write_plugin_settings(data_dir: &Path, settings: Value) -> Result<Value, String> {
-    let temporary = data_dir.join(format!(".settings-{}.tmp", uuid::Uuid::new_v4()));
-    let path = data_dir.join("settings.json");
     let serialized = serde_json::to_vec_pretty(&settings)
         .map_err(|error| format!("failed to serialize plugin settings: {error}"))?;
-    if let Err(error) = std::fs::write(&temporary, serialized) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(format!("failed to write plugin settings: {error}"));
-    }
-    if let Err(error) = planeai_paths::replace_file_atomically(&temporary, &path) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(format!("failed to save plugin settings: {error}"));
-    }
+    planeai_paths::write_file_atomically(&data_dir.join("settings.json"), &serialized)
+        .map_err(|error| format!("failed to save plugin settings: {error}"))?;
     Ok(settings)
 }
 

@@ -672,7 +672,9 @@ mod tests {
             other => panic!("expected a shell target, got {other:?}"),
         };
         assert!(
-            command.starts_with("claude --mcp-config ") && command.contains(MCP_URL),
+            command.starts_with("claude --settings ")
+                && command.contains(" --mcp-config ")
+                && command.contains(MCP_URL),
             "the agent is told where the server is: {command}"
         );
         let env = mcp_env(&started);
@@ -744,7 +746,13 @@ mod tests {
         .unwrap();
 
         match &plan.pty_target {
-            pty::PtyTarget::Shell { command, .. } => assert_eq!(command, "claude"),
+            pty::PtyTarget::Shell { command, .. } => assert_eq!(
+                *command,
+                format!(
+                    "claude {}",
+                    planeai_core::agent_hooks::installed_claude_launch_args()
+                )
+            ),
             other => panic!("expected a shell target, got {other:?}"),
         }
         assert!(!plan
@@ -842,10 +850,13 @@ mod tests {
         assert_eq!(
             ["kiro", "claude", "copilot", "codex"].map(first_attach),
             [
-                "kiro-cli chat -- '- Fix the login redirect'",
-                "claude -- '- Fix the login redirect'",
-                "copilot --interactive='- Fix the login redirect'",
-                "codex -- '- Fix the login redirect'",
+                "kiro-cli chat -- '- Fix the login redirect'".to_string(),
+                format!(
+                    "claude {} -- '- Fix the login redirect'",
+                    planeai_core::agent_hooks::installed_claude_launch_args()
+                ),
+                "copilot --interactive='- Fix the login redirect'".to_string(),
+                "codex -- '- Fix the login redirect'".to_string(),
             ]
         );
     }
