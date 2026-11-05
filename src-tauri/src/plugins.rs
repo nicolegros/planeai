@@ -3182,35 +3182,44 @@ impl PluginRuntimeSupervisor {
             PluginRpcError::NotRunning(format!("plugin runtime was not available: {plugin_id}"))
         })?;
         let result = process.request_with_timeout(method, params, timeout).await;
-        let Err(error) = result else {
-            return result;
-        };
-        if !error.is_fatal() {
-            return Err(error);
+        if let Err(error) = &result {
+            if error.is_fatal() {
+                self.retire_broken_process(plugin_id, process, error).await;
+            }
         }
+        result
+    }
 
+    /// Stops a runtime whose stdout can no longer be trusted, such as one holding the
+    /// answer to a timed-out request, before another request reads that answer.
+    async fn retire_broken_process(
+        &self,
+        plugin_id: &str,
+        process: Arc<RuntimeProcess>,
+        error: &PluginRpcError,
+    ) {
         let _lifecycle = self.lifecycle.lock().await;
         let owns_process = {
             let mut active_processes = self.processes.lock().await;
             remove_current_process(&mut active_processes, plugin_id, &process)
         };
-        if owns_process {
-            if let Err(stop_error) = stop_process(process).await {
-                tracing::warn!(plugin_id, %stop_error, "failed to stop timed-out plugin runtime");
-            }
-            if let Err(state_error) = self
-                .update_state(
-                    plugin_id,
-                    true,
-                    PluginRuntimeState::Error,
-                    Some(error.to_string()),
-                )
-                .await
-            {
-                tracing::warn!(plugin_id, %state_error, "failed to record timed-out plugin runtime");
-            }
+        if !owns_process {
+            return;
         }
-        Err(error)
+        if let Err(stop_error) = stop_process(process).await {
+            tracing::warn!(plugin_id, %stop_error, "failed to stop timed-out plugin runtime");
+        }
+        if let Err(state_error) = self
+            .update_state(
+                plugin_id,
+                true,
+                PluginRuntimeState::Error,
+                Some(error.to_string()),
+            )
+            .await
+        {
+            tracing::warn!(plugin_id, %state_error, "failed to record timed-out plugin runtime");
+        }
     }
 
     /// Deliver a committed lifecycle batch in the background. Delivery failures
@@ -3998,6 +4007,7 @@ impl PluginRuntimeSupervisor {
         let wake = Arc::new(Notify::new());
         let worker_wake = wake.clone();
         let app = self.app.clone();
+        let supervisor = self.this.clone();
         let data_dir = process.data_dir.clone();
         let worker_plugin_id = plugin_id.clone();
         let task = tokio::spawn(async move {
@@ -4028,7 +4038,20 @@ impl PluginRuntimeSupervisor {
                                 }
                             }
                         }
-                        Err(error) => tracing::warn!(plugin_id = %plugin_id, generation, method = %service.method, %error, "plugin background service failed"),
+                        Err(error) => {
+                            tracing::warn!(plugin_id = %plugin_id, generation, method = %service.method, %error, "plugin background service failed");
+                            if error.is_fatal() {
+                                // Disabling the plugin holds the lifecycle lock while it waits
+                                // for this worker, and stops the process itself.
+                                if let Some(supervisor) = supervisor.upgrade() {
+                                    tokio::select! {
+                                        _ = worker_cancel.cancelled() => {}
+                                        _ = supervisor.retire_broken_process(&plugin_id, process.clone(), &error) => {}
+                                    }
+                                }
+                                return;
+                            }
+                        }
                     }
                 }
                 let interval = match read_plugin_settings(&data_dir).ok().and_then(|settings| {
