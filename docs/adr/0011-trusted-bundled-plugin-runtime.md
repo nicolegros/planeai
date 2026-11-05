@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted - amended for local packages, and partially superseded by ADR-0014 for plugin-provided session runtimes
+Accepted - amended for local packages, partially superseded by ADR-0014 for plugin-provided session runtimes, and amended by ADR-0018, which adds reviewed installation from Discovery repositories to the "no remote URL installation" consequence below
 
 ## Context
 
@@ -29,6 +29,7 @@ PlaneAI runs bundled and user-selected local plugins as separately compiled subp
 
 - A plugin failure, malformed RPC message, unexpected process exit, or cancellation failure becomes a plugin-scoped diagnostic and leaves the Tauri process and legacy Jira integration running.
 - Local packages can be developed and distributed directly by trusted users, but PlaneAI has no marketplace, remote URL installation, signing policy, automatic updates, or sandboxed/WASM plugin mode in v1.
+  ADR-0018 later adds reviewed installation of a repository's release archive from Discovery; signing, automatic updates and sandboxing stay out of scope.
 - Plugin runtimes do not persist after application exit in v1. Persisted data is inventory, plugin-owned state, public settings, and failure/recovery information—not a detached background runtime.
 - New APIs require deliberate additions to the manifest capability vocabulary, typed UI bridge, runtime protocol, guide, fixture, and contract tests. Arbitrary Tauri command access and undeclared host RPC methods remain prohibited.
 - Release packaging must build and ship every trusted sidecar with Tauri's target-suffixed `externalBin` convention. Development requires the selected local package to contain a built current-platform executable; the host fails closed when it is absent.

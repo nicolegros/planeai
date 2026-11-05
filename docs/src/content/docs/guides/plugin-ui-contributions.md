@@ -492,12 +492,29 @@ A provider session's UI owns the keyboard like a terminal: PlaneAI takes focus o
    make local-plugin-fixture
    ```
 
-2. To find community candidates, open **Preferences → Plugins** and choose **Discover plugins**. PlaneAI asks your existing `gh` CLI to search public, non-archived, non-fork GitHub repositories tagged with the fixed `planeai` topic, returning up to 100 results ordered by stars. Results exist only for the current app session and are refreshed only when you choose discovery again. These results are unverified repository links—not packages, compatibility claims, downloads, or install actions. Review and obtain source from an author you trust before importing it.
-3. Choose **Install local package** and select the reviewed package directory, not an individual binary or manifest.
+2. To find community candidates, open **Preferences → Plugins** and choose **Discover plugins**. PlaneAI asks your existing `gh` CLI to search public, non-archived, non-fork GitHub repositories tagged with the fixed `planeai` topic, returning up to 100 results ordered by stars. Results exist only for the current app session and are refreshed only when you choose discovery again. Candidates are unverified community repositories, not compatibility claims. Review the repository and trust its author before installing anything from it.
+3. Either install from the card (see [Install from Discovery](#install-from-discovery)), or choose **Install local package** and select a reviewed package directory, not an individual binary or manifest.
 4. Enable the imported plugin. Open its `main-pane` from Cmd+K or interact with its declared sidebar/preferences placement. The fixture appears as **Local Fixture**.
 5. Use **Reload** after a runtime error or to restart an already imported package. Reload restarts the imported immutable copy; it does not reread your source directory.
 6. To publish a changed manifest, binary, or UI, rebuild and choose **Install local package** again. Selecting a package with the same installed local-plugin ID replaces its immutable package copy, preserves host-owned settings, secrets, logs, and data, and restarts the plugin if it was enabled. Imported content is copied under a SHA-256 directory, so edits to the original directory never affect an installed version.
 7. Disable a plugin to stop its sidecar. **Remove plugin** is available only for local packages and deletes PlaneAI's imported package and host-owned plugin state. It does not delete your original source directory.
+
+### Install from Discovery
+
+Right after discovery returns, every card checks what the repository offers for this platform (see [Downloads](#downloads)) and what is already installed, and shows one of:
+
+- **Install vX** (or **Install** when the latest release tag is not semver) for a repository you have not installed.
+- **Update to vY** when the latest release is newer than the installed manifest version, or **Up to date** when it is not.
+- **Reinstall latest** for a repository-installed plugin whose versions cannot be compared.
+- **Installed locally** with **Replace with vX** when a plugin with the same `id` was installed from a folder.
+- A sentence explaining why nothing can be installed, for example no archive for your platform or an `id` reserved by a bundled plugin.
+
+Choosing the action downloads the archive into a staging directory, verifies it against the release asset digest when it is a release asset, extracts and validates it, and opens a review.
+The review lists the manifest `id`, name and version, the repository, the source URL, the release tag, the SHA-256 marked **Verified** or **Unverified**, the capabilities, UI placements and MCP tools it declares, what it replaces, and a warning when the release tag and the manifest version disagree.
+Nothing is installed until you choose **Install and enable**; cancelling or closing the review discards the download.
+Installing keeps the plugin's host-owned settings, secrets, logs and data, exactly like **Install local package** with the same `id`, and enables the plugin.
+The installed list then shows `Source: github.com/<repository> @ <tag>` instead of a folder path, and a later **Install local package** of the same `id` replaces that origin.
+PlaneAI does not poll for updates: a newer release is only noticed when you open Discovery again.
 
 ## Headless contract test
 
