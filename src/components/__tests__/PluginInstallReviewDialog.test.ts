@@ -142,6 +142,15 @@ describe("PluginInstallReviewDialog", () => {
     );
   });
 
+  it("scrolls the package facts while the buttons stay in a fixed footer", async () => {
+    const content = await open({});
+    const scroller = content.querySelector(".overflow-y-auto");
+    expect(scroller?.contains(content.querySelector("dl"))).toBe(true);
+    expect(scroller?.textContent).toContain(NATIVE_CODE_WARNING);
+    expect(scroller?.contains(button("Install and enable")!)).toBe(false);
+    expect(scroller?.contains(button("Cancel")!)).toBe(false);
+  });
+
   it("confirms, cancels, and locks both buttons while installing", async () => {
     const onConfirm = vi.fn();
     const onCancel = vi.fn();
