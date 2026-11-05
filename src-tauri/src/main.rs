@@ -294,10 +294,7 @@ fn main() {
                 app.handle().clone(),
                 mcp_tools,
             ));
-            app.manage(
-                commands::PluginRemoteState::new(&app_dir)
-                    .expect("failed to initialize plugin staging"),
-            );
+            app.manage(commands::PluginRemoteState::new(&app_dir));
 
             // Notification system
             let notify_state: notify::SharedNotifyState =

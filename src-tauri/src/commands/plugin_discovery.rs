@@ -96,20 +96,21 @@ const GH_PROCESSES_PER_RESOLUTION: u32 = 2;
 pub struct PluginRemoteState {
     staging: StagingStore,
     resolve_permits: Semaphore,
-    downloader: Downloader,
+    /// A client that failed to build only blocks installs, so its error waits for the first one.
+    downloader: Result<Downloader, String>,
 }
 
 impl PluginRemoteState {
-    pub fn new(app_data_dir: &Path) -> Result<Self, String> {
+    pub fn new(app_data_dir: &Path) -> Self {
         let staging = StagingStore::new(app_data_dir);
         if let Err(error) = staging.reset() {
             tracing::warn!(%error, "failed to clear stale plugin staging");
         }
-        Ok(Self {
+        Self {
             staging,
             resolve_permits: Semaphore::new(GH_PROCESS_LIMIT),
-            downloader: Downloader::new()?,
-        })
+            downloader: Downloader::new(),
+        }
     }
 }
 
@@ -137,13 +138,14 @@ pub async fn stage_remote_plugin(
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<StagedPluginInstall, String> {
     let repo = RepoFullName::parse(&repo)?;
+    let downloader = remote.downloader.as_ref().map_err(Clone::clone)?;
     let source = fetch_remote_repo(repo.clone())
         .await?
         .select_source(crate::plugin_packages::current_platform_key())?;
     let inventory = runtime.0.list().await?;
     let (staging_id, dir) = remote.staging.create_dir()?;
     let staged = stage_package(
-        &remote.downloader,
+        downloader,
         &repo,
         &source,
         &inventory,
