@@ -225,6 +225,10 @@ impl NotifyState {
             return false;
         }
         let held = self.held.contains_key(session_id);
+        // Forgotten while its transcript was read: its agent exited.
+        if !held && !self.idle_since.contains_key(session_id) {
+            return false;
+        }
         match pending {
             Some(running) if running > 0 => {
                 self.idle_since.remove(session_id);
@@ -253,6 +257,15 @@ impl NotifyState {
         self.idle_since.remove(session_id);
         self.release_hold(session_id);
         self.notified.insert(session_id.to_string())
+    }
+
+    /// The transcripts of turns still being decided: debouncing or held.
+    pub fn deciding_transcripts(&self) -> Vec<std::path::PathBuf> {
+        self.idle_since
+            .keys()
+            .chain(self.held.keys())
+            .filter_map(|id| self.transcripts.get(id).cloned())
+            .collect()
     }
 
     /// The session's turn ended, but background subagents it started still run.
@@ -662,10 +675,23 @@ mod tests {
         assert!(due(&mut state).is_empty());
 
         let mut state = stopped(true);
+        assert_eq!(
+            state.deciding_transcripts(),
+            [std::path::PathBuf::from("/t.jsonl")]
+        );
         state.advance_time("s1", DEBOUNCE_THRESHOLD);
         due(&mut state);
         state.resolve_turn_end("s1", Some(1));
+        assert_eq!(
+            state.deciding_transcripts(),
+            [std::path::PathBuf::from("/t.jsonl")]
+        );
         state.forget_turn("s1");
+        assert!(state.deciding_transcripts().is_empty());
+        assert!(
+            !state.resolve_turn_end("s1", Some(1)),
+            "a read that ends after the exit never brings the turn back"
+        );
         state.advance_time("s1", HELD_RECHECK);
         assert!(!state.is_held("s1"));
         assert!(
