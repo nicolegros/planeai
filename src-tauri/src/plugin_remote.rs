@@ -236,9 +236,13 @@ impl ArchiveFormat {
     }
 }
 
+fn tag_version(tag: &str) -> &str {
+    tag.strip_prefix('v').unwrap_or(tag)
+}
+
 /// The release tag without a leading `v`, when it is semver.
 fn release_version(tag: &str) -> Option<semver::Version> {
-    semver::Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok()
+    semver::Version::parse(tag_version(tag)).ok()
 }
 
 impl RemoteRepo {
@@ -442,8 +446,7 @@ fn replacement(
 
 fn version_mismatch(release_tag: Option<&str>, manifest_version: &str) -> Option<VersionMismatch> {
     let tag = release_tag?;
-    let tag_version = tag.strip_prefix('v').unwrap_or(tag);
-    (tag_version != manifest_version).then(|| VersionMismatch {
+    (tag_version(tag) != manifest_version).then(|| VersionMismatch {
         release_tag: tag.to_string(),
         manifest_version: manifest_version.to_string(),
     })
@@ -949,12 +952,7 @@ impl StagingStore {
 
     /// Wipes every staged package; a crash mid-stage leaves nothing behind.
     pub(crate) fn reset(&self) -> Result<(), String> {
-        if self.root.exists() {
-            fs::remove_dir_all(&self.root)
-                .map_err(|error| format!("failed to clear plugin staging: {error}"))?;
-        }
-        self.entries.lock().map_err(|e| e.to_string())?.clear();
-        Ok(())
+        remove_dir(&self.root)
     }
 
     /// Stages `source` in a fresh directory and keeps the package until commit or discard.

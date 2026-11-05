@@ -427,6 +427,15 @@ fn is_executable(path: &Path) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_running_platform_is_a_valid_downloads_key() {
+        assert!(
+            planeai_plugin_contract::PLATFORM_KEYS.contains(&super::current_platform_key()),
+            "{} is missing from PLATFORM_KEYS",
+            super::current_platform_key()
+        );
+    }
+
     use super::*;
     use std::fs;
     #[cfg(unix)]

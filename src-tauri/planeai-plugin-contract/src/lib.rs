@@ -195,7 +195,7 @@ const MANIFEST_FIELDS: &[&str] = &[
     "tools",
     "downloads",
 ];
-/// The `backend_entrypoints` and `downloads` keys PlaneAI resolves for the running host.
+/// The `downloads` keys a manifest may declare, one per platform PlaneAI ships for.
 pub const PLATFORM_KEYS: &[&str] = &[
     "macos-arm64",
     "macos-x64",

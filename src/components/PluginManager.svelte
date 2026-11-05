@@ -338,7 +338,7 @@
                   onclick={() => void stageRemote(candidate.full_name)}
                 >{actionLabel}</button>
               {/if}
-              <button type="button" class="rounded bg-panel-hi px-3 py-1.5 text-xs font-medium text-t2 hover:bg-border" onclick={() => void openUrl(candidate.url)}>Open repository</button>
+              <button type="button" class="rounded bg-panel-hi px-3 py-1.5 text-xs font-medium text-t2 hover:bg-border" aria-label="Open repository {candidate.full_name}" onclick={() => void openUrl(candidate.url)}>Open repository</button>
             </div>
           </div>
           <p class="text-[11px] text-t3">{candidate.language ?? "Unknown language"} · {candidate.stargazers_count.toLocaleString()} {candidate.stargazers_count === 1 ? "star" : "stars"} · Updated {formattedUpdatedDate(candidate.updated_at)}</p>

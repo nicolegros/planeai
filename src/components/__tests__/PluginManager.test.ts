@@ -393,6 +393,9 @@ describe("PluginManager", () => {
     expect(buttonLabeled(card("acme/install")!, "Install v1.2.0")?.getAttribute("aria-label")).toBe(
       "Install v1.2.0 acme/install",
     );
+    expect(
+      buttonLabeled(card("acme/install")!, "Open repository")?.getAttribute("aria-label"),
+    ).toBe("Open repository acme/install");
     expect(cardButtons("acme/current")).toEqual(["Open repository"]);
     expect(card("acme/current")?.textContent).toContain("Up to date (v1.0.0)");
     expect(cardButtons("acme/update")).toEqual(["Update to v2.0.0", "Open repository"]);
