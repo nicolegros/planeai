@@ -1,10 +1,10 @@
-/** Reactive open-state for the New Item -> New Session dialog handoff harness. */
+/** Reactive open-state for the New Tab selector -> New Session dialog handoff harness. */
 export interface DialogHandoff {
-  showNewItem: boolean;
+  showNewTab: boolean;
   showSession: boolean;
 }
 
 export function createDialogHandoff(): DialogHandoff {
-  const handoff = $state({ showNewItem: true, showSession: false });
+  const handoff = $state({ showNewTab: true, showSession: false });
   return handoff;
 }

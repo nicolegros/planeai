@@ -537,6 +537,19 @@ describe("UnifiedSidebar in the Cards layout", () => {
     expect(newProject().classList).not.toContain("px-0");
   });
 
+  it("creates a task from the New task header button", async () => {
+    const onCreateTask = vi.fn();
+    mounted = await mountSidebar({}, { onCreateTask });
+    const newTask = mounted.target.querySelector<HTMLButtonElement>(
+      "button[aria-label='New task']",
+    )!;
+
+    expect(newTask.textContent!.replace(/\s+/g, " ").trim()).toBe(`New task ${MOD_LABEL}N`);
+    newTask.click();
+
+    expect(onCreateTask).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["cards", "classic"])(
     "renames a session from its input in the %s layout",
     async (layout) => {

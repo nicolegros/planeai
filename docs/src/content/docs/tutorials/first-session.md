@@ -57,8 +57,8 @@ Press **⌘/** (macOS) or **Ctrl+/** (Linux/Windows) at any time to see all keyb
 
 ## Step 3: Create a session
 
-1. Press **⌘N** (macOS) or **Ctrl+N** to open the new item modal
-2. Press **S** to create a session
+1. Press **⌘T** (macOS) or **Ctrl+T** to open the New tab selector
+2. Press **A** to create an agent session
 3. Select your project
 4. Choose a branch (or create a new one)
 5. Confirm — planeai launches Claude in a terminal pane

@@ -116,7 +116,7 @@ Tasks appear once you type — the menu's default view stays a short list of act
 
 ### Starting and renaming sessions
 
-While a task is focused, every "new session" entry point (**⌘N** then **S**, "New session" in the command menu, the sidebar button) opens the form with that task and its project already selected.
+While a task is focused, every "new session" entry point (**⌘T** then **A**, the **+** on a tab strip then **A**, "New session" in the command menu) opens the form with that task and its project already selected.
 The session name defaults to the task title; additional sessions on the same task are numbered, for example "Fix login (2)", and the name stays editable.
 
 A task's work can span repositories.
@@ -133,7 +133,10 @@ There are three ways to create tasks, each suited to a different workflow.
 
 ### From the GUI
 
-Press **⌘N** (macOS) or **Ctrl+N** (Linux/Windows) to open the new item modal, then press **T** to create a task. Alternatively, open the command menu (**⌘K** / **Ctrl+K**) and search for "create task". The create dialog has fields for:
+Press **⌘N** (macOS) or **Ctrl+N** (Linux/Windows), or click **New task** at the top of the sidebar, to open the create dialog.
+It starts in the project of the focused task or session.
+Alternatively, open the command menu (**⌘K** / **Ctrl+K**) and search for "create task".
+The create dialog has fields for:
 
 - **Project** - which project the task belongs to (required). **New Project** (**⇧O** in normal mode) opens Add Project on top of the form without losing what you typed; the new project is then selected. Changing the project clears the parent, blockers and base branch, since they belong to the previous project.
 - **Title** — short, actionable description (required). Prefilled with a random name such as `jubilant-waffle`; focusing the untouched name selects it, so typing replaces it.

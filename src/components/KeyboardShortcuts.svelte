@@ -22,7 +22,7 @@
       { keys: `Escape`, description: "Dismiss / focus terminal" },
     ]},
     { section: "Sessions", items: [
-      { keys: `${MOD_LABEL}N`, description: "New session" },
+      { keys: `${MOD_LABEL}N`, description: "New task" },
       { keys: `${MOD_LABEL}⇧N`, description: "New project" },
       { keys: `${MOD_LABEL}1–9`, description: "Jump to sidebar row" },
       { keys: `Ctrl+Tab`, description: "Switch session (MRU)" },

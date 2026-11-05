@@ -29,7 +29,7 @@ export function isPlatformMod(e: KeyboardEvent): boolean {
 
 export type KeyboardAction =
   | { type: "toggle_sidebar" }
-  | { type: "new_session" }
+  | { type: "new_task" }
   | { type: "new_project" }
   | { type: "jump_to_session"; index: number }
   | { type: "next_session" }
@@ -249,9 +249,9 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "close_split" };
   }
 
-  // Mod+N — new session
+  // Mod+N - new task
   if (mod && key === "n") {
-    return { type: "new_session" };
+    return { type: "new_task" };
   }
 
   // Mod+1-9 — jump to session
@@ -319,7 +319,7 @@ export function installKeyboardRouter(
     "next_session",
     "prev_session",
     "open_preferences",
-    "new_session",
+    "new_task",
     "split_vertical",
     "split_horizontal",
     "close_split",
@@ -394,9 +394,9 @@ export function installKeyboardRouter(
   }
 
   // Cmd/Ctrl+N opens global UI and must not be consumed by xterm or CodeMirror.
-  function captureNewSession(e: KeyboardEvent): void {
+  function captureNewTask(e: KeyboardEvent): void {
     const action = matchChord(e);
-    if (action?.type === "new_session") routeAction(e, action);
+    if (action?.type === "new_task") routeAction(e, action);
   }
 
   function handler(e: KeyboardEvent): void {
@@ -411,11 +411,11 @@ export function installKeyboardRouter(
   // Ctrl+Tab is reserved for MRU session switching, even when focused content
   // (such as xterm) consumes bubbling keyboard events.
   window.addEventListener("keydown", captureTabSwitcher, true);
-  window.addEventListener("keydown", captureNewSession, true);
+  window.addEventListener("keydown", captureNewTask, true);
   window.addEventListener("keydown", handler);
   return () => {
     window.removeEventListener("keydown", captureTabSwitcher, true);
-    window.removeEventListener("keydown", captureNewSession, true);
+    window.removeEventListener("keydown", captureNewTask, true);
     window.removeEventListener("keydown", handler);
   };
 }
