@@ -49,6 +49,12 @@
   const stagedForReview = $derived(
     remoteInstall.kind === "reviewing" || remoteInstall.kind === "installing" ? remoteInstall.staged : null,
   );
+  const checkingCount = $derived(
+    (discoveryCandidates ?? []).filter((candidate) => {
+      const resolution = cardResolutions[candidate.full_name];
+      return !resolution || resolution.kind === "checking";
+    }).length,
+  );
 
   async function refresh() {
     try {
@@ -272,11 +278,14 @@
   </div>
 
   {#if discoveryCandidates !== null}
-    <section class="rounded-lg border border-border p-4 space-y-3" aria-live="polite">
+    <section class="rounded-lg border border-border p-4 space-y-3" aria-busy={checkingCount > 0}>
       <div>
         <h3 class="text-sm font-medium text-t1">Community plugin candidates</h3>
         <p class="mt-1 text-xs text-t3">Public, active, non-fork repositories tagged <span class="font-mono">planeai</span>, ordered by stars. Candidates are unverified community repositories. Install downloads the package for this platform and shows a review before anything is installed. Packages run as native code with your user permissions.</p>
       </div>
+      {#if discoveryCandidates.length > 0}
+        <p class="sr-only" role="status">{checkingCount > 0 ? `Checking ${checkingCount} of ${discoveryCandidates.length} plugins…` : "All plugins checked"}</p>
+      {/if}
       {#each discoveryCandidates as candidate (candidate.url)}
         {@const view = cardView(cardResolutions[candidate.full_name])}
         {@const staging = remoteInstall.kind === "staging" && remoteInstall.repo === candidate.full_name}
@@ -312,7 +321,7 @@
   {/if}
 
   {#if loadError}
-    <p class="rounded border border-status-exited/30 bg-status-exited/10 p-3 text-xs text-status-exited">{loadError}</p>
+    <p class="rounded border border-status-exited/30 bg-status-exited/10 p-3 text-xs text-status-exited" role="alert">{loadError}</p>
   {/if}
 
   {#if githubMigration && githubMigration.state !== "not_needed"}

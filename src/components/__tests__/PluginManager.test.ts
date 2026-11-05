@@ -400,11 +400,17 @@ describe("PluginManager", () => {
     expect(card("acme/pending")?.textContent).toContain("Checking…");
     expect(cardButtons("acme/pending")).toEqual(["Open repository"]);
     expect(target.textContent).not.toContain("rate limit exceeded.");
+    const candidates = () => target.querySelector("section[aria-busy]");
+    expect(candidates()?.getAttribute("aria-busy")).toBe("true");
+    expect(candidates()?.getAttribute("aria-live")).toBeNull();
+    expect(target.querySelector('[role="status"]')?.textContent).toBe("Checking 1 of 8 plugins…");
 
     settlePending({ kind: "install", latest_version: null });
     await vi.waitFor(() =>
       expect(cardButtons("acme/pending")).toEqual(["Install", "Open repository"]),
     );
+    expect(candidates()?.getAttribute("aria-busy")).toBe("false");
+    expect(target.querySelector('[role="status"]')?.textContent).toBe("All plugins checked");
   });
 
   it("stages a Discovery install, reviews it, and commits it", async () => {
@@ -542,7 +548,7 @@ describe("PluginManager", () => {
     buttonLabeled(target, "Install v1.2.0")?.click();
 
     await vi.waitFor(() =>
-      expect(paragraphs()).toContain(
+      expect(target.querySelector('[role="alert"]')?.textContent).toBe(
         "Error: plugin download failed with HTTP 404: https://cdn.acme.dev/acme.tar.gz",
       ),
     );
