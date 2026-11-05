@@ -8,11 +8,10 @@ use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 use crate::plugin_remote::{
-    check_integrity, fetch_remote_repo, replacement, version_mismatch, DiscoveryCardState,
-    Downloader, RepoFullName, StagedManifest, StagedPackage, StagedPluginInstall, StagingStore,
-    EXPIRED_STAGING,
+    fetch_remote_repo, stage_package, DiscoveryCardState, Downloader, RepoFullName,
+    StagedPluginInstall, StagingStore, EXPIRED_STAGING,
 };
-use crate::plugins::{PluginInventory, PluginRuntimeHandle, RemoteOrigin};
+use crate::plugins::{PluginInventory, PluginRuntimeHandle};
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const DISCOVERY_ARGS: &[&str] = &[
@@ -161,70 +160,30 @@ pub async fn stage_remote_plugin(
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<StagedPluginInstall, String> {
     let repo = RepoFullName::parse(&repo)?;
-    let remote_repo = fetch_remote_repo(repo.clone()).await?;
-    let platform = crate::plugin_packages::current_platform_key();
-    let source = remote_repo.select_source(platform)?;
+    let source = fetch_remote_repo(repo.clone())
+        .await?
+        .select_source(crate::plugin_packages::current_platform_key())?;
+    let inventory = runtime.0.list().await?;
     let (staging_id, dir) = remote.staging.create_dir()?;
-    let staged = stage_into(&remote, &runtime, &remote_repo, &source, &dir).await;
+    let staged = stage_package(
+        &remote.downloader,
+        &repo,
+        &source,
+        &inventory,
+        staging_id.clone(),
+        &dir,
+    )
+    .await;
     match staged {
         Ok((package, preview)) => {
-            remote.staging.insert(staging_id.clone(), package)?;
-            Ok(StagedPluginInstall {
-                staging_id,
-                ..preview
-            })
+            remote.staging.insert(staging_id, package)?;
+            Ok(preview)
         }
         Err(error) => {
             let _ = crate::commands::blocking(move || crate::plugin_remote::remove_dir(&dir)).await;
             Err(error)
         }
     }
-}
-
-async fn stage_into(
-    remote: &PluginRemoteState,
-    runtime: &PluginRuntimeHandle,
-    remote_repo: &crate::plugin_remote::RemoteRepo,
-    source: &crate::plugin_remote::PackageSource,
-    dir: &Path,
-) -> Result<(StagedPackage, StagedPluginInstall), String> {
-    let format = source.format;
-    let archive = dir.join(format.file_name());
-    let sha256 = remote.downloader.download(&source.url, &archive).await?;
-    let integrity = check_integrity(sha256.clone(), source.expected_sha256.as_deref())?;
-    let extracted = dir.join("extracted");
-    let inspected = crate::commands::blocking(move || {
-        let root = crate::plugin_remote::extract_archive(&archive, format, &extracted)?;
-        crate::plugin_packages::inspect_package(&root)
-    })
-    .await?;
-    let inventory = runtime.0.list().await?;
-    let replaces = replacement(&inventory, &inspected.manifest.id)?;
-    let latest_tag = remote_repo
-        .latest_release
-        .as_ref()
-        .map(|release| release.tag_name.as_str());
-    let preview = StagedPluginInstall {
-        staging_id: String::new(),
-        repo: remote_repo.repo.as_str().to_string(),
-        source_url: source.url.clone(),
-        release_tag: source.release_tag.clone(),
-        integrity,
-        manifest: StagedManifest::from(&inspected.manifest),
-        replaces,
-        version_mismatch: version_mismatch(latest_tag, &inspected.manifest.version),
-    };
-    let package = StagedPackage {
-        dir: dir.to_path_buf(),
-        package_root: inspected.source,
-        origin: RemoteOrigin {
-            repo: remote_repo.repo.as_str().to_string(),
-            release_tag: source.release_tag.clone(),
-            source_url: source.url.clone(),
-            archive_sha256: sha256,
-        },
-    };
-    Ok((package, preview))
 }
 
 #[tauri::command]

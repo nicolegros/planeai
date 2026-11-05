@@ -42,7 +42,7 @@ What changes is who performs the mechanical steps, not who decides to trust the 
   A repository-installed plugin whose versions do not both parse, or whose repository has no release, is offered "Reinstall latest".
   A plugin installed from a folder is shown as installed locally with "Replace", never as a plain install.
   A bundled id is unavailable.
-  The review also warns when the staged manifest version differs from the latest release tag.
+  The review also warns when the staged manifest version differs from the release tag the archive came from.
 - **Scope.** Update awareness lives in Discovery only: no polling, no background checks, no automatic updates.
   The flow is app UI only; there is no MCP tool and no CLI command for it.
   Commands take a repository name or a staging id, never a URL from the frontend, and the backend re-resolves the source itself.

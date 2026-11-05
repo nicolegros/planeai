@@ -823,6 +823,52 @@ pub fn remove_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Downloads, verifies, extracts and inspects `source` under `dir`: the package to keep in the
+/// staging store and the preview the user reviews before committing it.
+pub async fn stage_package(
+    downloader: &Downloader,
+    repo: &RepoFullName,
+    source: &PackageSource,
+    inventory: &[PluginInventory],
+    staging_id: String,
+    dir: &Path,
+) -> Result<(StagedPackage, StagedPluginInstall), String> {
+    let format = source.format;
+    let archive = dir.join(format.file_name());
+    let sha256 = downloader.download(&source.url, &archive).await?;
+    let integrity = check_integrity(sha256.clone(), source.expected_sha256.as_deref())?;
+    let extracted = dir.join("extracted");
+    let inspected = crate::commands::blocking(move || {
+        let root = extract_archive(&archive, format, &extracted)?;
+        crate::plugin_packages::inspect_package(&root)
+    })
+    .await?;
+    let preview = StagedPluginInstall {
+        staging_id,
+        repo: repo.as_str().to_string(),
+        source_url: source.url.clone(),
+        release_tag: source.release_tag.clone(),
+        integrity,
+        manifest: StagedManifest::from(&inspected.manifest),
+        replaces: replacement(inventory, &inspected.manifest.id)?,
+        version_mismatch: version_mismatch(
+            source.release_tag.as_deref(),
+            &inspected.manifest.version,
+        ),
+    };
+    let package = StagedPackage {
+        dir: dir.to_path_buf(),
+        package_root: inspected.source,
+        origin: RemoteOrigin {
+            repo: repo.as_str().to_string(),
+            release_tag: source.release_tag.clone(),
+            source_url: source.url.clone(),
+            archive_sha256: sha256,
+        },
+    };
+    Ok((package, preview))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1676,32 +1722,169 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn stages_a_served_archive_into_a_reviewable_package() {
+        let bytes = good_tar();
+        let sha256 = hex(&Sha256::digest(&bytes));
+        let base = serve(bytes).await;
+        let temp = TempDir::new().unwrap();
+        let store = StagingStore::new(temp.path());
+        let url = format!("{base}/acme-macos-arm64.tar.gz");
+        let source = PackageSource {
+            url: url.clone(),
+            release_tag: Some("v1.2.0".to_string()),
+            expected_sha256: Some(sha256.to_ascii_uppercase()),
+            format: ArchiveFormat::TarGz,
+        };
+
+        let (id, dir) = store.create_dir().unwrap();
+        let (package, preview) = stage_package(
+            &Downloader::insecure_for_tests(),
+            &repo(),
+            &source,
+            &[],
+            id.clone(),
+            &dir,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            preview,
+            StagedPluginInstall {
+                staging_id: id,
+                repo: "acme/planeai-plugin-acme".to_string(),
+                source_url: url.clone(),
+                release_tag: Some("v1.2.0".to_string()),
+                integrity: PackageIntegrity::Verified {
+                    sha256: sha256.clone()
+                },
+                manifest: StagedManifest {
+                    id: "acme".to_string(),
+                    name: "Acme".to_string(),
+                    version: "1.2.0".to_string(),
+                    host_api_version: "planeai.plugin-host.v1".to_string(),
+                    capabilities: vec![],
+                    ui_contributions: vec![],
+                    tools: vec![],
+                },
+                replaces: StagedReplacement::None,
+                version_mismatch: None,
+            }
+        );
+        assert_eq!(package.dir, dir);
+        assert_eq!(
+            package.package_root,
+            dir.join("extracted").join("acme").canonicalize().unwrap()
+        );
+        assert_eq!(
+            package.origin,
+            RemoteOrigin {
+                repo: "acme/planeai-plugin-acme".to_string(),
+                release_tag: Some("v1.2.0".to_string()),
+                source_url: url.clone(),
+                archive_sha256: sha256.clone(),
+            }
+        );
+        assert_eq!(
+            fs::read_to_string(package.package_root.join("planeai-plugin.json")).unwrap(),
+            manifest_json("acme")
+        );
+
+        // The warning compares against the tag the archive came from, not the latest release.
+        let (id, dir) = store.create_dir().unwrap();
+        let older = PackageSource {
+            release_tag: Some("v1.1.0".to_string()),
+            expected_sha256: None,
+            ..source.clone()
+        };
+        let (_, preview) = stage_package(
+            &Downloader::insecure_for_tests(),
+            &repo(),
+            &older,
+            &[inventory("acme", "0.9.0", None)],
+            id,
+            &dir,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            preview.integrity,
+            PackageIntegrity::Unverified {
+                sha256: sha256.clone()
+            }
+        );
+        assert_eq!(
+            preview.replaces,
+            StagedReplacement::Local {
+                installed_version: "0.9.0".to_string(),
+                original_display_path: Some("/Users/me/acme".to_string()),
+            }
+        );
+        assert_eq!(
+            preview.version_mismatch,
+            Some(VersionMismatch {
+                release_tag: "v1.1.0".to_string(),
+                manifest_version: "1.2.0".to_string(),
+            })
+        );
+
+        let (id, dir) = store.create_dir().unwrap();
+        let tampered = PackageSource {
+            expected_sha256: Some("0000".to_string()),
+            ..source
+        };
+        let error = stage_package(
+            &Downloader::insecure_for_tests(),
+            &repo(),
+            &tampered,
+            &[],
+            id,
+            &dir,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error,
+            format!("plugin archive SHA-256 {sha256} does not match the release asset digest 0000")
+        );
+        assert!(
+            !dir.join("extracted").exists(),
+            "nothing is extracted after a digest mismatch"
+        );
+    }
+
     /// `cargo test -- --ignored remote_install_real_catalog` stages the real GitHub plugin.
     #[tokio::test]
     #[ignore]
     async fn remote_install_real_catalog() {
         let repo = RepoFullName::parse("nicolegros/planeai-plugin-github").unwrap();
-        let remote = fetch_remote_repo(repo).await.unwrap();
-        let platform = crate::plugin_packages::current_platform_key();
-        let source = remote.select_source(platform).unwrap();
-        let format = source.format;
-        let temp = TempDir::new().unwrap();
-        let archive = temp.path().join(format.file_name());
-        let sha256 = Downloader::new()
-            .unwrap()
-            .download(&source.url, &archive)
-            .await
+        let remote = fetch_remote_repo(repo.clone()).await.unwrap();
+        let source = remote
+            .select_source(crate::plugin_packages::current_platform_key())
             .unwrap();
-        let integrity = check_integrity(sha256, source.expected_sha256.as_deref()).unwrap();
-        let root = extract_archive(&archive, format, &temp.path().join("extracted")).unwrap();
-        let inspected = crate::plugin_packages::inspect_package(&root).unwrap();
-        assert_eq!(inspected.manifest.id, "github");
-        let imported =
-            crate::plugin_packages::import_local_package(&temp.path().join("app"), &root).unwrap();
+        let temp = TempDir::new().unwrap();
+        let (id, dir) = StagingStore::new(temp.path()).create_dir().unwrap();
+        let (package, preview) = stage_package(
+            &Downloader::new().unwrap(),
+            &repo,
+            &source,
+            &[],
+            id.clone(),
+            &dir,
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview.staging_id, id);
+        assert_eq!(preview.manifest.id, "github");
+        let imported = crate::plugin_packages::import_local_package(
+            &temp.path().join("app"),
+            &package.package_root,
+        )
+        .unwrap();
         assert_eq!(imported.manifest.id, "github");
         eprintln!(
-            "staged {} from {} ({integrity:?})",
-            inspected.manifest.version, source.url
+            "staged {} from {} ({:?})",
+            preview.manifest.version, preview.source_url, preview.integrity
         );
     }
 }
