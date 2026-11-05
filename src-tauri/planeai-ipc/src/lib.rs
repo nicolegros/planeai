@@ -82,25 +82,18 @@ pub fn daemon_socket_path() -> PathBuf {
 /// The directory holding the PTY and rmux daemon sockets. A process whose `HOME` is not the
 /// account's home, such as an app run with an isolated data folder, gets its own, since the
 /// daemons' sessions belong to one database and each app closes panes its database does not own.
-/// On Windows the daemons listen on named pipes, which have no directory.
+#[cfg(unix)]
 pub fn daemon_runtime_dir() -> &'static Path {
-    #[cfg(unix)]
-    {
-        static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-        DIR.get_or_init(|| {
-            let home = std::env::var_os("HOME");
-            runtime_dir(
-                std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
-                unsafe { libc::getuid() },
-                home.as_deref().map(Path::new),
-                account_home().as_deref(),
-            )
-        })
-    }
-    #[cfg(windows)]
-    {
-        Path::new(r"\\.\pipe")
-    }
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let home = std::env::var_os("HOME");
+        runtime_dir(
+            std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+            unsafe { libc::getuid() },
+            home.as_deref().map(Path::new),
+            account_home().as_deref(),
+        )
+    })
 }
 
 #[cfg(unix)]

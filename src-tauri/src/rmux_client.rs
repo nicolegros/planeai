@@ -17,7 +17,11 @@ static CLIENT: tokio::sync::OnceCell<Mutex<Option<Arc<RmuxClient>>>> =
 
 /// Resolve the endpoint and the user's installed rmux daemon binary.
 fn config() -> RmuxConfig {
+    #[cfg(unix)]
     let config = RmuxConfig::app_private(planeai_ipc::daemon_runtime_dir());
+    // Windows uses a fixed named pipe and ignores the directory.
+    #[cfg(windows)]
+    let config = RmuxConfig::app_private(&std::env::temp_dir());
     match crate::config::rmux_daemon_binary() {
         Some(binary) => config.with_daemon_binary(binary),
         None => config,

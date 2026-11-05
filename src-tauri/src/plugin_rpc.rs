@@ -309,7 +309,7 @@ impl RequestLane {
         result
     }
 
-    pub(crate) fn is_broken(&self) -> bool {
+    fn is_broken(&self) -> bool {
         self.broken.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
