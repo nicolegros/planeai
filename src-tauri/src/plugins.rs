@@ -976,13 +976,7 @@ pub fn insert_local_inventory(
         providers,
         tools,
     } = ManifestColumns::of(manifest)?;
-    let ProvenanceColumns {
-        original_display_path,
-        remote_repo,
-        remote_release_tag,
-        remote_source_url,
-        remote_archive_sha256,
-    } = ProvenanceColumns::of(provenance);
+    let provenance = ProvenanceColumns::of(provenance);
     conn.execute(
         "INSERT INTO plugin_inventory (
             id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions, capabilities, background_service,
@@ -1000,13 +994,13 @@ pub fn insert_local_inventory(
             background_service,
             content_hash,
             package_dir.display().to_string(),
-            original_display_path,
+            provenance.original_display_path,
             providers,
             tools,
-            remote_repo,
-            remote_release_tag,
-            remote_source_url,
-            remote_archive_sha256,
+            provenance.remote_repo,
+            provenance.remote_release_tag,
+            provenance.remote_source_url,
+            provenance.remote_archive_sha256,
         ],
     )
     .map_err(|error| format!("failed to persist imported local plugin: {error}"))?;
@@ -1041,13 +1035,7 @@ pub fn replace_local_inventory(
         providers,
         tools,
     } = ManifestColumns::of(manifest)?;
-    let ProvenanceColumns {
-        original_display_path,
-        remote_repo,
-        remote_release_tag,
-        remote_source_url,
-        remote_archive_sha256,
-    } = ProvenanceColumns::of(provenance);
+    let provenance = ProvenanceColumns::of(provenance);
     conn.execute(
         "UPDATE plugin_inventory SET
             name = ?2, version = ?3, host_api_version = ?4, backend_entrypoint = ?5,
@@ -1068,13 +1056,13 @@ pub fn replace_local_inventory(
             background_service,
             content_hash,
             package_dir.display().to_string(),
-            original_display_path,
+            provenance.original_display_path,
             providers,
             tools,
-            remote_repo,
-            remote_release_tag,
-            remote_source_url,
-            remote_archive_sha256,
+            provenance.remote_repo,
+            provenance.remote_release_tag,
+            provenance.remote_source_url,
+            provenance.remote_archive_sha256,
         ],
     )
     .map_err(|error| format!("failed to replace local plugin inventory: {error}"))?;
@@ -1178,6 +1166,23 @@ fn row_to_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInventory
             )
         },
     )?;
+    let remote_origin = match (
+        row.get::<_, Option<String>>(18)?,
+        row.get::<_, Option<String>>(20)?,
+        row.get::<_, Option<String>>(21)?,
+    ) {
+        (Some(repo), Some(source_url), Some(archive_sha256)) => Some(RemoteOrigin {
+            repo,
+            release_tag: row.get(19)?,
+            source_url,
+            archive_sha256,
+        }),
+        (None, None, None) => None,
+        _ => {
+            tracing::warn!(plugin_id = %id, "ignoring an incomplete remote origin row");
+            None
+        }
+    };
     Ok(PluginInventory {
         id,
         name: row.get(1)?,
@@ -1200,15 +1205,7 @@ fn row_to_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInventory
         installed_hash: row.get(9)?,
         installed_path: row.get(10)?,
         original_display_path: row.get(11)?,
-        remote_origin: match row.get::<_, Option<String>>(18)? {
-            Some(repo) => Some(RemoteOrigin {
-                repo,
-                release_tag: row.get(19)?,
-                source_url: row.get::<_, Option<String>>(20)?.unwrap_or_default(),
-                archive_sha256: row.get::<_, Option<String>>(21)?.unwrap_or_default(),
-            }),
-            None => None,
-        },
+        remote_origin,
         enabled: row.get(12)?,
         state: PluginRuntimeState::from_db(&state),
         last_error: row.get(14)?,
@@ -5351,6 +5348,35 @@ mod tests {
             replaced.original_display_path.as_deref(),
             Some("/Users/me/panel")
         );
+    }
+
+    #[test]
+    fn a_partial_remote_origin_row_reads_back_as_no_origin() {
+        let conn = database();
+        let manifest = session_panel_manifest();
+        let package = tempfile::TempDir::new().unwrap();
+        insert_local_inventory(
+            &conn,
+            &manifest,
+            "bin/plugin",
+            "hash",
+            package.path(),
+            &PackageProvenance::Remote(RemoteOrigin {
+                repo: "acme/planeai-plugin-acme".to_string(),
+                release_tag: None,
+                source_url: "https://cdn.acme.dev/acme.zip".to_string(),
+                archive_sha256: "0123abcd".to_string(),
+            }),
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE plugin_inventory SET remote_source_url = NULL WHERE id = 'panel-test'",
+            [],
+        )
+        .unwrap();
+        let plugin = get_inventory(&conn, "panel-test").unwrap().unwrap();
+        assert_eq!(plugin.remote_origin, None);
+        assert_eq!(plugin.installed_hash.as_deref(), Some("hash"));
     }
 
     #[test]
