@@ -491,6 +491,10 @@ mod tests {
             "nothing was written"
         );
         assert!(lane.is_broken());
+        assert!(
+            lane.shutdown_turn(Duration::from_secs(1)).await.is_some(),
+            "a broken runtime is still asked to shut down"
+        );
     }
 
     #[tokio::test]
