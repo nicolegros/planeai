@@ -504,8 +504,8 @@ A provider session's UI owns the keyboard like a terminal: PlaneAI takes focus o
 
 Right after discovery returns, every card checks what the repository offers for this platform (see [Downloads](#downloads)) and what is already installed, and shows one of:
 
-- **Install vX** (or **Install** when the latest release tag is not semver) for a repository you have not installed.
-- **Update to vY** beside the installed version when the latest release is newer than the installed manifest version, or **Up to date (vY)** when it is not.
+- **Install vX** for a repository you have not installed, or plain **Install** when there is no semver release tag.
+- **Update to vY** beside **Installed vX** when the latest release vY is newer than the installed manifest version vX, or **Up to date (vX)** when it is not.
 - **Reinstall latest** beside the installed version for a repository-installed plugin whose versions cannot be compared.
 - **Installed locally (vY)** with **Replace with vX** when a plugin with the same `id` was installed from a folder.
 - **Installed from github.com/<other repository> (vY)** with **Replace with vX** when a plugin with the same `id` was installed from a different repository, so another author's package is never offered as an update.
