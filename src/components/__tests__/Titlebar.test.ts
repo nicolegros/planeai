@@ -18,6 +18,7 @@ const plugin: PluginInventory = {
   installed_path: "/plugin",
   original_display_path: "/plugin",
   remote_origin: null,
+  tools: [],
   enabled: true,
   state: "running",
   last_error: null,

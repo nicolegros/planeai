@@ -18,6 +18,7 @@
     installed_path: "/planeai/plugins/packages/sha256/hash",
     original_display_path: "/source/routines",
     remote_origin: null,
+    tools: [],
     enabled: true,
     state: "running",
     last_error: null,

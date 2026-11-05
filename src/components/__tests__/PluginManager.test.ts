@@ -27,6 +27,7 @@ const disabledPlugin = {
   installed_path: null,
   original_display_path: null,
   remote_origin: null,
+  tools: [],
   enabled: false,
   state: "disabled" as const,
   last_error: null,

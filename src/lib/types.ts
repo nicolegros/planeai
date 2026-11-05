@@ -210,6 +210,7 @@ export interface PluginInventory {
   } | null;
   ui_contributions: PluginUiContribution[];
   providers: PluginProvider[];
+  tools: PluginTool[];
   installed_hash: string | null;
   installed_path: string | null;
   original_display_path: string | null;
@@ -244,7 +245,7 @@ export type StagedPluginReplacement =
   | { kind: "local"; installed_version: string; original_display_path: string | null };
 
 /** A manifest tool declaration as the backend serializes it (camelCase, ADR-0017). */
-export interface StagedPluginTool {
+export interface PluginTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -266,7 +267,7 @@ export interface StagedPluginInstall {
     host_api_version: string;
     capabilities: string[];
     ui_contributions: PluginUiContribution[];
-    tools: StagedPluginTool[];
+    tools: PluginTool[];
   };
   replaces: StagedPluginReplacement;
   version_mismatch: { release_tag: string; manifest_version: string } | null;
