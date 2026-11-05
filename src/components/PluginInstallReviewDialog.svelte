@@ -14,9 +14,10 @@
     const { replaces } = staged;
     if (replaces.kind === "repo") return `Updates v${replaces.installed_version} to v${staged.manifest.version}.`;
     if (replaces.kind === "local") {
+      const build = `your local build v${replaces.installed_version}`;
       return replaces.original_display_path
-        ? `Replaces your local build at ${replaces.original_display_path}. Data and settings are kept.`
-        : "Replaces your local build. Data and settings are kept.";
+        ? `Replaces ${build} at ${replaces.original_display_path}. Data and settings are kept.`
+        : `Replaces ${build}. Data and settings are kept.`;
     }
     return null;
   });

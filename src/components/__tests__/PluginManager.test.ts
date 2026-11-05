@@ -75,7 +75,6 @@ const stagedAcme: StagedPluginInstall = {
     id: "acme",
     name: "Acme",
     version: "1.2.0",
-    host_api_version: "planeai.plugin-host.v6",
     capabilities: ["settings"],
     ui_contributions: [],
     tools: [],
@@ -354,7 +353,6 @@ describe("PluginManager", () => {
       "acme/reinstall": { kind: "reinstall", installed_version: "1.0.0" },
       "acme/local": {
         kind: "installed_locally",
-        plugin_id: "acme",
         installed_version: "0.9.0",
         latest_version: "1.2.0",
       },
@@ -386,9 +384,11 @@ describe("PluginManager", () => {
     expect(cardButtons("acme/current")).toEqual(["Open repository"]);
     expect(card("acme/current")?.textContent).toContain("Up to date (v1.0.0)");
     expect(cardButtons("acme/update")).toEqual(["Update to v2.0.0", "Open repository"]);
+    expect(card("acme/update")?.textContent).toContain("Installed v1.0.0");
     expect(cardButtons("acme/reinstall")).toEqual(["Reinstall latest", "Open repository"]);
+    expect(card("acme/reinstall")?.textContent).toContain("Installed v1.0.0");
     expect(cardButtons("acme/local")).toEqual(["Replace with v1.2.0", "Open repository"]);
-    expect(card("acme/local")?.textContent).toContain("Installed locally");
+    expect(card("acme/local")?.textContent).toContain("Installed locally (v0.9.0)");
     expect(cardButtons("acme/unavailable")).toEqual(["Open repository"]);
     expect(card("acme/unavailable")?.textContent).toContain(
       "Not available for macos-arm64: the latest release ships no matching asset.",

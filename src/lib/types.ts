@@ -228,12 +228,7 @@ export type DiscoveryCardState =
   | { kind: "up_to_date"; installed_version: string }
   | { kind: "update"; installed_version: string; latest_version: string }
   | { kind: "reinstall"; installed_version: string }
-  | {
-      kind: "installed_locally";
-      plugin_id: string;
-      installed_version: string;
-      latest_version: string | null;
-    };
+  | { kind: "installed_locally"; installed_version: string; latest_version: string | null };
 
 export type PackageIntegrity =
   | { kind: "verified"; sha256: string }
@@ -264,7 +259,6 @@ export interface StagedPluginInstall {
     id: string;
     name: string;
     version: string;
-    host_api_version: string;
     capabilities: string[];
     ui_contributions: PluginUiContribution[];
     tools: PluginTool[];

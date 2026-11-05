@@ -80,7 +80,6 @@ pub(crate) enum DiscoveryCardState {
         installed_version: String,
     },
     InstalledLocally {
-        plugin_id: String,
         installed_version: String,
         latest_version: Option<String>,
     },
@@ -117,7 +116,6 @@ pub(crate) struct StagedManifest {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) version: String,
-    pub(crate) host_api_version: String,
     pub(crate) capabilities: Vec<PluginHostCapability>,
     pub(crate) ui_contributions: Vec<PluginUiContribution>,
     pub(crate) tools: Vec<PluginTool>,
@@ -129,7 +127,6 @@ impl From<&PluginManifest> for StagedManifest {
             id: manifest.id.clone(),
             name: manifest.name.clone(),
             version: manifest.version.clone(),
-            host_api_version: manifest.host_api_version.clone(),
             capabilities: manifest.capabilities.clone(),
             ui_contributions: manifest.effective_ui_contributions(),
             tools: manifest.tools.clone(),
@@ -365,7 +362,6 @@ impl RemoteRepo {
         let installed_version = installed.version.clone();
         if installed.remote_origin.is_none() {
             return DiscoveryCardState::InstalledLocally {
-                plugin_id: installed.id.clone(),
                 installed_version,
                 latest_version: latest_label,
             };
@@ -1350,7 +1346,6 @@ mod tests {
                 remote.clone(),
                 vec![inventory("acme", "0.9.0", None)],
                 DiscoveryCardState::InstalledLocally {
-                    plugin_id: "acme".to_string(),
                     installed_version: "0.9.0".to_string(),
                     latest_version: Some("1.2.0".to_string()),
                 },
@@ -2168,7 +2163,6 @@ mod tests {
                     id: "acme".to_string(),
                     name: "Acme".to_string(),
                     version: "1.2.0".to_string(),
-                    host_api_version: "planeai.plugin-host.v1".to_string(),
                     capabilities: vec![],
                     ui_contributions: vec![],
                     tools: vec![],

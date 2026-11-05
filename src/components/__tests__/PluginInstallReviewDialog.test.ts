@@ -14,7 +14,6 @@ const staged: StagedPluginInstall = {
     id: "acme",
     name: "Acme",
     version: "1.2.0",
-    host_api_version: "planeai.plugin-host.v6",
     capabilities: ["settings", "tools"],
     ui_contributions: [
       {
@@ -115,7 +114,7 @@ describe("PluginInstallReviewDialog", () => {
       },
     });
     expect(content.textContent).toContain(
-      "Replaces your local build at /source/acme. Data and settings are kept.",
+      "Replaces your local build v0.9.0 at /source/acme. Data and settings are kept.",
     );
   });
 
@@ -123,7 +122,9 @@ describe("PluginInstallReviewDialog", () => {
     const content = await open({
       replaces: { kind: "local", installed_version: "0.9.0", original_display_path: null },
     });
-    expect(content.textContent).toContain("Replaces your local build. Data and settings are kept.");
+    expect(content.textContent).toContain(
+      "Replaces your local build v0.9.0. Data and settings are kept.",
+    );
   });
 
   it("explains an update of an earlier Discovery install", async () => {

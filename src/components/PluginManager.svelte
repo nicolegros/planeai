@@ -114,12 +114,12 @@
       case "up_to_date":
         return { note: `Up to date (v${state.installed_version})`, tone: "muted", action: null };
       case "update":
-        return { note: null, tone: "muted", action: `Update to v${state.latest_version}` };
+        return { note: `Installed v${state.installed_version}`, tone: "muted", action: `Update to v${state.latest_version}` };
       case "reinstall":
-        return { note: null, tone: "muted", action: "Reinstall latest" };
+        return { note: `Installed v${state.installed_version}`, tone: "muted", action: "Reinstall latest" };
       case "installed_locally":
         return {
-          note: "Installed locally",
+          note: `Installed locally (v${state.installed_version})`,
           tone: "muted",
           action: state.latest_version ? `Replace with v${state.latest_version}` : "Replace",
         };
