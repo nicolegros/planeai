@@ -779,6 +779,8 @@
   }
 
   function openNewTaskForm(): void {
+    // The sidebar stays clickable under forms; reopening TaskForm would turn an edit into a create.
+    if (showTaskForm || showSessionForm || showProjectForm) return;
     if (projects.length === 0) { openAddProject(); return; }
     taskWorkspaceToEdit = null;
     showTaskForm = true;
@@ -789,11 +791,16 @@
     { id: "terminal", label: "Terminal", glyph: "$", key: "t", disabled: !activeSessionId, disabledHint: "Open a session first" },
   ] as const);
 
+  function openNewTabSelector(paneId?: string): void {
+    if (!keyboardModalOpen) newTabTarget = { paneId };
+  }
+
   function chooseNewTab(choice: (typeof newTabChoices)[number]["id"]): void {
     const paneId = newTabTarget?.paneId;
     newTabTarget = null;
     if (choice === "agent") startNewSession();
-    else void openShellTab(paneId);
+    // The clicked pane may have closed while the selector was open.
+    else void openShellTab(paneId && findLeaf(workspaceLayout.layout, paneId) ? paneId : undefined);
   }
 
   function selectWorkspaceTask(task: TaskItem, repoPath: string): void {
@@ -1007,7 +1014,11 @@
     const cleanup = installKeyboardRouter(
       (action) => {
         // Any other chord dismisses the selector, so it never sits under another overlay or keeps a stale pane.
-        if (newTabTarget && action.type !== "new_tab") newTabTarget = null;
+        if (newTabTarget && action.type !== "new_tab") {
+          newTabTarget = null;
+          // Closing is how users dismiss the frontmost sheet; it must not also close the tab behind it.
+          if (action.type === "close_tab" || action.type === "close_split") return;
+        }
         if (action.type === "new_task") {
           if (!keyboardModalOpen) openNewTaskForm();
         } else if (action.type === "new_project") { openAddProject(); }
@@ -1030,7 +1041,7 @@
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; commandMenuRenameId = null; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
-        else if (action.type === "new_tab") { if (!keyboardModalOpen) newTabTarget = {}; }
+        else if (action.type === "new_tab") { openNewTabSelector(); }
         else if (action.type === "close_tab") { closeFocusedTab(); }
         else if (action.type === "next_tab") { cycleTab(1); }
         else if (action.type === "prev_tab") { cycleTab(-1); }
@@ -1132,7 +1143,7 @@
       leavePluginWorkspace();
       selectPaneTab(ptyKey);
     }}
-    onAddTab={() => { newTabTarget = { paneId: singlePane?.id }; }}
+    onAddTab={() => openNewTabSelector(singlePane?.id)}
     onTabDoubleClick={renameFromTab}
     paneId={singlePane?.id}
     onTabPress={pressTab}
@@ -1299,7 +1310,7 @@
             showCloseButton={true}
             paneId={leaf.id}
             onSelectTab={selectPaneTab}
-            onAddTab={() => { newTabTarget = { paneId: leaf.id }; }}
+            onAddTab={() => openNewTabSelector(leaf.id)}
             onClose={() => { workspaceLayout.closePane(leaf.id); syncFocusedTabToSelection(); }}
             onTabDoubleClick={renameFromTab}
             onTabPress={pressTab}

@@ -1,7 +1,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import { flushFrames, stubLayoutAsVisible } from "./dom-visibility";
-import ChoiceDialog from "../ChoiceDialog.svelte";
+import ChoiceDialog, { type Choice } from "../ChoiceDialog.svelte";
 
 const restoreLayoutStubs = stubLayoutAsVisible();
 afterAll(restoreLayoutStubs);
@@ -14,16 +14,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-type Option = {
-  id: string;
-  label: string;
-  glyph: string;
-  key: string;
-  disabled?: boolean;
-  disabledHint?: string;
-};
-
-async function openDialog(options: Option[]) {
+async function openDialog(options: Choice[]) {
   const onChoose = vi.fn();
   const onClose = vi.fn();
   dialog = mount(ChoiceDialog, {
@@ -50,7 +41,7 @@ function row(label: string): HTMLButtonElement {
   return button;
 }
 
-const newTabOptions: Option[] = [
+const newTabOptions: Choice[] = [
   { id: "agent", label: "Agent session", glyph: "›_", key: "a" },
   { id: "terminal", label: "Terminal", glyph: "$", key: "t" },
 ];

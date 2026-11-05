@@ -34,7 +34,7 @@
     requestedId = enabled[(index + step + enabled.length) % enabled.length].id;
   }
 
-  // Capture on window: the dialog leaves focus in the terminal, which would otherwise eat these keys.
+  // Capture on window: focus stays outside the dialog (preventOpenAutoFocus), and these keys must beat App's window handlers.
   function onKeydown(e: KeyboardEvent): void {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     e.preventDefault();
