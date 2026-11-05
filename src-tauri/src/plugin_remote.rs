@@ -208,7 +208,7 @@ pub(crate) enum ArchiveFormat {
 impl ArchiveFormat {
     fn from_url(url: &str) -> Result<Self, String> {
         let path = url.split(['?', '#']).next().unwrap_or(url);
-        if path.ends_with(".tar.gz") || path.ends_with(".tgz") {
+        if path.ends_with(".tar.gz") {
             Ok(Self::TarGz)
         } else if path.ends_with(".zip") {
             Ok(Self::Zip)
@@ -1476,10 +1476,13 @@ mod tests {
             ArchiveFormat::from_url("https://x/a.zip").unwrap(),
             ArchiveFormat::Zip
         );
-        assert_eq!(
-            ArchiveFormat::from_url("https://x/a.dmg").unwrap_err(),
-            "plugin download must be a .tar.gz or .zip archive: https://x/a.dmg"
-        );
+        for unsupported in ["https://x/a.dmg", "https://x/a.tgz", "https://x/a.tar"] {
+            assert_eq!(
+                ArchiveFormat::from_url(unsupported).unwrap_err(),
+                format!("plugin download must be a .tar.gz or .zip archive: {unsupported}"),
+                "{unsupported}"
+            );
+        }
     }
 
     #[test]
