@@ -249,7 +249,7 @@
       <h2 class="text-[12px] font-medium text-t1">Installed plugins</h2>
       <p class="mt-0.5 text-[12px] leading-snug text-t3">Trusted local packages run as supervised subprocesses from PlaneAI-owned imported copies.</p>
     </div>
-    <div class="flex gap-2">
+    <div class="flex shrink-0 gap-2 whitespace-nowrap">
       <Button type="button" disabled={discovering} onclick={() => void discover()}>{discovering ? "Discovering…" : discoveryCandidates ? "Refresh discovery" : "Discover plugins"}</Button>
       <Button type="button" disabled={installing} onclick={() => void installLocal()}>{installing ? "Importing…" : "Install local package"}</Button>
       <Button type="button" onclick={() => void refresh()}>Refresh</Button>

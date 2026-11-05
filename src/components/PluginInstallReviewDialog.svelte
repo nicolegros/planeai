@@ -31,7 +31,7 @@
   {#if staged}
     <h2 class="text-sm font-semibold text-t1">Install {staged.manifest.name}?</h2>
     {#if replacementNotice}
-      <p class="text-sm text-t2">{replacementNotice}</p>
+      <p class="text-xs text-t2">{replacementNotice}</p>
     {/if}
     <dl class="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1 font-mono text-xs text-t3">
       <dt>id</dt>
