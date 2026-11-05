@@ -1014,7 +1014,6 @@
 
     const cleanup = installKeyboardRouter(
       (action) => {
-        // Any other chord dismisses the selector, so it never sits under another overlay or keeps a stale pane.
         if (newTabTarget) {
           const outcome = selectorChordOutcome(action.type);
           if (outcome !== "keep") newTabTarget = null;
