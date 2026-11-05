@@ -474,7 +474,13 @@ fn kiro_auto_approve_includes_yolo_flag() {
 #[test]
 fn claude_auto_approve_includes_yolo_flag() {
     let result = build_provider_launch_command(&claude_provider(), true, None, false, None, None);
-    assert_eq!(result.command, "claude --dangerously-skip-permissions");
+    assert_eq!(
+        result.command,
+        format!(
+            "claude --dangerously-skip-permissions {}",
+            planeai_core::agent_hooks::installed_claude_launch_args()
+        )
+    );
     assert!(result.auto_approve_was_applied);
 }
 
@@ -531,7 +537,13 @@ fn claude_task_prompt_starts_an_interactive_session() {
         None,
         None,
     );
-    assert_eq!(result.command, "claude -- '- Fix the login bug'");
+    assert_eq!(
+        result.command,
+        format!(
+            "claude {} -- '- Fix the login bug'",
+            planeai_core::agent_hooks::installed_claude_launch_args()
+        )
+    );
     assert!(result.prompt_was_injected);
 }
 

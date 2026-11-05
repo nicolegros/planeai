@@ -852,7 +852,11 @@ pub fn restart_command_for_provider(
         .resume_command
         .as_ref()
         .unwrap_or(&provider.command);
-    match planeai_core::session_launch::mcp_launch_args(provider.mcp_args.as_deref(), mcp) {
+    match planeai_core::session_launch::agent_launch_args(
+        command,
+        provider.mcp_args.as_deref(),
+        mcp,
+    ) {
         Some(args) => format!("{command} {args}"),
         None => command.clone(),
     }

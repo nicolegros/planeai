@@ -333,6 +333,7 @@ pub fn start_daemon_event_listener(app_handle: &tauri::AppHandle) {
                             &evt.session_id,
                             crate::task_activity::Activity::Exited,
                         );
+                        crate::notify::agent_exited(&app, &evt.session_id);
                         app.state::<PluginRuntimeHandle>()
                             .0
                             .dispatch_session_lifecycle(event);
@@ -374,6 +375,44 @@ pub fn register_active_sessions(
             .unwrap_or("unknown");
         register_notify_session(&mut ns, session, project_name, cfg);
     }
+}
+
+/// Removes the hooks older versions added to the user's Claude settings once no running agent
+/// still reports through them. Lists processes, so it runs off the main thread.
+pub fn spawn_legacy_claude_hooks_cleanup() {
+    #[cfg(unix)]
+    std::thread::spawn(|| {
+        use planeai_core::agent_hooks::{
+            claude_agents_need_legacy_hooks, legacy_claude_settings, remove_legacy_claude_hooks_at,
+        };
+        let output = match std::process::Command::new("ps")
+            .args(["-axww", "-o", "command="])
+            .output()
+        {
+            Ok(output) if output.status.success() => output,
+            Ok(output) => {
+                tracing::warn!(status = %output.status, "could not list processes; legacy Claude hooks kept");
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "could not list processes; legacy Claude hooks kept");
+                return;
+            }
+        };
+        if claude_agents_need_legacy_hooks(String::from_utf8_lossy(&output.stdout).lines()) {
+            tracing::info!(
+                "legacy Claude hooks kept: agents started without launch hooks still run"
+            );
+            return;
+        }
+        match remove_legacy_claude_hooks_at(&legacy_claude_settings(&config::home_dir())) {
+            Ok(true) => {
+                tracing::info!("removed the hooks older versions added to Claude's settings")
+            }
+            Ok(false) => {}
+            Err(error) => tracing::warn!(%error, "failed to remove legacy Claude hooks"),
+        }
+    });
 }
 
 /// Warm font cache in background so preferences page opens instantly.

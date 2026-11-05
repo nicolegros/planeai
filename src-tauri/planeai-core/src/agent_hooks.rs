@@ -50,14 +50,15 @@ impl AgentKind {
         })
     }
 
-    pub fn is_hook_installed(self, home: &str) -> bool {
+    /// `app_dir` is PlaneAI's data folder, which holds Claude's hooks.
+    pub fn is_hook_installed(self, home: &str, app_dir: &Path) -> bool {
         let home = Path::new(home);
         match self {
             AgentKind::Kiro => {
                 is_kiro_hook_installed_at(&home.join(".kiro/agents/default.json"))
                     || is_kiro_v3_hook_installed_at(&home.join(".kiro/hooks"))
             }
-            AgentKind::Claude => is_claude_hook_installed_at(&home.join(".claude/settings.json")),
+            AgentKind::Claude => claude_settings_path(app_dir).exists(),
             AgentKind::Copilot => is_copilot_hook_installed_at(&copilot_dir(home)),
             AgentKind::Codex => is_codex_hook_installed_at(&codex_dir(home)),
         }
@@ -65,10 +66,10 @@ impl AgentKind {
 
     /// Install (or repair) the hook script and register it in the agent's config.
     /// Idempotent: existing user config is preserved and planeai entries are never duplicated.
-    pub fn install_hook(self, home: &str) -> Result<(), String> {
+    pub fn install_hook(self, home: &str, app_dir: &Path) -> Result<(), String> {
         match self {
             AgentKind::Kiro => install_kiro_hook(home),
-            AgentKind::Claude => install_claude_hook(home),
+            AgentKind::Claude => install_claude_hook(home, app_dir),
             AgentKind::Copilot => install_copilot_hook(home),
             AgentKind::Codex => install_codex_hook(home),
         }
@@ -77,12 +78,15 @@ impl AgentKind {
 
 /// Rewrite already-installed hooks so their scripts match the bundled version.
 /// Agents whose hook is not installed are left untouched.
-pub fn refresh_hook_scripts(home: &str) {
+pub fn refresh_hook_scripts(home: &str, app_dir: &Path) {
     for kind in AgentKind::ALL {
-        if kind.is_hook_installed(home) {
-            if let Err(e) = kind.install_hook(home) {
-                tracing::warn!(?kind, error = %e, "failed to refresh hook script");
-            }
+        // Claude's hooks live in PlaneAI's own data and replace those it once added to the
+        // user's settings, so they are always written.
+        if kind != AgentKind::Claude && !kind.is_hook_installed(home, app_dir) {
+            continue;
+        }
+        if let Err(e) = kind.install_hook(home, app_dir) {
+            tracing::warn!(?kind, error = %e, "failed to refresh hook script");
         }
     }
 }
@@ -206,24 +210,6 @@ pub fn is_kiro_v3_hook_installed_at(hooks_dir: &Path) -> bool {
     false
 }
 
-pub fn is_claude_hook_installed_at(settings_path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(settings_path) else {
-        return false;
-    };
-    if !content.contains("planeai-stop-notify") {
-        return false;
-    }
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return false;
-    };
-    let Some(hooks) = v.get("hooks").and_then(|h| h.as_object()) else {
-        return false;
-    };
-    ["Stop", "StopFailure", "Notification", "UserPromptSubmit"]
-        .iter()
-        .all(|event| hooks.contains_key(*event))
-}
-
 pub fn is_copilot_hook_installed_at(copilot_dir: &Path) -> bool {
     let notify_path = copilot_dir.join("hooks").join("planeai-notify.json");
     let Ok(content) = std::fs::read_to_string(notify_path) else {
@@ -333,22 +319,83 @@ pub fn install_kiro_hook(home: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn install_claude_hook(home: &str) -> Result<(), String> {
-    let claude_dir = std::path::PathBuf::from(format!("{home}/.claude"));
-    let hooks_dir = claude_dir.join("hooks");
-    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
+// ─── Claude: hooks loaded per launch ─────────────────────────────────────────
 
-    #[cfg(not(windows))]
-    let (script_path, script_content) = (
-        hooks_dir.join("planeai-stop-notify-claude.sh"),
-        include_str!("../resources/planeai-stop-notify-claude.sh"),
-    );
-    #[cfg(windows)]
-    let (script_path, script_content) = (
-        hooks_dir.join("planeai-stop-notify-claude.ps1"),
-        include_str!("../resources/planeai-stop-notify-claude.ps1"),
-    );
+/// Claude Code gets PlaneAI's hooks from a settings file passed with `--settings` at each
+/// launch, so the user's own settings stay untouched and only PlaneAI sessions report.
+const CLAUDE_SETTINGS_FILE: &str = "claude-hooks.json";
+#[cfg(not(windows))]
+const CLAUDE_SCRIPT: (&str, &str) = (
+    "planeai-notify-claude.sh",
+    include_str!("../resources/planeai-stop-notify-claude.sh"),
+);
+#[cfg(windows)]
+const CLAUDE_SCRIPT: (&str, &str) = (
+    "planeai-notify-claude.ps1",
+    include_str!("../resources/planeai-stop-notify-claude.ps1"),
+);
 
+/// The script older versions registered in `~/.claude/hooks`.
+#[cfg(not(windows))]
+const LEGACY_CLAUDE_SCRIPT: &str = "planeai-stop-notify-claude.sh";
+#[cfg(windows)]
+const LEGACY_CLAUDE_SCRIPT: &str = "planeai-stop-notify-claude.ps1";
+
+fn claude_settings_path(app_dir: &Path) -> PathBuf {
+    app_dir.join("hooks").join(CLAUDE_SETTINGS_FILE)
+}
+
+/// The `--settings` argument loading PlaneAI's hooks into a Claude launch.
+pub fn claude_launch_args(app_dir: &Path) -> String {
+    format!("--settings {}", quote_path(&claude_settings_path(app_dir)))
+}
+
+/// [`claude_launch_args`] for PlaneAI's data folder, what every Claude launch carries.
+pub fn installed_claude_launch_args() -> String {
+    claude_launch_args(&crate::app_data_dir())
+}
+
+fn quote_path(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    if cfg!(windows) {
+        format!("\"{path}\"")
+    } else {
+        crate::template::shell_escape(&path)
+    }
+}
+
+/// Every event the script maps, each running it; `PostToolUse` flips a session back to busy
+/// after a permission prompt is approved.
+fn claude_hook_settings(script: &Path) -> serde_json::Value {
+    let group = |matcher: Option<&str>| {
+        let mut group = serde_json::json!({
+            "hooks": [{ "type": "command", "command": quote_path(script) }]
+        });
+        if let Some(matcher) = matcher {
+            group["matcher"] = serde_json::json!(matcher);
+        }
+        serde_json::json!([group])
+    };
+    serde_json::json!({
+        "hooks": {
+            "Stop": group(None),
+            "StopFailure": group(None),
+            "Notification": group(Some("idle_prompt|permission_prompt")),
+            "UserPromptSubmit": group(None),
+            "PostToolUse": group(None),
+        }
+    })
+}
+
+/// Writes the script and the settings file Claude launches load.
+fn install_claude_launch_hooks(app_dir: &Path) -> Result<(), String> {
+    let settings_path = claude_settings_path(app_dir);
+    let hooks_dir = settings_path
+        .parent()
+        .expect("the settings file is in a directory");
+    std::fs::create_dir_all(hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
+    let (script_name, script_content) = CLAUDE_SCRIPT;
+    let script_path = hooks_dir.join(script_name);
     std::fs::write(&script_path, script_content)
         .map_err(|e| format!("failed to write hook script: {e}"))?;
     #[cfg(unix)]
@@ -357,9 +404,90 @@ pub fn install_claude_hook(home: &str) -> Result<(), String> {
         std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| format!("failed to chmod hook: {e}"))?;
     }
+    let settings = serde_json::to_string_pretty(&claude_hook_settings(&script_path))
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&settings_path, settings)
+        .map_err(|e| format!("failed to write hook settings: {e}"))
+}
 
-    let script_command = script_path.to_string_lossy().to_string();
-    install_claude_hook_at(&claude_dir, &script_command)
+/// Removes the hooks PlaneAI used to add to the user's Claude settings, keeping everything
+/// else; returns whether it changed the file. Their script stays, since agents started before
+/// keep calling it until they restart.
+pub fn remove_legacy_claude_hooks_at(settings_path: &Path) -> Result<bool, String> {
+    let Ok(content) = std::fs::read_to_string(settings_path) else {
+        return Ok(false);
+    };
+    if !content.contains("planeai-stop-notify") {
+        return Ok(false);
+    }
+    let mut settings: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("failed to parse {}: {e}", settings_path.display()))?;
+    let Some(hooks) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) else {
+        return Ok(false);
+    };
+    let is_planeai = |hook: &serde_json::Value| {
+        hook.get("command")
+            .and_then(|c| c.as_str())
+            .is_some_and(|c| c.contains("planeai-stop-notify"))
+    };
+    for groups in hooks.values_mut() {
+        let Some(groups) = groups.as_array_mut() else {
+            continue;
+        };
+        for group in groups.iter_mut() {
+            if let Some(entries) = group.get_mut("hooks").and_then(|h| h.as_array_mut()) {
+                entries.retain(|hook| !is_planeai(hook));
+            }
+        }
+        groups.retain(|group| {
+            group
+                .get("hooks")
+                .and_then(|h| h.as_array())
+                .is_none_or(|entries| !entries.is_empty())
+        });
+    }
+    hooks.retain(|_, groups| groups.as_array().is_none_or(|groups| !groups.is_empty()));
+    if hooks.is_empty() {
+        settings.as_object_mut().unwrap().remove("hooks");
+    }
+    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    // Running agents watch this file, so it is replaced whole, through a symlink to it.
+    let target = std::fs::canonicalize(settings_path).map_err(|e| e.to_string())?;
+    planeai_paths::write_file_atomically(&target, output.as_bytes())
+        .map_err(|e| format!("failed to write {}: {e}", target.display()))?;
+    Ok(true)
+}
+
+/// Writes Claude's launch hooks. The hooks older versions added to the user's settings stay
+/// until no agent needs them (see [`claude_agents_need_legacy_hooks`]), since Claude Code
+/// applies settings changes live; their script is kept current meanwhile.
+pub fn install_claude_hook(home: &str, app_dir: &Path) -> Result<(), String> {
+    install_claude_launch_hooks(app_dir)?;
+    let script = legacy_claude_settings(home)
+        .with_file_name("hooks")
+        .join(LEGACY_CLAUDE_SCRIPT);
+    if !script.exists() {
+        return Ok(());
+    }
+    std::fs::write(&script, CLAUDE_SCRIPT.1)
+        .map_err(|e| format!("failed to refresh {}: {e}", script.display()))
+}
+
+/// The user settings older versions added Claude's hooks to.
+pub fn legacy_claude_settings(home: &str) -> PathBuf {
+    Path::new(home).join(".claude/settings.json")
+}
+
+/// Whether a running Claude agent still reports through the hooks older versions added to the
+/// user's settings: one started without PlaneAI's launch hooks, from the running processes'
+/// command lines. A Claude run outside PlaneAI counts too, which only delays the removal.
+pub fn claude_agents_need_legacy_hooks<'a>(
+    command_lines: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    command_lines.into_iter().any(|command| {
+        AgentKind::from_command(command) == Some(AgentKind::Claude)
+            && !command.contains(CLAUDE_SETTINGS_FILE)
+    })
 }
 
 pub fn install_copilot_hook(home: &str) -> Result<(), String> {
@@ -419,67 +547,6 @@ pub fn install_copilot_hook_at(
     Ok(())
 }
 
-pub fn install_claude_hook_at(claude_dir: &Path, script_command: &str) -> Result<(), String> {
-    std::fs::create_dir_all(claude_dir)
-        .map_err(|e| format!("failed to create .claude dir: {e}"))?;
-
-    let settings_path = claude_dir.join("settings.json");
-    let mut settings: serde_json::Value = if let Ok(content) =
-        std::fs::read_to_string(&settings_path)
-    {
-        serde_json::from_str(&content).map_err(|e| format!("failed to parse settings.json: {e}"))?
-    } else {
-        serde_json::json!({})
-    };
-
-    let hooks = settings
-        .as_object_mut()
-        .unwrap()
-        .entry("hooks")
-        .or_insert_with(|| serde_json::json!({}));
-    let hooks_obj = hooks.as_object_mut().unwrap();
-
-    let hook_entry = serde_json::json!({
-        "type": "command",
-        "command": script_command,
-        "args": []
-    });
-
-    let mut ensure_hook = |event: &str, matcher: Option<&str>| {
-        let arr = hooks_obj
-            .entry(event)
-            .or_insert_with(|| serde_json::json!([]));
-        let arr = arr.as_array_mut().unwrap();
-        if arr.iter().any(|g| {
-            serde_json::to_string(g)
-                .unwrap_or_default()
-                .contains("planeai-stop-notify")
-        }) {
-            return;
-        }
-        let mut group = serde_json::json!({ "hooks": [hook_entry] });
-        if let Some(m) = matcher {
-            group
-                .as_object_mut()
-                .unwrap()
-                .insert("matcher".to_string(), serde_json::json!(m));
-        }
-        arr.push(group);
-    };
-
-    ensure_hook("Stop", None);
-    ensure_hook("StopFailure", None);
-    ensure_hook("Notification", Some("idle_prompt|permission_prompt"));
-    ensure_hook("UserPromptSubmit", None);
-    // Flips the session back to busy after a permission prompt is approved.
-    ensure_hook("PostToolUse", None);
-
-    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(&settings_path, output)
-        .map_err(|e| format!("failed to write settings.json: {e}"))?;
-    Ok(())
-}
-
 pub fn install_codex_hook(home: &str) -> Result<(), String> {
     let codex_dir = codex_dir(Path::new(home));
     let hooks_dir = codex_dir.join("hooks");
@@ -518,10 +585,7 @@ fn codex_script_command(script_path: &Path, custom_codex_home: bool) -> String {
         )
     } else if custom_codex_home {
         // POSIX single quotes so `$`, backticks or `"` in CODEX_HOME stay literal.
-        format!(
-            "'{}'",
-            script_path.display().to_string().replace('\'', r"'\''")
-        )
+        crate::template::shell_escape(&script_path.display().to_string())
     } else {
         // Keep `$HOME` unexpanded (Codex runs hooks through a shell) so a hooks.json
         // kept in dotfiles stays portable across machines.
@@ -768,7 +832,7 @@ mod tests {
         let script = codex_dir.join("hooks/planeai-stop-notify-codex.sh");
         let mode = std::fs::metadata(&script).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o755);
-        assert!(AgentKind::Codex.is_hook_installed(home));
+        assert!(AgentKind::Codex.is_hook_installed(home, Path::new("/unused")));
     }
 
     #[cfg(unix)]
@@ -904,6 +968,15 @@ mod tests {
                 "{event}"
             );
         }
+        let stdin = r#"{"hook_event_name":"Notification","notification_type":"idle_prompt","transcript_path":"/tmp/a \"b\".jsonl","cwd":"/x"}"#;
+        assert_eq!(
+            run_notify_script(claude, None, stdin),
+            Some(
+                r#"{"session_id":"s-1","event":"notification","transcript_path":"/tmp/a \"b\".jsonl","notification_type":"idle_prompt"}"#
+                    .into()
+            ),
+            "the transcript and notification type ride along, JSON-escaped"
+        );
     }
 
     #[cfg(unix)]
@@ -929,12 +1002,165 @@ mod tests {
     }
 
     #[test]
-    fn refresh_skips_agents_without_installed_hooks() {
+    fn refresh_skips_agents_without_installed_hooks_but_always_writes_claudes() {
         let dir = tempfile::tempdir().unwrap();
-        refresh_hook_scripts(dir.path().to_str().unwrap());
+        let app_dir = dir.path().join("app");
+        refresh_hook_scripts(dir.path().to_str().unwrap(), &app_dir);
         assert!(!dir.path().join(".kiro").exists());
         assert!(!dir.path().join(".claude").exists());
         assert!(!dir.path().join(".codex").exists());
+        assert!(AgentKind::Claude.is_hook_installed("/unused", &app_dir));
+    }
+
+    // ─── Claude launch hooks ─────────────────────────────────────────────────
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_hooks_live_in_planeai_data_and_reach_the_launch_through_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_dir = dir.path().join("Application Support/ca.nicolegros.planeai");
+        install_claude_launch_hooks(&app_dir).unwrap();
+
+        let script = app_dir.join("hooks/planeai-notify-claude.sh");
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&script).unwrap().permissions().mode() & 0o111,
+            0o111
+        );
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(claude_settings_path(&app_dir)).unwrap())
+                .unwrap();
+        let quoted = format!("'{}'", script.display());
+        for event in [
+            "Stop",
+            "StopFailure",
+            "Notification",
+            "UserPromptSubmit",
+            "PostToolUse",
+        ] {
+            assert_eq!(
+                settings["hooks"][event][0]["hooks"][0]["command"], quoted,
+                "{event} runs the script, quoted for the space in its path"
+            );
+        }
+        assert_eq!(
+            settings["hooks"]["Notification"][0]["matcher"],
+            "idle_prompt|permission_prompt"
+        );
+        assert_eq!(
+            claude_launch_args(&app_dir),
+            format!("--settings '{}'", claude_settings_path(&app_dir).display())
+        );
+    }
+
+    #[test]
+    fn only_claude_agents_started_without_launch_hooks_need_the_legacy_ones() {
+        let launched =
+            "claude --dangerously-skip-permissions --settings '/a/hooks/claude-hooks.json' -- 'go'";
+        assert!(!claude_agents_need_legacy_hooks([
+            launched,
+            "codex resume --last",
+            "/usr/bin/zsh"
+        ]));
+        assert!(claude_agents_need_legacy_hooks([
+            launched,
+            "/opt/homebrew/bin/claude --resume"
+        ]));
+        assert!(!claude_agents_need_legacy_hooks([
+            "my-claude-wrapper",
+            "nvim CLAUDE.md"
+        ]));
+        assert!(!claude_agents_need_legacy_hooks([]));
+    }
+
+    #[test]
+    fn legacy_claude_hooks_stay_current_until_removed_keeping_the_users_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let settings_path = claude_dir.join("settings.json");
+        let planeai = serde_json::json!({ "type": "command", "command": "/h/.claude/hooks/planeai-stop-notify-claude.sh", "args": [] });
+        let mine = serde_json::json!({ "type": "command", "command": "afplay done.aiff" });
+        std::fs::write(
+            &settings_path,
+            serde_json::json!({
+                "model": "opus",
+                "hooks": {
+                    "Stop": [{ "hooks": [planeai.clone(), mine.clone()] }],
+                    "UserPromptSubmit": [{ "hooks": [planeai.clone()] }],
+                    "Notification": [{ "matcher": "idle_prompt|permission_prompt", "hooks": [planeai] }],
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let home = dir.path().to_str().unwrap();
+        let legacy_script = claude_dir.join("hooks").join(LEGACY_CLAUDE_SCRIPT);
+        std::fs::create_dir_all(legacy_script.parent().unwrap()).unwrap();
+        std::fs::write(&legacy_script, "old").unwrap();
+        let before = std::fs::read_to_string(&settings_path).unwrap();
+
+        install_claude_hook(home, &dir.path().join("app")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&settings_path).unwrap(),
+            before,
+            "agents still running need them"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&legacy_script).unwrap(),
+            CLAUDE_SCRIPT.1,
+            "their script stays current"
+        );
+
+        assert!(remove_legacy_claude_hooks_at(&legacy_claude_settings(home)).unwrap());
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(
+            settings,
+            serde_json::json!({ "model": "opus", "hooks": { "Stop": [{ "hooks": [mine] }] } })
+        );
+        assert!(
+            !remove_legacy_claude_hooks_at(&settings_path).unwrap(),
+            "nothing left to remove"
+        );
+        assert!(!remove_legacy_claude_hooks_at(&claude_dir.join("missing.json")).unwrap());
+
+        std::fs::write(
+            &settings_path,
+            r#"{"hooks":{"Stop":[{"hooks":[{"command":"planeai-stop-notify-claude.sh"}]}]}}"#,
+        )
+        .unwrap();
+        assert!(remove_legacy_claude_hooks_at(&settings_path).unwrap());
+        assert_eq!(std::fs::read_to_string(&settings_path).unwrap(), "{}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removing_legacy_claude_hooks_replaces_a_linked_settings_file_through_its_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("dotfiles-settings.json");
+        std::fs::write(
+            &real,
+            r#"{"hooks":{"Stop":[{"hooks":[{"command":"planeai-stop-notify-claude.sh"}]}]}}"#,
+        )
+        .unwrap();
+        let link = dir.path().join("settings.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert!(remove_legacy_claude_hooks_at(&link).unwrap());
+
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "{}");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            2,
+            "no temporary file is left behind"
+        );
     }
 
     // ─── Hook detection tests ────────────────────────────────────────────────
@@ -1029,22 +1255,6 @@ mod tests {
     }
 
     #[test]
-    fn detect_claude_hook_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        std::fs::write(&path, r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/path/to/planeai-stop-notify-claude.sh"}]}],"StopFailure":[{}],"Notification":[{}],"UserPromptSubmit":[{}]}}"#).unwrap();
-        assert!(is_claude_hook_installed_at(&path));
-    }
-
-    #[test]
-    fn detect_claude_hook_not_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        std::fs::write(&path, r#"{"hooks":{}}"#).unwrap();
-        assert!(!is_claude_hook_installed_at(&path));
-    }
-
-    #[test]
     fn detect_copilot_hook_installed() {
         let dir = tempfile::tempdir().unwrap();
         let hooks_dir = dir.path().join("hooks");
@@ -1088,56 +1298,6 @@ mod tests {
             std::fs::read_to_string(dir.path().join("hooks/planeai-notify.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert_eq!(v["hooks"]["agentStop"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn install_claude_hook_creates_correct_structure() {
-        let dir = tempfile::tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        install_claude_hook_at(&claude_dir, "/path/planeai-stop-notify-claude.sh").unwrap();
-        let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
-        )
-        .unwrap();
-        assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .contains("planeai-stop-notify"));
-    }
-
-    #[test]
-    fn install_claude_hook_marks_post_tool_use_busy() {
-        let dir = tempfile::tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        install_claude_hook_at(&claude_dir, "/path/planeai-stop-notify-claude.sh").unwrap();
-        let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
-        )
-        .unwrap();
-        assert!(settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .contains("planeai-stop-notify"));
-        assert!(include_str!("../resources/planeai-stop-notify-claude.sh").contains("PostToolUse"));
-    }
-
-    #[test]
-    fn install_claude_hook_merges_with_existing_settings() {
-        let dir = tempfile::tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
-        std::fs::write(
-            claude_dir.join("settings.json"),
-            r#"{"permissions":{"allow":["Read"]}}"#,
-        )
-        .unwrap();
-        install_claude_hook_at(&claude_dir, "/path/planeai-stop-notify-claude.sh").unwrap();
-        let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(settings["permissions"]["allow"][0], "Read");
-        assert!(settings["hooks"]["Stop"].is_array());
     }
 
     #[test]

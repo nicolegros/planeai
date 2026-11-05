@@ -11,11 +11,11 @@ use planeai::ipc::{Channel, IpcListener};
 // Re-export shared types from planeai-core
 #[cfg(test)]
 use planeai_core::agent_hooks::{
-    install_claude_hook_at, install_copilot_hook_at, is_claude_hook_installed_at,
-    is_copilot_hook_installed_at, is_kiro_hook_installed_at,
+    install_copilot_hook_at, is_copilot_hook_installed_at, is_kiro_hook_installed_at,
 };
 pub use planeai_core::notify::{
     parse_notify_message, AgentState, NotifyEvent, NotifyMessage, NotifyState, SharedNotifyState,
+    TurnEnd,
 };
 
 const SILENCE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
@@ -126,11 +126,21 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
         NotifyEvent::Notification => {
             let fired = {
                 let mut s = state.lock().unwrap();
+                if let Some(path) = &msg.transcript_path {
+                    s.note_transcript(&msg.session_id, path.clone());
+                }
                 let name = s
                     .get_meta(&msg.session_id)
-                    .map(|m| m.name.as_str())
-                    .unwrap_or("?");
-                tracing::info!(session_id = %msg.session_id, name, "immediate notification signal received");
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| "?".into());
+                // Claude Code reports an idle prompt while background subagents still work.
+                if msg.notification_type.as_deref() == Some("idle_prompt")
+                    && s.is_held(&msg.session_id)
+                {
+                    tracing::info!(session_id = %msg.session_id, %name, "idle prompt ignored: background subagents still running");
+                    return;
+                }
+                tracing::info!(session_id = %msg.session_id, %name, "immediate notification signal received");
                 s.notify_stop_immediate(&msg.session_id)
             };
             if fired {
@@ -140,11 +150,15 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
         }
         NotifyEvent::Stop => {
             let mut s = state.lock().unwrap();
+            if let Some(path) = &msg.transcript_path {
+                s.note_transcript(&msg.session_id, path.clone());
+            }
             let name = s
                 .get_meta(&msg.session_id)
                 .map(|m| m.name.clone())
                 .unwrap_or_else(|| "?".into());
-            let hook_enabled = s.get_meta(&msg.session_id).is_some_and(|m| m.hook_enabled);
+            // A Stop before the session registers still comes from a hook.
+            let hook_enabled = s.get_meta(&msg.session_id).is_none_or(|m| m.hook_enabled);
             if hook_enabled {
                 tracing::info!(session_id = %msg.session_id, %name, "stop received, debouncing 2s");
                 s.notify_stop_debounced(&msg.session_id);
@@ -356,6 +370,7 @@ fn mark_provider_session_exited(app: &AppHandle, session_id: &str) {
         match exited {
             Ok(Some(event)) => {
                 crate::task_activity::record(&app, &session_id, Activity::Exited);
+                agent_exited(&app, &session_id);
                 let _ = app.emit("pty-exited", serde_json::json!({ "pty_key": session_id }));
                 let _ = app.emit("sessions-changed", ());
                 app.state::<crate::plugins::PluginRuntimeHandle>()
@@ -372,10 +387,11 @@ fn mark_provider_session_exited(app: &AppHandle, session_id: &str) {
 
 /// Start the silence checker thread.
 pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
+    let mut transcripts = planeai_core::background_work::TranscriptCache::default();
     thread::spawn(move || loop {
         thread::sleep(SILENCE_CHECK_INTERVAL);
         let mut to_notify: Vec<String> = Vec::new();
-        {
+        let due = {
             let mut s = state.lock().unwrap();
             let busy = s.busy_sessions();
             for id in busy {
@@ -383,12 +399,30 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
                     to_notify.push(id);
                 }
             }
-            let debounced = s.debounced_sessions();
-            for id in debounced {
-                if s.check_debounce(&id) {
-                    to_notify.push(id);
+            s.turn_ends_due()
+        };
+        // Transcripts are read outside the lock: hooks and the PTY reader take it too.
+        let pending: Vec<_> = due
+            .into_iter()
+            .map(|(id, transcript)| {
+                let running = transcript
+                    .as_deref()
+                    .and_then(|path| transcripts.pending_background_subagents(path));
+                (id, running)
+            })
+            .collect();
+        {
+            let mut s = state.lock().unwrap();
+            for (id, running) in pending {
+                match s.resolve_turn_end(&id, running) {
+                    TurnEnd::Settled => to_notify.push(id),
+                    TurnEnd::Held => {
+                        tracing::info!(session_id = %id, running, "turn ended with background subagents running; holding")
+                    }
+                    TurnEnd::Undecided => {}
                 }
             }
+            transcripts.keep_only(s.deciding_transcripts().iter().map(|p| p.as_path()));
             // Emitted under the lock so a busy signal cannot publish its resume before this Idle.
             for id in &to_notify {
                 emit_state_change(&app, id, AgentState::Idle);
@@ -405,6 +439,13 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
             agent_settled(&app, &session_id, &state, Activity::Finished);
         }
     });
+}
+
+/// An agent exited: a turn of it still held or debounced will never end.
+pub fn agent_exited(app: &AppHandle, session_id: &str) {
+    if let Some(handle) = app.try_state::<crate::state::NotifyHandle>() {
+        handle.0.lock().unwrap().forget_turn(session_id);
+    }
 }
 
 fn emit_state_change(app: &AppHandle, session_id: &str, state: AgentState) {
@@ -577,38 +618,6 @@ mod tests {
     // ─── Hook detection tests ────────────────────────────────────────────────
 
     #[test]
-    fn detect_claude_hook_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-        std::fs::write(&settings_path, r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/path/to/planeai-stop-notify-claude.sh"}]}],"StopFailure":[{}],"Notification":[{}],"UserPromptSubmit":[{}]}}"#).unwrap();
-        assert!(is_claude_hook_installed_at(&settings_path));
-    }
-
-    #[test]
-    fn detect_claude_hook_not_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-        std::fs::write(&settings_path, r#"{"hooks":{}}"#).unwrap();
-        assert!(!is_claude_hook_installed_at(&settings_path));
-    }
-
-    #[test]
-    fn detect_claude_hook_missing_event_triggers_reinstall() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-        std::fs::write(&settings_path, r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/path/to/planeai-stop-notify-claude.sh"}]}],"StopFailure":[{}],"Notification":[{}]}}"#).unwrap();
-        assert!(!is_claude_hook_installed_at(&settings_path));
-    }
-
-    #[test]
-    fn detect_claude_hook_missing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!is_claude_hook_installed_at(
-            &dir.path().join("settings.json")
-        ));
-    }
-
-    #[test]
     fn detect_copilot_hook_installed() {
         let dir = tempfile::tempdir().unwrap();
         let hooks_dir = dir.path().join("hooks");
@@ -681,62 +690,6 @@ mod tests {
             std::fs::read_to_string(dir.path().join("hooks/planeai-notify.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert_eq!(v["hooks"]["agentStop"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn install_claude_hook_creates_correct_structure() {
-        let dir = tempfile::tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        install_claude_hook_at(
-            &claude_dir,
-            "/home/user/.claude/hooks/planeai-stop-notify-claude.sh",
-        )
-        .unwrap();
-        let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
-        )
-        .unwrap();
-        assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .contains("planeai-stop-notify"));
-        assert_eq!(
-            settings["hooks"]["Notification"][0]["matcher"],
-            "idle_prompt|permission_prompt"
-        );
-    }
-
-    #[test]
-    fn install_claude_hook_merges_with_existing_settings() {
-        let dir = tempfile::tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
-        let existing = serde_json::json!({
-            "permissions": {"allow": ["Read"]},
-            "hooks": {
-                "PostToolUse": [{"matcher": "Write", "hooks": [{"type": "command", "command": "lint.sh"}]}]
-            }
-        });
-        std::fs::write(
-            claude_dir.join("settings.json"),
-            serde_json::to_string_pretty(&existing).unwrap(),
-        )
-        .unwrap();
-        install_claude_hook_at(
-            &claude_dir,
-            "/home/user/.claude/hooks/planeai-stop-notify-claude.sh",
-        )
-        .unwrap();
-        let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(settings["permissions"]["allow"][0], "Read");
-        assert_eq!(settings["hooks"]["PostToolUse"][0]["matcher"], "Write");
-        assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .contains("planeai-stop-notify"));
     }
 
     #[test]

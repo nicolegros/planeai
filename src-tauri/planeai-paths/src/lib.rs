@@ -38,6 +38,31 @@ pub fn notify_socket_path() -> PathBuf {
     app_data_dir().join("notify.sock")
 }
 
+/// Writes `contents` to `path` in one step: a temporary file beside it replaces it, keeping the
+/// permissions of the file it replaces, so a reader never sees it half written.
+pub fn write_file_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
+    })?;
+    let temporary = path.with_file_name(format!(
+        ".{}.{}-{}.tmp",
+        name.to_string_lossy(),
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let written = std::fs::write(&temporary, contents).and_then(|()| {
+        if let Ok(metadata) = std::fs::metadata(path) {
+            std::fs::set_permissions(&temporary, metadata.permissions())?;
+        }
+        replace_file_atomically(&temporary, path)
+    });
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written
+}
+
 /// Atomically replace `path` with `temporary`. The temporary file must be in
 /// the destination directory and is consumed on success.
 #[cfg(not(windows))]
@@ -123,6 +148,29 @@ pub fn raise_fd_limit() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn an_atomic_write_keeps_the_replaced_files_permissions_and_leaves_no_temporary() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("planeai-paths-write-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        write_file_atomically(&path, b"new").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        assert!(write_file_atomically(&root.join("missing/settings.json"), b"x").is_err());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn atomic_replacement_overwrites_an_existing_file() {

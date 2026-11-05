@@ -897,7 +897,8 @@ mod tests {
         let command = ops.daemon_calls.borrow()[0].1.clone();
         // Quoting is per platform; Windows wraps the JSON in escaped double quotes.
         assert!(
-            command.starts_with("claude --resume --mcp-config ")
+            command.starts_with("claude --resume --settings ")
+                && command.contains(" --mcp-config ")
                 && command.contains("http://127.0.0.1:47437/mcp"),
             "{command}"
         );
@@ -939,7 +940,13 @@ mod tests {
         let ops = MockRestartOps::new();
         restart(&conn, id, &Config::default(), None, &ops).unwrap();
 
-        assert_eq!(ops.daemon_calls.borrow()[0].1, "claude --resume");
+        assert_eq!(
+            ops.daemon_calls.borrow()[0].1,
+            format!(
+                "claude --resume {}",
+                planeai_core::agent_hooks::installed_claude_launch_args()
+            )
+        );
         assert_eq!(*ops.daemon_mcp.borrow(), vec![None]);
     }
 

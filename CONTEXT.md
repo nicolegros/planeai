@@ -131,17 +131,26 @@ The notify socket (`notify.sock` / `\\.\pipe\planeai-notify`) accepts JSONL mess
 
 ### Agent notification hooks
 
-planeai installs a small notify script into each supported agent's own config so the agent reports `busy`, `stop` and `notification` instead of relying on silence detection.
+planeai gives each supported agent a small notify script so the agent reports `busy`, `stop` and `notification` instead of relying on silence detection.
+Claude gets it per launch: its launch and resume commands carry `--settings <app data>/hooks/claude-hooks.json`, a settings file planeai writes at startup next to the script, so the user's own Claude settings stay untouched and only planeai sessions report.
+Older versions added these hooks to `~/.claude/settings.json`, and Claude Code applies changes to it live, so removing them would silence every agent started before the upgrade.
+planeai keeps them, and their script in `~/.claude/hooks` current, until a startup finds no running `claude` process launched without `claude-hooks.json`; it then removes only its own entries, keeping the user's.
+On Windows the check does not run yet, so the legacy entries stay until removed by hand, and each Claude signal arrives twice.
+The other agents get it in their own config.
 `AgentKind` (`planeai-core/src/agent_hooks.rs`) identifies the agent from a provider command's executable name and owns detection, installation and the startup script refresh.
 
 | Agent   | Config written                                | Events -> signal                                                                                       |
 | ------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | Kiro    | `~/.kiro/agents/default.json`                 | `userPromptSubmit` -> busy, `stop` -> stop                                                             |
-| Claude  | `~/.claude/settings.json`                     | `UserPromptSubmit`/`PostToolUse` -> busy, `Stop` -> stop, `Notification`/`StopFailure` -> notification |
+| Claude  | `--settings` per launch (planeai app data)    | `UserPromptSubmit`/`PostToolUse` -> busy, `Stop` -> stop, `Notification`/`StopFailure` -> notification |
 | Copilot | `$COPILOT_HOME/hooks/planeai-notify.json`     | `userPromptSubmitted` -> busy, `agentStop` -> stop, `errorOccurred` -> notification                    |
 | Codex   | `$CODEX_HOME/hooks.json` (default `~/.codex`) | `UserPromptSubmit`/`PostToolUse` -> busy, `Stop` -> stop                                               |
 
 `PostToolUse` flips a session back to busy after a permission prompt is approved, since PTY output does not override the idle state of a hook-enabled session.
+Claude Code fires `Stop` at the end of every turn, even while subagents it launched in the background keep working, and reports an `idle_prompt` notification a minute later.
+So the Claude script also forwards the hook's `transcript_path` and `notification_type`, and when a `Stop` comes due planeai reads the transcript (`planeai-core/src/background_work.rs`): while background subagents still run, including one that stopped while its own background work runs, the turn is held, the session stays busy, `idle_prompt` is ignored, and the transcript is reread every 5 seconds until they finish.
+Background shell commands and monitors do not hold a turn, since they are as often a dev server as a wait.
+A `Stop` that arrives before its session registers is still debounced as a hook.
 Notify scripts ignore any event they do not map explicitly, so a hook config newer than its script can never flood the user with alerts.
 Codex `PermissionRequest` is not hooked: with `approvals_reviewer = "auto_review"` it fires for every escalated command even though no human is needed.
 Codex only runs hooks the user has trusted: it asks on the first launch after installation.

@@ -4,7 +4,8 @@ $sid = $env:PLANEAI_SESSION_ID
 if (-not $sid) { exit 0 }
 $sock = if ($env:PLANEAI_SOCKET) { $env:PLANEAI_SOCKET } else { "\\.\pipe\planeai-notify" }
 $input_text = [Console]::In.ReadToEnd()
-$event = ($input_text | ConvertFrom-Json).hook_event_name
+$hook = $input_text | ConvertFrom-Json
+$event = $hook.hook_event_name
 $e = switch ($event) {
     "Stop" { "stop" }
     "UserPromptSubmit" { "busy" }
@@ -13,7 +14,11 @@ $e = switch ($event) {
     "StopFailure" { "notification" }
     default { exit 0 }  # unknown events must never alert
 }
-$msg = '{"session_id":"' + $sid + '","event":"' + $e + '"}'
+# The transcript tells planeai whether background subagents still run when a turn ends.
+$fields = [ordered]@{ session_id = $sid; event = $e }
+if ($hook.transcript_path -is [string]) { $fields.transcript_path = $hook.transcript_path }
+if ($hook.notification_type -is [string]) { $fields.notification_type = $hook.notification_type }
+$msg = $fields | ConvertTo-Json -Compress
 $pipeName = $sock -replace '^\\\\.\\pipe\\',''
 try {
     $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(".", $pipeName, [System.IO.Pipes.PipeDirection]::Out)
