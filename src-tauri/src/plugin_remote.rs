@@ -469,13 +469,13 @@ pub async fn fetch_remote_repo(repo: RepoFullName) -> Result<RemoteRepo, String>
 
 pub struct Downloader {
     client: reqwest::Client,
-    https_only: bool,
 }
 
 impl Downloader {
     pub fn new() -> Result<Self, String> {
         let client = reqwest::Client::builder()
             .timeout(DOWNLOAD_TIMEOUT)
+            .https_only(true)
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 if attempt.previous().len() >= MAX_REDIRECTS {
                     attempt.error("too many redirects")
@@ -487,10 +487,7 @@ impl Downloader {
             }))
             .build()
             .map_err(|error| format!("failed to build plugin download client: {error}"))?;
-        Ok(Self {
-            client,
-            https_only: true,
-        })
+        Ok(Self { client })
     }
 
     /// Plain-http client for a local test server; production stays https-only.
@@ -502,15 +499,11 @@ impl Downloader {
                 .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
                 .build()
                 .unwrap(),
-            https_only: false,
         }
     }
 
     /// Streams `url` into `destination`, returning the archive's SHA-256.
     pub async fn download(&self, url: &str, destination: &Path) -> Result<String, String> {
-        if self.https_only && !url.starts_with("https://") {
-            return Err(format!("plugin downloads must use https: {url}"));
-        }
         let response = self
             .client
             .get(url)
@@ -1677,7 +1670,9 @@ mod tests {
                 .download(&format!("{base}/acme-macos-arm64.tar.gz"), &destination)
                 .await
                 .unwrap_err(),
-            format!("plugin downloads must use https: {base}/acme-macos-arm64.tar.gz")
+            format!(
+                "plugin download failed: builder error for url ({base}/acme-macos-arm64.tar.gz)"
+            )
         );
     }
 
