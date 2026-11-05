@@ -37,7 +37,8 @@ What changes is who performs the mechanical steps, not who decides to trust the 
   A local package has exactly one provenance, a folder or a remote origin, and installing the same id again replaces it whole, so a later folder install clears the remote origin.
   Bundled plugins have none.
 - **Card state.** Right after discovery returns, the frontend asks the backend for every card's state at once.
-  Each resolution runs two `gh` processes side by side (the HEAD manifest and the latest release) and holds two permits of an 8-permit semaphore, so at most 8 `gh` processes run at once.
+  Resolving a card and staging an install each run two `gh` processes side by side (the HEAD manifest and the latest release) and hold two permits of an 8-permit semaphore only while those requests run, so at most 8 `gh` processes serve resolutions and staging at once and a download never holds a permit.
+  The discovery search itself is one more `gh` process outside that bound.
   A card matches an installed plugin by provenance repository first, then by the HEAD manifest `id`.
   Latest is the release tag without a leading `v`, parsed as semver; an update is offered when it is greater than the installed manifest version, also semver.
   A repository-installed plugin whose versions do not both parse, or whose repository has no release, is offered "Reinstall latest".

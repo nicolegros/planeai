@@ -5,8 +5,8 @@ use tauri::State;
 use tokio::sync::Semaphore;
 
 use crate::plugin_remote::{
-    fetch_remote_repo, run_gh, DiscoveryCardState, Downloader, RepoFullName, StagedPluginInstall,
-    StagingStore,
+    fetch_remote_repo, run_gh, DiscoveryCardState, Downloader, RemoteRepo, RepoFullName,
+    StagedPluginInstall, StagingStore,
 };
 use crate::plugins::{PluginInventory, PluginRuntimeHandle};
 
@@ -112,6 +112,17 @@ impl PluginRemoteState {
             downloader: Downloader::new(),
         }
     }
+
+    /// Card resolution and staging share the `gh` bound; the permits are released before any
+    /// download starts.
+    async fn fetch(&self, repo: RepoFullName) -> Result<RemoteRepo, String> {
+        let _permits = self
+            .resolve_permits
+            .acquire_many(GH_PROCESSES_PER_RESOLUTION)
+            .await
+            .map_err(|error| error.to_string())?;
+        fetch_remote_repo(repo).await
+    }
 }
 
 #[tauri::command]
@@ -121,12 +132,7 @@ pub async fn resolve_plugin_candidate(
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<DiscoveryCardState, String> {
     let repo = RepoFullName::parse(&repo)?;
-    let _permits = remote
-        .resolve_permits
-        .acquire_many(GH_PROCESSES_PER_RESOLUTION)
-        .await
-        .map_err(|error| error.to_string())?;
-    let remote_repo = fetch_remote_repo(repo).await?;
+    let remote_repo = remote.fetch(repo).await?;
     let inventory = runtime.0.list().await?;
     Ok(remote_repo.card_state(&inventory, crate::plugin_packages::current_platform_key()))
 }
@@ -139,7 +145,8 @@ pub async fn stage_remote_plugin(
 ) -> Result<StagedPluginInstall, String> {
     let repo = RepoFullName::parse(&repo)?;
     let downloader = remote.downloader.as_ref().map_err(Clone::clone)?;
-    let source = fetch_remote_repo(repo.clone())
+    let source = remote
+        .fetch(repo.clone())
         .await?
         .select_source(crate::plugin_packages::current_platform_key())?;
     let inventory = runtime.0.list().await?;
