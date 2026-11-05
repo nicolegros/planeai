@@ -82,10 +82,11 @@ pub fn refresh_hook_scripts(home: &str, app_dir: &Path) {
     for kind in AgentKind::ALL {
         // Claude's hooks live in PlaneAI's own data and replace those it once added to the
         // user's settings, so they are always written.
-        if kind == AgentKind::Claude || kind.is_hook_installed(home, app_dir) {
-            if let Err(e) = kind.install_hook(home, app_dir) {
-                tracing::warn!(?kind, error = %e, "failed to refresh hook script");
-            }
+        if kind != AgentKind::Claude && !kind.is_hook_installed(home, app_dir) {
+            continue;
+        }
+        if let Err(e) = kind.install_hook(home, app_dir) {
+            tracing::warn!(?kind, error = %e, "failed to refresh hook script");
         }
     }
 }
@@ -334,6 +335,12 @@ const CLAUDE_SCRIPT: (&str, &str) = (
     include_str!("../resources/planeai-stop-notify-claude.ps1"),
 );
 
+/// The script older versions registered in `~/.claude/hooks`.
+#[cfg(not(windows))]
+const LEGACY_CLAUDE_SCRIPT: &str = "planeai-stop-notify-claude.sh";
+#[cfg(windows)]
+const LEGACY_CLAUDE_SCRIPT: &str = "planeai-stop-notify-claude.ps1";
+
 pub fn claude_settings_path(app_dir: &Path) -> PathBuf {
     app_dir.join("hooks").join(CLAUDE_SETTINGS_FILE)
 }
@@ -444,9 +451,36 @@ pub fn remove_legacy_claude_hooks_at(settings_path: &Path) -> Result<bool, Strin
     Ok(true)
 }
 
+/// Writes Claude's launch hooks. The hooks older versions added to the user's settings stay
+/// until no agent needs them (see [`claude_agents_need_legacy_hooks`]), since Claude Code
+/// applies settings changes live; their script is kept current meanwhile.
 pub fn install_claude_hook(home: &str, app_dir: &Path) -> Result<(), String> {
     install_claude_launch_hooks(app_dir)?;
-    remove_legacy_claude_hooks_at(&Path::new(home).join(".claude/settings.json")).map(|_| ())
+    let script = legacy_claude_settings(home)
+        .with_file_name("hooks")
+        .join(LEGACY_CLAUDE_SCRIPT);
+    if !script.exists() {
+        return Ok(());
+    }
+    std::fs::write(&script, CLAUDE_SCRIPT.1)
+        .map_err(|e| format!("failed to refresh {}: {e}", script.display()))
+}
+
+/// The user settings older versions added Claude's hooks to.
+pub fn legacy_claude_settings(home: &str) -> PathBuf {
+    Path::new(home).join(".claude/settings.json")
+}
+
+/// Whether a running Claude agent still reports through the hooks older versions added to the
+/// user's settings: one started without PlaneAI's launch hooks, from the running processes'
+/// command lines. A Claude run outside PlaneAI counts too, which only delays the removal.
+pub fn claude_agents_need_legacy_hooks<'a>(
+    command_lines: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    command_lines.into_iter().any(|command| {
+        AgentKind::from_command(command) == Some(AgentKind::Claude)
+            && !command.contains(CLAUDE_SETTINGS_FILE)
+    })
 }
 
 pub fn install_copilot_hook(home: &str) -> Result<(), String> {
@@ -1016,7 +1050,27 @@ mod tests {
     }
 
     #[test]
-    fn installing_claudes_hooks_removes_only_the_ones_planeai_added_to_user_settings() {
+    fn only_claude_agents_started_without_launch_hooks_need_the_legacy_ones() {
+        let launched =
+            "claude --dangerously-skip-permissions --settings '/a/hooks/claude-hooks.json' -- 'go'";
+        assert!(!claude_agents_need_legacy_hooks([
+            launched,
+            "codex resume --last",
+            "/usr/bin/zsh"
+        ]));
+        assert!(claude_agents_need_legacy_hooks([
+            launched,
+            "/opt/homebrew/bin/claude --resume"
+        ]));
+        assert!(!claude_agents_need_legacy_hooks([
+            "my-claude-wrapper",
+            "nvim CLAUDE.md"
+        ]));
+        assert!(!claude_agents_need_legacy_hooks([]));
+    }
+
+    #[test]
+    fn legacy_claude_hooks_stay_current_until_removed_keeping_the_users_own() {
         let dir = tempfile::tempdir().unwrap();
         let claude_dir = dir.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
@@ -1037,7 +1091,25 @@ mod tests {
         )
         .unwrap();
 
-        install_claude_hook(dir.path().to_str().unwrap(), &dir.path().join("app")).unwrap();
+        let home = dir.path().to_str().unwrap();
+        let legacy_script = claude_dir.join("hooks").join(LEGACY_CLAUDE_SCRIPT);
+        std::fs::create_dir_all(legacy_script.parent().unwrap()).unwrap();
+        std::fs::write(&legacy_script, "old").unwrap();
+        let before = std::fs::read_to_string(&settings_path).unwrap();
+
+        install_claude_hook(home, &dir.path().join("app")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&settings_path).unwrap(),
+            before,
+            "agents still running need them"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&legacy_script).unwrap(),
+            CLAUDE_SCRIPT.1,
+            "their script stays current"
+        );
+
+        assert!(remove_legacy_claude_hooks_at(&legacy_claude_settings(home)).unwrap());
 
         let settings: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();

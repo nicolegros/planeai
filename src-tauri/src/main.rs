@@ -309,6 +309,7 @@ fn main() {
                 &planeai_paths::app_data_dir(),
             );
             commands::sessions::helpers::invalidate_hook_cache();
+            startup::spawn_legacy_claude_hooks_cleanup();
 
             {
                 let conn = db_arc.lock().unwrap();

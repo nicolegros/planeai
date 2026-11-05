@@ -133,7 +133,8 @@ The notify socket (`notify.sock` / `\\.\pipe\planeai-notify`) accepts JSONL mess
 
 planeai gives each supported agent a small notify script so the agent reports `busy`, `stop` and `notification` instead of relying on silence detection.
 Claude gets it per launch: its launch and resume commands carry `--settings <app data>/hooks/claude-hooks.json`, a settings file planeai writes at startup next to the script, so the user's own Claude settings stay untouched and only planeai sessions report.
-At startup planeai also removes the hooks older versions added to `~/.claude/settings.json`, keeping the user's own, and leaves their script in `~/.claude/hooks` for agents started before.
+Older versions added these hooks to `~/.claude/settings.json`, and Claude Code applies changes to it live, so removing them would silence every agent started before the upgrade.
+planeai keeps them, and their script in `~/.claude/hooks` current, until a startup finds no running `claude` process launched without `claude-hooks.json`; it then removes only its own entries, keeping the user's.
 The other agents get it in their own config.
 `AgentKind` (`planeai-core/src/agent_hooks.rs`) identifies the agent from a provider command's executable name and owns detection, installation and the startup script refresh.
 
