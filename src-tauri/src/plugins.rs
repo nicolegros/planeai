@@ -32,9 +32,9 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 // perform that transition, and add a comment. Each network request is bounded
 // by the Jira client at 20 seconds, so this must cover the full sequence.
 const JIRA_LIFECYCLE_RPC_TIMEOUT: Duration = Duration::from_secs(90);
-// Synchronization can legitimately fetch up to 100 Jira pages before its first
-// nested host task request. Keep a finite watchdog, but allow that bounded fetch.
-const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(40 * 60);
+// A background service such as a tracker sync can legitimately fetch many pages before its
+// first nested host request. Keep a finite watchdog, but allow that bounded fetch.
+const BACKGROUND_SERVICE_RPC_TIMEOUT: Duration = Duration::from_secs(40 * 60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_PLUGIN_SESSION_PROMPT_CHARS: usize = 100_000;
@@ -1529,9 +1529,13 @@ fn validate_plugin_session_completion(
     Ok(completion)
 }
 
-fn request_timeout(method: &str) -> Duration {
+/// The deadline for `method`; `background_method` is the plugin's declared background
+/// service, which keeps its long deadline when the UI runs it on demand.
+fn request_timeout(method: &str, background_method: Option<&str>) -> Duration {
+    if background_method == Some(method) {
+        return BACKGROUND_SERVICE_RPC_TIMEOUT;
+    }
     match method {
-        "jira.syncNow" => JIRA_SYNC_RPC_TIMEOUT,
         "plugin.taskLifecycle" | "plugin.sessionLifecycle" => JIRA_LIFECYCLE_RPC_TIMEOUT,
         _ => planeai_plugin_contract::provider::request_timeout(method).unwrap_or(RPC_TIMEOUT),
     }
@@ -1539,7 +1543,7 @@ fn request_timeout(method: &str) -> Duration {
 
 impl RuntimeProcess {
     async fn request(&self, method: &str, params: Value) -> Result<Value, PluginRpcError> {
-        self.request_with_timeout(method, params, request_timeout(method))
+        self.request_with_timeout(method, params, request_timeout(method, None))
             .await
     }
 
@@ -3448,14 +3452,8 @@ impl PluginRuntimeSupervisor {
         params: Value,
         host_controlled: bool,
     ) -> Result<Value, PluginRpcError> {
-        self.call_internal_within(
-            plugin_id,
-            method,
-            params,
-            host_controlled,
-            request_timeout(method),
-        )
-        .await
+        self.call_internal_within(plugin_id, method, params, host_controlled, None)
+            .await
     }
 
     async fn call_internal_within(
@@ -3464,14 +3462,14 @@ impl PluginRuntimeSupervisor {
         method: &str,
         params: Value,
         host_controlled: bool,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> Result<Value, PluginRpcError> {
         if !host_controlled && is_host_controlled_plugin_method(method) {
             return Err("plugin lifecycle methods are reserved for PlaneAI"
                 .to_string()
                 .into());
         }
-        let process = {
+        let (process, timeout) = {
             let _lifecycle = self.lifecycle.lock().await;
             let inventory = self.inventory(plugin_id).await?.ok_or_else(|| {
                 PluginRpcError::NotRunning(format!("plugin inventory entry not found: {plugin_id}"))
@@ -3481,7 +3479,14 @@ impl PluginRuntimeSupervisor {
                     "plugin {plugin_id} is not running"
                 )));
             }
-            self.processes.lock().await.get(plugin_id).cloned()
+            let background_method = inventory
+                .background_service
+                .as_ref()
+                .map(|service| service.method.as_str());
+            (
+                self.processes.lock().await.get(plugin_id).cloned(),
+                timeout.unwrap_or_else(|| request_timeout(method, background_method)),
+            )
         };
         let process = process.ok_or_else(|| {
             PluginRpcError::NotRunning(format!("plugin runtime was not available: {plugin_id}"))
@@ -3768,7 +3773,7 @@ impl PluginRuntimeSupervisor {
                     planeai_plugin_contract::TOOL_CALL,
                     params,
                     true,
-                    timeout,
+                    Some(timeout),
                 )
                 .await
             }
@@ -4311,7 +4316,7 @@ impl PluginRuntimeSupervisor {
             loop {
                 tokio::select! {
                     _ = worker_cancel.cancelled() => return,
-                    outcome = process.request(&service.method, Value::Null) => match outcome {
+                    outcome = process.request_with_timeout(&service.method, Value::Null, BACKGROUND_SERVICE_RPC_TIMEOUT) => match outcome {
                         Ok(totals) => {
                             tracing::info!(plugin_id = %plugin_id, generation, method = %service.method, totals = ?totals, "plugin background service complete");
                             let changed_data = background_run_changed_data(&totals);
@@ -5712,15 +5717,26 @@ mod tests {
     }
 
     #[test]
-    fn jira_sync_and_lifecycle_use_extended_rpc_timeouts() {
-        assert_eq!(request_timeout("jira.syncNow"), JIRA_SYNC_RPC_TIMEOUT);
+    fn background_services_and_lifecycle_use_extended_rpc_timeouts() {
         assert_eq!(
-            request_timeout("plugin.taskLifecycle"),
+            request_timeout("jira.syncNow", Some("jira.syncNow")),
+            BACKGROUND_SERVICE_RPC_TIMEOUT
+        );
+        assert_eq!(
+            request_timeout("linear.syncNow", Some("linear.syncNow")),
+            BACKGROUND_SERVICE_RPC_TIMEOUT
+        );
+        assert_eq!(request_timeout("linear.syncNow", None), RPC_TIMEOUT);
+        assert_eq!(
+            request_timeout("plugin.taskLifecycle", None),
             JIRA_LIFECYCLE_RPC_TIMEOUT
         );
-        assert_eq!(request_timeout("jira.status"), RPC_TIMEOUT);
         assert_eq!(
-            request_timeout("provider.session.start"),
+            request_timeout("jira.status", Some("jira.syncNow")),
+            RPC_TIMEOUT
+        );
+        assert_eq!(
+            request_timeout("provider.session.start", None),
             Duration::from_secs(30)
         );
     }
