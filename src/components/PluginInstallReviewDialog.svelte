@@ -50,7 +50,7 @@
         <dd class="text-t2 break-all">{staged.source_url}</dd>
         <dt>release</dt>
         <dd class="text-t2">{staged.release_tag ?? "none"}</dd>
-        <dt>sha-256</dt>
+        <dt>archive sha-256</dt>
         <dd class="text-t2 break-all">
           {#if staged.integrity.kind === "verified"}
             <span class="mr-1.5 rounded-full bg-status-running/15 px-2 py-0.5 font-sans text-[11px] font-medium text-status-running">Verified</span>

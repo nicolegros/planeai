@@ -81,6 +81,18 @@ describe("PluginInstallReviewDialog", () => {
     expect(text).toContain("v1.2.0");
     expect(text).toContain("Verified");
     expect(text).not.toContain("Unverified");
+    const labels = Array.from(content.querySelectorAll("dt")).map((row) => row.textContent);
+    expect(labels).toEqual([
+      "id",
+      "version",
+      "repository",
+      "source",
+      "release",
+      "archive sha-256",
+      "capabilities",
+      "ui",
+      "tools",
+    ]);
     expect(text).toContain("3f2a9c1e5b7d");
     expect(text).toContain("settings, tools");
     expect(text).toContain("Acme settings (preferences)");

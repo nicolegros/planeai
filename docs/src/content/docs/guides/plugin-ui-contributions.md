@@ -511,7 +511,8 @@ Right after discovery returns, every card checks what the repository offers for 
 - A sentence explaining why nothing can be installed, for example no archive for your platform or an `id` reserved by a bundled plugin.
 
 Choosing the action downloads the archive into a staging directory, verifies it against the release asset digest when it is a release asset, extracts and validates it, and opens a review.
-The review lists the manifest `id`, name and version, the repository, the source URL, the release tag, the SHA-256 marked **Verified** or **Unverified**, the capabilities, UI placements and MCP tools it declares, what it replaces, and a warning when the release tag and the manifest version disagree.
+The review lists the manifest `id`, name and version, the repository, the source URL, the release tag, the archive SHA-256 marked **Verified** or **Unverified**, the capabilities, UI placements and MCP tools it declares, what it replaces, and a warning when the release tag and the manifest version disagree.
+The installed list shows a different hash, the SHA-256 of the imported package tree.
 Nothing is installed until you choose **Install and enable**; cancelling or closing the review discards the download.
 Installing keeps the plugin's host-owned settings, secrets, logs and data, exactly like **Install local package** with the same `id`, and enables the plugin.
 The installed list then shows `Source: github.com/<repository> @ <tag>` instead of a folder path, and a later **Install local package** of the same `id` replaces that origin.
