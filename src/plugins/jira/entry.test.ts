@@ -526,6 +526,21 @@ describe("jiraSidebarSectionEntrypoint", () => {
     expect(stylesheet).toContain(".section-header:focus,.issue:focus { outline:none; }");
   });
 
+  it("unfocuses a focused button on Escape inside the shadow root, then closes on the next", async () => {
+    const sidebar = mountSidebar();
+    const dialog = await openAndLoad(sidebar);
+    const wrapper = dialog.querySelector<HTMLElement>("[data-form-keyboard]")!;
+    const newProject = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.startsWith("New Project"),
+    )!;
+
+    newProject.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(sidebar.close).not.toHaveBeenCalled();
+
+    wrapper.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(sidebar.close).toHaveBeenCalledOnce();
+  });
+
   it("uses PlaneAI normal and insert modes for assignment shortcuts", async () => {
     const sidebar = mountSidebar();
     const dialog = await openAndLoad(sidebar);
