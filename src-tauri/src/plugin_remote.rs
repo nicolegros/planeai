@@ -150,27 +150,27 @@ pub struct StagedPluginInstall {
 
 /// The default-branch manifest, read leniently because HEAD may target a newer host.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct HeadManifest {
+struct HeadManifest {
     #[serde(default)]
-    pub id: Option<String>,
+    id: Option<String>,
     #[serde(default)]
-    pub downloads: BTreeMap<String, String>,
+    downloads: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct Release {
-    pub tag_name: String,
+struct Release {
+    tag_name: String,
     #[serde(default)]
-    pub assets: Vec<ReleaseAsset>,
+    assets: Vec<ReleaseAsset>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct ReleaseAsset {
-    pub name: String,
-    pub browser_download_url: String,
+struct ReleaseAsset {
+    name: String,
+    browser_download_url: String,
     /// `sha256:<hex>` as the GitHub API reports it.
     #[serde(default)]
-    pub digest: Option<String>,
+    digest: Option<String>,
 }
 
 impl ReleaseAsset {
@@ -185,9 +185,9 @@ impl ReleaseAsset {
 /// Everything resolution learned about one Discovery repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteRepo {
-    pub repo: RepoFullName,
-    pub head: Option<HeadManifest>,
-    pub latest_release: Option<Release>,
+    repo: RepoFullName,
+    head: Option<HeadManifest>,
+    latest_release: Option<Release>,
 }
 
 /// The one archive to download for this platform.
@@ -229,12 +229,12 @@ impl ArchiveFormat {
 }
 
 /// The release tag without a leading `v`, when it is semver.
-pub fn release_version(tag: &str) -> Option<semver::Version> {
+fn release_version(tag: &str) -> Option<semver::Version> {
     semver::Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok()
 }
 
 impl RemoteRepo {
-    pub fn latest_version(&self) -> Option<semver::Version> {
+    fn latest_version(&self) -> Option<semver::Version> {
         self.latest_release
             .as_ref()
             .and_then(|release| release_version(&release.tag_name))
@@ -314,7 +314,7 @@ impl RemoteRepo {
     }
 
     /// The installed plugin this repository stands for: by provenance first, then by HEAD id.
-    pub fn installed<'a>(&self, inventory: &'a [PluginInventory]) -> Option<&'a PluginInventory> {
+    fn installed<'a>(&self, inventory: &'a [PluginInventory]) -> Option<&'a PluginInventory> {
         inventory
             .iter()
             .find(|plugin| {
@@ -608,7 +608,7 @@ pub fn check_integrity(sha256: String, expected: Option<&str>) -> Result<Package
 // ─── Extraction ───────────────────────────────────────────────────────────────
 
 /// A relative archive entry path with no absolute, root, prefix, or parent components.
-pub fn safe_entry_path(raw: &str) -> Result<PathBuf, String> {
+fn safe_entry_path(raw: &str) -> Result<PathBuf, String> {
     let escapes = || format!("plugin archive entry escapes the package: {raw}");
     let mut safe = PathBuf::new();
     for component in Path::new(raw).components() {

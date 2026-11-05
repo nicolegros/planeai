@@ -92,7 +92,7 @@ const RESOLVE_CONCURRENCY: usize = 8;
 
 /// Staging and the shared download client for Discovery installs (ADR-0018).
 pub struct PluginRemoteState {
-    pub staging: StagingStore,
+    staging: StagingStore,
     resolve_permits: Semaphore,
     downloader: Downloader,
 }
