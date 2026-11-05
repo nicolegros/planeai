@@ -502,8 +502,6 @@ pub(crate) async fn fetch_remote_repo(repo: RepoFullName) -> Result<RemoteRepo, 
 
 pub(crate) struct Downloader {
     client: reqwest::Client,
-    /// Production refuses plain http before any request; tests download from a local http server.
-    https_only: bool,
 }
 
 /// Why a redirect must not be followed, when it must not.
@@ -545,10 +543,7 @@ impl Downloader {
             .https_only(true)
             .build()
             .map_err(|error| format!("failed to build plugin download client: {error}"))?;
-        Ok(Self {
-            client,
-            https_only: true,
-        })
+        Ok(Self { client })
     }
 
     /// Plain-http client for a local test server; production stays https-only.
@@ -556,7 +551,6 @@ impl Downloader {
     fn insecure_for_tests() -> Self {
         Self {
             client: client_builder().build().unwrap(),
-            https_only: false,
         }
     }
 
@@ -572,10 +566,14 @@ impl Downloader {
         destination: &Path,
         limit: u64,
     ) -> Result<String, String> {
-        if self.https_only && !url.starts_with("https://") {
-            return Err(format!("plugin downloads must use https: {url}"));
-        }
-        let response = self.client.get(url).send().await.map_err(download_failed)?;
+        let response = self.client.get(url).send().await.map_err(|error| {
+            // The production client's https_only rejection surfaces as a builder error.
+            if error.is_builder() && !url.starts_with("https://") {
+                format!("plugin downloads must use https: {url}")
+            } else {
+                download_failed(error)
+            }
+        })?;
         if !response.status().is_success() {
             return Err(format!(
                 "plugin download failed with HTTP {}: {url}",
