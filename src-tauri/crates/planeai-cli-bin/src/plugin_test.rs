@@ -45,6 +45,11 @@ pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>)
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("plugin manifest host_api_version must be a string"))?;
     validate_ui_entrypoints(&package, &manifest)?;
+    let plugin_id = manifest["id"].as_str().unwrap_or_default();
+    for tool in declared_tools(&manifest) {
+        planeai_core::mcp::plugin_tool_name(plugin_id, tool["name"].as_str().unwrap_or_default())
+            .map_err(|error| anyhow!(error))?;
+    }
     let executable = validate_entrypoint(&package, &entrypoint)?;
 
     let mut process = PluginProcess::spawn(&executable, &package, &capabilities)?;
@@ -61,13 +66,19 @@ pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>)
         process.call(protocol::RECONCILE, json!({ "sessions": [] }))?;
     }
 
-    for request in scenario.unwrap_or_default() {
-        match request.timeout {
-            Some(timeout) => {
-                process.call_until_cancelled(&request.method, request.params, timeout)?
-            }
-            None => {
+    for step in scenario.unwrap_or_default() {
+        match step {
+            ScenarioStep::Request(ScenarioRequest {
+                method,
+                params,
+                timeout: Some(timeout),
+            }) => process.call_until_cancelled(&method, params, timeout)?,
+            ScenarioStep::Request(request) => {
                 process.call(&request.method, request.params)?;
+            }
+            ScenarioStep::ToolCall { tool, arguments } => {
+                call_tool(&mut process, &manifest, &tool, arguments)
+                    .with_context(|| format!("tool {tool}"))?
             }
         }
     }
@@ -102,6 +113,55 @@ pub fn run(package: &Path, scenario: Option<&Path>, provider_turn: Option<&str>)
         "plugin test passed: {}",
         manifest["id"].as_str().unwrap_or("<unknown>")
     );
+    Ok(())
+}
+
+fn declared_tools(manifest: &Value) -> Vec<&Value> {
+    manifest
+        .get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// `tool.call` as PlaneAI sends it for an agent in a session, within the tool's timeout;
+/// the result must be `{ text, is_error? }`.
+fn call_tool(
+    process: &mut PluginProcess,
+    manifest: &Value,
+    tool: &str,
+    arguments: Value,
+) -> Result<()> {
+    let declared = declared_tools(manifest)
+        .into_iter()
+        .find(|declared| declared["name"] == tool)
+        .ok_or_else(|| anyhow!("the scenario calls a tool the manifest does not declare"))?;
+    let timeout = planeai_plugin_contract::tool_timeout(declared["timeoutMs"].as_u64());
+    let Value::Object(arguments) = arguments else {
+        bail!("scenario tool arguments must be a JSON object");
+    };
+    let params = planeai_plugin_contract::ToolCallParams {
+        tool: tool.to_string(),
+        arguments,
+        caller: planeai_plugin_contract::ToolCaller {
+            session_id: uuid::Uuid::new_v4().to_string(),
+            project: planeai_plugin_contract::ToolProject {
+                id: "plugin-test".into(),
+                name: "plugin-test".into(),
+            },
+            task: None,
+            auto_approve: false,
+        },
+    };
+    let result = process.call_within(
+        planeai_plugin_contract::TOOL_CALL,
+        serde_json::to_value(params)?,
+        timeout,
+    )?;
+    let planeai_plugin_contract::ToolCallResult { text, is_error } =
+        serde_json::from_value(result).context("tool.call must return { text, is_error? }")?;
+    println!("tool.call {tool} (is_error: {is_error}): {text}");
     Ok(())
 }
 
@@ -141,6 +201,8 @@ fn session_params(
             "PATH": std::env::var("PATH").unwrap_or_default(),
         },
         "auto_approve": false,
+        // As the host sends while its MCP server listens; nothing listens on port 9.
+        "mcp": { "url": "http://127.0.0.1:9/mcp", "token": "plugin-test-token" },
     });
     let Value::Object(params) = params else {
         unreachable!("session params are an object")
@@ -228,13 +290,23 @@ fn check_provider(
 }
 
 #[derive(Debug, PartialEq)]
+enum ScenarioStep {
+    Request(ScenarioRequest),
+    /// A `tool.call` of a declared tool, as an agent in a session makes it.
+    ToolCall {
+        tool: String,
+        arguments: Value,
+    },
+}
+
+#[derive(Debug, PartialEq)]
 struct ScenarioRequest {
     method: String,
     params: Value,
     timeout: Option<Duration>,
 }
 
-fn read_scenario(path: &Path) -> Result<Vec<ScenarioRequest>> {
+fn read_scenario(path: &Path) -> Result<Vec<ScenarioStep>> {
     let file = fs::File::open(path)
         .with_context(|| format!("failed to read scenario {}", path.display()))?;
     BufReader::new(file)
@@ -254,12 +326,26 @@ fn read_scenario(path: &Path) -> Result<Vec<ScenarioRequest>> {
         .collect()
 }
 
-fn parse_scenario_line(line: &str) -> Result<ScenarioRequest> {
+fn parse_scenario_line(line: &str) -> Result<ScenarioStep> {
     let value: Value = serde_json::from_str(line)
         .map_err(|error| anyhow!("scenario line is not valid JSON: {error}"))?;
     let object = value
         .as_object()
         .ok_or_else(|| anyhow!("scenario line must be a JSON object"))?;
+    if object.contains_key("tool") {
+        reject_unknown_fields(object, &["tool", "arguments"], "scenario tool line")?;
+        let arguments = object
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        if !arguments.is_object() {
+            bail!("scenario tool arguments must be a JSON object");
+        }
+        return Ok(ScenarioStep::ToolCall {
+            tool: required_string(object, "tool")?.to_owned(),
+            arguments,
+        });
+    }
     reject_unknown_fields(object, &["method", "params", "timeout_ms"], "scenario line")?;
     let method = required_string(object, "method")?.to_owned();
     if is_host_controlled_method(&method) {
@@ -282,11 +368,11 @@ fn parse_scenario_line(line: &str) -> Result<ScenarioRequest> {
             Some(Duration::from_millis(milliseconds))
         }
     };
-    Ok(ScenarioRequest {
+    Ok(ScenarioStep::Request(ScenarioRequest {
         method,
         params: object.get("params").cloned().unwrap_or(Value::Null),
         timeout,
-    })
+    }))
 }
 
 fn manifest_capabilities(manifest: &Value) -> Vec<String> {
@@ -542,7 +628,14 @@ impl PluginProcess {
     /// A request within the host's deadline for it. A plugin's JSON-RPC error is an
     /// [`RpcError`] at the root of the returned error.
     fn call(&mut self, method: &str, params: Value) -> Result<Value> {
-        let timeout = protocol::request_timeout(method).unwrap_or(RPC_TIMEOUT);
+        self.call_within(
+            method,
+            params,
+            protocol::request_timeout(method).unwrap_or(RPC_TIMEOUT),
+        )
+    }
+
+    fn call_within(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
         let deadline = Instant::now() + timeout;
         let id = self.send_request(method, params, deadline)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -1194,7 +1287,7 @@ mod tests {
         assert!(validate_local_manifest(&recipient_api, "test-platform").is_ok());
 
         let mut incompatible_api = manifest();
-        incompatible_api["host_api_version"] = json!("planeai.plugin-host.v6");
+        incompatible_api["host_api_version"] = json!("planeai.plugin-host.v99");
         assert!(validate_local_manifest(&incompatible_api, "test-platform").is_err());
 
         let mut unsupported_capability = manifest();
@@ -1343,28 +1436,50 @@ mod tests {
         assert!(!lifecycle_delivery_is_granted(&capabilities, &[]));
     }
 
+    fn request(line: &str) -> ScenarioRequest {
+        match parse_scenario_line(line).unwrap() {
+            ScenarioStep::Request(request) => request,
+            step => panic!("not a request: {step:?}"),
+        }
+    }
+
     #[test]
     fn scenario_parser_accepts_stable_request_lines_and_rejects_invalid_shapes() {
         assert_eq!(
             parse_scenario_line(r#"{ "method": "fixture.persistSettings", "params": { "settings": { "nested": true } } }"#)
                 .unwrap(),
-            ScenarioRequest {
+            ScenarioStep::Request(ScenarioRequest {
                 method: "fixture.persistSettings".to_string(),
                 params: json!({ "settings": { "nested": true } }),
                 timeout: None,
+            })
+        );
+        assert_eq!(
+            request(r#"{ "method": "fixture.status" }"#).params,
+            Value::Null
+        );
+        assert_eq!(
+            parse_scenario_line(r#"{ "tool": "echo", "arguments": { "text": "hi" } }"#).unwrap(),
+            ScenarioStep::ToolCall {
+                tool: "echo".to_string(),
+                arguments: json!({ "text": "hi" }),
             }
         );
         assert_eq!(
-            parse_scenario_line(r#"{ "method": "fixture.status" }"#)
-                .unwrap()
-                .params,
-            Value::Null
+            parse_scenario_line(r#"{ "tool": "echo" }"#).unwrap(),
+            ScenarioStep::ToolCall {
+                tool: "echo".to_string(),
+                arguments: json!({}),
+            }
         );
         for line in [
             "[]",
             r#"{ "method": 1 }"#,
             r#"{ "method": "" }"#,
             r#"{ "method": "x", "id": 1 }"#,
+            r#"{ "tool": "echo", "arguments": [] }"#,
+            r#"{ "tool": "echo", "method": "x" }"#,
+            r#"{ "tool": "" }"#,
         ] {
             assert!(parse_scenario_line(line).is_err(), "{line}");
         }
@@ -1373,6 +1488,7 @@ mod tests {
             "plugin.shutdown",
             "plugin.taskLifecycle",
             "$/cancelRequest",
+            "tool.call",
         ] {
             assert!(
                 parse_scenario_line(&format!(r#"{{ "method": "{method}" }}"#)).is_err(),
@@ -1389,9 +1505,7 @@ mod tests {
 
     #[test]
     fn scenario_timeout_requests_and_verifies_cancellation() {
-        let request =
-            parse_scenario_line(r#"{ "method": "fixture.awaitCancellation", "timeout_ms": 25 }"#)
-                .unwrap();
+        let request = request(r#"{ "method": "fixture.awaitCancellation", "timeout_ms": 25 }"#);
         assert_eq!(request.timeout, Some(Duration::from_millis(25)));
         for line in [
             r#"{ "method": "fixture.awaitCancellation", "timeout_ms": 0 }"#,

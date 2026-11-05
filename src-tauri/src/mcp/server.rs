@@ -67,14 +67,9 @@ impl ServerHandler for Handler {
         let tool = self.registry.get(&request.name).ok_or_else(|| {
             ErrorData::invalid_params(format!("unknown tool: {}", request.name), None)
         })?;
-        let tool_context = self.context.clone();
         let arguments = request.arguments.unwrap_or_default();
         tracing::info!(tool = %tool.name, session_id = %caller.session_id, "mcp tool call");
-        // Handlers do SQLite, git and IPC work synchronously.
-        let output =
-            tokio::task::spawn_blocking(move || tool.call(&tool_context, &caller, arguments))
-                .await
-                .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let output = tool.call(&self.context, &caller, arguments).await;
         let content = vec![ContentBlock::text(output.text)];
         Ok(if output.is_error {
             CallToolResult::error(content)
@@ -256,9 +251,9 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    pub fn new(registry: Registry, context: ToolContext) -> Self {
+    pub fn new(registry: Arc<Registry>, context: ToolContext) -> Self {
         Self {
-            registry: Arc::new(registry),
+            registry,
             context,
             state: std::sync::Mutex::new(ServerState::Off),
             applying: tokio::sync::Mutex::new(()),
@@ -314,6 +309,15 @@ impl McpServer {
             ServerState::Listening(running) => Some(planeai_core::mcp::server_url(running.port)),
             _ => None,
         }
+    }
+
+    /// What an agent launched now connects to, with the plugin tools it may run without
+    /// asking; `None` unless the server is listening.
+    pub fn launch(&self) -> Option<planeai_core::mcp::McpLaunch> {
+        self.url().map(|url| planeai_core::mcp::McpLaunch {
+            url,
+            approved_plugin_tools: self.registry.approved_plugin_tools(),
+        })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ServerState> {

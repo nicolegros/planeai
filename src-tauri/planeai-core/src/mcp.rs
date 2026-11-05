@@ -90,6 +90,54 @@ pub const TOOLS: [ToolSpec; 11] = [
     },
 ];
 
+/// Agents call a tool as `mcp__planeai__<name>`, which Claude Code and Codex cap at 64
+/// characters.
+pub const MAX_TOOL_NAME_CHARS: usize = 64 - "mcp__".len() - SERVER_NAME.len() - "__".len();
+
+/// The name a plugin's tool is served under. Plugin ids have no `_`, so the names of two
+/// plugins' tools never meet; one a PlaneAI tool uses is refused.
+pub fn plugin_tool_name(plugin_id: &str, tool: &str) -> Result<String, String> {
+    let name = format!("{plugin_id}_{tool}");
+    if TOOLS.iter().any(|core| core.name == name) {
+        return Err(format!(
+            "plugin {plugin_id} tool {tool} would be served as {name}, a PlaneAI tool"
+        ));
+    }
+    if name.len() > MAX_TOOL_NAME_CHARS {
+        return Err(format!(
+            "plugin {plugin_id} tool {tool} would be served as {name}, longer than {MAX_TOOL_NAME_CHARS} characters"
+        ));
+    }
+    Ok(name)
+}
+
+/// The server a launch connects its agent to, with the plugin tools it serves now that the
+/// agent may run without asking (ADR-0017).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpLaunch {
+    pub url: String,
+    pub approved_plugin_tools: Vec<String>,
+}
+
+impl McpLaunch {
+    /// A server that serves no plugin tools.
+    pub fn new(url: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            approved_plugin_tools: Vec::new(),
+        }
+    }
+
+    /// Every tool an agent launched now may run without asking.
+    pub fn approved_tools(&self) -> impl Iterator<Item = &str> {
+        TOOLS
+            .iter()
+            .filter(|tool| tool.effect.pre_approved())
+            .map(|tool| tool.name)
+            .chain(self.approved_plugin_tools.iter().map(String::as_str))
+    }
+}
+
 /// What an agent process needs to reach the MCP server as its session.
 #[derive(Clone, PartialEq, Eq)]
 pub struct McpEndpoint {
@@ -114,6 +162,11 @@ impl McpEndpoint {
         let file = dir.join(format!("{}.token", uuid::Uuid::new_v4().simple()));
         write_private(&file, self.token.as_bytes())?;
         Ok(file)
+    }
+
+    /// The bearer token, for a client PlaneAI hands it to other than through an environment.
+    pub fn token(&self) -> &str {
+        &self.token
     }
 
     pub fn owned_env(&self) -> impl Iterator<Item = (String, String)> + '_ {
@@ -145,6 +198,8 @@ pub struct McpCaller {
     pub task: Option<CallerTask>,
     /// The session's agent runs without permission prompts (yolo).
     pub auto_approve: bool,
+    /// Plugin tools this agent's launch let it run without asking.
+    pub approved_plugin_tools: Vec<String>,
 }
 
 /// The task a session works on, with the project that owns it.
@@ -179,20 +234,40 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         CREATE TRIGGER IF NOT EXISTS mcp_tokens_revoke_on_session_delete
         AFTER DELETE ON sessions
         BEGIN DELETE FROM mcp_tokens WHERE session_id = OLD.id; END;",
-    )
+    )?;
+    // Already added, by an earlier run or a concurrent app/CLI migrate.
+    match conn.execute_batch(
+        "ALTER TABLE mcp_tokens ADD COLUMN approved_plugin_tools TEXT NOT NULL DEFAULT '[]'",
+    ) {
+        Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+            if message.starts_with("duplicate column name") =>
+        {
+            Ok(())
+        }
+        result => result,
+    }
 }
 
-/// Mint a token for the session's next agent process, replacing any earlier one.
-/// The token table exists: the app and the CLI both migrate it when they open the database.
-pub fn issue(conn: &Connection, session_id: &str, url: &str) -> rusqlite::Result<McpEndpoint> {
+/// Mint a token for the session's next agent process, replacing any earlier one. It keeps
+/// the plugin tools the launch approved, so the server can tell when one has since become
+/// one that must ask. The token table exists: the app and the CLI both migrate it when they
+/// open the database.
+pub fn issue(
+    conn: &Connection,
+    session_id: &str,
+    launch: &McpLaunch,
+) -> rusqlite::Result<McpEndpoint> {
     let token = random_secret();
+    let approved = serde_json::to_string(&launch.approved_plugin_tools)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     conn.execute(
-        "INSERT INTO mcp_tokens (session_id, token_hash, created_at) VALUES (?1, ?2, ?3)
-         ON CONFLICT(session_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at",
-        params![session_id, hash(&token), chrono::Utc::now().to_rfc3339()],
+        "INSERT INTO mcp_tokens (session_id, token_hash, created_at, approved_plugin_tools) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(session_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at,
+             approved_plugin_tools = excluded.approved_plugin_tools",
+        params![session_id, hash(&token), chrono::Utc::now().to_rfc3339(), approved],
     )?;
     Ok(McpEndpoint {
-        url: url.to_string(),
+        url: launch.url.clone(),
         token,
     })
 }
@@ -201,10 +276,10 @@ pub fn issue(conn: &Connection, session_id: &str, url: &str) -> rusqlite::Result
 /// not listening.
 pub fn endpoint(
     conn: &Connection,
-    url: Option<&str>,
+    mcp: Option<&McpLaunch>,
     session_id: &str,
 ) -> Result<Option<McpEndpoint>, String> {
-    url.map(|url| issue(conn, session_id, url))
+    mcp.map(|launch| issue(conn, session_id, launch))
         .transpose()
         .map_err(|error| format!("failed to mint the session's MCP token: {error}"))
 }
@@ -213,11 +288,11 @@ pub fn endpoint(
 /// first attach instead, which mints its own token.
 pub fn launch_endpoint(
     conn: &Connection,
-    url: Option<&str>,
+    mcp: Option<&McpLaunch>,
     session_id: &str,
     backend: &str,
 ) -> Result<Option<McpEndpoint>, String> {
-    endpoint(conn, url.filter(|_| backend != "local"), session_id)
+    endpoint(conn, mcp.filter(|_| backend != "local"), session_id)
 }
 
 /// A fresh random token, URL-safe.
@@ -239,7 +314,8 @@ fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 /// The live session a presented token belongs to, or `None` for an unknown or revoked token.
 pub fn resolve(conn: &Connection, token: &str) -> rusqlite::Result<Option<McpCaller>> {
     conn.query_row(
-        "SELECT s.id, s.project_id, s.task_key, COALESCE(s.task_project_id, s.project_id), s.auto_approve
+        "SELECT s.id, s.project_id, s.task_key, COALESCE(s.task_project_id, s.project_id), s.auto_approve,
+                t.approved_plugin_tools
          FROM mcp_tokens t JOIN sessions s ON s.id = t.session_id
          WHERE t.token_hash = ?1",
         params![hash(token)],
@@ -256,6 +332,14 @@ pub fn resolve(conn: &Connection, token: &str) -> rusqlite::Result<Option<McpCal
                     None => None,
                 },
                 auto_approve: row.get(4)?,
+                approved_plugin_tools: serde_json::from_str(&row.get::<_, String>(5)?)
+                    .map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            5,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?,
             })
         },
     )
@@ -313,10 +397,31 @@ mod tests {
     }
 
     #[test]
+    fn a_plugin_tool_is_served_under_its_plugin_id() {
+        assert_eq!(
+            plugin_tool_name("github", "pr_show"),
+            Ok("github_pr_show".to_string())
+        );
+        assert_eq!(
+            plugin_tool_name("task", "list"),
+            Err("plugin task tool list would be served as task_list, a PlaneAI tool".into())
+        );
+        let longest = "x".repeat(MAX_TOOL_NAME_CHARS - "github_".len());
+        assert!(plugin_tool_name("github", &longest).is_ok());
+        assert_eq!(
+            plugin_tool_name("github", &format!("{longest}x")),
+            Err(format!(
+                "plugin github tool {longest}x would be served as github_{longest}x, longer than {MAX_TOOL_NAME_CHARS} characters"
+            ))
+        );
+        assert_eq!(MAX_TOOL_NAME_CHARS, 50);
+    }
+
+    #[test]
     fn an_issued_token_resolves_to_its_session_and_project() {
         let conn = db();
         let (id, project_id) = session(&conn, None);
-        let endpoint = issue(&conn, &id, URL).unwrap();
+        let endpoint = issue(&conn, &id, &McpLaunch::new(URL)).unwrap();
 
         assert_eq!(
             resolve(&conn, &token(&endpoint)).unwrap(),
@@ -325,8 +430,57 @@ mod tests {
                 project_id,
                 task: None,
                 auto_approve: false,
+                approved_plugin_tools: Vec::new(),
             })
         );
+    }
+
+    #[test]
+    fn a_token_keeps_the_plugin_tools_its_launch_approved() {
+        let conn = db();
+        let (id, _) = session(&conn, None);
+        let launch = McpLaunch {
+            url: URL.into(),
+            approved_plugin_tools: vec!["issues_show".into()],
+        };
+        let caller = resolve(&conn, &token(&issue(&conn, &id, &launch).unwrap()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(caller.approved_plugin_tools, ["issues_show"]);
+        let again = resolve(
+            &conn,
+            &token(&issue(&conn, &id, &McpLaunch::new(URL)).unwrap()),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(again.approved_plugin_tools.is_empty());
+    }
+
+    #[test]
+    fn a_v1_114_token_table_gains_empty_approvals_and_migrates_again_unchanged() {
+        let conn = db();
+        let (id, _) = session(&conn, None);
+        conn.execute_batch(
+            "DROP TABLE mcp_tokens;
+             CREATE TABLE mcp_tokens (
+                 session_id TEXT PRIMARY KEY,
+                 token_hash TEXT NOT NULL UNIQUE,
+                 created_at TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO mcp_tokens VALUES (?1, ?2, '2026-10-01T00:00:00Z')",
+            params![id, hash("v1.114-token")],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+
+        let caller = resolve(&conn, "v1.114-token").unwrap().unwrap();
+        assert_eq!(caller.session_id, id);
+        assert!(caller.approved_plugin_tools.is_empty());
     }
 
     #[test]
@@ -335,9 +489,12 @@ mod tests {
         let (id, _) = session(&conn, None);
         conn.execute("UPDATE sessions SET auto_approve = 1 WHERE id = ?1", [&id])
             .unwrap();
-        let caller = resolve(&conn, &token(&issue(&conn, &id, URL).unwrap()))
-            .unwrap()
-            .unwrap();
+        let caller = resolve(
+            &conn,
+            &token(&issue(&conn, &id, &McpLaunch::new(URL)).unwrap()),
+        )
+        .unwrap()
+        .unwrap();
         assert!(caller.auto_approve);
     }
 
@@ -346,9 +503,12 @@ mod tests {
         let conn = db();
         let (_, owner_id) = session(&conn, None);
         let (id, project_id) = session(&conn, Some(("PLA-7", Some(&owner_id))));
-        let caller = resolve(&conn, &token(&issue(&conn, &id, URL).unwrap()))
-            .unwrap()
-            .unwrap();
+        let caller = resolve(
+            &conn,
+            &token(&issue(&conn, &id, &McpLaunch::new(URL)).unwrap()),
+        )
+        .unwrap()
+        .unwrap();
 
         assert_eq!(
             caller.task,
@@ -365,7 +525,7 @@ mod tests {
     fn the_token_is_a_32_byte_base64url_value_and_only_its_hash_is_stored() {
         let conn = db();
         let (id, _) = session(&conn, None);
-        let endpoint = issue(&conn, &id, URL).unwrap();
+        let endpoint = issue(&conn, &id, &McpLaunch::new(URL)).unwrap();
         let token = token(&endpoint);
 
         assert_eq!(URL_SAFE_NO_PAD.decode(&token).unwrap().len(), 32);
@@ -384,11 +544,11 @@ mod tests {
     fn the_endpoint_hands_both_variables_to_the_agent_environment() {
         let conn = db();
         let (id, _) = session(&conn, None);
-        let endpoint = issue(&conn, &id, URL).unwrap();
+        let endpoint = issue(&conn, &id, &McpLaunch::new(URL)).unwrap();
         let env = endpoint.env();
 
         assert_eq!(env[0], ("PLANEAI_MCP_URL", URL));
-        assert_eq!(env[1].0, "PLANEAI_MCP_TOKEN");
+        assert_eq!(env[1], ("PLANEAI_MCP_TOKEN", endpoint.token()));
         assert!(!format!("{endpoint:?}").contains(env[1].1));
     }
 
@@ -396,8 +556,8 @@ mod tests {
     fn reissuing_replaces_the_previous_token() {
         let conn = db();
         let (id, _) = session(&conn, None);
-        let first = token(&issue(&conn, &id, URL).unwrap());
-        let second = token(&issue(&conn, &id, URL).unwrap());
+        let first = token(&issue(&conn, &id, &McpLaunch::new(URL)).unwrap());
+        let second = token(&issue(&conn, &id, &McpLaunch::new(URL)).unwrap());
 
         assert_eq!(resolve(&conn, &first).unwrap(), None);
         assert_eq!(resolve(&conn, &second).unwrap().unwrap().session_id, id);
@@ -407,9 +567,12 @@ mod tests {
     fn a_local_launch_mints_nothing_and_other_backends_mint_while_listening() {
         let conn = db();
         let (id, _) = session(&conn, None);
-        assert_eq!(launch_endpoint(&conn, Some(URL), &id, "local"), Ok(None));
+        assert_eq!(
+            launch_endpoint(&conn, Some(&McpLaunch::new(URL)), &id, "local"),
+            Ok(None)
+        );
         assert_eq!(launch_endpoint(&conn, None, &id, "daemon"), Ok(None));
-        let endpoint = launch_endpoint(&conn, Some(URL), &id, "daemon")
+        let endpoint = launch_endpoint(&conn, Some(&McpLaunch::new(URL)), &id, "daemon")
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -425,7 +588,7 @@ mod tests {
     fn unknown_tokens_resolve_to_nobody() {
         let conn = db();
         let (id, _) = session(&conn, None);
-        issue(&conn, &id, URL).unwrap();
+        issue(&conn, &id, &McpLaunch::new(URL)).unwrap();
         assert_eq!(resolve(&conn, "not-a-token").unwrap(), None);
         assert_eq!(resolve(&conn, "").unwrap(), None);
     }
@@ -439,7 +602,7 @@ mod tests {
             SessionService::delete,
         ] {
             let (id, _) = session(&conn, None);
-            let token = token(&issue(&conn, &id, URL).unwrap());
+            let token = token(&issue(&conn, &id, &McpLaunch::new(URL)).unwrap());
             end(&conn, &id).unwrap();
             assert_eq!(resolve(&conn, &token).unwrap(), None);
             let rows: i64 = conn
@@ -457,7 +620,7 @@ mod tests {
     fn an_exited_session_keeps_its_token_for_the_agent_that_may_reconnect() {
         let conn = db();
         let (id, _) = session(&conn, None);
-        let token = token(&issue(&conn, &id, URL).unwrap());
+        let token = token(&issue(&conn, &id, &McpLaunch::new(URL)).unwrap());
         SessionService::mark_exited(&conn, &id).unwrap();
         assert_eq!(resolve(&conn, &token).unwrap().unwrap().session_id, id);
     }
@@ -469,7 +632,10 @@ mod tests {
         let (id, token) = {
             let conn = crate::services::open_db_at(&path).unwrap();
             let (id, _) = session(&conn, None);
-            (id.clone(), token(&issue(&conn, &id, URL).unwrap()))
+            (
+                id.clone(),
+                token(&issue(&conn, &id, &McpLaunch::new(URL)).unwrap()),
+            )
         };
         let conn = crate::services::open_db_at(&path).unwrap();
         assert_eq!(resolve(&conn, &token).unwrap().unwrap().session_id, id);

@@ -70,7 +70,7 @@ pub(crate) fn exit_active_session(
 pub(crate) async fn restart_blocking(
     db: Arc<Mutex<Connection>>,
     cfg: Config,
-    mcp_url: Option<String>,
+    mcp: Option<planeai_core::mcp::McpLaunch>,
     session_id: String,
 ) -> Result<(String, db::Session), String> {
     crate::commands::blocking(move || {
@@ -80,7 +80,7 @@ pub(crate) async fn restart_blocking(
             .ok_or("session not found")?;
         let ops = crate::session_restart::real_restart_ops();
         let session =
-            crate::session_restart::restart(&conn, &session_id, &cfg, mcp_url.as_deref(), &ops)?;
+            crate::session_restart::restart(&conn, &session_id, &cfg, mcp.as_ref(), &ops)?;
         Ok((previous.status, session))
     })
     .await
@@ -97,7 +97,7 @@ pub async fn restart_session(
 ) -> Result<db::Session, String> {
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
     let (previous_status, session) =
-        restart_blocking(db_state.0.clone(), cfg, mcp.0.url(), session_id.clone()).await?;
+        restart_blocking(db_state.0.clone(), cfg, mcp.0.launch(), session_id.clone()).await?;
     runtime
         .0
         .dispatch_session_lifecycle(session_transition(&session, &previous_status, "active"));

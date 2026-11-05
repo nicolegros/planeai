@@ -14,21 +14,21 @@ pub trait Backend: Send + Sync {
         branch: &str,
         base: &str,
     ) -> Result<(), String>;
-    /// `mcp_url` is the URL the agent's command was built with; the agent's token is minted for it.
+    /// `mcp` is the server the agent's command was built for; the agent's token is minted for it.
     fn create_tmux_session(
         &self,
         name: &str,
         cwd: &str,
         cmd: &str,
         session_id: &str,
-        mcp_url: Option<&str>,
+        mcp: Option<&crate::mcp::McpLaunch>,
     ) -> Result<(), String>;
     fn create_daemon_session(
         &self,
         session_id: &str,
         cmd: &str,
         cwd: &str,
-        mcp_url: Option<&str>,
+        mcp: Option<&crate::mcp::McpLaunch>,
     ) -> Result<(), String>;
     /// Spawn the agent in PlaneAI's private rmux daemon.
     ///
@@ -40,7 +40,7 @@ pub trait Backend: Send + Sync {
         workspace: &str,
         cmd: &str,
         cwd: &str,
-        mcp_url: Option<&str>,
+        mcp: Option<&crate::mcp::McpLaunch>,
     ) -> Result<(), String>;
     fn insert_session(&self, session: &NewSession) -> Result<(), String>;
     fn notify_gui(&self, session_id: &str) -> Result<(), String>;
@@ -55,8 +55,8 @@ pub trait Backend: Send + Sync {
     /// The project's current folder, read live so a relinked project dispatches into its
     /// new folder. None while the folder is missing on disk.
     fn project_folder(&self, project_id: &str) -> Option<String>;
-    /// The MCP server's URL while it is listening; agents dispatched now connect to it.
-    fn mcp_url(&self) -> Option<String> {
+    /// The MCP server while it is listening; agents dispatched now connect to it.
+    fn mcp(&self) -> Option<crate::mcp::McpLaunch> {
         None
     }
 }
@@ -150,7 +150,7 @@ impl SessionDispatcher {
             .as_deref()
             .map(|tpl| vars.render(tpl));
 
-        let mcp_url = backend.mcp_url();
+        let mcp = backend.mcp();
         let provider_config = crate::session_launch::ProviderConfig {
             command: self.dispatch_config.provider_command.clone(),
             yolo_flag: self.dispatch_config.yolo_flag.clone(),
@@ -163,7 +163,7 @@ impl SessionDispatcher {
             rendered_prompt.as_deref(),
             true, // autonomous: auto-dispatched sessions always use autonomous template
             self.dispatch_config.prompt_wrapper.as_deref(),
-            mcp_url.as_deref(),
+            mcp.as_ref(),
         );
         let cmd = launch_result.command;
         // The prompt is task content: log its size, never its text.
@@ -186,11 +186,9 @@ impl SessionDispatcher {
                 &wt_path,
                 &cmd,
                 &session_id,
-                mcp_url.as_deref(),
+                mcp.as_ref(),
             )?,
-            "daemon" => {
-                backend.create_daemon_session(&session_id, &cmd, &wt_path, mcp_url.as_deref())?
-            }
+            "daemon" => backend.create_daemon_session(&session_id, &cmd, &wt_path, mcp.as_ref())?,
             "rmux" => {
                 let workspace = rmux_workspace_name(&self.project_id, &task.key);
                 backend.create_rmux_session(
@@ -198,7 +196,7 @@ impl SessionDispatcher {
                     &workspace,
                     &cmd,
                     &wt_path,
-                    mcp_url.as_deref(),
+                    mcp.as_ref(),
                 )?
             }
             // `local` sessions spawn their PTY on attach.

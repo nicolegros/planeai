@@ -1131,6 +1131,7 @@ mod tests {
                     supports: vec![ProviderFeature::AutoApprove],
                 },
             ],
+            tools: Vec::new(),
             installed_hash: None,
             installed_path: None,
             original_display_path: None,

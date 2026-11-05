@@ -9,7 +9,9 @@ use super::runtime::ProviderRuntime;
 use super::sink::{ProviderSessionEvent, ProviderStatus};
 use crate::plugin_rpc::PluginRpcError;
 use crate::plugins::{PluginProvider, ProviderFeature};
-use planeai_plugin_contract::provider::{self as protocol, error_code, ProviderSessionStatus};
+use planeai_plugin_contract::provider::{
+    self as protocol, error_code, ProviderMcp, ProviderSessionStatus,
+};
 
 /// Records what reaches the app's notify state and UI.
 #[derive(Default)]
@@ -91,7 +93,13 @@ pub(crate) struct FakeRuntime {
     /// The params of the last request of each method.
     pub(crate) params: Mutex<HashMap<String, Value>>,
     pub(crate) status: FakeStatus,
+    /// Whether the MCP server listens.
+    pub(crate) listening: bool,
+    /// Sessions a token was minted for, in order.
+    pub(crate) minted: Mutex<Vec<String>>,
 }
+
+pub(crate) const FAKE_MCP_URL: &str = "http://127.0.0.1:47437/mcp";
 
 impl FakeRuntime {
     pub(crate) fn running(statuses: &[(&str, &str)]) -> Self {
@@ -103,6 +111,13 @@ impl FakeRuntime {
                 .map(|(id, status)| (id.to_string(), status.to_string())),
         );
         runtime
+    }
+
+    pub(crate) fn listening(self) -> Self {
+        Self {
+            listening: true,
+            ..self
+        }
     }
 
     pub(crate) fn sent(&self) -> Vec<String> {
@@ -209,6 +224,18 @@ impl ProviderRuntime for FakeRuntime {
             Some(status) => Err(format!("session is not active (status: {status})")),
             None => Err(format!("session not found: {session_id}")),
         }
+    }
+
+    async fn mcp_endpoint(&self, session_id: &str) -> Result<Option<ProviderMcp>, String> {
+        if !self.listening {
+            return Ok(None);
+        }
+        let mut minted = self.minted.lock().unwrap();
+        minted.push(session_id.to_string());
+        Ok(Some(ProviderMcp {
+            url: FAKE_MCP_URL.into(),
+            token: format!("token-{}", minted.len()),
+        }))
     }
 
     async fn session_statuses(

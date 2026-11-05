@@ -56,14 +56,109 @@ pub const TASK_SESSION_HOST_API_VERSION: &str = "planeai.plugin-host.v4";
 /// host APIs the slot stays visual-only. The frontend enforces it in `src/lib/plugin-navigation.ts`.
 pub const SESSION_META_HOST_API_VERSION: &str = "planeai.plugin-host.v5";
 
+/// MCP tools a plugin contributes to agents in sessions (`tools[]`, the `tools` capability
+/// and `tool.call`); see ADR-0017.
+pub const TOOLS_HOST_API_VERSION: &str = "planeai.plugin-host.v6";
+
 /// Every host API this host serves, oldest first; each includes the ones before it.
-const HOST_API_VERSIONS: [&str; 5] = [
+const HOST_API_VERSIONS: [&str; 6] = [
     HOST_API_VERSION,
     RECIPIENT_HOST_API_VERSION,
     PROVIDER_HOST_API_VERSION,
     TASK_SESSION_HOST_API_VERSION,
     SESSION_META_HOST_API_VERSION,
+    TOOLS_HOST_API_VERSION,
 ];
+
+/// The host-to-plugin request that runs one of the plugin's tools.
+pub const TOOL_CALL: &str = "tool.call";
+pub const DEFAULT_TOOL_TIMEOUT_MS: u64 = 30_000;
+pub const MAX_TOOL_TIMEOUT_MS: u64 = 120_000;
+
+/// How long the host waits for a tool declaring `timeoutMs`.
+pub fn tool_timeout(timeout_ms: Option<u64>) -> std::time::Duration {
+    std::time::Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS))
+}
+
+/// `tool.call` params: the tool by its manifest name, the agent's arguments, and the session
+/// the agent runs in.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ToolCallParams {
+    pub tool: String,
+    pub arguments: Map<String, Value>,
+    pub caller: ToolCaller,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ToolCaller {
+    pub session_id: String,
+    pub project: ToolProject,
+    /// The session's task, `null` when it has none.
+    pub task: Option<ToolTask>,
+    /// The session runs without permission prompts.
+    pub auto_approve: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ToolProject {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ToolTask {
+    pub key: String,
+    /// The project owning the task, which may differ from the session's.
+    pub project: ToolProject,
+}
+
+/// A `tool.call` result, what the agent reads.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ToolCallResult {
+    pub text: String,
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+/// What a tool call does, from its MCP annotations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolEffect {
+    Read,
+    Write { idempotent: bool },
+    Delete,
+}
+
+/// A declared tool's MCP annotation hints, absent ones taking the MCP defaults.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolAnnotations {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only_hint: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destructive_hint: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotent_hint: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_world_hint: Option<bool>,
+}
+
+impl ToolAnnotations {
+    /// MCP's defaults make a tool that is not read-only destructive unless it says otherwise.
+    pub fn effect(&self) -> std::result::Result<ToolEffect, String> {
+        match (self.read_only_hint, self.destructive_hint) {
+            (Some(true), Some(true)) => Err("cannot be both read-only and destructive".into()),
+            (Some(true), _) => Ok(ToolEffect::Read),
+            (_, Some(false)) => Ok(ToolEffect::Write {
+                idempotent: self.idempotent_hint.unwrap_or(false),
+            }),
+            _ => Ok(ToolEffect::Delete),
+        }
+    }
+
+    pub fn open_world(&self) -> bool {
+        self.open_world_hint.unwrap_or(true)
+    }
+}
 
 pub fn supports_host_api_version(version: &str) -> bool {
     HOST_API_VERSIONS.contains(&version)
@@ -97,6 +192,20 @@ const MANIFEST_FIELDS: &[&str] = &[
     "ui_entrypoint",
     "background_service",
     "providers",
+    "tools",
+];
+const TOOL_FIELDS: &[&str] = &[
+    "name",
+    "description",
+    "inputSchema",
+    "annotations",
+    "timeoutMs",
+];
+const TOOL_ANNOTATION_FIELDS: &[&str] = &[
+    "readOnlyHint",
+    "destructiveHint",
+    "idempotentHint",
+    "openWorldHint",
 ];
 const UI_CONTRIBUTION_FIELDS: &[&str] = &[
     "id",
@@ -122,6 +231,7 @@ const LOCAL_CAPABILITIES: &[&str] = &[
     "tasks.transition",
     "task-events",
     "providers",
+    "tools",
 ];
 const BACKGROUND_SERVICE_FIELDS: &[&str] = &["method", "interval_setting", "default_interval_ms"];
 const UI_PLACEMENTS: &[&str] = &[
@@ -182,6 +292,7 @@ pub fn validate_local_manifest(manifest: &Value, platform: &str) -> Result<Strin
     validate_background_service(object)?;
     validate_ui_contributions(object, id)?;
     validate_providers(object, id)?;
+    validate_tools(object, id)?;
     Ok(entrypoint.to_owned())
 }
 
@@ -229,8 +340,91 @@ fn validate_capabilities(object: &Map<String, Value>) -> Result<()> {
                 TASK_SESSION_HOST_API_VERSION,
             )?;
         }
+        if capability == "tools" {
+            require_host_api(object, "the tools capability", TOOLS_HOST_API_VERSION)?;
+        }
     }
     Ok(())
+}
+
+fn validate_tools(object: &Map<String, Value>, plugin_id: &str) -> Result<()> {
+    let declares_capability = object
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|capabilities| capabilities.iter().any(|value| value == "tools"));
+    let tools = match object.get("tools") {
+        None | Some(Value::Null) => &[][..],
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| anyhow!("plugin manifest tools must be an array"))?,
+    };
+    match (declares_capability, tools.is_empty()) {
+        (true, true) => bail!("the tools capability requires at least one declared tool"),
+        (false, false) => bail!("declared tools require the tools capability"),
+        _ => {}
+    }
+    let mut names = HashSet::new();
+    for tool in tools {
+        let tool = tool
+            .as_object()
+            .ok_or_else(|| anyhow!("tool must be an object"))?;
+        let name = tool.get("name").and_then(Value::as_str).unwrap_or_default();
+        if !is_tool_name(name) {
+            bail!("tool name must start with a lowercase letter and contain only lowercase letters, digits, or underscores");
+        }
+        reject_unknown_fields(tool, TOOL_FIELDS, &format!("tool {name}"))?;
+        if !names.insert(name) {
+            bail!("plugin {plugin_id} defines duplicate tool {name}");
+        }
+        if tool
+            .get("description")
+            .and_then(Value::as_str)
+            .is_none_or(|description| description.trim().is_empty())
+        {
+            bail!("tool {name} description must be a nonempty string");
+        }
+        if tool
+            .get("inputSchema")
+            .and_then(|schema| schema.get("type"))
+            .and_then(Value::as_str)
+            != Some("object")
+        {
+            bail!("tool {name} inputSchema must be a JSON Schema object with \"type\": \"object\"");
+        }
+        match tool.get("timeoutMs") {
+            None => {}
+            Some(Value::Number(value))
+                if value
+                    .as_u64()
+                    .is_some_and(|ms| (1..=MAX_TOOL_TIMEOUT_MS).contains(&ms)) => {}
+            Some(_) => {
+                bail!("tool {name} timeoutMs must be an integer from 1 to {MAX_TOOL_TIMEOUT_MS}")
+            }
+        }
+        if let Some(annotations) = tool.get("annotations") {
+            let subject = format!("tool {name} annotations");
+            let fields = annotations
+                .as_object()
+                .ok_or_else(|| anyhow!("{subject} must be an object"))?;
+            reject_unknown_fields(fields, TOOL_ANNOTATION_FIELDS, &subject)?;
+            if let Some((field, _)) = fields.iter().find(|(_, value)| !value.is_boolean()) {
+                bail!("{subject} {field} must be a boolean");
+            }
+            ToolAnnotations::deserialize(annotations)
+                .map_err(|error| anyhow!("{subject}: {error}"))?
+                .effect()
+                .map_err(|error| anyhow!("tool {name} {error}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// A tool's name within its plugin; the host serves it as `<plugin id>_<name>`.
+pub fn is_tool_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 fn validate_background_service(object: &Map<String, Value>) -> Result<()> {
@@ -655,6 +849,204 @@ mod tests {
         let mut empty = provider_manifest();
         empty["providers"] = json!([]);
         assert!(provider_error(empty).contains("must not be empty"));
+    }
+
+    fn tools_manifest() -> Value {
+        let mut manifest = manifest();
+        manifest["host_api_version"] = json!(TOOLS_HOST_API_VERSION);
+        manifest["capabilities"] = json!(["tools"]);
+        manifest["tools"] = json!([
+            {
+                "name": "issue_show",
+                "description": "Show an issue.",
+                "inputSchema": { "type": "object", "properties": { "key": { "type": "string" } } },
+                "annotations": { "readOnlyHint": true },
+                "timeoutMs": 10000
+            },
+            {
+                "name": "issue_close",
+                "description": "Close an issue.",
+                "inputSchema": { "type": "object" }
+            }
+        ]);
+        manifest
+    }
+
+    fn tools_error(change: impl FnOnce(&mut Value)) -> String {
+        let mut manifest = tools_manifest();
+        change(&mut manifest);
+        validate_local_manifest(&manifest, "macos-arm64")
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn accepts_tools_on_host_api_v6() {
+        assert_eq!(
+            validate_local_manifest(&tools_manifest(), "macos-arm64").unwrap(),
+            "bin/plugin"
+        );
+    }
+
+    #[test]
+    fn tools_require_host_api_v6_and_the_tools_capability() {
+        assert_eq!(
+            tools_error(
+                |manifest| manifest["host_api_version"] = json!(SESSION_META_HOST_API_VERSION)
+            ),
+            "the tools capability requires host API planeai.plugin-host.v6"
+        );
+        assert_eq!(
+            tools_error(|manifest| manifest["capabilities"] = json!([])),
+            "declared tools require the tools capability"
+        );
+        assert_eq!(
+            tools_error(|manifest| {
+                manifest.as_object_mut().unwrap().remove("tools");
+            }),
+            "the tools capability requires at least one declared tool"
+        );
+        assert_eq!(
+            tools_error(|manifest| manifest["tools"] = json!([])),
+            "the tools capability requires at least one declared tool"
+        );
+    }
+
+    #[test]
+    fn tool_names_are_lowercase_words_unique_within_the_plugin() {
+        for name in ["", "Show", "1show", "show-issue", "show issue", "_show"] {
+            assert_eq!(
+                tools_error(|manifest| manifest["tools"][0]["name"] = json!(name)),
+                "tool name must start with a lowercase letter and contain only lowercase letters, digits, or underscores",
+                "{name:?}"
+            );
+        }
+        assert_eq!(
+            tools_error(|manifest| manifest["tools"][1]["name"] = json!("issue_show")),
+            "plugin integration defines duplicate tool issue_show"
+        );
+    }
+
+    #[test]
+    fn tools_are_validated() {
+        assert_eq!(
+            tools_error(|manifest| manifest["tools"][0]["description"] = json!(" ")),
+            "tool issue_show description must be a nonempty string"
+        );
+        assert_eq!(
+            tools_error(
+                |manifest| manifest["tools"][0]["inputSchema"] = json!({ "type": "string" })
+            ),
+            "tool issue_show inputSchema must be a JSON Schema object with \"type\": \"object\""
+        );
+        assert_eq!(
+            tools_error(|manifest| {
+                manifest["tools"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("inputSchema");
+            }),
+            "tool issue_show inputSchema must be a JSON Schema object with \"type\": \"object\""
+        );
+        for timeout in [json!(0), json!(120_001), json!("10"), json!(1.5)] {
+            assert_eq!(
+                tools_error(|manifest| manifest["tools"][0]["timeoutMs"] = timeout.clone()),
+                "tool issue_show timeoutMs must be an integer from 1 to 120000",
+                "{timeout}"
+            );
+        }
+        assert_eq!(
+            tools_error(|manifest| manifest["tools"][0]["outputSchema"] = json!({})),
+            "tool issue_show contains undocumented field: outputSchema"
+        );
+        assert_eq!(
+            tools_error(|manifest| manifest["tools"][0]["annotations"] = json!({ "title": "x" })),
+            "tool issue_show annotations contains undocumented field: title"
+        );
+        assert_eq!(
+            tools_error(
+                |manifest| manifest["tools"][0]["annotations"] = json!({ "readOnlyHint": "yes" })
+            ),
+            "tool issue_show annotations readOnlyHint must be a boolean"
+        );
+        assert_eq!(
+            tools_error(|manifest| {
+                manifest["tools"][0]["annotations"] =
+                    json!({ "readOnlyHint": true, "destructiveHint": true })
+            }),
+            "tool issue_show cannot be both read-only and destructive"
+        );
+    }
+
+    #[test]
+    fn tool_call_messages_keep_their_wire_shape() {
+        let params = ToolCallParams {
+            tool: "show".into(),
+            arguments: json!({ "key": "ISS-1" }).as_object().unwrap().clone(),
+            caller: ToolCaller {
+                session_id: "s1".into(),
+                project: ToolProject {
+                    id: "p1".into(),
+                    name: "demo".into(),
+                },
+                task: None,
+                auto_approve: false,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&params).unwrap(),
+            json!({
+                "tool": "show",
+                "arguments": { "key": "ISS-1" },
+                "caller": {
+                    "session_id": "s1",
+                    "project": { "id": "p1", "name": "demo" },
+                    "task": null,
+                    "auto_approve": false
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<ToolCallResult>(json!({ "text": "ok" })).unwrap(),
+            ToolCallResult {
+                text: "ok".into(),
+                is_error: false
+            }
+        );
+        assert!(
+            serde_json::from_value::<ToolCallResult>(json!({ "text": "x", "is_error": "no" }))
+                .is_err()
+        );
+        assert_eq!(tool_timeout(None), std::time::Duration::from_secs(30));
+        assert_eq!(
+            tool_timeout(Some(250)),
+            std::time::Duration::from_millis(250)
+        );
+    }
+
+    #[test]
+    fn tool_effects_follow_the_mcp_annotation_defaults() {
+        let effect = |annotations: Value| {
+            ToolAnnotations::deserialize(&annotations)
+                .unwrap()
+                .effect()
+                .unwrap()
+        };
+        assert_eq!(effect(json!({ "readOnlyHint": true })), ToolEffect::Read);
+        // MCP treats a tool that is not read-only as destructive unless it says otherwise.
+        assert_eq!(effect(json!({})), ToolEffect::Delete);
+        assert_eq!(
+            effect(json!({ "destructiveHint": true })),
+            ToolEffect::Delete
+        );
+        assert_eq!(
+            effect(json!({ "destructiveHint": false })),
+            ToolEffect::Write { idempotent: false }
+        );
+        assert_eq!(
+            effect(json!({ "destructiveHint": false, "idempotentHint": true })),
+            ToolEffect::Write { idempotent: true }
+        );
     }
 
     #[test]

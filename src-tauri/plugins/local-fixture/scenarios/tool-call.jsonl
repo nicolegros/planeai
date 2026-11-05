@@ -1,0 +1,2 @@
+{"tool":"echo","arguments":{"text":"hello from plugin test"}}
+{"tool":"forget","arguments":{"key":"fixture-key"}}

@@ -15,7 +15,7 @@ fn load_creates_default_config_when_no_file_exists() {
     let dir = tempfile::tempdir().unwrap();
     let config_dir = dir.path();
 
-    let (config, warnings) = load(config_dir);
+    let (config, errors) = load(config_dir);
 
     assert_eq!(
         config,
@@ -24,7 +24,7 @@ fn load_creates_default_config_when_no_file_exists() {
             ..Config::default()
         }
     );
-    assert!(warnings.is_empty());
+    assert!(errors.is_empty());
     assert!(config_dir.join("config.json").exists());
 }
 
@@ -92,10 +92,10 @@ fn load_reads_existing_config_file() {
     let json = serde_json::to_string_pretty(&custom).unwrap();
     fs::write(config_dir.join("config.json"), &json).unwrap();
 
-    let (config, warnings) = load(config_dir);
+    let (config, errors) = load(config_dir);
 
     assert_eq!(config, custom);
-    assert!(warnings.is_empty());
+    assert!(errors.is_empty());
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn load_merges_with_defaults_when_fields_missing() {
     let partial = r#"{ "appearance": { "mode": "dark" } }"#;
     fs::write(config_dir.join("config.json"), partial).unwrap();
 
-    let (config, warnings) = load(config_dir);
+    let (config, errors) = load(config_dir);
 
     // Specified field is kept
     assert_eq!(config.appearance.mode, "dark");
@@ -116,24 +116,24 @@ fn load_merges_with_defaults_when_fields_missing() {
     assert_eq!(config.terminal.font_size, 14);
     assert_eq!(config.default_provider, "kiro");
     assert!(config.providers.contains_key("kiro"));
-    assert!(warnings.is_empty());
+    assert!(errors.is_empty());
 }
 
 #[test]
-fn load_returns_defaults_with_warning_on_invalid_json() {
+fn load_returns_defaults_with_error_on_invalid_json() {
     let dir = tempfile::tempdir().unwrap();
     let config_dir = dir.path();
 
     fs::write(config_dir.join("config.json"), "not valid json {{{").unwrap();
 
-    let (config, warnings) = load(config_dir);
+    let (config, errors) = load(config_dir);
 
     assert_eq!(
         config.editor.as_ref().map(|editor| editor.mode.as_str()),
         Some("__invalid__")
     );
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("parse"));
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].contains("parse"));
 }
 
 #[test]
@@ -149,10 +149,10 @@ fn load_parses_jsonc_with_comments() {
     }"#;
     fs::write(config_dir.join("config.json"), jsonc).unwrap();
 
-    let (config, warnings) = load(config_dir);
+    let (config, errors) = load(config_dir);
 
     assert_eq!(config.appearance.mode, "light");
-    assert!(warnings.is_empty());
+    assert!(errors.is_empty());
 }
 
 #[test]
@@ -191,10 +191,10 @@ fn round_trip_write_whole_then_load() {
     config.onboarding_completed = Some(true);
 
     write_whole(config_dir, &config).unwrap();
-    let (loaded, warnings) = load(config_dir);
+    let (loaded, errors) = load(config_dir);
 
     assert_eq!(loaded, config);
-    assert!(warnings.is_empty());
+    assert!(errors.is_empty());
 }
 
 #[test]
@@ -212,8 +212,8 @@ fn migrate_from_db_creates_config_from_legacy_settings() {
 
     migrate_from_db(config_dir, &settings).unwrap();
 
-    let (config, warnings) = load(config_dir);
-    assert!(warnings.is_empty());
+    let (config, errors) = load(config_dir);
+    assert!(errors.is_empty());
     assert_eq!(config.appearance.mode, "dark");
     assert_eq!(config.appearance.terminal_theme_dark, "catppuccin");
     assert_eq!(config.appearance.terminal_theme_light, "github-light");
@@ -538,9 +538,9 @@ fn load_keeps_stored_provider_commands_as_written() {
     )
     .unwrap();
 
-    let (config, warnings) = load(dir.path());
+    let (config, errors) = load(dir.path());
 
-    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(errors.is_empty(), "{errors:?}");
     let launch = |key: &str| config.providers[key].first_launch_command(false, Some("Go"), None);
     assert_eq!(launch("claude"), "claude -p 'Go'");
     assert_eq!(launch("copilot"), "copilot --resume 'Go'");
@@ -587,8 +587,8 @@ fn load_backfills_resume_fields_for_known_providers() {
     }"#;
     fs::write(config_dir.join("config.json"), old_config).unwrap();
 
-    let (config, warnings) = load(config_dir);
-    assert!(warnings.is_empty());
+    let (config, errors) = load(config_dir);
+    assert!(errors.is_empty());
     let kiro = config.providers.get("kiro").unwrap();
     assert_eq!(
         kiro.resume_command,
@@ -696,9 +696,9 @@ fn load_migrates_legacy_task_managers_to_task_management() {
     }"#;
     fs::write(config_dir.join("config.json"), json).unwrap();
 
-    let (config, warnings) = load(config_dir);
+    let (config, errors) = load(config_dir);
 
-    assert!(warnings.is_empty());
+    assert!(errors.is_empty());
     let tm = config
         .task_management
         .expect("task_management should be migrated");
@@ -746,8 +746,8 @@ fn config_without_integrations_field_deserializes() {
         r#"{"providers": {"kiro": {"command": "kiro-cli chat"}}, "default_provider": "kiro"}"#;
     fs::write(dir.path().join("config.json"), json).unwrap();
 
-    let (config, warnings) = load(dir.path());
-    assert!(warnings.is_empty());
+    let (config, errors) = load(dir.path());
+    assert!(errors.is_empty());
     assert_eq!(config.integrations, None);
 }
 
@@ -772,8 +772,8 @@ fn config_with_legacy_jira_payload_deserializes() {
     }"#;
     fs::write(dir.path().join("config.json"), json).unwrap();
 
-    let (config, warnings) = load(dir.path());
-    assert!(warnings.is_empty());
+    let (config, errors) = load(dir.path());
+    assert!(errors.is_empty());
     let jira = config.integrations.unwrap().jira.unwrap();
     assert_eq!(jira["site"], "https://test.atlassian.net");
     let source = &jira["sources"]["myapp"];
@@ -807,8 +807,8 @@ fn editor_settings_round_trip_through_config_file() {
     };
 
     write_whole(config_dir, &config).unwrap();
-    let (loaded, warnings) = load(config_dir);
-    assert!(warnings.is_empty());
+    let (loaded, errors) = load(config_dir);
+    assert!(errors.is_empty());
     assert_eq!(loaded.editor, config.editor);
     assert!(validate(&loaded).is_ok());
 }
@@ -830,19 +830,19 @@ fn editor_validation_rejects_invalid_non_embedded_settings() {
 }
 
 #[test]
-fn load_returns_defaults_with_warning_for_malformed_editor_shape() {
+fn load_returns_defaults_with_error_for_malformed_editor_shape() {
     let dir = tempfile::tempdir().unwrap();
     let config_dir = dir.path();
     fs::write(config_dir.join("config.json"), r#"{ "editor": "code" }"#).unwrap();
 
-    let (config, warnings) = load(config_dir);
+    let (config, errors) = load(config_dir);
 
     assert_eq!(
         config.editor.as_ref().map(|editor| editor.mode.as_str()),
         Some("__invalid__")
     );
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("Failed to deserialize config.json"));
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].contains("Failed to deserialize config.json"));
 }
 
 #[test]
@@ -855,14 +855,14 @@ fn load_marks_editor_invalid_when_a_non_editor_field_is_malformed() {
     )
     .unwrap();
 
-    let (config, warnings) = load(config_dir);
+    let (config, errors) = load(config_dir);
 
     assert_eq!(
         config.editor.as_ref().map(|editor| editor.mode.as_str()),
         Some("__invalid__")
     );
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("Failed to deserialize config.json"));
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].contains("Failed to deserialize config.json"));
 }
 #[test]
 fn refresh_rejects_invalid_editor_configuration() {
@@ -895,8 +895,8 @@ fn sidebar_view_options_round_trip_through_config_file() {
     assert!(content.contains(r#""sidebar_layout": "classic""#));
     assert!(content.contains(r#""sidebar_group_by": "status""#));
 
-    let (loaded, warnings) = load(dir.path());
-    assert!(warnings.is_empty());
+    let (loaded, errors) = load(dir.path());
+    assert!(errors.is_empty());
     assert_eq!(loaded.sidebar_layout, Some(SidebarLayout::Classic));
     assert_eq!(loaded.sidebar_group_by, Some(SidebarGroupBy::Status));
     assert_eq!(loaded.hide_task_keys, Some(true));
@@ -924,13 +924,13 @@ fn unknown_sidebar_layout_is_reported_as_a_config_error() {
     )
     .unwrap();
 
-    let (_, warnings) = load(dir.path());
+    let (_, errors) = load(dir.path());
 
-    assert_eq!(warnings.len(), 1);
+    assert_eq!(errors.len(), 1);
     assert!(
-        warnings[0].contains("unknown variant `grid`"),
+        errors[0].contains("unknown variant `grid`"),
         "{}",
-        warnings[0]
+        errors[0]
     );
 }
 
@@ -943,13 +943,13 @@ fn unknown_sidebar_group_by_is_reported_as_a_config_error() {
     )
     .unwrap();
 
-    let (_, warnings) = load(dir.path());
+    let (_, errors) = load(dir.path());
 
-    assert_eq!(warnings.len(), 1);
+    assert_eq!(errors.len(), 1);
     assert!(
-        warnings[0].contains("unknown variant `statu`"),
+        errors[0].contains("unknown variant `statu`"),
         "{}",
-        warnings[0]
+        errors[0]
     );
 }
 
@@ -976,9 +976,9 @@ fn existing_config_without_flag_counts_as_onboarded() {
     )
     .unwrap();
 
-    let (config, warnings) = load(dir.path());
+    let (config, errors) = load(dir.path());
 
-    assert!(warnings.is_empty());
+    assert!(errors.is_empty());
     assert_eq!(config.onboarding_completed, Some(true));
 }
 
@@ -999,9 +999,9 @@ fn unparseable_config_does_not_trigger_onboarding() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("config.json"), "{ not json").unwrap();
 
-    let (config, warnings) = load(dir.path());
+    let (config, errors) = load(dir.path());
 
-    assert!(!warnings.is_empty());
+    assert!(!errors.is_empty());
     assert_eq!(config.onboarding_completed, Some(true));
 }
 
@@ -1130,9 +1130,9 @@ fn post_merge_action_survives_a_settings_update_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     write_whole(dir.path(), &config).unwrap();
 
-    let (reloaded, warnings) = load(dir.path());
+    let (reloaded, errors) = load(dir.path());
 
-    assert!(warnings.is_empty());
+    assert!(errors.is_empty());
     assert_eq!(reloaded.post_merge_action, Some(PostMergeAction::Destroy));
 }
 
@@ -1145,9 +1145,9 @@ fn unknown_post_merge_action_is_reported_as_a_config_error() {
     )
     .unwrap();
 
-    let (_, warnings) = load(dir.path());
+    let (_, errors) = load(dir.path());
 
-    assert_eq!(warnings.len(), 1);
+    assert_eq!(errors.len(), 1);
 }
 
 #[test]
@@ -1169,9 +1169,9 @@ fn existing_config_without_task_management_keeps_tasks_off() {
     )
     .unwrap();
 
-    let (config, warnings) = load(dir.path());
+    let (config, errors) = load(dir.path());
 
-    assert!(warnings.is_empty());
+    assert!(errors.is_empty());
     assert_eq!(config.task_management, None);
 }
 
@@ -1242,9 +1242,9 @@ fn broken_config_falls_back_to_existing_user_behavior() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("config.json"), content).unwrap();
 
-        let (config, warnings) = load(dir.path());
+        let (config, errors) = load(dir.path());
 
-        assert_eq!(warnings.len(), 1, "{content}");
+        assert_eq!(errors.len(), 1, "{content}");
         assert_eq!(config.task_management, None, "{content}");
         assert_eq!(config.auto_open_review, Some(true), "{content}");
         assert_eq!(config.onboarding_completed, Some(true), "{content}");
@@ -1260,8 +1260,8 @@ fn provider_keys_with_a_colon_are_reserved_for_plugins() {
         r#"{ "providers": { "team:claude": { "command": "claude" } } }"#,
     )
     .unwrap();
-    let (config, warnings) = load(dir.path());
-    assert!(warnings.is_empty(), "{warnings:?}");
+    let (config, errors) = load(dir.path());
+    assert!(errors.is_empty(), "{errors:?}");
     assert!(config.providers.contains_key("team:claude"));
     // Saving asks for it to be renamed first.
     assert!(validate(&config)
@@ -1308,13 +1308,13 @@ fn save_edit(file: &str, edit: impl FnOnce(&mut Config)) -> String {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     fs::write(&path, file).unwrap();
-    let (before, warnings) = load(dir.path());
-    assert!(warnings.is_empty(), "{warnings:?}");
+    let (before, errors) = load(dir.path());
+    assert!(errors.is_empty(), "{errors:?}");
     let mut after = before.clone();
     edit(&mut after);
     save(dir.path(), &before, &after).unwrap();
-    let (reloaded, warnings) = load(dir.path());
-    assert!(warnings.is_empty(), "{warnings:?}");
+    let (reloaded, errors) = load(dir.path());
+    assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(
         reloaded, after,
         "the saved file loads back as the edited config"
@@ -1569,7 +1569,9 @@ fn load_backfills_mcp_args_for_built_in_agents_but_keeps_an_explicit_opt_out() {
         config.providers["codex"].first_launch_command(
             false,
             None,
-            Some("http://127.0.0.1:47437/mcp")
+            Some(&planeai_core::mcp::McpLaunch::new(
+                "http://127.0.0.1:47437/mcp"
+            ))
         ),
         "codex"
     );
@@ -1584,11 +1586,103 @@ fn a_restarted_agent_reconnects_to_the_mcp_server() {
         ..Default::default()
     };
     assert_eq!(
-        restart_command_for_provider(&provider, Some("http://127.0.0.1:47437/mcp")),
+        restart_command_for_provider(
+            &provider,
+            Some(&planeai_core::mcp::McpLaunch::new(
+                "http://127.0.0.1:47437/mcp"
+            ))
+        ),
         "agent --resume --mcp http://127.0.0.1:47437/mcp"
     );
     assert_eq!(
         restart_command_for_provider(&provider, None),
         "agent --resume"
     );
+}
+
+#[test]
+fn a_v1_114_codex_config_loads_with_the_current_approval_template() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("config.json"),
+        r#"{
+  "providers": {
+    "codex": {
+      "command": "codex",
+      "mcp_args": "-c mcp_servers.planeai.url=\"{mcp_url}\" -c mcp_servers.planeai.bearer_token_env_var=\"PLANEAI_MCP_TOKEN\" -c mcp_servers.planeai.default_tools_approval_mode=\"approve\" {mcp_codex_prompted_tools}"
+    }
+  }
+}"#,
+    )
+    .unwrap();
+
+    let (config, errors) = load(dir.path());
+
+    assert_eq!(errors, Vec::<String>::new());
+    assert_eq!(
+        config.providers["codex"].mcp_args,
+        Config::default().providers["codex"].mcp_args
+    );
+    let saved = std::fs::read_to_string(dir.path().join("config.json")).unwrap();
+    assert!(saved.contains("{mcp_codex_approved_tools}"), "{saved}");
+    assert!(!saved.contains("{mcp_codex_prompted_tools}"), "{saved}");
+}
+
+const UNUPGRADABLE_CODEX_ARGS: &str =
+    "-c mcp_servers.planeai.default_tools_approval_mode=approve {mcp_codex_prompted_tools}";
+
+fn write_codex_args(dir: &std::path::Path, editor: Option<&str>) {
+    let editor = editor.map_or(String::new(), |editor| format!(r#""editor": {editor},"#));
+    std::fs::write(
+        dir.join("config.json"),
+        format!(
+            r#"{{ {editor} "providers": {{ "codex": {{ "command": "codex", "mcp_args": "{UNUPGRADABLE_CODEX_ARGS}" }} }} }}"#
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_v1_114_codex_template_that_cannot_be_upgraded_is_kept_with_a_notice() {
+    let dir = tempfile::TempDir::new().unwrap();
+    write_codex_args(dir.path(), None);
+
+    let (config, errors, notices) = load_with_notices(dir.path());
+
+    assert_eq!(
+        config.providers["codex"].mcp_args.as_deref(),
+        Some(UNUPGRADABLE_CODEX_ARGS)
+    );
+    assert_eq!(errors, Vec::<String>::new());
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].starts_with("Agent codex runs without PlaneAI tools: "));
+}
+
+#[test]
+fn a_reload_with_a_codex_template_that_cannot_be_upgraded_succeeds() {
+    let dir = tempfile::TempDir::new().unwrap();
+    write_codex_args(dir.path(), None);
+
+    let config = refresh(dir.path()).unwrap();
+
+    assert_eq!(
+        config.providers["codex"].mcp_args.as_deref(),
+        Some(UNUPGRADABLE_CODEX_ARGS)
+    );
+}
+
+#[test]
+fn an_invalid_editor_keeps_the_codex_template_notice() {
+    let dir = tempfile::TempDir::new().unwrap();
+    write_codex_args(
+        dir.path(),
+        Some(r#"{ "mode": "terminal", "command": "", "args": [] }"#),
+    );
+
+    let (_, errors, notices) = load_with_notices(dir.path());
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("Editor executable is required"));
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].starts_with("Agent codex runs without PlaneAI tools: "));
 }

@@ -207,9 +207,10 @@ impl TabHost for PtyTabHost {
             .map_err(|e| e.to_string())?
             .clone();
         let pty = self.app.state::<PtyState>().0.clone();
+        let mcp = self.app.state::<crate::state::McpServerState>().0.launch();
         let (tab, spec) = (tab.clone(), spec.clone());
         let prepared = crate::commands::blocking(move || {
-            prepare_tab_spawn(&tab, &spec, output.dark_mode, connection, config)
+            prepare_tab_spawn(&tab, &spec, output.dark_mode, connection, config, mcp)
         })
         .await?;
         let PreparedTab {
@@ -340,11 +341,20 @@ fn prepare_tab_spawn(
     dark_mode: bool,
     connection: Arc<std::sync::Mutex<rusqlite::Connection>>,
     config: crate::config::Config,
+    mcp: Option<planeai_core::mcp::McpLaunch>,
 ) -> Result<PreparedTab, String> {
     let conn = connection.lock().map_err(|e| e.to_string())?;
     let session = db::get_session(&conn, tab.session_id())
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
+    // A provider session's program tab is its handoff: the agent the provider detached
+    // continues there, and its argv reaches the UI, so the token only goes in its env.
+    let handoff_mcp = match spec {
+        TabSpec::Program { .. } if session.backend == crate::session_ops::PLUGIN_BACKEND => {
+            planeai_core::mcp::endpoint(&conn, mcp.as_ref(), &session.id)?
+        }
+        _ => None,
+    };
     let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
     let project_path = projects
         .iter()
@@ -374,7 +384,7 @@ fn prepare_tab_spawn(
         TabSpec::Program { argv } => argv.join(" "),
     };
     // The same env (augmented PATH, TERM, COLORFGBG, PLANEAI_SOCKET) for every backend.
-    let env = {
+    let mut env = {
         let extra_path_dirs = config.resolved_extra_path_dirs();
         super::helpers::build_local_env(
             &pty_key,
@@ -384,6 +394,7 @@ fn prepare_tab_spawn(
             extra_path_dirs,
         )?
     };
+    env.extend(handoff_mcp.iter().flat_map(|endpoint| endpoint.owned_env()));
 
     tracing::info!(
         pty_key = %pty_key,
@@ -573,7 +584,62 @@ mod tests {
             true,
             session_db(backend),
             crate::config::Config::default(),
+            None,
         )
+    }
+
+    #[test]
+    fn a_handoff_program_gets_its_sessions_mcp_token_in_its_environment_only() {
+        let db = session_db("plugin");
+        let launch = planeai_core::mcp::McpLaunch::new("http://127.0.0.1:1/mcp");
+        let prepare = |spec: TabSpec, mcp: Option<&planeai_core::mcp::McpLaunch>| {
+            prepare_tab_spawn(
+                &TabId::new("s1", 2),
+                &spec,
+                true,
+                db.clone(),
+                crate::config::Config::default(),
+                mcp.cloned(),
+            )
+            .unwrap()
+        };
+        let var = |tab: &PreparedTab, key: &str| {
+            tab.env
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value.clone())
+        };
+        let program = || TabSpec::Program {
+            argv: vec!["claude".into(), "--resume".into()],
+        };
+
+        let handoff = prepare(program(), Some(&launch));
+
+        assert_eq!(
+            var(&handoff, "PLANEAI_MCP_URL").as_deref(),
+            Some("http://127.0.0.1:1/mcp")
+        );
+        let token = var(&handoff, "PLANEAI_MCP_TOKEN").unwrap();
+        let conn = db.lock().unwrap();
+        assert_eq!(
+            planeai_core::mcp::resolve(&conn, &token)
+                .unwrap()
+                .unwrap()
+                .session_id,
+            "s1"
+        );
+        drop(conn);
+        match &handoff.launch {
+            TabLaunch::Local(pty::PtyTarget::Program { argv, .. }) => {
+                assert!(!argv.iter().any(|arg| arg.contains(&token)))
+            }
+            _ => panic!("expected a local program"),
+        }
+        assert_eq!(var(&prepare(program(), None), "PLANEAI_MCP_TOKEN"), None);
+        assert_eq!(
+            var(&prepare(TabSpec::Shell, Some(&launch)), "PLANEAI_MCP_TOKEN"),
+            None
+        );
     }
 
     fn session_db(backend: &str) -> Arc<std::sync::Mutex<rusqlite::Connection>> {

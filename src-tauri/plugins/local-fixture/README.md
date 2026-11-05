@@ -2,11 +2,13 @@
 
 This is the reference package for PlaneAI's **trusted local plugin** contract. It deliberately demonstrates the whole v1 surface:
 
-- `planeai-plugin.json` requests the local-only `settings`, `projects.read`, `sessions.read`, `tasks.read`, `tasks.create`, `task-events`, `session-events`, and `providers` capabilities.
+- `planeai-plugin.json` requests the local-only `settings`, `projects.read`, `sessions.read`, `tasks.read`, `tasks.create`, `task-events`, `session-events`, `providers`, and `tools` capabilities.
 - `bin/<platform>/planeai-plugin-fixture[.exe]` is a JSON-RPC/JSONL sidecar after `make local-plugin-fixture` builds it for the current platform.
 - `ui/entry.js` is a self-contained browser ESM module. It uses `context.host.call("fixture.status")` and the public `context.host.settings.get()` / `.replace()` bridge, then returns a disposer that removes its click handler and Shadow DOM content.
 - `providers` declares the **Echo (fixture)** provider (host API `planeai.plugin-host.v3`).
   Its sessions echo every prompt as a `busy` → events → `idle` turn, and `ui/chat.js` is the reference provider UI: raw transcript, prompt input, and reattach through `fixture.providerSnapshot` plus `context.host.session.onEvent`.
+- `tools` declares two MCP tools for agents in PlaneAI sessions (host API `planeai.plugin-host.v6`): `echo`, a read that answers with its text and the calling session and project, and `forget`, a destructive tool that only reports the key it would delete.
+  Agents call them as `local-fixture_echo` and `local-fixture_forget`.
 - The Rust sidecar advertises `task.lifecycle`, logs startup/lifecycle/shutdown to stderr, implements `fixture.persistSettings` with correlated `host.settings.get` and `host.settings.replace` callbacks, implements `fixture.awaitCancellation` for cooperative `$/cancelRequest` handling, and implements `fixture.requireStateDirectories` to verify host-owned state paths.
 
 ## Build and install locally
@@ -30,5 +32,6 @@ The manifest lists every supported platform, but the Make target materializes on
    Switch sessions and back; the transcript is rebuilt from the snapshot.
 5. Run `planeai-cli plugin test --package src-tauri/plugins/local-fixture --scenario src-tauri/plugins/local-fixture/scenarios/state-environment.jsonl` to verify `PLANEAI_PLUGIN_DATA_DIR` and `PLANEAI_PLUGIN_SECRETS_DIR`, and run the corresponding `cancellation.jsonl` scenario to verify cooperative cancellation. The checked-in `persist-settings.jsonl` scenario exercises nested settings callbacks.
 6. Run `planeai-cli plugin test --package src-tauri/plugins/local-fixture --provider-turn "hello from plugin test"` to start an Echo session, send one prompt, and check it reports `busy` then `idle`.
+7. Run `planeai-cli plugin test --package src-tauri/plugins/local-fixture --scenario src-tauri/plugins/local-fixture/scenarios/tool-call.jsonl` to send `tool.call` for both tools as PlaneAI does for an agent, and check each result.
 
 See the [Plugin author guide](../../../docs/src/content/docs/guides/plugin-ui-contributions.md) for the full package and protocol contract.

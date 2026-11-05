@@ -21,7 +21,7 @@ my-plugin/
     └── entry.js
 ```
 
-`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers), `planeai.plugin-host.v4` for plugins that use the `sessions.start` capability or the `dialog` placement, or `planeai.plugin-host.v5` for a `session.meta` slot with a tooltip that opens the plugin's session panel (each version includes the ones before it); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
+`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers), `planeai.plugin-host.v4` for plugins that use the `sessions.start` capability or the `dialog` placement, `planeai.plugin-host.v5` for a `session.meta` slot with a tooltip that opens the plugin's session panel, or `planeai.plugin-host.v6` for plugins that contribute [tools](#tools) to agents (each version includes the ones before it); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
 
 Every backend and UI path must be a package-relative file path: no absolute paths and no `..`. The active platform's backend must exist and be executable. On Unix, its executable mode is preserved in the imported copy.
 
@@ -38,7 +38,7 @@ After each successful call, PlaneAI tells the plugin's UI its data changed, unle
   "id": "local-fixture",
   "name": "Local Fixture",
   "version": "0.1.0",
-  "host_api_version": "planeai.plugin-host.v3",
+  "host_api_version": "planeai.plugin-host.v6",
   "source_kind": "local",
   "backend_entrypoints": {
     "macos-arm64": "bin/macos-arm64/planeai-plugin-fixture",
@@ -56,7 +56,8 @@ After each successful call, PlaneAI tells the plugin's UI its data changed, unle
     "tasks.create",
     "task-events",
     "session-events",
-    "providers"
+    "providers",
+    "tools"
   ],
   "ui_contributions": [
     {
@@ -73,6 +74,19 @@ After each successful call, PlaneAI tells the plugin's UI its data changed, unle
       "entrypoint": "ui/chat.js",
       "supports": ["auto_approve"]
     }
+  ],
+  "tools": [
+    {
+      "name": "echo",
+      "description": "Echo a text back with the session and project that called the tool.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "text": { "type": "string" } },
+        "required": ["text"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "timeoutMs": 5000
+    }
   ]
 }
 ```
@@ -81,7 +95,7 @@ The platform key is the current OS and architecture: `macos-arm64`, `macos-x64`,
 
 ### Capabilities
 
-Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `sessions.start`, `tasks.read`, `tasks.create`, `tasks.transition`, `task-events`, and `providers`; duplicates and all other local capabilities are rejected.
+Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `sessions.start`, `tasks.read`, `tasks.create`, `tasks.transition`, `task-events`, `providers`, and `tools`; duplicates and all other local capabilities are rejected.
 
 - `settings` permits sidecar callbacks `host.settings.get` and `host.settings.replace`.
 - `projects.read` permits `host.projects.list`, returning non-hidden active projects.
@@ -118,6 +132,7 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
 - `tasks.transition` permits `host.sessions.transitionLinkedTask` with `{ "session_id", "status" }`. PlaneAI resolves the task strictly from that session's linked task key, changes its lifecycle status, and emits the normal task lifecycle batch (including automatic parent completion).
 - `task-events` permits event delivery only when the handshake also subscribes to `task.lifecycle`.
 - `providers` permits declaring `providers` (host API v3 only) and the provider session contract described in [Providers](#providers). It is required exactly when `providers` is declared.
+- `tools` permits declaring `tools` (host API v6) that agents in PlaneAI sessions call, described in [Tools](#tools). It is required exactly when `tools` is declared.
 - `session-events` permits best-effort `plugin.sessionLifecycle` delivery only when the handshake also subscribes to `session.lifecycle`. Events describe committed host session status changes and include the session/project identity, branch, linked task key, previous status, and new status.
 
 The sandbox UI can use the same read/create operations directly through `context.host.rpc.call("projects.list")`, `context.host.rpc.call("sessions.list")`, `context.host.rpc.call("task.get", { key })`, `context.host.rpc.call("tasks.create", params)`, `context.host.rpc.call("tasks.createChild", params)`, and `context.host.rpc.call("sessions.providers")`. The sidecar uses matching nested callbacks with the `host.` prefix. PlaneAI derives the owning plugin identity for both transports and applies identical manifest capability checks.
@@ -188,20 +203,27 @@ PlaneAI calls these sidecar methods.
 Each must return promptly and do its work asynchronously; `send` means the input is accepted and queued, not that the turn ran.
 Results are JSON objects, and PlaneAI ignores fields it does not know.
 
-| Method                        | Params                                                                               | Meaning                                                                                                                                 |
-| ----------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `provider.session.start`      | `session_id`, `provider_id`, `cwd`, `env`, `auto_approve`, optional `initial_prompt` | A new session was created. Run the agent in `cwd` with `env`.                                                                           |
-| `provider.session.resume`     | `session_id`, `provider_id`, `cwd`, `env`, `auto_approve`, `handed_off`              | The current sidecar does not drive this existing session yet, after an app restart or plugin reload. Restore it; do not replay prompts. |
-| `provider.session.send`       | `session_id`, `text`                                                                 | Input from the chat UI, the CLI, or another plugin's `sessions.prompt`.                                                                 |
-| `provider.session.interrupt`  | `session_id`                                                                         | Stop the current turn.                                                                                                                  |
-| `provider.session.stop`       | `session_id`, `reason` (`archive`, `destroy` or `exit`)                              | The session ended. Release its process; on `destroy`, delete its data.                                                                  |
-| `provider.session.handoff`    | `session_id`                                                                         | With `handoff` only. Stop driving the session and return `{ "argv": [...] }`, the command that continues it in a terminal.              |
-| `provider.session.handback`   | `session_id`                                                                         | With `handoff` only. The terminal tab closed, or the handoff answer had no runnable `argv`; drive the session again.                    |
-| `provider.sessions.reconcile` | `sessions`: `[{ "session_id", "provider_id", "status" }]`                            | Sent once after the handshake. The plugin's sessions that still exist; see [Lifecycle](#lifecycle).                                     |
+| Method                        | Params                                                                                               | Meaning                                                                                                                                 |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider.session.start`      | `session_id`, `provider_id`, `cwd`, `env`, `auto_approve`, optional `initial_prompt`, optional `mcp` | A new session was created. Run the agent in `cwd` with `env`.                                                                           |
+| `provider.session.resume`     | `session_id`, `provider_id`, `cwd`, `env`, `auto_approve`, `handed_off`, optional `mcp`              | The current sidecar does not drive this existing session yet, after an app restart or plugin reload. Restore it; do not replay prompts. |
+| `provider.session.send`       | `session_id`, `text`                                                                                 | Input from the chat UI, the CLI, or another plugin's `sessions.prompt`.                                                                 |
+| `provider.session.interrupt`  | `session_id`                                                                                         | Stop the current turn.                                                                                                                  |
+| `provider.session.stop`       | `session_id`, `reason` (`archive`, `destroy` or `exit`)                                              | The session ended. Release its process; on `destroy`, delete its data.                                                                  |
+| `provider.session.handoff`    | `session_id`                                                                                         | With `handoff` only. Stop driving the session and return `{ "argv": [...] }`, the command that continues it in a terminal.              |
+| `provider.session.handback`   | `session_id`, optional `mcp`                                                                         | With `handoff` only. The terminal tab closed, or the handoff answer had no runnable `argv`; drive the session again.                    |
+| `provider.sessions.reconcile` | `sessions`: `[{ "session_id", "provider_id", "status" }]`                                            | Sent once after the handshake. The plugin's sessions that still exist; see [Lifecycle](#lifecycle).                                     |
 
 `session_id` is a lowercase UUID.
 `cwd` is the session's worktree, or its project's root for a session without one.
 `env` is an overlay on the sidecar's own environment: `PLANEAI_SESSION_ID`, `PLANEAI_SOCKET` and the augmented `PATH`, so the agent can still spawn sub-sessions and manage tasks.
+
+`mcp` is `{ "url", "token" }`: PlaneAI's MCP server and a bearer token that authenticates as the session, so the agent can call PlaneAI's tools and those of running plugins (ADR-0017).
+It is present while the server listens and absent otherwise; older providers can ignore it.
+Each one is a fresh token that revokes the session's previous one, so connect the agent you start or restore with the latest you received.
+A `resume` of a handed-off session carries none, because the terminal's agent still uses the current token; the `handback` that follows brings a new one.
+Treat the token as a secret: keep it out of logs, argv, and the UI, and hand it to the agent through its environment or its MCP client configuration.
+The program a handoff runs gets the session's URL and a token as `PLANEAI_MCP_URL` and `PLANEAI_MCP_TOKEN` in its environment, never in its argv, which reaches PlaneAI's UI; reference the variable instead, as in Claude Code's `--mcp-config` header `Bearer ${PLANEAI_MCP_TOKEN}`.
 
 Start, resume, handoff and handback have a 30-second deadline, since they may launch the agent; every other provider method has five seconds.
 On expiry PlaneAI cancels the request as described above.
@@ -277,6 +299,79 @@ PlaneAI unmounts the UI when the user switches sessions, and resumes the session
 To rebuild the view, subscribe first, fetch a snapshot through a plugin-defined `context.host.call(...)` method, then drop live events whose `seq` is at or below the snapshot's.
 Every response is one frame, so a long transcript must come back in pages (for example, events after a given `seq` until the sidecar reports no more), or a single oversized response stops the runtime.
 The fixture's `ui/chat.js` and `fixture.providerSnapshot` show the pattern on a transcript small enough for one page.
+
+## Tools
+
+A plugin can give agents tools.
+Agents running in PlaneAI sessions reach PlaneAI's MCP server (ADR-0016), and every tool a running plugin declares joins PlaneAI's own tools there.
+See ADR-0017.
+
+```json
+"host_api_version": "planeai.plugin-host.v6",
+"capabilities": ["tools"],
+"tools": [
+  {
+    "name": "echo",
+    "description": "Echo a text back, with the calling session.",
+    "inputSchema": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] },
+    "annotations": { "readOnlyHint": true },
+    "timeoutMs": 5000
+  }
+]
+```
+
+- `name` starts with a lowercase letter and contains only lowercase letters, digits, and underscores, and is unique within the plugin.
+  Agents call the tool as `<plugin id>_<name>`, which Claude Code shows as `mcp__planeai__<plugin id>_<name>`.
+  That name must be at most 50 characters and must not be one of PlaneAI's own tools (`task_list`, for example, for a plugin `task` with a tool `list`), or the package does not install.
+  Plugin ids contain no underscore, so two plugins' tools never share a name.
+- `description` is a nonempty string, and `inputSchema` a JSON Schema whose `type` is `object`, as MCP requires.
+  Agents see both as written.
+- `annotations` holds MCP's `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` booleans, with MCP's defaults.
+  They decide the tool's effect: read-only, a write (idempotent or not), or destructive.
+  A tool that is not read-only is destructive unless it sets `destructiveHint: false`, so a tool without annotations counts as destructive.
+  A tool cannot be both read-only and destructive.
+- `timeoutMs` is how long PlaneAI waits for the tool, from 1 to 120000; the default is 30000.
+
+Effects decide approval as for PlaneAI's own tools: an agent PlaneAI launches, from the app, `planeai-cli` or another agent, runs the read and write tools of the plugins running at its launch without asking, and asks before a destructive one or the tool of a plugin enabled later.
+
+Unknown fields in a tool or its annotations are rejected.
+
+### Calls
+
+PlaneAI lists a plugin's tools while the plugin is running: enabling it adds them, and disabling, reloading or a crash removes them, without restarting the app.
+The MCP server runs in stateless mode, so it cannot notify connected agents; they see the change on their next `tools/list`, which Claude Code and Codex make when they connect.
+A call of a tool whose plugin stopped meanwhile answers the agent with an error.
+
+When an agent calls the tool, PlaneAI sends the sidecar a `tool.call` request:
+
+```json
+{
+  "tool": "echo",
+  "arguments": { "text": "hi" },
+  "caller": {
+    "session_id": "1b4e28ba-2fa1-11d2-883f-0016d3cca427",
+    "project": { "id": "4f6c...", "name": "planeai" },
+    "task": { "key": "PLA-12", "project": { "id": "4f6c...", "name": "planeai" } },
+    "auto_approve": false
+  }
+}
+```
+
+`tool` is the name from the manifest, without the plugin prefix.
+`arguments` is what the agent sent; PlaneAI does not check it against `inputSchema`, so validate it.
+`caller` is the session the agent runs in, taken from its MCP token: its project, its task when it has one (`null` otherwise) with the project owning that task, and whether it runs without permission prompts.
+A plugin must not give a session more than it has: when `auto_approve` is `false`, do not do on the agent's behalf what its user has not approved, as PlaneAI's own tools refuse to start a `yolo` session for it.
+
+Answer `{ "text": "...", "is_error": false }`; `is_error` defaults to `false`.
+The agent reads `text` as the tool's whole result, so keep it compact (PlaneAI's own tools answer in TOON) and within the 64 KiB frame.
+Report a failure the agent should read, such as an unknown key, with `is_error: true`.
+A JSON-RPC error answer also reaches the agent as an error with its message.
+
+PlaneAI waits `timeoutMs`, then cancels the request as described in [Native sidecar protocol](#native-sidecar-protocol).
+A plugin that acknowledges the cancellation keeps running, and the agent reads that the plugin gave no answer within the timeout and the call was cancelled.
+A plugin that does not acknowledge it is stopped, and the agent reads that `tool.call` timed out.
+PlaneAI sends a plugin one request at a time, so a slow tool delays the plugin's other requests.
+`tool.call` is reserved for PlaneAI: plugin UI cannot call it, and `planeai-cli plugin test` scenarios send it only through a tool line.
 
 ## UI contributions
 
@@ -410,13 +505,19 @@ planeai-cli plugin test \
   --package src-tauri/plugins/local-fixture \
   --scenario src-tauri/plugins/local-fixture/scenarios/cancellation.jsonl
 
+# Call declared tools as an agent in a session would.
+planeai-cli plugin test \
+  --package src-tauri/plugins/local-fixture \
+  --scenario src-tauri/plugins/local-fixture/scenarios/tool-call.jsonl
+
 # Run one provider turn: send a prompt and require busy, an event, then idle.
 planeai-cli plugin test \
   --package src-tauri/plugins/local-fixture \
   --provider-turn "hello"
 ```
 
-The command validates every declared local backend path and the current-platform executable, creates temporary host-owned `PLANEAI_PLUGIN_DATA_DIR` and `PLANEAI_PLUGIN_SECRETS_DIR` directories, forwards only manifest-granted host capabilities during handshake, delivers a task lifecycle batch only when both sides opt in, rejects malformed or mismatched JSON-RPC output, and verifies clean shutdown. A scenario is newline-delimited JSON objects containing `method`, optional `params`, and optional `timeout_ms`. A positive `timeout_ms` (at most 5000) makes the harness send `$/cancelRequest` when the call remains pending and requires the original request to finish with error code `-32800`. Use the checked-in scenarios as executable examples. For a plugin that declares providers, the harness sends `provider.sessions.reconcile` after the handshake and, for every provider, checks the session contract with the parameters PlaneAI sends: start, a repeated stop, an interrupt of the stopped session answering `-32010`, a resume of a session the plugin never saw, and a stop of an unknown session. It validates every provider notification (known session, `seq` in range and increasing, documented status). When a provider supports `handoff`, it also checks that a repeated `provider.session.handoff` returns a runnable argv and that a repeated `provider.session.handback` succeeds. `--provider-turn <text>` additionally sends one prompt and requires a `busy` then `idle` turn with at least one event; skip it for providers that call a real model. Browser UI lifecycle remains covered by your own DOM test using the documented `mount` context and disposer.
+The command validates every declared local backend path and the current-platform executable, creates temporary host-owned `PLANEAI_PLUGIN_DATA_DIR` and `PLANEAI_PLUGIN_SECRETS_DIR` directories, forwards only manifest-granted host capabilities during handshake, delivers a task lifecycle batch only when both sides opt in, rejects malformed or mismatched JSON-RPC output, and verifies clean shutdown. A scenario is newline-delimited JSON objects containing `method`, optional `params`, and optional `timeout_ms`. A positive `timeout_ms` (at most 5000) makes the harness send `$/cancelRequest` when the call remains pending and requires the original request to finish with error code `-32800`. A line `{ "tool": "echo", "arguments": { ... } }` instead sends `tool.call` for that declared tool, with a stand-in caller and the tool's timeout, and requires a `{ text, is_error? }` result, which it prints.
+Use the checked-in scenarios as executable examples. For a plugin that declares providers, the harness sends `provider.sessions.reconcile` after the handshake and, for every provider, checks the session contract with the parameters PlaneAI sends: start, a repeated stop, an interrupt of the stopped session answering `-32010`, a resume of a session the plugin never saw, and a stop of an unknown session. It validates every provider notification (known session, `seq` in range and increasing, documented status). When a provider supports `handoff`, it also checks that a repeated `provider.session.handoff` returns a runnable argv and that a repeated `provider.session.handback` succeeds. `--provider-turn <text>` additionally sends one prompt and requires a `busy` then `idle` turn with at least one event; skip it for providers that call a real model. Browser UI lifecycle remains covered by your own DOM test using the documented `mount` context and disposer.
 
 ## v1 limitations and author checklist
 

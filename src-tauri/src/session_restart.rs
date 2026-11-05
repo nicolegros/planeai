@@ -47,13 +47,13 @@ pub trait RestartOps {
     ) -> Result<(), String>;
 }
 
-/// `mcp_url` is the MCP server's URL while it is listening.
+/// `mcp` is the MCP server while it is listening.
 #[tracing::instrument(skip(conn, config, restart_ops), fields(session_id = id))]
 pub fn restart(
     conn: &Connection,
     id: &str,
     config: &Config,
-    mcp_url: Option<&str>,
+    mcp: Option<&planeai_core::mcp::McpLaunch>,
     restart_ops: &dyn RestartOps,
 ) -> Result<Session, String> {
     let session = db::get_session(conn, id)
@@ -86,12 +86,12 @@ pub fn restart(
     let resume_cmd = if has_resume_command {
         Some(crate::config::restart_command_for_provider(
             provider_def,
-            mcp_url,
+            mcp,
         ))
     } else {
         None
     };
-    let fresh_cmd = provider_def.first_launch_command(session.auto_approve, None, mcp_url);
+    let fresh_cmd = provider_def.first_launch_command(session.auto_approve, None, mcp);
 
     tracing::info!(
         backend = %session.backend,
@@ -138,7 +138,7 @@ pub fn restart(
     let mcp = if agent_alive {
         None
     } else {
-        planeai_core::mcp::launch_endpoint(conn, mcp_url, id, &session.backend)?
+        planeai_core::mcp::launch_endpoint(conn, mcp, id, &session.backend)?
     };
     let mcp = mcp.as_ref();
     let try_spawn = |cmd: &str| -> Result<(), String> {
@@ -887,7 +887,9 @@ mod tests {
             &conn,
             id,
             &Config::default(),
-            Some("http://127.0.0.1:47437/mcp"),
+            Some(&planeai_core::mcp::McpLaunch::new(
+                "http://127.0.0.1:47437/mcp",
+            )),
             &ops,
         )
         .unwrap();
@@ -964,14 +966,22 @@ mod tests {
         )
         .unwrap();
         let url = "http://127.0.0.1:47437/mcp";
-        let running = planeai_core::mcp::issue(&conn, id, url).unwrap();
+        let running =
+            planeai_core::mcp::issue(&conn, id, &planeai_core::mcp::McpLaunch::new(url)).unwrap();
         db::mark_session_exited(&conn, id).unwrap();
         let ops = MockRestartOps {
             tmux_alive: true,
             ..MockRestartOps::new()
         };
 
-        let updated = restart(&conn, id, &Config::default(), Some(url), &ops).unwrap();
+        let updated = restart(
+            &conn,
+            id,
+            &Config::default(),
+            Some(&planeai_core::mcp::McpLaunch::new(url)),
+            &ops,
+        )
+        .unwrap();
 
         assert_eq!(updated.status, "active");
         assert!(ops.calls.borrow().is_empty());
@@ -988,14 +998,14 @@ mod tests {
     fn a_restart_that_adopts_a_live_rmux_pane_keeps_its_agents_token() {
         let conn = setup_db();
         let id = exited_task_session(&conn, planeai_rmux::BACKEND);
-        let url = "http://127.0.0.1:47437/mcp";
-        let running = planeai_core::mcp::issue(&conn, &id, url).unwrap();
+        let launch = planeai_core::mcp::McpLaunch::new("http://127.0.0.1:47437/mcp");
+        let running = planeai_core::mcp::issue(&conn, &id, &launch).unwrap();
         let ops = MockRestartOps {
             rmux_alive: true,
             ..MockRestartOps::new()
         };
 
-        restart(&conn, &id, &Config::default(), Some(url), &ops).unwrap();
+        restart(&conn, &id, &Config::default(), Some(&launch), &ops).unwrap();
 
         let [_, (_, token)] = running.env();
         assert_eq!(

@@ -80,7 +80,8 @@ pub async fn restore_session(
 ) -> Result<(), String> {
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
     let (previous_status, session) =
-        super::lifecycle::restart_blocking(state.0.clone(), cfg.clone(), mcp.0.url(), id).await?;
+        super::lifecycle::restart_blocking(state.0.clone(), cfg.clone(), mcp.0.launch(), id)
+            .await?;
     runtime
         .0
         .dispatch_session_lifecycle(session_transition(&session, &previous_status, "active"));

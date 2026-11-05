@@ -3,7 +3,7 @@
   "id": "local-fixture",
   "name": "Local Fixture",
   "version": "0.1.0",
-  "host_api_version": "planeai.plugin-host.v3",
+  "host_api_version": "planeai.plugin-host.v6",
   "source_kind": "local",
   "backend_entrypoints": {
     "macos-arm64": "bin/macos-arm64/planeai-plugin-fixture",
@@ -21,7 +21,8 @@
     "tasks.create",
     "task-events",
     "session-events",
-    "providers"
+    "providers",
+    "tools"
   ],
   "ui_contributions": [
     {
@@ -37,6 +38,29 @@
       "label": "Echo (fixture)",
       "entrypoint": "ui/chat.js",
       "supports": ["auto_approve", "handoff"]
+    }
+  ],
+  "tools": [
+    {
+      "name": "echo",
+      "description": "Echo a text back with the session and project that called the tool.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "text": { "type": "string" } },
+        "required": ["text"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "timeoutMs": 5000
+    },
+    {
+      "name": "forget",
+      "description": "Forget a key. The fixture keeps nothing, so this only reports what it would delete.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "key": { "type": "string" } },
+        "required": ["key"]
+      },
+      "annotations": { "destructiveHint": true }
     }
   ]
 }

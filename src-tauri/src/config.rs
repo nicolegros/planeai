@@ -270,12 +270,12 @@ impl Provider {
     }
 
     /// The command a new session's agent starts with, carrying the task prompt if any.
-    /// `mcp_url` is the URL of the MCP server while it is listening.
+    /// `mcp` is the MCP server while it is listening.
     pub fn first_launch_command(
         &self,
         auto_approve: bool,
         task_prompt: Option<&str>,
-        mcp_url: Option<&str>,
+        mcp: Option<&planeai_core::mcp::McpLaunch>,
     ) -> String {
         planeai_core::session_launch::build_provider_launch_command(
             &self.launch_config(),
@@ -283,7 +283,7 @@ impl Provider {
             task_prompt,
             false,
             None,
-            mcp_url,
+            mcp,
         )
         .command
     }
@@ -516,6 +516,28 @@ pub fn backfill_provider_defaults(config: &mut Config) {
     }
 }
 
+/// Upgrade providers' stored `mcp_args` from the v1.114 Codex approval scheme (ADR-0017).
+/// Returns whether any provider changed, and a notice per template left as is, which
+/// launches its agent without PlaneAI tools.
+fn upgrade_provider_mcp_args(config: &mut Config) -> (bool, Vec<String>) {
+    let mut upgraded = false;
+    let mut notices = Vec::new();
+    for (key, provider) in &mut config.providers {
+        let Some(args) = provider.mcp_args.as_deref() else {
+            continue;
+        };
+        match planeai_core::session_launch::upgrade_mcp_args(args) {
+            Ok(Some(args)) => {
+                provider.mcp_args = Some(args);
+                upgraded = true;
+            }
+            Ok(None) => {}
+            Err(error) => notices.push(format!("Agent {key} runs without PlaneAI tools: {error}")),
+        }
+    }
+    (upgraded, notices)
+}
+
 /// Migrate `autonomous_prompt_template` from providers to `auto_dispatch`.
 /// Takes the value from the auto_dispatch provider (or default provider) — first non-null wins.
 /// Clears the deprecated field from all providers after migration.
@@ -627,7 +649,18 @@ fn invalid_config_fallback() -> Config {
     }
 }
 
+/// Like `load_with_notices`, but logs the notices.
 pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
+    let (config, errors, notices) = load_with_notices(config_dir);
+    for notice in &notices {
+        tracing::warn!(%notice, "config loaded with a notice");
+    }
+    (config, errors)
+}
+
+/// The config, its errors, and notices about parts it ignores, such as an agent launched
+/// without PlaneAI tools. Notices never stop a config from loading.
+fn load_with_notices(config_dir: &Path) -> (Config, Vec<String>, Vec<String>) {
     let config_path = config_dir.join("config.json");
     if config_path.exists() {
         let content = std::fs::read_to_string(&config_path).unwrap();
@@ -635,7 +668,11 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
             Ok(v) => v,
             Err(e) => {
                 let config = invalid_config_fallback();
-                return (config, vec![format!("Failed to parse config.json: {e}")]);
+                return (
+                    config,
+                    vec![format!("Failed to parse config.json: {e}")],
+                    vec![],
+                );
             }
         };
         // Migrate legacy task_managers → task_management
@@ -650,6 +687,7 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
                 return (
                     config,
                     vec![format!("Failed to deserialize config.json: {error}")],
+                    vec![],
                 );
             }
         };
@@ -657,22 +695,28 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         config.onboarding_completed.get_or_insert(true);
         let unmigrated = config.clone();
         let migrated = migrate_autonomous_prompt_template(&mut config);
+        let (upgraded, notices) = upgrade_provider_mcp_args(&mut config);
+        let migrated = upgraded || migrated;
         if let Some(Err(error)) = config.editor.as_ref().map(validate_editor_config) {
             config.editor = Some(invalid_editor_config());
-            return (config, vec![format!("Invalid config.json: {error}")]);
+            return (
+                config,
+                vec![format!("Invalid config.json: {error}")],
+                notices,
+            );
         }
         if migrated {
             // Persist the migration so the file reflects the new structure
             save(config_dir, &unmigrated, &config).ok();
         }
-        return (config, vec![]);
+        return (config, vec![], notices);
     }
     let config = Config {
         onboarding_completed: Some(false),
         ..Config::default()
     };
     write_whole(config_dir, &config).ok();
-    (config, vec![])
+    (config, vec![], vec![])
 }
 
 /// Writes only what differs between `before` and `after` into config.json, so comments,
@@ -800,12 +844,15 @@ pub fn normalize_base_path(raw: &str) -> String {
 }
 
 /// Build the command for restarting a session: use interactive resume if available, otherwise fresh launch.
-pub fn restart_command_for_provider(provider: &Provider, mcp_url: Option<&str>) -> String {
+pub fn restart_command_for_provider(
+    provider: &Provider,
+    mcp: Option<&planeai_core::mcp::McpLaunch>,
+) -> String {
     let command = provider
         .resume_command
         .as_ref()
         .unwrap_or(&provider.command);
-    match planeai_core::session_launch::mcp_launch_args(provider.mcp_args.as_deref(), mcp_url) {
+    match planeai_core::session_launch::mcp_launch_args(provider.mcp_args.as_deref(), mcp) {
         Some(args) => format!("{command} {args}"),
         None => command.clone(),
     }
@@ -920,12 +967,12 @@ fn detect_provider_binaries_in(config: &Config, path: &str) -> HashMap<String, O
         .collect()
 }
 
-/// Re-read config from disk. On success returns the new config; on any warning/error returns Err
+/// Re-read config from disk. On success returns the new config; on any error returns Err
 /// (caller should keep the previous config).
 pub fn refresh(config_dir: &Path) -> Result<Config, String> {
-    let (config, warnings) = load(config_dir);
-    if let Some(w) = warnings.into_iter().next() {
-        return Err(w);
+    let (config, errors) = load(config_dir);
+    if let Some(error) = errors.into_iter().next() {
+        return Err(error);
     }
     Ok(config)
 }

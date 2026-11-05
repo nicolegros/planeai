@@ -118,8 +118,12 @@ fn build_daemon_env_hands_an_agent_its_mcp_endpoint() {
 
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     planeai_core::services::migrate(&conn).unwrap();
-    let endpoint =
-        planeai_core::mcp::issue(&conn, "session-1", "http://127.0.0.1:47437/mcp").unwrap();
+    let endpoint = planeai_core::mcp::issue(
+        &conn,
+        "session-1",
+        &planeai_core::mcp::McpLaunch::new("http://127.0.0.1:47437/mcp"),
+    )
+    .unwrap();
     let mut path_buf = String::new();
     let env = build_daemon_env(&[], "session-1", &mut path_buf, Some(&endpoint));
 

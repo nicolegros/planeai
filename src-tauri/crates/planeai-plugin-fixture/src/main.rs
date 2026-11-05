@@ -7,7 +7,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines, Stdin, Stdout}
 const PLUGIN_ID: &str = "local-fixture";
 const PLUGIN_NAME: &str = "Local Fixture";
 const PLUGIN_VERSION: &str = "0.1.0";
-const HOST_API_VERSION: &str = "planeai.plugin-host.v3";
+const HOST_API_VERSION: &str = "planeai.plugin-host.v6";
 const SETTINGS_GET_ID: &str = "fixture-settings-get";
 const SETTINGS_REPLACE_ID: &str = "fixture-settings-replace";
 /// The provider contract's error for a session the plugin does not know.
@@ -238,10 +238,34 @@ fn dispatch(request: &Value) -> (Value, bool) {
             success(id, json!({ "received": true }))
         }
         "plugin.sessionLifecycle" => success(id, json!({ "received": true })),
+        "tool.call" => {
+            eprintln!("{PLUGIN_ID} received tool.call: {}", request["params"]);
+            success(id, call_tool(&request["params"]))
+        }
         "plugin.shutdown" => success(id, json!({ "stopping": true })),
         _ => error(id, -32601, "method not found"),
     };
     (response, method == "plugin.shutdown")
+}
+
+/// `echo` reads its text back with the calling session; `forget` only says what it would delete.
+fn call_tool(params: &Value) -> Value {
+    let caller = &params["caller"];
+    let argument = |name: &str| params["arguments"][name].as_str().map(str::to_owned);
+    match (params["tool"].as_str(), argument("text"), argument("key")) {
+        (Some("echo"), Some(text), _) => json!({
+            "text": format!(
+                "echo: {text} (session {}, project {})",
+                caller["session_id"].as_str().unwrap_or("?"),
+                caller["project"]["name"].as_str().unwrap_or("?"),
+            ),
+        }),
+        (Some("forget"), _, Some(key)) => json!({ "text": format!("forgot {key}") }),
+        (Some(tool @ ("echo" | "forget")), _, _) => {
+            json!({ "text": format!("{tool}: missing argument"), "is_error": true })
+        }
+        (tool, _, _) => json!({ "text": format!("unknown tool: {tool:?}"), "is_error": true }),
+    }
 }
 
 /// Echo provider: every prompt becomes a user event, an `echo:` reply and a busy→idle turn.
@@ -281,6 +305,17 @@ impl EchoProvider {
         let Some(session_id) = params["session_id"].as_str().map(str::to_owned) else {
             return (error(id, -32602, "session_id is required"), Vec::new());
         };
+        if let (Some(url), Some(token)) = (
+            params["mcp"]["url"].as_str(),
+            params["mcp"]["token"].as_str(),
+        ) {
+            eprintln!("{PLUGIN_ID} {method} for {session_id} carries mcp url {url} and a token");
+            tokio::spawn(initialize_mcp(
+                url.to_owned(),
+                token.to_owned(),
+                session_id.clone(),
+            ));
+        }
         match method {
             "provider.session.start" | "provider.session.resume" => {
                 self.sessions
@@ -355,6 +390,45 @@ impl EchoProvider {
         }
         notifications.push(status(session_id, "idle"));
         notifications
+    }
+}
+
+/// Connects to the PlaneAI MCP server as a provider's agent would, logging the HTTP status
+/// of `initialize` and never the token.
+async fn initialize_mcp(url: String, token: String, session_id: String) {
+    let answer = async {
+        let address = url
+            .strip_prefix("http://")
+            .ok_or("only http URLs are supported")?;
+        let (host, path) = address.split_once('/').ok_or("the URL has no path")?;
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"local-fixture","version":"0"}}}"#;
+        let request = format!(
+            "POST /{path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let mut stream = tokio::net::TcpStream::connect(host)
+            .await
+            .map_err(|error| error.to_string())?;
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut response = String::new();
+        tokio::io::AsyncReadExt::read_to_string(&mut stream, &mut response)
+            .await
+            .map_err(|error| error.to_string())?;
+        response
+            .split(' ')
+            .nth(1)
+            .map(str::to_owned)
+            .ok_or_else(|| "no HTTP status".to_string())
+    }
+    .await;
+    match answer {
+        Ok(status) => {
+            eprintln!("{PLUGIN_ID} mcp initialize for {session_id} answered HTTP {status}")
+        }
+        Err(error) => eprintln!("{PLUGIN_ID} mcp initialize for {session_id} failed: {error}"),
     }
 }
 
@@ -559,6 +633,45 @@ mod tests {
             json!({ "session_id": "s1", "reason": "destroy" }),
         ));
         assert_eq!(response["result"]["stopped"], true);
+    }
+
+    #[test]
+    fn tools_answer_with_text_and_an_error_flag() {
+        let call = |tool: &str, arguments: Value| {
+            dispatch(&json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tool.call",
+                "params": {
+                    "tool": tool,
+                    "arguments": arguments,
+                    "caller": {
+                        "session_id": "s1",
+                        "project": { "id": "p1", "name": "demo" },
+                        "task": null,
+                        "auto_approve": false
+                    }
+                },
+            }))
+            .0["result"]
+                .clone()
+        };
+        assert_eq!(
+            call("echo", json!({ "text": "hi" })),
+            json!({ "text": "echo: hi (session s1, project demo)" })
+        );
+        assert_eq!(
+            call("forget", json!({ "key": "k" })),
+            json!({ "text": "forgot k" })
+        );
+        assert_eq!(
+            call("echo", json!({})),
+            json!({ "text": "echo: missing argument", "is_error": true })
+        );
+        assert_eq!(
+            call("nope", json!({})),
+            json!({ "text": "unknown tool: Some(\"nope\")", "is_error": true })
+        );
     }
 
     #[test]

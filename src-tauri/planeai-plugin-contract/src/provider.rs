@@ -145,6 +145,23 @@ pub struct SessionStatusParams {
     pub status: ProviderSessionStatus,
 }
 
+/// The PlaneAI MCP server a provider's agent connects to (ADR-0017), sent as `mcp` with
+/// `provider.session.start`, `provider.session.resume` and `provider.session.handback`
+/// while the server listens. The token authenticates as the session.
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ProviderMcp {
+    pub url: String,
+    pub token: String,
+}
+
+impl std::fmt::Debug for ProviderMcp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderMcp")
+            .field("url", &self.url)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct HandoffResponse {
     pub argv: Vec<String>,
@@ -176,7 +193,8 @@ pub fn validate_handoff_argv(argv: Vec<String>) -> Result<Vec<String>, String> {
 }
 
 /// Methods only the host sends: plugin UIs cannot call them, and scenarios cannot script them.
-/// Provider session methods carry host-owned lifecycle and routing.
+/// Provider session methods carry host-owned lifecycle and routing, and `tool.call` the
+/// calling session.
 pub fn is_host_controlled_method(method: &str) -> bool {
     method.starts_with("provider.")
         || matches!(
@@ -186,6 +204,7 @@ pub fn is_host_controlled_method(method: &str) -> bool {
                 | "plugin.taskLifecycle"
                 | "plugin.sessionLifecycle"
                 | "$/cancelRequest"
+                | crate::TOOL_CALL
         )
 }
 
@@ -309,9 +328,23 @@ mod tests {
     }
 
     #[test]
+    fn the_mcp_server_travels_as_url_and_token_and_never_prints_its_token() {
+        let mcp = ProviderMcp {
+            url: "http://127.0.0.1:47437/mcp".into(),
+            token: "secret".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&mcp).unwrap(),
+            serde_json::json!({ "url": "http://127.0.0.1:47437/mcp", "token": "secret" })
+        );
+        assert!(!format!("{mcp:?}").contains("secret"));
+    }
+
+    #[test]
     fn provider_and_lifecycle_methods_are_host_controlled() {
         assert!(is_host_controlled_method(SEND));
         assert!(is_host_controlled_method("plugin.shutdown"));
+        assert!(is_host_controlled_method("tool.call"));
         assert!(!is_host_controlled_method("claude.snapshot"));
     }
 }

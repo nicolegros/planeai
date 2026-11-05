@@ -1,8 +1,12 @@
-//! The tools agents call, one per verb, kept as a registry so plugin tools can join it
-//! (ADR-0016). Each tool is a thin adapter over the AXI domain functions the CLI uses.
+//! The tools agents call, kept as a registry: PlaneAI's own, one per verb, each a thin
+//! adapter over the AXI domain functions the CLI uses (ADR-0016), and those of running
+//! plugins (ADR-0017).
 
+use std::collections::{BTreeMap, HashSet};
+use std::future::Future;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use planeai_core::mcp::McpCaller;
 use planeai_core::task_lifecycle::{TaskLifecycleBatch, TaskLifecycleOrigin};
@@ -41,7 +45,7 @@ impl ToolContext {
 
 use planeai_core::mcp::Effect;
 
-fn annotations(effect: Effect) -> ToolAnnotations {
+fn annotations(effect: Effect, open_world: bool) -> ToolAnnotations {
     let (read_only, destructive, idempotent) = match effect {
         Effect::Read => (true, false, true),
         Effect::Write { idempotent } => (false, false, idempotent),
@@ -51,7 +55,7 @@ fn annotations(effect: Effect) -> ToolAnnotations {
         .read_only(read_only)
         .destructive(destructive)
         .idempotent(idempotent)
-        .open_world(false)
+        .open_world(open_world)
 }
 
 /// A tool's TOON reply; errors are reported to the agent, not as protocol failures.
@@ -62,7 +66,7 @@ pub struct ToolOutput {
 }
 
 impl ToolOutput {
-    fn error(message: &str) -> Self {
+    pub fn error(message: &str) -> Self {
         Self {
             text: planeai_toon::render(&[planeai_toon::field(
                 "error",
@@ -82,12 +86,14 @@ impl From<(String, i32)> for ToolOutput {
     }
 }
 
-type Handler = Box<dyn Fn(&ToolContext, &McpCaller, JsonObject) -> ToolOutput + Send + Sync>;
+pub type ToolFuture = Pin<Box<dyn Future<Output = ToolOutput> + Send>>;
+type Handler = Box<dyn Fn(ToolContext, McpCaller, JsonObject) -> ToolFuture + Send + Sync>;
 
 pub struct ToolDef {
-    pub name: &'static str,
-    description: &'static str,
+    pub name: String,
+    description: String,
     effect: Effect,
+    open_world: bool,
     /// The app reloads its tasks after every call, even a failed one, which may have
     /// written part of its change.
     refreshes_tasks: bool,
@@ -111,17 +117,53 @@ impl ToolDef {
             .unwrap_or_else(|| panic!("{name} is missing from planeai_core::mcp::TOOLS"))
             .effect;
         Self {
-            name,
-            description,
+            name: name.to_string(),
+            description: description.to_string(),
             effect,
+            open_world: false,
             refreshes_tasks: false,
             input_schema: rmcp::handler::server::common::schema_for_type::<I>(),
             handler: Box::new(move |context, caller, arguments| {
-                match serde_json::from_value::<I>(serde_json::Value::Object(arguments)) {
-                    Ok(input) => run(context, caller, input)
-                        .unwrap_or_else(|message| ToolOutput::error(&message)),
-                    Err(error) => ToolOutput::error(&format!("invalid arguments: {error}")),
+                // Handlers do SQLite, git and IPC work synchronously.
+                Box::pin(async move {
+                    tokio::task::spawn_blocking(move || {
+                        match serde_json::from_value::<I>(serde_json::Value::Object(arguments)) {
+                            Ok(input) => run(&context, &caller, input)
+                                .unwrap_or_else(|message| ToolOutput::error(&message)),
+                            Err(error) => ToolOutput::error(&format!("invalid arguments: {error}")),
+                        }
+                    })
+                    .await
+                    .unwrap_or_else(|error| ToolOutput::error(&error.to_string()))
+                })
+            }),
+        }
+    }
+
+    /// A tool a plugin serves (ADR-0017); `run` answers every call, failures included.
+    pub fn plugin(
+        name: String,
+        description: String,
+        input_schema: JsonObject,
+        effect: Effect,
+        open_world: bool,
+        run: impl Fn(McpCaller, JsonObject) -> ToolFuture + Send + Sync + 'static,
+    ) -> Self {
+        let served = name.clone();
+        Self {
+            name,
+            description,
+            effect,
+            open_world,
+            refreshes_tasks: false,
+            input_schema: Arc::new(input_schema),
+            handler: Box::new(move |_context, caller, arguments| {
+                // A tool that asks must not run under an approval its launch granted.
+                if !effect.pre_approved() && caller.approved_plugin_tools.contains(&served) {
+                    let message = format!("{served} now asks before running, but this session's launch approved it; restart the session to use it");
+                    return Box::pin(async move { ToolOutput::error(&message) });
                 }
+                run(caller, arguments)
             }),
         }
     }
@@ -134,17 +176,21 @@ impl ToolDef {
     }
 
     pub fn tool(&self) -> Tool {
-        Tool::new(self.name, self.description, self.input_schema.clone())
-            .with_annotations(annotations(self.effect))
+        Tool::new(
+            self.name.clone(),
+            self.description.clone(),
+            self.input_schema.clone(),
+        )
+        .with_annotations(annotations(self.effect, self.open_world))
     }
 
-    pub fn call(
+    pub async fn call(
         &self,
         context: &ToolContext,
         caller: &McpCaller,
         arguments: JsonObject,
     ) -> ToolOutput {
-        let output = (self.handler)(context, caller, arguments);
+        let output = (self.handler)(context.clone(), caller.clone(), arguments).await;
         if self.refreshes_tasks {
             context.events.tasks_changed();
         }
@@ -152,21 +198,93 @@ impl ToolDef {
     }
 }
 
-pub struct Registry(Vec<Arc<ToolDef>>);
+type PluginTools = BTreeMap<String, Vec<Arc<ToolDef>>>;
+
+/// The tools the server lists: PlaneAI's own, then those of each running plugin by id.
+pub struct Registry {
+    core: Vec<Arc<ToolDef>>,
+    plugins: RwLock<PluginTools>,
+}
 
 impl Registry {
     pub fn get(&self, name: &str) -> Option<Arc<ToolDef>> {
-        self.0.iter().find(|tool| tool.name == name).cloned()
+        let plugins = self.plugins();
+        self.core
+            .iter()
+            .chain(plugins.values().flatten())
+            .find(|tool| tool.name == name)
+            .cloned()
     }
 
     pub fn tools(&self) -> Vec<Tool> {
-        self.0.iter().map(|tool| tool.tool()).collect()
+        let plugins = self.plugins();
+        self.core
+            .iter()
+            .chain(plugins.values().flatten())
+            .map(|tool| tool.tool())
+            .collect()
+    }
+
+    /// Serve `tools` for the plugin, replacing its earlier set. A set holding a name that
+    /// another tool is served under is refused whole.
+    pub fn publish_plugin(&self, plugin_id: &str, tools: Vec<ToolDef>) -> Result<(), String> {
+        let mut plugins = self
+            .plugins
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut names = HashSet::new();
+        for tool in &tools {
+            let served_elsewhere = self
+                .core
+                .iter()
+                .chain(
+                    plugins
+                        .iter()
+                        .filter(|(id, _)| id.as_str() != plugin_id)
+                        .flat_map(|(_, tools)| tools),
+                )
+                .any(|other| other.name == tool.name);
+            if served_elsewhere || !names.insert(tool.name.as_str()) {
+                return Err(format!(
+                    "plugin {plugin_id} tool {} is already served",
+                    tool.name
+                ));
+            }
+        }
+        plugins.insert(
+            plugin_id.to_string(),
+            tools.into_iter().map(Arc::new).collect(),
+        );
+        Ok(())
+    }
+
+    /// Served plugin tools agents may run without asking: every effect but deletes.
+    pub fn approved_plugin_tools(&self) -> Vec<String> {
+        self.plugins()
+            .values()
+            .flatten()
+            .filter(|tool| tool.effect.pre_approved())
+            .map(|tool| tool.name.clone())
+            .collect()
+    }
+
+    pub fn retire_plugin(&self, plugin_id: &str) {
+        self.plugins
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(plugin_id);
+    }
+
+    fn plugins(&self) -> RwLockReadGuard<'_, PluginTools> {
+        self.plugins
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// PlaneAI's own tools.
     pub fn core() -> Self {
-        Self(
-            [
+        Self {
+            core: [
             ToolDef::core(
                 "task_list",
                 "List tasks of a project (default: the project of this session's task).",
@@ -229,7 +347,8 @@ impl Registry {
             .into_iter()
             .map(Arc::new)
             .collect(),
-        )
+            plugins: RwLock::default(),
+        }
     }
 }
 
@@ -593,7 +712,7 @@ fn session_create(
                     provider: input.provider,
                     prompt: input.prompt,
                 },
-                context.mcp_url.clone(),
+                crate::cli::McpUrl::Known(context.mcp_url.clone()),
             )?
         }
         SessionMode::Child => crate::cli::create_child_session(
@@ -611,7 +730,7 @@ fn session_create(
                 task_project: input.task_project,
                 prompt: input.prompt,
             },
-            context.mcp_url.clone(),
+            crate::cli::McpUrl::Known(context.mcp_url.clone()),
         )?,
     };
     Ok(axi::session_create_output(&session).into())

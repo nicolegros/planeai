@@ -39,8 +39,8 @@ pub struct Env {
     pub backend: String,
     pub socket_path: std::path::PathBuf,
     pub config: config::Config,
-    /// The MCP server URL the agent connects to.
-    pub mcp_url: Option<String>,
+    /// The MCP server the agent connects to.
+    pub mcp: Option<planeai_core::mcp::McpLaunch>,
 }
 
 // ─── Plan / Execute ───
@@ -109,11 +109,8 @@ pub fn build_session_plan(
     if let Some(prompt) = &opts.prompt {
         planeai_core::session_launch::check_task_prompt(prompt)?;
     }
-    let cmd = provider_def.first_launch_command(
-        opts.yolo,
-        opts.prompt.as_deref(),
-        env.mcp_url.as_deref(),
-    );
+    let cmd =
+        provider_def.first_launch_command(opts.yolo, opts.prompt.as_deref(), env.mcp.as_ref());
 
     let short_id = &session_id.replace('-', "")[..8];
 
@@ -216,7 +213,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     let worktree_path = checkout.worktree_path(repo);
     let mcp = planeai_core::mcp::launch_endpoint(
         conn,
-        env.mcp_url.as_deref(),
+        env.mcp.as_ref(),
         &plan.session_id,
         &plan.backend,
     )?;
@@ -320,23 +317,40 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     serde_json::to_string(&session).map_err(|e| e.to_string())
 }
 
+/// Where a created session's agent finds the MCP server.
+pub enum McpUrl {
+    /// The configured port. Agents the CLI launches connect to it; while the app is not
+    /// running their MCP connection fails and they work without PlaneAI tools.
+    Configured,
+    /// The URL of a server the caller runs, `None` while it is not listening.
+    Known(Option<String>),
+}
+
+fn resolve_mcp_url(source: McpUrl, cfg: &config::Config) -> Option<String> {
+    match source {
+        McpUrl::Configured => cfg.mcp_listen_port().map(planeai_core::mcp::server_url),
+        McpUrl::Known(url) => url,
+    }
+}
+
 /// Shared session creation orchestration used by both the JSON CLI and the AXI
 /// interface. Loads config, resolves the project, builds a plan, and executes it.
 /// Returns the created `Session` on success.
 pub fn create_session(
     conn: &Connection,
     opts: SessionCreateOpts,
-    mcp_url: Option<String>,
+    mcp_url: McpUrl,
 ) -> Result<db::Session, String> {
     let cfg_dir = config::config_dir("planeai");
     let (cfg, _) = config::load(&cfg_dir);
     let backend = config::resolve_backend(&cfg).to_string();
+    let mcp_url = resolve_mcp_url(mcp_url, &cfg);
 
     let env = Env {
         backend,
         socket_path: planeai_paths::notify_socket_path(),
         config: cfg,
-        mcp_url,
+        mcp: mcp_url.map(|url| crate::mcp::launch_from_inventory(conn, url)),
     };
 
     let project_name = opts.project.clone();
@@ -394,7 +408,7 @@ pub fn create_workspace_sibling(
     conn: &Connection,
     parent_session_id: &str,
     opts: WorkspaceSiblingOpts,
-    mcp_url: Option<String>,
+    mcp_url: McpUrl,
 ) -> Result<db::Session, String> {
     let parent = parent_session(conn, parent_session_id)?;
     let task_key = parent
@@ -442,7 +456,7 @@ pub fn create_child_session(
     conn: &Connection,
     parent_session_id: &str,
     opts: ChildSessionOpts,
-    mcp_url: Option<String>,
+    mcp_url: McpUrl,
 ) -> Result<db::Session, String> {
     let parent = parent_session(conn, parent_session_id)?;
     let project = match opts.project {
@@ -513,7 +527,9 @@ mod tests {
             backend: backend.to_string(),
             socket_path: std::path::PathBuf::from("/tmp/fake.sock"),
             config: config::Config::default(),
-            mcp_url: Some("http://127.0.0.1:47437/mcp".to_string()),
+            mcp: Some(planeai_core::mcp::McpLaunch::new(
+                "http://127.0.0.1:47437/mcp",
+            )),
         }
     }
 
@@ -731,11 +747,36 @@ mod tests {
         let url = "http://127.0.0.1:47437/mcp";
 
         let conn = open_db(&path).unwrap();
-        let endpoint =
-            planeai_core::mcp::launch_endpoint(&conn, Some(url), "session-1", "daemon").unwrap();
+        let endpoint = planeai_core::mcp::launch_endpoint(
+            &conn,
+            Some(&planeai_core::mcp::McpLaunch::new(url)),
+            "session-1",
+            "daemon",
+        )
+        .unwrap();
 
         assert_eq!(endpoint.map(|endpoint| endpoint.url).as_deref(), Some(url));
         assert!(open_db(&dir.path().join("fresh.db")).is_ok());
+    }
+
+    #[test]
+    fn the_mcp_url_comes_from_the_config_only_when_configured() {
+        let enabled = config::Config::default();
+        let disabled = config::Config {
+            mcp_enabled: Some(false),
+            ..config::Config::default()
+        };
+        let known = "http://127.0.0.1:1/mcp".to_string();
+        assert_eq!(
+            resolve_mcp_url(McpUrl::Configured, &enabled),
+            Some("http://127.0.0.1:47437/mcp".to_string())
+        );
+        assert_eq!(resolve_mcp_url(McpUrl::Configured, &disabled), None);
+        assert_eq!(
+            resolve_mcp_url(McpUrl::Known(Some(known.clone())), &enabled),
+            Some(known)
+        );
+        assert_eq!(resolve_mcp_url(McpUrl::Known(None), &enabled), None);
     }
 
     #[test]
@@ -744,12 +785,18 @@ mod tests {
         let mut opts = task_opts(None, None);
         opts.provider = Some("codex".into());
         let plan = build_session_plan("abcd1234-0000", &opts, &env, &test_project()).unwrap();
+        let approvals = planeai_core::mcp::McpLaunch::new("")
+            .approved_tools()
+            .map(|tool| format!(r#" -c mcp_servers.planeai.tools.{tool}.approval_mode="approve""#))
+            .collect::<String>();
         assert_eq!(
             plan.command,
-            r#"codex -c mcp_servers.planeai.url="http://127.0.0.1:47437/mcp" -c mcp_servers.planeai.bearer_token_env_var="PLANEAI_MCP_TOKEN" -c mcp_servers.planeai.default_tools_approval_mode="approve" -c mcp_servers.planeai.tools.task_delete.approval_mode="prompt""#
+            format!(
+                r#"codex -c mcp_servers.planeai.url="http://127.0.0.1:47437/mcp" -c mcp_servers.planeai.bearer_token_env_var="PLANEAI_MCP_TOKEN" -c mcp_servers.planeai.default_tools_approval_mode="prompt"{approvals}"#
+            )
         );
 
-        env.mcp_url = None;
+        env.mcp = None;
         let plan = build_session_plan("abcd1234-0000", &opts, &env, &test_project()).unwrap();
         assert_eq!(plan.command, "codex");
     }

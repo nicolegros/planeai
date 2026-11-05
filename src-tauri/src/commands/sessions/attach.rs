@@ -57,7 +57,7 @@ pub async fn attach_session(
     };
     // A remount rebinds the running local agent, which keeps the token it was spawned with.
     let agent_running = state.0.is_running(&session_id);
-    let mcp_url = mcp.0.url();
+    let mcp = mcp.0.launch();
     let AttachPlan {
         session,
         pty_target,
@@ -72,7 +72,7 @@ pub async fn attach_session(
             claim_attach_plan(
                 &conn,
                 &cfg,
-                mcp_url.as_deref(),
+                mcp.as_ref(),
                 &session_id,
                 dark_mode,
                 agent_running,
@@ -152,18 +152,18 @@ pub struct AttachPlan {
 /// the prompt reaches the agent at most once, even if the app quits before the attach is
 /// recorded. A spawn that fails gives it back with `release_first_prompt`.
 /// A local agent this attach starts gets a fresh MCP token in its environment while the
-/// server at `mcp_url` is listening.
+/// server `mcp` is listening.
 pub fn claim_attach_plan(
     conn: &rusqlite::Connection,
     cfg: &config::Config,
-    mcp_url: Option<&str>,
+    mcp: Option<&planeai_core::mcp::McpLaunch>,
     session_id: &str,
     dark_mode: Option<bool>,
     agent_running: bool,
 ) -> Result<AttachPlan, String> {
-    let mut plan = resolve_attach_plan(conn, cfg, mcp_url, session_id, dark_mode)?;
+    let mut plan = resolve_attach_plan(conn, cfg, mcp, session_id, dark_mode)?;
     if !agent_running && matches!(plan.pty_target, pty::PtyTarget::Shell { .. }) {
-        if let Some(endpoint) = planeai_core::mcp::endpoint(conn, mcp_url, session_id)? {
+        if let Some(endpoint) = planeai_core::mcp::endpoint(conn, mcp, session_id)? {
             plan.env.extend(endpoint.owned_env());
         }
     }
@@ -188,7 +188,7 @@ pub fn release_first_prompt(
 pub fn resolve_attach_plan(
     conn: &rusqlite::Connection,
     cfg: &config::Config,
-    mcp_url: Option<&str>,
+    mcp: Option<&planeai_core::mcp::McpLaunch>,
     session_id: &str,
     dark_mode: Option<bool>,
 ) -> Result<AttachPlan, String> {
@@ -252,15 +252,11 @@ pub fn resolve_attach_plan(
             .to_string();
 
         let cmd = if session.attached_once {
-            config::restart_command_for_provider(provider_def, mcp_url)
+            config::restart_command_for_provider(provider_def, mcp)
         } else {
             // This spawn is the launch, so it carries the task prompt `launch` kept for it.
             first_prompt = db::pending_prompt(conn, session_id).map_err(|e| e.to_string())?;
-            provider_def.first_launch_command(
-                session.auto_approve,
-                first_prompt.as_deref(),
-                mcp_url,
-            )
+            provider_def.first_launch_command(session.auto_approve, first_prompt.as_deref(), mcp)
         };
 
         let target = pty::PtyTarget::Shell {
@@ -665,7 +661,7 @@ mod tests {
         let started = claim_attach_plan(
             &conn,
             &config_with_provider(),
-            Some(MCP_URL),
+            Some(&planeai_core::mcp::McpLaunch::new(MCP_URL)),
             "session-1",
             None,
             false,
@@ -700,7 +696,7 @@ mod tests {
         let remount = claim_attach_plan(
             &conn,
             &config_with_provider(),
-            Some(MCP_URL),
+            Some(&planeai_core::mcp::McpLaunch::new(MCP_URL)),
             "session-1",
             None,
             true,
@@ -785,7 +781,7 @@ mod tests {
             let plan = claim_attach_plan(
                 &conn,
                 &config_with_provider(),
-                Some(MCP_URL),
+                Some(&planeai_core::mcp::McpLaunch::new(MCP_URL)),
                 "session-1",
                 None,
                 false,

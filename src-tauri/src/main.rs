@@ -20,6 +20,7 @@ mod paths;
 mod plugin_packages;
 mod plugin_providers;
 mod plugin_rpc;
+mod plugin_tools;
 mod plugins;
 mod pty;
 mod pty_planeai_core_adapter;
@@ -164,7 +165,10 @@ fn main() {
             if let Ok(settings) = db::get_settings(&conn) {
                 let _ = config::migrate_from_db(&config_dir, &settings);
             }
-            let (cfg, _warnings) = config::load(&config_dir);
+            let (cfg, errors) = config::load(&config_dir);
+            for error in &errors {
+                tracing::warn!(%error, "config loaded with an error");
+            }
             jira_migration::initialize(&conn, &cfg)
                 .expect("failed to initialize Jira migration state");
             github_migration::initialize(&conn, &app_dir, &config_dir.join("config.json"))
@@ -177,15 +181,16 @@ fn main() {
             tracing::info!("config loaded");
 
             // Listening before any agent is revived, so revived agents reconnect to it.
+            let mcp_tools = Arc::new(planeai::mcp::tools::Registry::core());
             let mcp_server = planeai::mcp::server::McpServer::new(
-                planeai::mcp::tools::Registry::core(),
+                mcp_tools.clone(),
                 planeai::mcp::tools::ToolContext::new(
                     app_dir.join("planeai.db"),
                     Arc::new(notify::McpAppEvents(app.handle().clone())),
                 ),
             );
             tauri::async_runtime::block_on(mcp_server.apply(cfg.mcp_listen_port()));
-            let mcp_url = mcp_server.url();
+            let mcp = mcp_server.launch();
             app.manage(McpServerState(mcp_server));
 
             // Revive sessions
@@ -193,7 +198,7 @@ fn main() {
             let _ = startup::revive_sessions(
                 &conn,
                 &cfg,
-                mcp_url.as_deref(),
+                mcp.as_ref(),
                 tmux::has_session,
                 tmux::create_session_with_cmd_and_path,
             );
@@ -201,7 +206,7 @@ fn main() {
             let _ = startup::revive_sessions(
                 &conn,
                 &cfg,
-                mcp_url.as_deref(),
+                mcp.as_ref(),
                 |_| false,
                 |_, _, _, _, _, _| Err("tmux not available".to_string()),
             );
@@ -286,6 +291,7 @@ fn main() {
             app.manage(plugins::PluginRuntimeHandle::new(
                 db_arc.clone(),
                 app.handle().clone(),
+                mcp_tools,
             ));
 
             // Notification system
