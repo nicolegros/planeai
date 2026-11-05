@@ -1493,7 +1493,7 @@ mod tests {
             source_kind: PluginSourceKind::Builtin,
             ..inventory("jira", "0.1.0", None)
         };
-        let cases: Vec<(&str, Vec<PluginInventory>, &str, Result<StagedReplacement, String>)> = vec![
+        let cases = vec![
             ("new", vec![local.clone()], "acme", Ok(StagedReplacement::None)),
             (
                 "local build",
