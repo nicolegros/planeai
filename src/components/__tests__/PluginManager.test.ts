@@ -380,6 +380,9 @@ describe("PluginManager", () => {
     await vi.waitFor(() =>
       expect(cardButtons("acme/install")).toEqual(["Install v1.2.0", "Open repository"]),
     );
+    expect(buttonLabeled(card("acme/install")!, "Install v1.2.0")?.getAttribute("aria-label")).toBe(
+      "Install v1.2.0 acme/install",
+    );
     expect(cardButtons("acme/current")).toEqual(["Open repository"]);
     expect(card("acme/current")?.textContent).toContain("Up to date (v1.0.0)");
     expect(cardButtons("acme/update")).toEqual(["Update to v2.0.0", "Open repository"]);
@@ -420,6 +423,9 @@ describe("PluginManager", () => {
     buttonLabeled(target, "Install v1.2.0")?.click();
     await vi.waitFor(() => expect(stageRemote).toHaveBeenCalledWith("acme/planeai-plugin-acme"));
     await vi.waitFor(() => expect(buttonLabeled(target, "Downloading…")?.disabled).toBe(true));
+    expect(buttonLabeled(target, "Downloading…")?.getAttribute("aria-label")).toBe(
+      "Downloading… acme/planeai-plugin-acme",
+    );
 
     finishStaging(stagedAcme);
     await vi.waitFor(() => expect(reviewDialog()?.textContent).toContain("Install Acme?"));

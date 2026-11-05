@@ -280,6 +280,7 @@
       {#each discoveryCandidates as candidate (candidate.url)}
         {@const view = cardView(cardResolutions[candidate.full_name])}
         {@const staging = remoteInstall.kind === "staging" && remoteInstall.repo === candidate.full_name}
+        {@const actionLabel = staging ? "Downloading…" : view.action}
         <article class="rounded border border-border p-3 space-y-2">
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
@@ -294,9 +295,10 @@
                 <button
                   type="button"
                   class="rounded bg-accent px-3 py-1.5 text-xs font-medium text-on-accent hover:opacity-90 disabled:opacity-50"
+                  aria-label="{actionLabel} {candidate.full_name}"
                   disabled={remoteInstall.kind !== "idle"}
                   onclick={() => void stageRemote(candidate.full_name)}
-                >{staging ? "Downloading…" : view.action}</button>
+                >{actionLabel}</button>
               {/if}
               <button type="button" class="rounded bg-panel-hi px-3 py-1.5 text-xs font-medium text-t2 hover:bg-border" onclick={() => void openUrl(candidate.url)}>Open repository</button>
             </div>
