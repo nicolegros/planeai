@@ -206,16 +206,14 @@ pub(crate) enum ArchiveFormat {
 }
 
 impl ArchiveFormat {
-    fn from_url(url: &str) -> Result<Self, String> {
+    fn from_url(url: &str) -> Option<Self> {
         let path = url.split(['?', '#']).next().unwrap_or(url);
         if path.ends_with(".tar.gz") {
-            Ok(Self::TarGz)
+            Some(Self::TarGz)
         } else if path.ends_with(".zip") {
-            Ok(Self::Zip)
+            Some(Self::Zip)
         } else {
-            Err(format!(
-                "plugin download must be a .tar.gz or .zip archive: {url}"
-            ))
+            None
         }
     }
 
@@ -280,7 +278,11 @@ impl RemoteRepo {
                     "Not available for {platform}: the repository manifest download is not an https URL."
                 ));
             }
-            let format = ArchiveFormat::from_url(url)?;
+            let Some(format) = ArchiveFormat::from_url(url) else {
+                return Err(format!(
+                    "Not available for {platform}: the repository manifest download is not a .tar.gz or .zip archive."
+                ));
+            };
             return Ok(match self.release_asset_for_url(url) {
                 Some(asset) => PackageSource {
                     url: url.clone(),
@@ -1244,11 +1246,19 @@ mod tests {
         );
         let plain_http = RemoteRepo {
             head: Some(head(&[("macos-arm64", "http://cdn.acme.dev/acme.zip")])),
-            ..remote
+            ..remote.clone()
         };
         assert_eq!(
             plain_http.select_source("macos-arm64").unwrap_err(),
             "Not available for macos-arm64: the repository manifest download is not an https URL."
+        );
+        let disk_image = RemoteRepo {
+            head: Some(head(&[("macos-arm64", "https://cdn.acme.dev/acme.dmg")])),
+            ..remote
+        };
+        assert_eq!(
+            disk_image.select_source("macos-arm64").unwrap_err(),
+            "Not available for macos-arm64: the repository manifest download is not a .tar.gz or .zip archive."
         );
     }
 
@@ -1291,6 +1301,17 @@ mod tests {
                 vec![],
                 DiscoveryCardState::Unavailable {
                     reason: "Not available for macos-arm64: the repository manifest lists no download and the repository has no release.".to_string(),
+                },
+            ),
+            (
+                "manifest download that is not an archive",
+                RemoteRepo {
+                    head: Some(head(&[("macos-arm64", "https://cdn.acme.dev/acme.dmg")])),
+                    ..remote.clone()
+                },
+                vec![],
+                DiscoveryCardState::Unavailable {
+                    reason: "Not available for macos-arm64: the repository manifest download is not a .tar.gz or .zip archive.".to_string(),
                 },
             ),
             (
@@ -1469,19 +1490,15 @@ mod tests {
     #[test]
     fn archive_format_comes_from_the_url_path() {
         assert_eq!(
-            ArchiveFormat::from_url("https://x/a-macos-arm64.tar.gz?token=1").unwrap(),
-            ArchiveFormat::TarGz
+            ArchiveFormat::from_url("https://x/a-macos-arm64.tar.gz?token=1"),
+            Some(ArchiveFormat::TarGz)
         );
         assert_eq!(
-            ArchiveFormat::from_url("https://x/a.zip").unwrap(),
-            ArchiveFormat::Zip
+            ArchiveFormat::from_url("https://x/a.zip"),
+            Some(ArchiveFormat::Zip)
         );
         for unsupported in ["https://x/a.dmg", "https://x/a.tgz", "https://x/a.tar"] {
-            assert_eq!(
-                ArchiveFormat::from_url(unsupported).unwrap_err(),
-                format!("plugin download must be a .tar.gz or .zip archive: {unsupported}"),
-                "{unsupported}"
-            );
+            assert_eq!(ArchiveFormat::from_url(unsupported), None, "{unsupported}");
         }
     }
 
