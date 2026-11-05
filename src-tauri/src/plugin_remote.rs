@@ -411,27 +411,60 @@ pub fn version_mismatch(
 
 // ─── GitHub metadata through gh ──────────────────────────────────────────────
 
-async fn gh_api(args: &[&str]) -> Result<Option<Vec<u8>>, String> {
+pub(crate) enum GhError {
+    Timeout,
+    Spawn(std::io::Error),
+    Failed {
+        status: std::process::ExitStatus,
+        diagnostic: String,
+    },
+}
+
+impl GhError {
+    /// The user-facing message; `what` names the request, such as "GitHub plugin discovery".
+    pub(crate) fn describe(&self, what: &str) -> String {
+        match self {
+            Self::Timeout => format!(
+                "{what} timed out after {} seconds. Please retry.",
+                GH_TIMEOUT.as_secs()
+            ),
+            Self::Spawn(error) => format!("failed to start GitHub CLI: {error}"),
+            Self::Failed { status, diagnostic } if diagnostic.is_empty() => {
+                format!("{what} failed with status {status}.")
+            }
+            Self::Failed { diagnostic, .. } => format!("{what} failed: {diagnostic}"),
+        }
+    }
+}
+
+/// Runs `gh` with `args` off the main thread and returns its stdout.
+pub(crate) async fn run_gh(args: &[&str]) -> Result<Vec<u8>, GhError> {
     let mut command = tokio::process::Command::new(crate::command::resolve("gh"));
     no_window_tokio(&mut command);
     command.env("PATH", augmented_path(&[]));
-    command.arg("api").args(args);
+    command.args(args);
     let output = timeout(GH_TIMEOUT, command.output())
         .await
-        .map_err(|_| "GitHub request timed out after 30 seconds. Please retry.".to_string())?
-        .map_err(|error| format!("failed to start GitHub CLI: {error}"))?;
+        .map_err(|_| GhError::Timeout)?
+        .map_err(GhError::Spawn)?;
     if output.status.success() {
-        return Ok(Some(output.stdout));
+        return Ok(output.stdout);
     }
-    let diagnostic = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if diagnostic.contains("HTTP 404") {
-        return Ok(None);
-    }
-    Err(if diagnostic.is_empty() {
-        format!("GitHub request failed with status {}.", output.status)
-    } else {
-        format!("GitHub request failed: {diagnostic}")
+    Err(GhError::Failed {
+        status: output.status,
+        diagnostic: String::from_utf8_lossy(&output.stderr).trim().to_string(),
     })
+}
+
+/// `gh api` with a 404 read as absence.
+async fn gh_api(args: &[&str]) -> Result<Option<Vec<u8>>, String> {
+    let mut full = vec!["api"];
+    full.extend_from_slice(args);
+    match run_gh(&full).await {
+        Ok(stdout) => Ok(Some(stdout)),
+        Err(GhError::Failed { diagnostic, .. }) if diagnostic.contains("HTTP 404") => Ok(None),
+        Err(error) => Err(error.describe("GitHub request")),
+    }
 }
 
 pub async fn fetch_remote_repo(repo: RepoFullName) -> Result<RemoteRepo, String> {
@@ -945,6 +978,37 @@ mod tests {
             source_url: format!("https://github.com/{repo}/releases/download/v1.0.0/x.tar.gz"),
             archive_sha256: "abc".to_string(),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_failures_read_as_one_sentence_per_cause() {
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(
+            GhError::Timeout.describe("GitHub plugin discovery"),
+            "GitHub plugin discovery timed out after 30 seconds. Please retry."
+        );
+        assert_eq!(
+            GhError::Spawn(std::io::Error::new(std::io::ErrorKind::NotFound, "no gh"))
+                .describe("GitHub request"),
+            "failed to start GitHub CLI: no gh"
+        );
+        assert_eq!(
+            GhError::Failed {
+                status: std::process::ExitStatus::from_raw(256),
+                diagnostic: String::new(),
+            }
+            .describe("GitHub request"),
+            "GitHub request failed with status exit status: 1."
+        );
+        assert_eq!(
+            GhError::Failed {
+                status: std::process::ExitStatus::from_raw(256),
+                diagnostic: "HTTP 403: rate limited".to_string(),
+            }
+            .describe("GitHub plugin discovery"),
+            "GitHub plugin discovery failed: HTTP 403: rate limited"
+        );
     }
 
     #[test]

@@ -1,19 +1,15 @@
 use std::path::Path;
-use std::time::Duration;
 
-use planeai_core::command::{augmented_path, no_window_tokio};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use tokio::sync::Semaphore;
-use tokio::time::timeout;
 
 use crate::plugin_remote::{
-    fetch_remote_repo, stage_package, DiscoveryCardState, Downloader, RepoFullName,
+    fetch_remote_repo, run_gh, stage_package, DiscoveryCardState, Downloader, RepoFullName,
     StagedPluginInstall, StagingStore, EXPIRED_STAGING,
 };
 use crate::plugins::{PluginInventory, PluginRuntimeHandle};
 
-const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const DISCOVERY_ARGS: &[&str] = &[
     "search",
     "repos",
@@ -58,31 +54,10 @@ struct GithubRepository {
 
 #[tauri::command]
 pub async fn discover_plugins() -> Result<Vec<PluginDiscoveryCandidate>, String> {
-    let mut command = tokio::process::Command::new(crate::command::resolve("gh"));
-    no_window_tokio(&mut command);
-    command.env("PATH", augmented_path(&[]));
-    command.args(DISCOVERY_ARGS);
-
-    let output = timeout(DISCOVERY_TIMEOUT, command.output())
+    let output = run_gh(DISCOVERY_ARGS)
         .await
-        .map_err(|_| {
-            "GitHub plugin discovery timed out after 30 seconds. Please retry.".to_string()
-        })?
-        .map_err(|error| format!("failed to start GitHub CLI for plugin discovery: {error}"))?;
-
-    if !output.status.success() {
-        let diagnostic = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if diagnostic.is_empty() {
-            format!(
-                "GitHub plugin discovery failed with status {}.",
-                output.status
-            )
-        } else {
-            format!("GitHub plugin discovery failed: {diagnostic}")
-        });
-    }
-
-    parse_candidates(&output.stdout)
+        .map_err(|error| error.describe("GitHub plugin discovery"))?;
+    parse_candidates(&output)
 }
 
 fn parse_candidates(output: &[u8]) -> Result<Vec<PluginDiscoveryCandidate>, String> {
