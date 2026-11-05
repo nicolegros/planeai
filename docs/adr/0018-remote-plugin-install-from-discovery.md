@@ -29,7 +29,7 @@ What changes is who performs the mechanical steps, not who decides to trust the 
 - **Transport.** `reqwest` with rustls and the platform trust store, no default features, streaming to disk with a 100 MB cap and a 60 second timeout.
   Only `https` URLs are fetched and redirects to anything else fail.
   `gh` stays the metadata client, so Discovery and installs share its authentication and rate limits.
-  Extraction (`tar` + `flate2`, `zip` with deflate only) rejects absolute paths, `..` components, symbolic and hard links, stops once the archive decompresses past 500 MB in total (tar headers included, since the tar reader buffers long-name headers before yielding an entry), and requires exactly one top-level directory holding `planeai-plugin.json`.
+  Extraction (`tar` + `flate2`, `zip` reading deflate through the same `flate2`) rejects absolute paths, `..` components, symbolic and hard links, stops once the archive decompresses past 500 MB in total (tar headers included, since the tar reader buffers long-name headers before yielding an entry), and requires exactly one top-level directory holding `planeai-plugin.json`.
 - **Integrity.** When the archive is an asset of the latest release (the fallback path, or a `downloads` URL of the form `https://github.com/{owner}/{name}/releases/latest/download/{asset}` or `.../releases/download/{latest tag}/{asset}`), its SHA-256 must equal the `digest` GitHub reports for that asset, and a mismatch fails closed before the review.
   Any other URL, and a release asset for which GitHub reports no digest, installs as unverified and the review shows the computed hash.
   Signing remains out of scope.
