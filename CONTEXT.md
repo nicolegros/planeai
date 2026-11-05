@@ -261,6 +261,7 @@ It owns the layout, which workspace it belongs to, and loading and saving it; it
 ### Shell tabs
 
 Each agent session can have shell tabs (pty keys `<sessionId>:<index>`).
+Cmd/Ctrl+T and a pane's **+** open the New tab selector, which offers a new agent session or a shell tab in that pane; Cmd/Ctrl+N opens the New Task form instead.
 
 - **Terminal tab lifecycle (ADR-0015)**: shells, terminal editors and provider handoffs are terminal tabs, owned by the backend's Terminal tabs module (`src-tauri/src/terminal_tabs.rs`).
   Each goes reserved → spawning → live → closing → gone; the layout opens one (`open_tab` with what it runs), its terminal attaches to it (`attach_tab`), and closing it is one call (`close_tab`).

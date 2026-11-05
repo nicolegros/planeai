@@ -13,7 +13,7 @@ const sections: ShortcutSection[] = [
   {
     section: "Sessions",
     items: [
-      { keys: "⌘N", description: "New session" },
+      { keys: "⌘N", description: "New task" },
       { keys: "⌘⇧N", description: "New project" },
     ],
   },
@@ -37,7 +37,7 @@ describe("filterShortcuts", () => {
     expect(result).toHaveLength(1);
     expect(result[0].section).toBe("");
     expect(result[0].items).toEqual([
-      { keys: "⌘N", description: "New session" },
+      { keys: "⌘N", description: "New task" },
       { keys: "⌘⇧N", description: "New project" },
       { keys: "⌘T", description: "New tab" },
     ]);

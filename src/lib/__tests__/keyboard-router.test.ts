@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setActiveZone } from "../focus.svelte";
 import { IS_MAC, installKeyboardRouter, type KeyboardAction } from "../keyboard";
 
 describe("installKeyboardRouter shortcut ownership", () => {
@@ -72,7 +73,27 @@ describe("installKeyboardRouter shortcut ownership", () => {
 
     consumer.dispatchEvent(event);
 
-    expect(onAction).toHaveBeenCalledWith({ type: "new_session" });
+    expect(onAction).toHaveBeenCalledWith({ type: "new_task" });
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("routes Cmd+N to new_task while CodeMirror owns focus", () => {
+    cleanup();
+    setActiveZone("editor");
+    cleanup = installKeyboardRouter(onAction, undefined, () => true);
+    const consumer = addShortcutConsumer();
+    const modKey = IS_MAC ? "metaKey" : "ctrlKey";
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "n",
+      [modKey]: true,
+    });
+
+    consumer.dispatchEvent(event);
+    setActiveZone("terminal");
+
+    expect(onAction).toHaveBeenCalledWith({ type: "new_task" });
     expect(event.defaultPrevented).toBe(true);
   });
 

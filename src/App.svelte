@@ -19,6 +19,7 @@
   import { applyDoneNow, applyInterruptedDone, canUndoTaskChange, commitPendingDone, completeTask, undoLastTaskChange } from "./lib/task-moves";
   import { closeCustomSnooze, closeSnoozeMenu, getCustomSnooze, getSnoozeMenu, snoozeCustom, snoozeMenuItems, snoozeOrWake } from "./lib/snooze-picker.svelte";
   import SnoozeCustomDialog from "./components/SnoozeCustomDialog.svelte";
+import ChoiceDialog from "./components/ChoiceDialog.svelte";
   import { startSnoozeClock } from "./lib/snooze-clock.svelte";
   import ContextMenu from "./components/ui/ContextMenu.svelte";
   import { getSidebarModel, getVisibleNavigationOrder, setOpenTaskWorkspace } from "./lib/sidebar-model-store.svelte";
@@ -80,7 +81,8 @@
   let commandMenuOpen = $state(false);
   let commandMenuFileMode = $state(false);
   let commandMenuRenameId = $state<string | null>(null);
-  let showNewItemModal = $state(false);
+  /** Open while the Mod+T / tab-strip "+" selector shows; `paneId` is the pane whose "+" was clicked. */
+  let newTabTarget = $state<{ paneId?: string } | null>(null);
   let showShortcuts = $state(false);
   let showHookPrompt = $state(false);
   let showQuitConfirm = $state(false);
@@ -233,7 +235,7 @@
   // one, and xterm swallows the keys the dialog needs. Dialogs App does not model
   // are caught by the DOM probe inside releaseTerminalDomFocus.
   const keyboardModalOpen = $derived(
-    showNewItemModal || !!sessionToDelete || showTaskForm || showProjectForm || !!pluginDialog
+    !!newTabTarget || !!sessionToDelete || showTaskForm || showProjectForm || !!pluginDialog
       || showSessionForm || commandMenuOpen || showShortcuts
       || !!projectToDelete || showQuitConfirm || showOnboarding,
   );
@@ -526,7 +528,7 @@
   }
 
   function closeOverlays(): void {
-    showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; closePluginContributionModal(); sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false; commandMenuRenameId = null;
+    showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; newTabTarget = null; showTaskForm = false; closePluginContributionModal(); sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false; commandMenuRenameId = null;
   }
 
   // Setup can restart mid-session; anything left open would sit under the wizard and keep the keyboard.
@@ -770,6 +772,36 @@
     showSessionForm = true;
   }
 
+  function startNewSession(): void {
+    if (projects.length === 0) openAddProject();
+    else openNewSessionForm();
+  }
+
+  function openNewTaskForm(): void {
+    if (projects.length === 0) { openAddProject(); return; }
+    taskWorkspaceToEdit = null;
+    showTaskForm = true;
+  }
+
+  const newTaskProjectPath = $derived(
+    activeTaskWorkspace?.project.path
+      ?? projects.find((p) => p.id === activeSession?.project_id)?.path
+      ?? projects[0]?.path
+      ?? "",
+  );
+
+  const newTabChoices = $derived([
+    { id: "agent", label: "Agent session", glyph: "›_", key: "a" },
+    { id: "terminal", label: "Terminal", glyph: "$", key: "t", disabled: !activeSessionId },
+  ] as const);
+
+  function chooseNewTab(choice: (typeof newTabChoices)[number]["id"]): void {
+    const paneId = newTabTarget?.paneId;
+    newTabTarget = null;
+    if (choice === "agent") startNewSession();
+    else void openShellTab(paneId);
+  }
+
   function selectWorkspaceTask(task: TaskItem, repoPath: string): void {
     const project = projects.find((candidate) => candidate.path === repoPath);
     if (!project) return;
@@ -980,8 +1012,9 @@
 
     const cleanup = installKeyboardRouter(
       (action) => {
-        if (action.type === "new_session") {
-          showNewItemModal = true;
+        if (action.type === "new_task") {
+          newTabTarget = null;
+          openNewTaskForm();
         } else if (action.type === "new_project") { openAddProject(); }
         else if (action.type === "toggle_sidebar") { sidebarVisible = !sidebarVisible; if (sidebarVisible) focusSidebar(); else focusTerminal(); }
         else if (action.type === "jump_to_session") { jumpToSidebarRow(action.index); }
@@ -1002,7 +1035,7 @@
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; commandMenuRenameId = null; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
-        else if (action.type === "new_tab") { void openShellTab(); }
+        else if (action.type === "new_tab") { newTabTarget = {}; }
         else if (action.type === "close_tab") { closeFocusedTab(); }
         else if (action.type === "next_tab") { cycleTab(1); }
         else if (action.type === "prev_tab") { cycleTab(-1); }
@@ -1037,7 +1070,7 @@
         else if (action.type === "focus_toast") toggleToastFocus();
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
-      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !pluginDialog && !getCycleState().isCycling && !navCycle.isCycling(),
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !newTabTarget && !showTaskForm && !pluginDialog && !getCycleState().isCycling && !navCycle.isCycling(),
       () => getActiveZone() === "editor" && workspaceLayout.focusedTab()?.type === "editor",
       () => !!document.activeElement?.closest('[data-form-keyboard]'),
       () => showOnboarding,
@@ -1046,13 +1079,7 @@
 
     function onModalKeydown(e: KeyboardEvent) {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (showNewItemModal) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        if (e.key === 'Escape') { showNewItemModal = false; }
-        else if (e.key === 's') { showNewItemModal = false; openNewSessionForm(); }
-        else if (e.key === 't') { showNewItemModal = false; showTaskForm = true; }
-      } else if (sessionToDelete) {
+      if (sessionToDelete) {
         e.preventDefault();
         e.stopImmediatePropagation();
         if (e.key === 'Escape' || e.key === 'c' || e.key === 'n') sessionToDelete = null;
@@ -1110,7 +1137,7 @@
       leavePluginWorkspace();
       selectPaneTab(ptyKey);
     }}
-    onAddTab={() => openShellTab(singlePane?.id)}
+    onAddTab={() => { newTabTarget = { paneId: singlePane?.id }; }}
     onTabDoubleClick={renameFromTab}
     paneId={singlePane?.id}
     onTabPress={pressTab}
@@ -1138,7 +1165,7 @@
         onSelectTask={selectWorkspaceTask}
         onAddProject={openAddProject}
         onOpenPreferences={openPreferences}
-        onCreateSession={openNewSessionForm}
+        onCreateTask={openNewTaskForm}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
         onToggleDiff={toggleDiff}
         pluginContributions={sidebarPluginContributions}
@@ -1171,7 +1198,7 @@
         onCreateTask={() => {
           showSessionForm = false;
           taskPrefill = null;
-          showTaskForm = true;
+          openNewTaskForm();
         }}
         onCreated={(session) => { leavePluginWorkspace(); showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
         onCancel={() => { showSessionForm = false; taskPrefill = null; tick().then(() => refocusTerminal()); }}
@@ -1197,7 +1224,7 @@
           tags: taskWorkspaceToEdit.task.tags,
           baseBranch: taskWorkspaceToEdit.task.base_branch,
           projectPath: taskWorkspaceToEdit.project.path,
-        } : { projectPath: projects[0]?.path ?? "" }}
+        } : { projectPath: newTaskProjectPath }}
         onSubmitted={() => { taskWorkspaceToEdit = null; showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
         onCancel={() => { taskWorkspaceToEdit = null; showTaskForm = false; tick().then(() => refocusTerminal()); }}
         onSessionCreated={(session) => { leavePluginWorkspace(); taskWorkspaceToEdit = null; showTaskForm = false; orchestrator.createSession(session); focusTerminal(); }}
@@ -1220,7 +1247,7 @@
       onRenameSession={doRename}
       onRestoreSession={async (id) => { await sessionsApi.restore(id); await orchestrator.loadSessions(); }}
       onDestroyArchivedSession={async (id) => { await sessionsApi.destroy(id); }}
-      onNewSession={() => { if (projects.length === 0) openAddProject(); else openNewSessionForm(); }}
+      onNewSession={startNewSession}
       onResetTerminal={() => {
         if (activeSessionId) {
           orchestrator.recordUserInput(activeSessionId);
@@ -1233,7 +1260,7 @@
       onDeleteProject={(id) => { const p = projects.find(x => x.id === id); if (p) projectToDelete = p; }}
       onRestoreProject={async (id) => { await projectStore.restoreProject(id); }}
       onSelectTask={(task, repoPath) => { selectWorkspaceTask(task, repoPath); focusTerminal(); }}
-      onCreateTask={() => { showTaskForm = true; }}
+      onCreateTask={openNewTaskForm}
       onToggleDiff={toggleDiff}
       onOpenFile={(path) => { if (activeSessionId) openFile(activeSessionId, path); }}
       onOpenLogViewer={logViewerEnabled ? () => { showLogViewer = true; } : undefined}
@@ -1277,7 +1304,7 @@
             showCloseButton={true}
             paneId={leaf.id}
             onSelectTab={selectPaneTab}
-            onAddTab={() => openShellTab(leaf.id)}
+            onAddTab={() => { newTabTarget = { paneId: leaf.id }; }}
             onClose={() => { workspaceLayout.closePane(leaf.id); syncFocusedTabToSelection(); }}
             onTabDoubleClick={renameFromTab}
             onTabPress={pressTab}
@@ -1516,27 +1543,8 @@
       </SharedDialog>
     {/if}
 
-    {#if showNewItemModal}
-      <SharedDialog open={true} onOpenChange={(v) => { if (!v) showNewItemModal = false; }} title="New…" preventOpenAutoFocus={true} class="w-[268px] rounded-[13px] border-border-s shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] overflow-hidden">
-        <div>
-          <div class="flex items-center px-[15px] pt-[13px] pb-[11px]">
-            <span class="text-[13px] font-semibold text-t1">New…</span>
-            <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
-          </div>
-          <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
-            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] bg-accent-bg" onclick={() => { showNewItemModal = false; openNewSessionForm(); }}>
-              <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">›_</span>
-              <span class="flex-1 text-[13.5px] text-t1">Session</span>
-              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">s</span>
-            </button>
-            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showNewItemModal = false; showTaskForm = true; }}>
-              <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">☰</span>
-              <span class="flex-1 text-[13.5px] text-t1">Task</span>
-              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">t</span>
-            </button>
-          </div>
-        </div>
-      </SharedDialog>
+    {#if newTabTarget}
+      <ChoiceDialog title="New tab" options={newTabChoices} onChoose={chooseNewTab} onClose={() => { newTabTarget = null; }} />
     {/if}
 
     {#if showLogViewer}

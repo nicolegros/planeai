@@ -50,7 +50,7 @@
     onEditTask: (task: TaskItem, project: Project) => void;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectTask?: (task: TaskItem, repoPath: string) => void;
-    onCreateSession?: () => void;
+    onCreateTask?: () => void;
     onSessionsChanged?: () => void;
     onToggleDiff?: () => void;
     pluginContributions?: PluginSlot[];
@@ -65,7 +65,7 @@
     onOpenPluginSessionPanel?: (sessionId: string, pluginId: string, contributionId: string) => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateSession, onSessionsChanged, onToggleDiff, pluginContributions = [], sessionIndicatorContributions = [], sessionMetaContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose, onOpenPluginSessionPanel }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateTask, onSessionsChanged, onToggleDiff, pluginContributions = [], sessionIndicatorContributions = [], sessionMetaContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose, onOpenPluginSessionPanel }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
   function pluginContributionKey(item: PluginSlot): string {
@@ -649,17 +649,17 @@
 >
   <ResizeHandle side="right" bind:width={sidebarWidth} min={160} max={Infinity} defaultWidth={266} onResizeEnd={(w) => setLayoutWidth("sidebar", w)} />
 
-  <!-- Header: new session + new project buttons -->
+  <!-- Header: new task + new project buttons -->
   <div class="px-3 pt-3 pb-2 flex gap-1.5">
     {#if projects.length > 0}
       <button
-        onclick={() => onCreateSession?.()}
-        aria-label="New session"
+        onclick={() => onCreateTask?.()}
+        aria-label="New task"
         class="{headerBtnClass} flex-[3] justify-between px-3"
       >
         <span class="flex items-center gap-1.5 overflow-hidden">
           <Plus class="size-3.5 shrink-0" />
-          {#if sidebarWidth >= 220}<span class="truncate">New session</span>{/if}
+          {#if sidebarWidth >= 220}<span class="truncate">New task</span>{/if}
         </span>
         {#if sidebarWidth >= 220}<span class="font-mono text-[10px] text-t3 shrink-0 ml-1">{MOD_LABEL}N</span>{/if}
       </button>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ComponentProps } from "svelte";
-  import Dialog from "../ui/Dialog.svelte";
+  import ChoiceDialog from "../ChoiceDialog.svelte";
   import FormDialog from "../ui/FormDialog.svelte";
   import SessionForm from "../SessionForm.svelte";
   import type { DialogHandoff } from "./dialog-handoff-state.svelte";
@@ -15,7 +15,7 @@
 
 <!--
   Mirrors App.svelte: the New Session dialog block is declared before the
-  New Item dialog block, so on handoff the new dialog mounts before the old one
+  New Tab selector block, so on handoff the new dialog mounts before the old one
   unmounts and runs its close-auto-focus.
 -->
 {#if handoff.showSession}
@@ -24,10 +24,11 @@
   </FormDialog>
 {/if}
 
-{#if handoff.showNewItem}
-  <Dialog open={true} title="New…" preventOpenAutoFocus={true}>
-    <div>
-      <button type="button">Session</button>
-    </div>
-  </Dialog>
+{#if handoff.showNewTab}
+  <ChoiceDialog
+    title="New tab"
+    options={[{ id: "agent", label: "Agent session", glyph: "›_", key: "a" }]}
+    onChoose={() => {}}
+    onClose={() => {}}
+  />
 {/if}

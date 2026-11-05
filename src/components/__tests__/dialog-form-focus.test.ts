@@ -31,7 +31,7 @@ import DialogFormKeyboardHarness from "./DialogFormKeyboardHarness.svelte";
 import { hasOpenDialog, releaseTerminalDomFocus } from "../../lib/terminal-focus";
 import { createDialogOpenState } from "./dialog-open-state.svelte";
 import SessionFormDialogHarness from "./SessionFormDialogHarness.svelte";
-import NewItemToSessionHarness from "./NewItemToSessionHarness.svelte";
+import NewTabToSessionHarness from "./NewTabToSessionHarness.svelte";
 import TaskFormDialogHarness from "./TaskFormDialogHarness.svelte";
 import { createDialogHandoff } from "./dialog-handoff-state.svelte";
 
@@ -183,13 +183,13 @@ describe("New Session dialog initial focus", () => {
     expect(document.activeElement).toBe(wrapperEl());
   });
 
-  it("keeps focus when handed off from the New Item dialog (Cmd+N then S)", async () => {
+  it("keeps focus when handed off from the New tab selector (Cmd+T then A)", async () => {
     const terminal = document.createElement("textarea");
     document.body.append(terminal);
     terminal.focus();
 
     const handoff = createDialogHandoff();
-    mountTracked(NewItemToSessionHarness, {
+    mountTracked(NewTabToSessionHarness, {
       target: document.body,
       props: { handoff, form: sessionFormProps() },
     });
@@ -197,7 +197,7 @@ describe("New Session dialog initial focus", () => {
     await flushFrames();
     expect(document.activeElement).toBe(terminal);
 
-    handoff.showNewItem = false;
+    handoff.showNewTab = false;
     handoff.showSession = true;
     flushSync();
     await flushFrames();

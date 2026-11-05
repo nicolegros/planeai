@@ -63,9 +63,9 @@ describe("matchChord", () => {
     expect(matchChord(key({ key: "b", [wrongMod]: true }))).toBeNull();
   });
 
-  it("returns new_session on platform mod+N", () => {
+  it("returns new_task on platform mod+N", () => {
     expect(matchChord(key({ key: "n", [modKey]: true }))).toEqual({
-      type: "new_session",
+      type: "new_task",
     });
   });
 
