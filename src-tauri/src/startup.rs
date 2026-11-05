@@ -333,6 +333,7 @@ pub fn start_daemon_event_listener(app_handle: &tauri::AppHandle) {
                             &evt.session_id,
                             crate::task_activity::Activity::Exited,
                         );
+                        crate::notify::agent_exited(&app, &evt.session_id);
                         app.state::<PluginRuntimeHandle>()
                             .0
                             .dispatch_session_lifecycle(event);

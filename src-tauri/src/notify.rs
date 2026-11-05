@@ -370,6 +370,7 @@ fn mark_provider_session_exited(app: &AppHandle, session_id: &str) {
         match exited {
             Ok(Some(event)) => {
                 crate::task_activity::record(&app, &session_id, Activity::Exited);
+                agent_exited(&app, &session_id);
                 let _ = app.emit("pty-exited", serde_json::json!({ "pty_key": session_id }));
                 let _ = app.emit("sessions-changed", ());
                 app.state::<crate::plugins::PluginRuntimeHandle>()
@@ -386,6 +387,7 @@ fn mark_provider_session_exited(app: &AppHandle, session_id: &str) {
 
 /// Start the silence checker thread.
 pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
+    let mut transcripts = planeai_core::background_work::TranscriptCache::default();
     thread::spawn(move || loop {
         thread::sleep(SILENCE_CHECK_INTERVAL);
         let mut to_notify: Vec<String> = Vec::new();
@@ -400,24 +402,23 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
             s.turn_ends_due()
         };
         // Transcripts are read outside the lock: hooks and the PTY reader take it too.
-        let pending: Vec<(String, Option<usize>)> = due
+        let pending: Vec<_> = due
             .into_iter()
             .map(|(id, transcript)| {
-                let running = transcript.and_then(|path| {
-                    std::fs::File::open(path).ok().map(|file| {
-                        planeai_core::background_work::pending_background_subagents(
-                            std::io::BufReader::new(file),
-                        )
-                    })
-                });
-                (id, running.flatten())
+                let running = transcript
+                    .as_deref()
+                    .and_then(|path| transcripts.pending_background_subagents(path));
+                (id, transcript, running)
             })
             .collect();
         {
             let mut s = state.lock().unwrap();
-            for (id, running) in pending {
+            for (id, transcript, running) in pending {
                 let held = s.is_held(&id);
                 if s.resolve_turn_end(&id, running) {
+                    if let Some(path) = transcript {
+                        transcripts.forget(&path);
+                    }
                     to_notify.push(id);
                 } else if !held && s.is_held(&id) {
                     tracing::info!(session_id = %id, running, "turn ended with background subagents running; holding");
@@ -439,6 +440,13 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
             agent_settled(&app, &session_id, &state, Activity::Finished);
         }
     });
+}
+
+/// An agent exited: a turn of it still held or debounced will never end.
+pub fn agent_exited(app: &AppHandle, session_id: &str) {
+    if let Some(handle) = app.try_state::<crate::state::NotifyHandle>() {
+        handle.0.lock().unwrap().forget_turn(session_id);
+    }
 }
 
 fn emit_state_change(app: &AppHandle, session_id: &str, state: AgentState) {
