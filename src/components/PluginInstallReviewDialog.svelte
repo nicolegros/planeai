@@ -12,7 +12,12 @@
   const replacementNotice = $derived.by(() => {
     if (!staged) return null;
     const { replaces } = staged;
-    if (replaces.kind === "repo") return `Updates v${replaces.installed_version} to v${staged.manifest.version}.`;
+    if (replaces.kind === "repo") {
+      const staging = staged.manifest.version;
+      return replaces.installed_version === staging
+        ? `Reinstalls v${staging}. Data and settings are kept.`
+        : `Replaces v${replaces.installed_version} with v${staging}. Data and settings are kept.`;
+    }
     if (replaces.kind === "other_repo") {
       return `Replaces v${replaces.installed_version} installed from github.com/${replaces.repo}. Data and settings are kept.`;
     }

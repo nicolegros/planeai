@@ -98,8 +98,7 @@ describe("PluginInstallReviewDialog", () => {
     expect(text).toContain("Acme settings (preferences)");
     expect(text).toContain("acme_lookup: Look up an Acme record");
     expect(text).toContain(NATIVE_CODE_WARNING);
-    expect(text).not.toContain("Replaces your local build");
-    expect(text).not.toContain("Updates v");
+    expect(text).not.toContain("Data and settings are kept.");
   });
 
   it("marks an unverified package and falls back to none for empty lists", async () => {
@@ -139,9 +138,17 @@ describe("PluginInstallReviewDialog", () => {
     );
   });
 
-  it("explains an update of an earlier Discovery install", async () => {
+  it("explains a replacement of an earlier Discovery install of another version", async () => {
     const content = await open({ replaces: { kind: "repo", installed_version: "1.0.0" } });
-    expect(content.textContent).toContain("Updates v1.0.0 to v1.2.0.");
+    expect(content.textContent).toContain(
+      "Replaces v1.0.0 with v1.2.0. Data and settings are kept.",
+    );
+  });
+
+  it("explains a reinstall of the version already installed from this repository", async () => {
+    const content = await open({ replaces: { kind: "repo", installed_version: "1.2.0" } });
+    expect(content.textContent).toContain("Reinstalls v1.2.0. Data and settings are kept.");
+    expect(content.textContent).not.toContain("Replaces v");
   });
 
   it("explains a replacement of the same id installed from another repository", async () => {
@@ -155,7 +162,7 @@ describe("PluginInstallReviewDialog", () => {
     expect(content.textContent).toContain(
       "Replaces v1.0.0 installed from github.com/fork/planeai-plugin-acme. Data and settings are kept.",
     );
-    expect(content.textContent).not.toContain("Updates v");
+    expect(content.textContent).not.toContain(" with v");
   });
 
   it("warns when the release tag and the manifest version disagree", async () => {
