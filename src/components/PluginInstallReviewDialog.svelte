@@ -29,6 +29,7 @@
 <Dialog
   open={staged !== null}
   onOpenChange={(open) => { if (!open && !busy) onCancel(); }}
+  preventEscapeClose={busy}
   title="Install plugin"
   class="w-[520px] p-6 space-y-4"
 >

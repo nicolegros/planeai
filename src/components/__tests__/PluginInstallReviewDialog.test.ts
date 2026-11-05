@@ -165,6 +165,28 @@ describe("PluginInstallReviewDialog", () => {
     expect(scroller?.contains(button("Cancel")!)).toBe(false);
   });
 
+  it("cancels on Escape while reviewing but stays open while installing", async () => {
+    const escape = () =>
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    const onCancel = vi.fn();
+    await open({}, { onCancel });
+    escape();
+    await vi.waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
+    unmount(component!);
+    component = undefined;
+    document.body.innerHTML = "";
+
+    const onCancelWhileBusy = vi.fn();
+    await open({}, { busy: true, onCancel: onCancelWhileBusy });
+    escape();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onCancelWhileBusy).not.toHaveBeenCalled();
+    expect(dialog()?.textContent).toContain("Install Acme?");
+    expect(button("Installing…")?.disabled).toBe(true);
+  });
+
   it("confirms, cancels, and locks both buttons while installing", async () => {
     const onConfirm = vi.fn();
     const onCancel = vi.fn();
