@@ -196,6 +196,8 @@ describe("PluginManager", () => {
   const cardButtons = (repo: string) =>
     buttons(card(repo)!).map((button) => button.textContent?.trim());
   const reviewDialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
+  const paragraphs = () =>
+    Array.from(target.querySelectorAll("p")).map((line) => line.textContent?.trim() ?? "");
 
   async function mountWithDiscovery(candidates: PluginDiscoveryCandidate[]) {
     discover.mockResolvedValue(candidates);
@@ -446,6 +448,52 @@ describe("PluginManager", () => {
     await vi.waitFor(() => expect(reviewDialog()).toBeNull());
     expect(commitStaged).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(buttonLabeled(target, "Install v1.2.0")?.disabled).toBe(false));
+  });
+
+  it("reports a failed commit once the review closes and re-resolves the card", async () => {
+    const repo = "acme/planeai-plugin-acme";
+    list.mockResolvedValue([]);
+    resolveCandidate
+      .mockResolvedValueOnce({ kind: "install", latest_version: "1.2.0" })
+      .mockResolvedValue({ kind: "reinstall", installed_version: "1.2.0" });
+    stageRemote.mockResolvedValue(stagedAcme);
+    commitStaged.mockRejectedValue(new Error("plugin backend exited during startup"));
+    await mountWithDiscovery([candidate(repo)]);
+
+    await vi.waitFor(() => expect(buttonLabeled(target, "Install v1.2.0")).toBeDefined());
+    buttonLabeled(target, "Install v1.2.0")?.click();
+    await vi.waitFor(() => expect(reviewDialog()?.textContent).toContain("Install Acme?"));
+    buttonLabeled(reviewDialog()!, "Install and enable")?.click();
+
+    await vi.waitFor(() => expect(reviewDialog()).toBeNull());
+    await vi.waitFor(() =>
+      expect(paragraphs()).toContain("Error: plugin backend exited during startup"),
+    );
+    await vi.waitFor(() =>
+      expect(cardButtons(repo)).toEqual(["Reinstall latest", "Open repository"]),
+    );
+    expect(discardStaged).not.toHaveBeenCalled();
+  });
+
+  it("shows a failed download and offers the install again", async () => {
+    const repo = "acme/planeai-plugin-acme";
+    list.mockResolvedValue([]);
+    resolveCandidate.mockResolvedValue({ kind: "install", latest_version: "1.2.0" });
+    stageRemote.mockRejectedValue(
+      new Error("plugin download failed with HTTP 404: https://cdn.acme.dev/acme.tar.gz"),
+    );
+    await mountWithDiscovery([candidate(repo)]);
+
+    await vi.waitFor(() => expect(buttonLabeled(target, "Install v1.2.0")).toBeDefined());
+    buttonLabeled(target, "Install v1.2.0")?.click();
+
+    await vi.waitFor(() =>
+      expect(paragraphs()).toContain(
+        "Error: plugin download failed with HTTP 404: https://cdn.acme.dev/acme.tar.gz",
+      ),
+    );
+    expect(reviewDialog()).toBeNull();
+    expect(buttonLabeled(target, "Install v1.2.0")?.disabled).toBe(false);
   });
 
   it("shows the GitHub origin instead of the import path for Discovery installs", async () => {
