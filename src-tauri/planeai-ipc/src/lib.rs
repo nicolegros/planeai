@@ -71,14 +71,7 @@ pub fn socket_path(channel: Channel, app_dir: &Path) -> PathBuf {
 pub fn daemon_socket_path() -> PathBuf {
     #[cfg(unix)]
     {
-        let home = std::env::var_os("HOME");
-        runtime_dir(
-            std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
-            unsafe { libc::getuid() },
-            home.as_deref().map(Path::new),
-            account_home().as_deref(),
-        )
-        .join("daemon.sock")
+        daemon_runtime_dir().join("daemon.sock")
     }
     #[cfg(windows)]
     {
@@ -89,6 +82,27 @@ pub fn daemon_socket_path() -> PathBuf {
 /// The directory holding the PTY and rmux daemon sockets. A process whose `HOME` is not the
 /// account's home, such as an app run with an isolated data folder, gets its own, since the
 /// daemons' sessions belong to one database and each app closes panes its database does not own.
+/// On Windows the daemons listen on named pipes, which have no directory.
+pub fn daemon_runtime_dir() -> &'static Path {
+    #[cfg(unix)]
+    {
+        static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        DIR.get_or_init(|| {
+            let home = std::env::var_os("HOME");
+            runtime_dir(
+                std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+                unsafe { libc::getuid() },
+                home.as_deref().map(Path::new),
+                account_home().as_deref(),
+            )
+        })
+    }
+    #[cfg(windows)]
+    {
+        Path::new(r"\\.\pipe")
+    }
+}
+
 #[cfg(unix)]
 fn runtime_dir(
     xdg_runtime_dir: Option<PathBuf>,
@@ -97,9 +111,11 @@ fn runtime_dir(
     account_home: Option<&Path>,
 ) -> PathBuf {
     let resolved = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let suffix = match home {
-        Some(home) if Some(resolved(home)) != account_home.map(resolved) => {
-            format!("-{:016x}", fnv1a(home))
+    // An unknown account home keeps the shared directory, so a failed lookup never strands
+    // the daemons of a normal install.
+    let suffix = match (home.map(resolved), account_home.map(resolved)) {
+        (Some(home), Some(account_home)) if home != account_home => {
+            format!("-{:016x}", fnv1a(&home))
         }
         _ => String::new(),
     };
@@ -128,18 +144,22 @@ fn account_home() -> Option<PathBuf> {
     let mut passwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
     let mut buffer = vec![0 as libc::c_char; 4096];
     let mut result = std::ptr::null_mut();
-    // SAFETY: getpwuid_r writes into `passwd` and `buffer`, which outlive the read below.
-    let status = unsafe {
-        libc::getpwuid_r(
-            libc::getuid(),
-            passwd.as_mut_ptr(),
-            buffer.as_mut_ptr(),
-            buffer.len(),
-            &mut result,
-        )
-    };
-    if status != 0 || result.is_null() {
-        return None;
+    loop {
+        // SAFETY: getpwuid_r writes into `passwd` and `buffer`, which outlive the read below.
+        let status = unsafe {
+            libc::getpwuid_r(
+                libc::getuid(),
+                passwd.as_mut_ptr(),
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+        match status {
+            0 if !result.is_null() => break,
+            libc::ERANGE if buffer.len() < 1 << 20 => buffer.resize(buffer.len() * 4, 0),
+            _ => return None,
+        }
     }
     // SAFETY: on success `pw_dir` points to a NUL-terminated string inside `buffer`.
     let dir = unsafe { CStr::from_ptr((*result).pw_dir) };
@@ -162,6 +182,11 @@ mod tests {
             PathBuf::from("/tmp/planeai-501")
         );
         assert_eq!(
+            runtime_dir(None, 501, Some(Path::new("/tmp/e2e")), None),
+            PathBuf::from("/tmp/planeai-501"),
+            "an unknown account home keeps the shared directory"
+        );
+        assert_eq!(
             runtime_dir(Some("/run/user/501".into()), 501, Some(home), Some(home)),
             PathBuf::from("/run/user/501/planeai")
         );
@@ -179,6 +204,20 @@ mod tests {
                 runtime_dir(None, 501, Some(&home), Some(account.path())),
                 PathBuf::from("/tmp/planeai-501")
             );
+        }
+    }
+
+    #[test]
+    fn every_spelling_of_another_home_finds_the_same_daemons() {
+        let isolated = tempfile::tempdir().unwrap();
+        let link = tempfile::tempdir().unwrap();
+        let linked_home = link.path().join("home");
+        std::os::unix::fs::symlink(isolated.path(), &linked_home).unwrap();
+        let trailing_slash = PathBuf::from(format!("{}/", isolated.path().display()));
+        let account = Some(Path::new("/Users/me"));
+        let dir = runtime_dir(None, 501, Some(isolated.path()), account);
+        for home in [linked_home, trailing_slash] {
+            assert_eq!(runtime_dir(None, 501, Some(&home), account), dir);
         }
     }
 

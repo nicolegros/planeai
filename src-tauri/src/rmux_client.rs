@@ -17,13 +17,7 @@ static CLIENT: tokio::sync::OnceCell<Mutex<Option<Arc<RmuxClient>>>> =
 
 /// Resolve the endpoint and the user's installed rmux daemon binary.
 fn config() -> RmuxConfig {
-    // Share the runtime directory with the existing daemon socket so both
-    // backends inherit the same location and permissions.
-    let runtime_dir = planeai_ipc::daemon_socket_path()
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(std::env::temp_dir);
-    let config = RmuxConfig::app_private(&runtime_dir);
+    let config = RmuxConfig::app_private(planeai_ipc::daemon_runtime_dir());
     match crate::config::rmux_daemon_binary() {
         Some(binary) => config.with_daemon_binary(binary),
         None => config,
