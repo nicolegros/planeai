@@ -283,7 +283,9 @@ If a daemon spawn fails with "Broken pipe", "Connection refused", or "No such fi
 
 ### macOS / Linux
 
-- Unix domain socket at `$XDG_RUNTIME_DIR/planeai/daemon.sock` or `/tmp/planeai-<uid>/daemon.sock`
+- Unix domain socket at `$XDG_RUNTIME_DIR/planeai/daemon.sock` or `/tmp/planeai-<uid>/daemon.sock`, beside the rmux socket
+- A process whose `HOME` is not the account's home directory, such as an app run with an isolated data folder, uses `$XDG_RUNTIME_DIR/planeai-<hash of HOME>` or `/tmp/planeai-<uid>-<hash of HOME>` instead.
+  Each app closes the rmux panes its own database does not own, so sharing the directory would let an isolated app close the real app's sessions.
 - Shell default: zsh (macOS) or sh (Linux)
 - Detached daemon via `process_group(0)`
 - FD soft limit raised to min(hard_limit, 10240) at startup — the macOS default of 256 is too low for many PTY sessions + data connections + log files. Applied in the GUI process, the daemon binary, and via `pre_exec` on daemon child spawns.

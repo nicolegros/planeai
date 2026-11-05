@@ -366,6 +366,7 @@ Answer `{ "text": "...", "is_error": false }`; `is_error` defaults to `false`.
 The agent reads `text` as the tool's whole result, so keep it compact (PlaneAI's own tools answer in TOON) and within the 64 KiB frame.
 Report a failure the agent should read, such as an unknown key, with `is_error: true`.
 A JSON-RPC error answer also reaches the agent as an error with its message.
+After PlaneAI sends a call of a tool that is not read-only, whatever the plugin answers, it tells the plugin's UI its data changed, as `data.changed()` does.
 
 PlaneAI waits `timeoutMs`, then cancels the request as described in [Native sidecar protocol](#native-sidecar-protocol).
 A plugin that acknowledges the cancellation keeps running, and the agent reads that the plugin gave no answer within the timeout and the call was cancelled.
@@ -428,7 +429,7 @@ For example, local UI CSS can adopt or intentionally customize the host theme:
 
 - `call(method, params?)` — RPC scoped to the owning sidecar. Lifecycle methods are reserved.
 - `settings.get<T extends Record<string, unknown>>()` and `settings.replace<T>(settings)` — typed public JSON-object settings. These are the UI counterpart to the capability-gated sidecar settings callbacks; they never expose secrets.
-- `data.changed()` - tells PlaneAI the plugin's data changed, as does each run of the [background service](#background-service). A running `sidebar.section` remounts after this event.
+- `data.changed()` - tells PlaneAI the plugin's data changed, as do each run of the [background service](#background-service) and each call of a [tool](#tools) that is not read-only. A running `sidebar.section` remounts after this event.
 - `data.onChanged(listener)` returns an unsubscribe function and calls `listener` when the plugin's data changed. A local `session.indicator`, `session.meta`, `sidebar.header`, `main-pane`, `dialog`, or `titlebar` frame receives it in place and keeps its state, so subscribe to refresh what it shows; so does a local `session.panel` on host API `planeai.plugin-host.v5` or later, while an older one remounts instead. Other local frames never call it.
 - `navigation.open(pluginId, contributionId)`, `navigation.close()`, and `navigation.openPreferences()`.
 - `sidebar.register(rows)`, `sidebar.select(rowId)`, and `sidebar.handleKeydown(event)` for sidebar navigation contributions. Always call the returned unregister function from your mount disposer.

@@ -1194,7 +1194,7 @@ struct RuntimeProcess {
     stdin: AsyncMutex<ChildStdin>,
     /// Frames from the stdout reader task, minus the host notifications it handles itself.
     frames: AsyncMutex<mpsc::Receiver<Result<String, String>>>,
-    request_lock: AsyncMutex<()>,
+    requests: crate::plugin_rpc::RequestLane,
     next_request_id: AtomicU64,
     plugin_id: String,
     data_dir: PathBuf,
@@ -1393,22 +1393,22 @@ impl RuntimeProcess {
         let deadline = Instant::now() + request_timeout;
         // JSON-RPC responses share one stdout stream. Serialize normal host
         // requests while stdin remains independently writable for cancellation.
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let _request = timeout(remaining, self.request_lock.lock())
-            .await
-            .map_err(|_| request_queue_timeout_error(method))?;
-        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let frame = encode_request(request_id, method, params)?;
-        self.write_request_frame(&frame, deadline)
-            .await
-            .map_err(PluginRpcError::Broken)?;
+        self.requests
+            .run(method, request_timeout, || async {
+                let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1;
+                let frame = encode_request(request_id, method, params)?;
+                self.write_request_frame(&frame, deadline)
+                    .await
+                    .map_err(PluginRpcError::Broken)?;
 
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match timeout(remaining, self.read_matching_response()).await {
-            Ok(Ok(frame)) => decode_json_rpc_frame(&frame, request_id),
-            Ok(Err(error)) => Err(PluginRpcError::Broken(error)),
-            Err(_) => Err(self.cancel_timed_out_request(method, request_id).await),
-        }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                match timeout(remaining, self.read_matching_response()).await {
+                    Ok(Ok(frame)) => decode_json_rpc_frame(&frame, request_id),
+                    Ok(Err(error)) => Err(PluginRpcError::Broken(error)),
+                    Err(_) => Err(self.cancel_timed_out_request(method, request_id).await),
+                }
+            })
+            .await
     }
 
     /// How a request that timed out ends, once cancelled.
@@ -1688,9 +1688,11 @@ impl RuntimeProcess {
 
     async fn request_shutdown(&self, deadline: Instant) -> Result<Value, String> {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let _request = timeout(remaining, self.request_lock.lock())
+        let _turn = self
+            .requests
+            .shutdown_turn(remaining)
             .await
-            .map_err(|_| "plugin shutdown request timed out".to_string())?;
+            .ok_or_else(|| "plugin shutdown request timed out".to_string())?;
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1;
         let frame = encode_json_rpc_line(request_id, "plugin.shutdown", Value::Null)?;
         self.write_shutdown_frame(&frame, deadline).await?;
@@ -1740,6 +1742,13 @@ impl RuntimeProcess {
 /// idle run does not make every open frame reload its data.
 fn background_run_changed_data(totals: &Value) -> bool {
     totals.get("changed") != Some(&Value::Bool(false))
+}
+
+/// Tells the plugin's views that its data changed, so they refresh in place.
+fn emit_plugin_data_changed(app: &AppHandle, plugin_id: &str) {
+    if let Err(error) = app.emit("plugin-data-changed", plugin_id) {
+        tracing::warn!(plugin_id, %error, "failed to emit plugin refresh event");
+    }
 }
 
 fn read_plugin_settings(data_dir: &Path) -> Result<Value, String> {
@@ -3182,35 +3191,44 @@ impl PluginRuntimeSupervisor {
             PluginRpcError::NotRunning(format!("plugin runtime was not available: {plugin_id}"))
         })?;
         let result = process.request_with_timeout(method, params, timeout).await;
-        let Err(error) = result else {
-            return result;
-        };
-        if !error.is_fatal() {
-            return Err(error);
+        if let Err(error) = &result {
+            if error.is_fatal() {
+                self.retire_broken_process(plugin_id, process, error).await;
+            }
         }
+        result
+    }
 
+    /// Stops a runtime whose stdout can no longer be trusted, such as one holding the
+    /// answer to a timed-out request, before another request reads that answer.
+    async fn retire_broken_process(
+        &self,
+        plugin_id: &str,
+        process: Arc<RuntimeProcess>,
+        error: &PluginRpcError,
+    ) {
         let _lifecycle = self.lifecycle.lock().await;
         let owns_process = {
             let mut active_processes = self.processes.lock().await;
             remove_current_process(&mut active_processes, plugin_id, &process)
         };
-        if owns_process {
-            if let Err(stop_error) = stop_process(process).await {
-                tracing::warn!(plugin_id, %stop_error, "failed to stop timed-out plugin runtime");
-            }
-            if let Err(state_error) = self
-                .update_state(
-                    plugin_id,
-                    true,
-                    PluginRuntimeState::Error,
-                    Some(error.to_string()),
-                )
-                .await
-            {
-                tracing::warn!(plugin_id, %state_error, "failed to record timed-out plugin runtime");
-            }
+        if !owns_process {
+            return;
         }
-        Err(error)
+        if let Err(stop_error) = stop_process(process).await {
+            tracing::warn!(plugin_id, %stop_error, "failed to stop broken plugin runtime");
+        }
+        if let Err(state_error) = self
+            .update_state(
+                plugin_id,
+                true,
+                PluginRuntimeState::Error,
+                Some(error.to_string()),
+            )
+            .await
+        {
+            tracing::warn!(plugin_id, %state_error, "failed to record broken plugin runtime");
+        }
     }
 
     /// Deliver a committed lifecycle batch in the background. Delivery failures
@@ -3394,9 +3412,11 @@ impl PluginRuntimeSupervisor {
                 let plugin_id: Arc<str> = inventory.id.as_str().into();
                 let name: Arc<str> = tool.name.as_str().into();
                 let timeout = tool.timeout();
+                let effect = tool.effect(&inventory.id)?;
                 crate::plugin_tools::plugin_tool_def(
                     &inventory.id,
                     tool,
+                    effect,
                     move |caller, arguments| {
                         let (supervisor, plugin_id, name) =
                             (supervisor.clone(), plugin_id.clone(), name.clone());
@@ -3404,7 +3424,9 @@ impl PluginRuntimeSupervisor {
                             match supervisor.upgrade() {
                                 Some(supervisor) => {
                                     supervisor
-                                        .call_tool(&plugin_id, &name, timeout, arguments, caller)
+                                        .call_tool(
+                                            &plugin_id, &name, timeout, effect, arguments, caller,
+                                        )
                                         .await
                                 }
                                 None => planeai::mcp::tools::ToolOutput::error(
@@ -3426,6 +3448,7 @@ impl PluginRuntimeSupervisor {
         plugin_id: &str,
         tool: &str,
         timeout: Duration,
+        effect: planeai_core::mcp::Effect,
         arguments: serde_json::Map<String, Value>,
         caller: planeai_core::mcp::McpCaller,
     ) -> planeai::mcp::tools::ToolOutput {
@@ -3457,6 +3480,9 @@ impl PluginRuntimeSupervisor {
         };
         if let Err(error) = &result {
             tracing::warn!(plugin_id, tool, %error, "plugin tool.call failed");
+        }
+        if crate::plugin_tools::refreshes_views(effect, &result) {
+            emit_plugin_data_changed(&self.app, plugin_id);
         }
         crate::plugin_tools::tool_output(plugin_id, timeout, result)
     }
@@ -3982,6 +4008,7 @@ impl PluginRuntimeSupervisor {
         let wake = Arc::new(Notify::new());
         let worker_wake = wake.clone();
         let app = self.app.clone();
+        let supervisor = self.this.clone();
         let data_dir = process.data_dir.clone();
         let worker_plugin_id = plugin_id.clone();
         let task = tokio::spawn(async move {
@@ -4007,12 +4034,25 @@ impl PluginRuntimeSupervisor {
                                 }
                             }
                             if changed_data {
-                                if let Err(error) = app.emit("plugin-data-changed", plugin_id.clone()) {
-                                    tracing::warn!(plugin_id = %plugin_id, %error, "failed to emit plugin refresh event");
-                                }
+                                emit_plugin_data_changed(&app, &plugin_id);
                             }
                         }
-                        Err(error) => tracing::warn!(plugin_id = %plugin_id, generation, method = %service.method, %error, "plugin background service failed"),
+                        Err(error) => {
+                            tracing::warn!(plugin_id = %plugin_id, generation, method = %service.method, %error, "plugin background service failed");
+                            // A broken lane is retired by the request that broke it; disabling
+                            // the plugin waits for this worker while holding the lifecycle lock.
+                            if process.requests.is_broken() {
+                                if error.is_fatal() {
+                                    if let Some(supervisor) = supervisor.upgrade() {
+                                        tokio::select! {
+                                            _ = worker_cancel.cancelled() => {}
+                                            _ = supervisor.retire_broken_process(&plugin_id, process.clone(), &error) => {}
+                                        }
+                                    }
+                                }
+                                return;
+                            }
+                        }
                     }
                 }
                 let interval = match read_plugin_settings(&data_dir).ok().and_then(|settings| {
@@ -4232,7 +4272,7 @@ async fn spawn_runtime(
         child: AsyncMutex::new(child),
         stdin: AsyncMutex::new(stdin),
         frames: AsyncMutex::new(frames),
-        request_lock: AsyncMutex::new(()),
+        requests: Default::default(),
         next_request_id: AtomicU64::new(0),
         plugin_id: plugin_id.to_string(),
         data_dir,
