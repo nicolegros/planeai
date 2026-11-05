@@ -218,45 +218,52 @@ impl NotifyState {
     }
 
     /// Decides a due turn end from the background subagents its transcript still shows running
-    /// (`None` while the transcript has not closed the turn). Returns whether it settles now.
-    pub fn resolve_turn_end(&mut self, session_id: &str, pending: Option<usize>) -> bool {
+    /// (`None` while the transcript has not closed the turn).
+    pub fn resolve_turn_end(&mut self, session_id: &str, pending: Option<usize>) -> TurnEnd {
         if self.get_state(session_id) != Some(AgentState::Idle) {
             self.release_hold(session_id);
-            return false;
+            return TurnEnd::Undecided;
         }
         let held = self.held.contains_key(session_id);
         // Forgotten while its transcript was read: its agent exited.
         if !held && !self.idle_since.contains_key(session_id) {
-            return false;
+            return TurnEnd::Undecided;
         }
         match pending {
             Some(running) if running > 0 => {
                 self.idle_since.remove(session_id);
                 self.held_ended.remove(session_id);
-                if !held {
-                    let now = self.stamp(session_id);
-                    self.held.insert(session_id.to_string(), now);
+                if held {
+                    return TurnEnd::Undecided;
                 }
-                return false;
+                let now = self.stamp(session_id);
+                self.held.insert(session_id.to_string(), now);
+                return TurnEnd::Held;
             }
-            None if held => return false,
+            None if held => return TurnEnd::Undecided,
             // A subagent's last notice lands just before the turn it starts: a second recheck
             // lets that turn's busy signal end the hold first.
-            Some(_) if held && self.held_ended.insert(session_id.to_string()) => return false,
+            Some(_) if held && self.held_ended.insert(session_id.to_string()) => {
+                return TurnEnd::Undecided
+            }
             None => {
                 let closing = self
                     .idle_since
                     .get(session_id)
                     .is_some_and(|&since| self.elapsed_since(session_id, since) < TURN_CLOSE_GRACE);
                 if closing && self.transcripts.contains_key(session_id) {
-                    return false;
+                    return TurnEnd::Undecided;
                 }
             }
             Some(_) => {}
         }
         self.idle_since.remove(session_id);
         self.release_hold(session_id);
-        self.notified.insert(session_id.to_string())
+        if self.notified.insert(session_id.to_string()) {
+            TurnEnd::Settled
+        } else {
+            TurnEnd::Undecided
+        }
     }
 
     /// The transcripts of turns still being decided: debouncing or held.
@@ -367,7 +374,7 @@ impl NotifyState {
     #[cfg(any(test, feature = "test-support"))]
     pub fn check_debounce(&mut self, session_id: &str) -> bool {
         let due = self.turn_ends_due().iter().any(|(id, _)| id == session_id);
-        due && self.resolve_turn_end(session_id, None)
+        due && self.resolve_turn_end(session_id, None) == TurnEnd::Settled
     }
 
     pub fn get_state(&self, session_id: &str) -> Option<AgentState> {
@@ -413,6 +420,17 @@ impl NotifyState {
 }
 
 pub type SharedNotifyState = Arc<Mutex<NotifyState>>;
+
+/// What deciding a due turn end did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnEnd {
+    /// The turn ended and is worth notifying.
+    Settled,
+    /// The turn ended while background subagents run, so it is held from now on.
+    Held,
+    /// Nothing to report: still held, still closing, already notified, or no longer due.
+    Undecided,
+}
 
 /// Parse a JSONL line from the socket. Falls back to treating the line as a bare session ID.
 pub fn parse_notify_message(line: &str) -> NotifyMessage {
@@ -634,6 +652,15 @@ mod tests {
         state
     }
 
+    /// A stopped session whose turn ended with a background subagent running.
+    fn held() -> NotifyState {
+        let mut state = stopped(true);
+        state.advance_time("s1", DEBOUNCE_THRESHOLD);
+        due(&mut state);
+        assert_eq!(state.resolve_turn_end("s1", Some(1)), TurnEnd::Held);
+        state
+    }
+
     fn due(state: &mut NotifyState) -> Vec<String> {
         state
             .turn_ends_due()
@@ -643,61 +670,62 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_with_background_subagents_running_is_held_until_they_finish() {
+    fn a_turn_with_background_subagents_running_is_held_and_rechecked() {
         let mut state = stopped(true);
         state.advance_time("s1", DEBOUNCE_THRESHOLD);
         assert_eq!(
             state.turn_ends_due(),
             vec![("s1".to_string(), Some("/t.jsonl".into()))]
         );
-        assert!(!state.resolve_turn_end("s1", Some(1)));
+        assert_eq!(state.resolve_turn_end("s1", Some(1)), TurnEnd::Held);
         assert!(state.is_held("s1"));
 
         assert!(due(&mut state).is_empty(), "rechecks wait {HELD_RECHECK:?}");
         state.advance_time("s1", HELD_RECHECK);
         assert_eq!(due(&mut state), ["s1"]);
-        assert!(!state.resolve_turn_end("s1", Some(1)));
-        assert!(
-            !state.resolve_turn_end("s1", None),
+        assert_eq!(state.resolve_turn_end("s1", Some(1)), TurnEnd::Undecided);
+        assert_eq!(
+            state.resolve_turn_end("s1", None),
+            TurnEnd::Undecided,
             "a held turn keeps holding while the transcript is unreadable"
         );
+        assert!(state.is_held("s1"));
+    }
 
-        state.advance_time("s1", HELD_RECHECK);
-        assert_eq!(due(&mut state), ["s1"]);
-        assert!(
-            !state.resolve_turn_end("s1", Some(0)),
-            "the turn a last notice starts gets a recheck to report busy"
+    /// A subagent's last notice lands just before the turn it starts, whose busy signal must
+    /// win.
+    #[test]
+    fn a_held_turn_settles_after_two_rechecks_find_nothing_running() {
+        let mut state = held();
+        assert_eq!(state.resolve_turn_end("s1", Some(0)), TurnEnd::Undecided);
+        assert_eq!(state.resolve_turn_end("s1", Some(1)), TurnEnd::Undecided);
+        assert_eq!(
+            state.resolve_turn_end("s1", Some(0)),
+            TurnEnd::Undecided,
+            "a count back above zero starts over"
         );
-        state.advance_time("s1", HELD_RECHECK);
-        assert_eq!(due(&mut state), ["s1"]);
-        assert!(state.resolve_turn_end("s1", Some(0)));
+        assert_eq!(state.resolve_turn_end("s1", Some(0)), TurnEnd::Settled);
         assert!(!state.is_held("s1"));
         assert!(due(&mut state).is_empty());
+    }
 
-        let mut state = stopped(true);
-        assert_eq!(
-            state.deciding_transcripts(),
-            [std::path::PathBuf::from("/t.jsonl")]
-        );
-        state.advance_time("s1", DEBOUNCE_THRESHOLD);
-        due(&mut state);
-        state.resolve_turn_end("s1", Some(1));
+    #[test]
+    fn an_exited_agents_turn_is_forgotten_even_by_a_read_in_flight() {
+        let mut state = held();
         assert_eq!(
             state.deciding_transcripts(),
             [std::path::PathBuf::from("/t.jsonl")]
         );
         state.forget_turn("s1");
         assert!(state.deciding_transcripts().is_empty());
-        assert!(
-            !state.resolve_turn_end("s1", Some(1)),
+        assert_eq!(
+            state.resolve_turn_end("s1", Some(1)),
+            TurnEnd::Undecided,
             "a read that ends after the exit never brings the turn back"
         );
         state.advance_time("s1", HELD_RECHECK);
         assert!(!state.is_held("s1"));
-        assert!(
-            due(&mut state).is_empty(),
-            "an exited agent's turn is never rechecked"
-        );
+        assert!(due(&mut state).is_empty());
     }
 
     #[test]
@@ -705,40 +733,36 @@ mod tests {
         let mut state = stopped(true);
         state.advance_time("s1", DEBOUNCE_THRESHOLD);
         assert_eq!(due(&mut state), ["s1"]);
-        assert!(!state.resolve_turn_end("s1", None));
+        assert_eq!(state.resolve_turn_end("s1", None), TurnEnd::Undecided);
         state.advance_time("s1", TURN_CLOSE_GRACE);
         assert_eq!(due(&mut state), ["s1"]);
-        assert!(state.resolve_turn_end("s1", None));
+        assert_eq!(state.resolve_turn_end("s1", None), TurnEnd::Settled);
 
         let mut state = stopped(false);
         state.advance_time("s1", DEBOUNCE_THRESHOLD);
         assert_eq!(due(&mut state), ["s1"]);
-        assert!(
+        assert_eq!(
             state.resolve_turn_end("s1", None),
+            TurnEnd::Settled,
             "without a transcript the debounce alone decides"
         );
     }
 
     #[test]
     fn a_new_turn_ends_a_hold_and_a_request_for_the_user_surfaces_through_it() {
-        let mut state = stopped(true);
-        state.advance_time("s1", DEBOUNCE_THRESHOLD);
-        due(&mut state);
-        state.resolve_turn_end("s1", Some(1));
+        let mut state = held();
         assert!(
             state.notify_stop_immediate("s1"),
             "a permission prompt notifies"
         );
         assert!(!state.is_held("s1"));
 
-        let mut state = stopped(true);
-        state.advance_time("s1", DEBOUNCE_THRESHOLD);
-        due(&mut state);
-        state.resolve_turn_end("s1", Some(1));
+        let mut state = held();
         assert!(state.notify_busy("s1"));
         assert!(!state.is_held("s1"));
-        assert!(
-            !state.resolve_turn_end("s1", Some(0)),
+        assert_eq!(
+            state.resolve_turn_end("s1", Some(0)),
+            TurnEnd::Undecided,
             "a busy session never settles"
         );
     }
