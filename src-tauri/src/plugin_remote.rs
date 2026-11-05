@@ -27,14 +27,14 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const DOWNLOAD_LIMIT_BYTES: u64 = 100 * 1024 * 1024;
 const EXTRACT_LIMIT_BYTES: u64 = 500 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
-pub const EXPIRED_STAGING: &str = "This install review expired. Start again.";
+pub(crate) const EXPIRED_STAGING: &str = "This install review expired. Start again.";
 
 /// A GitHub `owner/name`, validated at the command boundary so commands never take URLs.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RepoFullName(String);
+pub(crate) struct RepoFullName(String);
 
 impl RepoFullName {
-    pub fn parse(value: &str) -> Result<Self, String> {
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
         let invalid = || format!("invalid GitHub repository name: {value}");
         let (owner, name) = value.split_once('/').ok_or_else(invalid)?;
         let owner_ok =
@@ -51,18 +51,18 @@ impl RepoFullName {
         Ok(Self(value.to_string()))
     }
 
-    pub fn as_str(&self) -> &str {
+    fn as_str(&self) -> &str {
         &self.0
     }
 
-    pub fn name(&self) -> &str {
+    fn name(&self) -> &str {
         self.0.split_once('/').map(|(_, name)| name).unwrap_or("")
     }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum DiscoveryCardState {
+pub(crate) enum DiscoveryCardState {
     Unavailable {
         reason: String,
     },
@@ -88,14 +88,14 @@ pub enum DiscoveryCardState {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum PackageIntegrity {
+pub(crate) enum PackageIntegrity {
     Verified { sha256: String },
     Unverified { sha256: String },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum StagedReplacement {
+pub(crate) enum StagedReplacement {
     None,
     Repo {
         installed_version: String,
@@ -107,20 +107,20 @@ pub enum StagedReplacement {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct VersionMismatch {
-    pub release_tag: String,
-    pub manifest_version: String,
+pub(crate) struct VersionMismatch {
+    pub(crate) release_tag: String,
+    pub(crate) manifest_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct StagedManifest {
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    pub host_api_version: String,
-    pub capabilities: Vec<PluginHostCapability>,
-    pub ui_contributions: Vec<PluginUiContribution>,
-    pub tools: Vec<PluginTool>,
+pub(crate) struct StagedManifest {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) version: String,
+    pub(crate) host_api_version: String,
+    pub(crate) capabilities: Vec<PluginHostCapability>,
+    pub(crate) ui_contributions: Vec<PluginUiContribution>,
+    pub(crate) tools: Vec<PluginTool>,
 }
 
 impl From<&PluginManifest> for StagedManifest {
@@ -139,15 +139,15 @@ impl From<&PluginManifest> for StagedManifest {
 
 /// What the user reviews before a staged package is committed.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct StagedPluginInstall {
-    pub staging_id: String,
-    pub repo: String,
-    pub source_url: String,
-    pub release_tag: Option<String>,
-    pub integrity: PackageIntegrity,
-    pub manifest: StagedManifest,
-    pub replaces: StagedReplacement,
-    pub version_mismatch: Option<VersionMismatch>,
+pub(crate) struct StagedPluginInstall {
+    pub(crate) staging_id: String,
+    pub(crate) repo: String,
+    pub(crate) source_url: String,
+    pub(crate) release_tag: Option<String>,
+    pub(crate) integrity: PackageIntegrity,
+    pub(crate) manifest: StagedManifest,
+    pub(crate) replaces: StagedReplacement,
+    pub(crate) version_mismatch: Option<VersionMismatch>,
 }
 
 /// The default-branch manifest, read leniently because HEAD may target a newer host.
@@ -186,7 +186,7 @@ impl ReleaseAsset {
 
 /// Everything resolution learned about one Discovery repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteRepo {
+pub(crate) struct RemoteRepo {
     repo: RepoFullName,
     head: Option<HeadManifest>,
     latest_release: Option<Release>,
@@ -194,22 +194,22 @@ pub struct RemoteRepo {
 
 /// The one archive to download for this platform.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PackageSource {
-    pub url: String,
+pub(crate) struct PackageSource {
+    url: String,
     /// Set when the archive is an asset of the latest release.
-    pub release_tag: Option<String>,
-    pub expected_sha256: Option<String>,
-    pub format: ArchiveFormat,
+    release_tag: Option<String>,
+    expected_sha256: Option<String>,
+    format: ArchiveFormat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArchiveFormat {
+pub(crate) enum ArchiveFormat {
     TarGz,
     Zip,
 }
 
 impl ArchiveFormat {
-    pub fn from_url(url: &str) -> Result<Self, String> {
+    fn from_url(url: &str) -> Result<Self, String> {
         let path = url.split(['?', '#']).next().unwrap_or(url);
         if path.ends_with(".tar.gz") || path.ends_with(".tgz") {
             Ok(Self::TarGz)
@@ -222,7 +222,7 @@ impl ArchiveFormat {
         }
     }
 
-    pub fn file_name(self) -> &'static str {
+    fn file_name(self) -> &'static str {
         match self {
             Self::TarGz => "package.tar.gz",
             Self::Zip => "package.zip",
@@ -272,7 +272,7 @@ impl RemoteRepo {
         })
     }
 
-    pub fn select_source(&self, platform: &str) -> Result<PackageSource, String> {
+    pub(crate) fn select_source(&self, platform: &str) -> Result<PackageSource, String> {
         if let Some(url) = self
             .head
             .as_ref()
@@ -336,7 +336,11 @@ impl RemoteRepo {
             })
     }
 
-    pub fn card_state(&self, inventory: &[PluginInventory], platform: &str) -> DiscoveryCardState {
+    pub(crate) fn card_state(
+        &self,
+        inventory: &[PluginInventory],
+        platform: &str,
+    ) -> DiscoveryCardState {
         let latest_version = self.latest_version();
         let latest_label = latest_version.as_ref().map(ToString::to_string);
         let Some(installed) = self.installed(inventory) else {
@@ -381,7 +385,7 @@ impl RemoteRepo {
 }
 
 /// What a staged package replaces, from the installed plugin with the staged manifest's id.
-pub fn replacement(
+fn replacement(
     inventory: &[PluginInventory],
     manifest_id: &str,
 ) -> Result<StagedReplacement, String> {
@@ -400,10 +404,7 @@ pub fn replacement(
     })
 }
 
-pub fn version_mismatch(
-    release_tag: Option<&str>,
-    manifest_version: &str,
-) -> Option<VersionMismatch> {
+fn version_mismatch(release_tag: Option<&str>, manifest_version: &str) -> Option<VersionMismatch> {
     let tag = release_tag?;
     let tag_version = tag.strip_prefix('v').unwrap_or(tag);
     (tag_version != manifest_version).then(|| VersionMismatch {
@@ -470,7 +471,7 @@ async fn gh_api(args: &[&str]) -> Result<Option<Vec<u8>>, String> {
     }
 }
 
-pub async fn fetch_remote_repo(repo: RepoFullName) -> Result<RemoteRepo, String> {
+pub(crate) async fn fetch_remote_repo(repo: RepoFullName) -> Result<RemoteRepo, String> {
     let manifest_path = format!("repos/{}/contents/planeai-plugin.json", repo.as_str());
     let release_path = format!("repos/{}/releases/latest", repo.as_str());
     let manifest_args = [
@@ -503,7 +504,7 @@ pub async fn fetch_remote_repo(repo: RepoFullName) -> Result<RemoteRepo, String>
 
 // ─── Download ─────────────────────────────────────────────────────────────────
 
-pub struct Downloader {
+pub(crate) struct Downloader {
     client: reqwest::Client,
     /// Production refuses plain http before any request; tests download from a local http server.
     https_only: bool,
@@ -543,7 +544,7 @@ fn download_failed(error: reqwest::Error) -> String {
 }
 
 impl Downloader {
-    pub fn new() -> Result<Self, String> {
+    pub(crate) fn new() -> Result<Self, String> {
         let client = client_builder()
             .https_only(true)
             .build()
@@ -556,7 +557,7 @@ impl Downloader {
 
     /// Plain-http client for a local test server; production stays https-only.
     #[cfg(test)]
-    pub fn insecure_for_tests() -> Self {
+    fn insecure_for_tests() -> Self {
         Self {
             client: client_builder().build().unwrap(),
             https_only: false,
@@ -564,7 +565,7 @@ impl Downloader {
     }
 
     /// Streams `url` into `destination`, returning the archive's SHA-256.
-    pub async fn download(&self, url: &str, destination: &Path) -> Result<String, String> {
+    async fn download(&self, url: &str, destination: &Path) -> Result<String, String> {
         self.download_within(url, destination, DOWNLOAD_LIMIT_BYTES)
             .await
     }
@@ -621,7 +622,7 @@ impl Downloader {
 }
 
 /// Fails closed when the downloaded bytes differ from the release asset digest.
-pub fn check_integrity(sha256: String, expected: Option<&str>) -> Result<PackageIntegrity, String> {
+fn check_integrity(sha256: String, expected: Option<&str>) -> Result<PackageIntegrity, String> {
     match expected {
         Some(expected) if expected.eq_ignore_ascii_case(&sha256) => {
             Ok(PackageIntegrity::Verified { sha256 })
@@ -667,7 +668,7 @@ fn entry_target(destination: &Path, raw: &str, is_dir: bool) -> Result<Option<Pa
 }
 
 /// Extracts the archive under `destination` and returns its single top-level package directory.
-pub fn extract_archive(
+fn extract_archive(
     archive: &Path,
     format: ArchiveFormat,
     destination: &Path,
@@ -890,20 +891,20 @@ fn package_root(destination: &Path) -> Result<PathBuf, String> {
 
 /// A downloaded, verified and extracted package waiting for the user's decision.
 #[derive(Debug)]
-pub struct StagedPackage {
-    pub dir: PathBuf,
-    pub package_root: PathBuf,
-    pub origin: RemoteOrigin,
+pub(crate) struct StagedPackage {
+    pub(crate) dir: PathBuf,
+    pub(crate) package_root: PathBuf,
+    pub(crate) origin: RemoteOrigin,
 }
 
 #[derive(Debug)]
-pub struct StagingStore {
+pub(crate) struct StagingStore {
     root: PathBuf,
     entries: Mutex<HashMap<String, StagedPackage>>,
 }
 
 impl StagingStore {
-    pub fn new(app_data_dir: &Path) -> Self {
+    pub(crate) fn new(app_data_dir: &Path) -> Self {
         Self {
             root: app_data_dir.join("plugins").join("staging"),
             entries: Mutex::new(HashMap::new()),
@@ -911,7 +912,7 @@ impl StagingStore {
     }
 
     /// Wipes every staged package; a crash mid-stage leaves nothing behind.
-    pub fn reset(&self) -> Result<(), String> {
+    pub(crate) fn reset(&self) -> Result<(), String> {
         if self.root.exists() {
             fs::remove_dir_all(&self.root)
                 .map_err(|error| format!("failed to clear plugin staging: {error}"))?;
@@ -920,7 +921,7 @@ impl StagingStore {
         Ok(())
     }
 
-    pub fn create_dir(&self) -> Result<(String, PathBuf), String> {
+    pub(crate) fn create_dir(&self) -> Result<(String, PathBuf), String> {
         let id = Uuid::new_v4().to_string();
         let dir = self.root.join(&id);
         fs::create_dir_all(&dir)
@@ -928,7 +929,7 @@ impl StagingStore {
         Ok((id, dir))
     }
 
-    pub fn insert(&self, id: String, staged: StagedPackage) -> Result<(), String> {
+    pub(crate) fn insert(&self, id: String, staged: StagedPackage) -> Result<(), String> {
         self.entries
             .lock()
             .map_err(|e| e.to_string())?
@@ -936,12 +937,12 @@ impl StagingStore {
         Ok(())
     }
 
-    pub fn take(&self, id: &str) -> Result<Option<StagedPackage>, String> {
+    pub(crate) fn take(&self, id: &str) -> Result<Option<StagedPackage>, String> {
         Ok(self.entries.lock().map_err(|e| e.to_string())?.remove(id))
     }
 }
 
-pub fn remove_dir(dir: &Path) -> Result<(), String> {
+pub(crate) fn remove_dir(dir: &Path) -> Result<(), String> {
     if dir.exists() {
         fs::remove_dir_all(dir)
             .map_err(|error| format!("failed to remove plugin staging directory: {error}"))?;
@@ -951,7 +952,7 @@ pub fn remove_dir(dir: &Path) -> Result<(), String> {
 
 /// Downloads, verifies, extracts and inspects `source` under `dir`: the package to keep in the
 /// staging store and the preview the user reviews before committing it.
-pub async fn stage_package(
+pub(crate) async fn stage_package(
     downloader: &Downloader,
     repo: &RepoFullName,
     source: &PackageSource,
