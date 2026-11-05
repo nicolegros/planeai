@@ -21,6 +21,7 @@
   import SnoozeCustomDialog from "./components/SnoozeCustomDialog.svelte";
   import ChoiceDialog from "./components/ChoiceDialog.svelte";
   import { newTaskProjectPath } from "./lib/new-task-project";
+  import { selectorChordOutcome } from "./lib/new-tab-selector";
   import { startSnoozeClock } from "./lib/snooze-clock.svelte";
   import ContextMenu from "./components/ui/ContextMenu.svelte";
   import { getSidebarModel, getVisibleNavigationOrder, setOpenTaskWorkspace } from "./lib/sidebar-model-store.svelte";
@@ -780,7 +781,7 @@
 
   function openNewTaskForm(): void {
     // The sidebar stays clickable under forms; reopening TaskForm would turn an edit into a create.
-    if (showTaskForm || showSessionForm || showProjectForm) return;
+    if (keyboardModalOpen) return;
     if (projects.length === 0) { openAddProject(); return; }
     taskWorkspaceToEdit = null;
     showTaskForm = true;
@@ -1014,14 +1015,13 @@
     const cleanup = installKeyboardRouter(
       (action) => {
         // Any other chord dismisses the selector, so it never sits under another overlay or keeps a stale pane.
-        if (newTabTarget && action.type !== "new_tab") {
-          newTabTarget = null;
-          // Closing is how users dismiss the frontmost sheet; it must not also close the tab behind it.
-          if (action.type === "close_tab" || action.type === "close_split") return;
+        if (newTabTarget) {
+          const outcome = selectorChordOutcome(action.type);
+          if (outcome !== "keep") newTabTarget = null;
+          if (outcome === "dismiss-only") return;
         }
-        if (action.type === "new_task") {
-          if (!keyboardModalOpen) openNewTaskForm();
-        } else if (action.type === "new_project") { openAddProject(); }
+        if (action.type === "new_task") { openNewTaskForm(); }
+        else if (action.type === "new_project") { openAddProject(); }
         else if (action.type === "toggle_sidebar") { sidebarVisible = !sidebarVisible; if (sidebarVisible) focusSidebar(); else focusTerminal(); }
         else if (action.type === "jump_to_session") { jumpToSidebarRow(action.index); }
         else if (action.type === "tab_switch") {

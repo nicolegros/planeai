@@ -595,7 +595,7 @@
                   value="create task"
                   keywords={["task", "new", "add", "create", "ticket"]}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
-                  onSelect={() => { onCreateTask(); close(); }}
+                  onSelect={() => { close(); onCreateTask(); }}
                 >
                   Create task…
                 </Command.Item>
