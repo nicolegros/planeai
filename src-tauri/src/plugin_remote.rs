@@ -607,23 +607,35 @@ pub fn check_integrity(sha256: String, expected: Option<&str>) -> Result<Package
 
 // ─── Extraction ───────────────────────────────────────────────────────────────
 
-/// A relative archive entry path with no absolute, root, prefix, or parent components.
-fn safe_entry_path(raw: &str) -> Result<PathBuf, String> {
-    let escapes = || format!("plugin archive entry escapes the package: {raw}");
+fn escapes(raw: &str) -> String {
+    format!("plugin archive entry escapes the package: {raw}")
+}
+
+/// The entry's relative path, or `None` when it names the archive root itself (`.` or `./`).
+fn safe_entry_path(raw: &str) -> Result<Option<PathBuf>, String> {
     let mut safe = PathBuf::new();
     for component in Path::new(raw).components() {
         match component {
             Component::Normal(part) => safe.push(part),
             Component::CurDir => {}
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(escapes())
+                return Err(escapes(raw))
             }
         }
     }
-    if raw.starts_with('/') || raw.starts_with('\\') || safe.as_os_str().is_empty() {
-        return Err(escapes());
+    if raw.starts_with('/') || raw.starts_with('\\') {
+        return Err(escapes(raw));
     }
-    Ok(safe)
+    Ok((!safe.as_os_str().is_empty()).then_some(safe))
+}
+
+/// Where an entry lands under `destination`; `None` for the root directory entry, which needs nothing.
+fn entry_target(destination: &Path, raw: &str, is_dir: bool) -> Result<Option<PathBuf>, String> {
+    match safe_entry_path(raw)? {
+        Some(relative) => Ok(Some(destination.join(relative))),
+        None if is_dir => Ok(None),
+        None => Err(escapes(raw)),
+    }
 }
 
 /// Extracts the archive under `destination` and returns its single top-level package directory.
@@ -702,7 +714,9 @@ fn extract_tar_gz(
                 "plugin archive contains an unsupported entry: {raw}"
             ));
         }
-        let target = destination.join(safe_entry_path(&raw)?);
+        let Some(target) = entry_target(destination, &raw, kind.is_dir())? else {
+            continue;
+        };
         let entry_error = |error: std::io::Error| {
             format!("failed to extract plugin archive entry {raw}: {error}")
         };
@@ -741,7 +755,9 @@ fn extract_zip(
         if entry.is_symlink() {
             return Err(format!("plugin archive contains a link: {raw}"));
         }
-        let target = destination.join(safe_entry_path(&raw)?);
+        let Some(target) = entry_target(destination, &raw, entry.is_dir())? else {
+            continue;
+        };
         let entry_error = |error: std::io::Error| {
             format!("failed to extract plugin archive entry {raw}: {error}")
         };
@@ -1398,13 +1414,16 @@ mod tests {
     fn entry_paths_must_stay_inside_the_package() {
         assert_eq!(
             safe_entry_path("acme/bin/plugin").unwrap(),
-            PathBuf::from("acme/bin/plugin")
+            Some(PathBuf::from("acme/bin/plugin"))
         );
         assert_eq!(
             safe_entry_path("./acme/planeai-plugin.json").unwrap(),
-            PathBuf::from("acme/planeai-plugin.json")
+            Some(PathBuf::from("acme/planeai-plugin.json"))
         );
-        for raw in ["../x", "acme/../../x", "/etc/passwd", "", "."] {
+        for root in [".", "./", ""] {
+            assert_eq!(safe_entry_path(root).unwrap(), None, "{root:?}");
+        }
+        for raw in ["../x", "acme/../../x", "/etc/passwd"] {
             assert_eq!(
                 safe_entry_path(raw).unwrap_err(),
                 format!("plugin archive entry escapes the package: {raw}"),
@@ -1547,6 +1566,62 @@ mod tests {
                 0o755
             );
         }
+    }
+
+    /// `tar -czf x.tar.gz -C dist .` and `zip -r x.zip .` prefix every entry with `./` and list the root itself.
+    #[test]
+    fn extracts_archives_whose_entries_start_with_dot_slash() {
+        let temp = TempDir::new().unwrap();
+        let manifest = manifest_json("acme").into_bytes();
+        let archive = write_archive(
+            &temp,
+            "dot.tar.gz",
+            &tar_gz(&[
+                ("./", TarEntry::Dir),
+                ("./acme/", TarEntry::Dir),
+                (
+                    "./acme/planeai-plugin.json",
+                    TarEntry::File(manifest.clone(), 0o644),
+                ),
+                (
+                    "./acme/bin/plugin",
+                    TarEntry::File(b"#!/bin/sh\n".to_vec(), 0o755),
+                ),
+            ]),
+        );
+        let root =
+            extract_archive(&archive, ArchiveFormat::TarGz, &temp.path().join("tar")).unwrap();
+        assert_eq!(root, temp.path().join("tar").join("acme"));
+        assert_eq!(fs::read(root.join("bin/plugin")).unwrap(), b"#!/bin/sh\n");
+
+        let archive = write_archive(
+            &temp,
+            "dot.zip",
+            &zip_bytes(&[
+                ("./", None, 0o755),
+                ("./acme/", None, 0o755),
+                ("./acme/planeai-plugin.json", Some(&manifest), 0o644),
+                ("./acme/bin/plugin", Some(b"#!/bin/sh\n"), 0o755),
+            ]),
+        );
+        let root = extract_archive(&archive, ArchiveFormat::Zip, &temp.path().join("zip")).unwrap();
+        assert_eq!(root, temp.path().join("zip").join("acme"));
+        assert_eq!(fs::read(root.join("bin/plugin")).unwrap(), b"#!/bin/sh\n");
+
+        let nameless = write_archive(
+            &temp,
+            "nameless.tar.gz",
+            &tar_gz(&[("./", TarEntry::File(b"x".to_vec(), 0o644))]),
+        );
+        assert_eq!(
+            extract_archive(
+                &nameless,
+                ArchiveFormat::TarGz,
+                &temp.path().join("nameless")
+            )
+            .unwrap_err(),
+            "plugin archive entry escapes the package: ./"
+        );
     }
 
     #[test]
