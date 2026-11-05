@@ -15,6 +15,7 @@ use planeai_core::agent_hooks::{
 };
 pub use planeai_core::notify::{
     parse_notify_message, AgentState, NotifyEvent, NotifyMessage, NotifyState, SharedNotifyState,
+    TurnEnd,
 };
 
 const SILENCE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
@@ -413,11 +414,12 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
         {
             let mut s = state.lock().unwrap();
             for (id, running) in pending {
-                let held = s.is_held(&id);
-                if s.resolve_turn_end(&id, running) {
-                    to_notify.push(id);
-                } else if !held && s.is_held(&id) {
-                    tracing::info!(session_id = %id, running, "turn ended with background subagents running; holding");
+                match s.resolve_turn_end(&id, running) {
+                    TurnEnd::Settled => to_notify.push(id),
+                    TurnEnd::Held => {
+                        tracing::info!(session_id = %id, running, "turn ended with background subagents running; holding")
+                    }
+                    TurnEnd::Undecided => {}
                 }
             }
             transcripts.keep_only(s.deciding_transcripts().iter().map(|p| p.as_path()));
