@@ -16,8 +16,8 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::plugins::{
-    PluginHostCapability, PluginInventory, PluginManifest, PluginSourceKind, PluginTool,
-    PluginUiContribution, RemoteOrigin,
+    null_as_default, PluginHostCapability, PluginInventory, PluginManifest, PluginSourceKind,
+    PluginTool, PluginUiContribution, RemoteOrigin,
 };
 
 const GH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -153,7 +153,7 @@ pub struct StagedPluginInstall {
 struct HeadManifest {
     #[serde(default)]
     id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     downloads: BTreeMap<String, String>,
 }
 
@@ -1008,6 +1008,33 @@ mod tests {
             }
             .describe("GitHub plugin discovery"),
             "GitHub plugin discovery failed: HTTP 403: rate limited"
+        );
+    }
+
+    #[test]
+    fn head_manifests_read_leniently_and_take_null_downloads_as_none() {
+        assert_eq!(
+            serde_json::from_str::<HeadManifest>(
+                r#"{"id":"acme","downloads":null,"version":"0.0.0","future_field":[1]}"#
+            )
+            .unwrap(),
+            HeadManifest {
+                id: Some("acme".to_string()),
+                downloads: BTreeMap::new(),
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<HeadManifest>(
+                r#"{"downloads":{"macos-arm64":"https://acme.dev/a.tar.gz"}}"#
+            )
+            .unwrap(),
+            HeadManifest {
+                id: None,
+                downloads: BTreeMap::from([(
+                    "macos-arm64".to_string(),
+                    "https://acme.dev/a.tar.gz".to_string()
+                )]),
+            }
         );
     }
 

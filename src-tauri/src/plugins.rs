@@ -67,10 +67,19 @@ pub struct PluginManifest {
     #[serde(default)]
     pub tools: Vec<PluginTool>,
     /// Platform key to https archive URL; read by Discovery installs, ignored by the runtime.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub downloads: BTreeMap<String, String>,
     #[serde(default, rename = "ui_entrypoint")]
     legacy_ui_entrypoint: LegacyUiEntrypoint,
+}
+
+/// Hand-written manifests spell an absent collection as `null`; serde `default` only covers a missing key.
+pub(crate) fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// Keeps the legacy field's three wire states distinct: missing fields are
@@ -4829,6 +4838,26 @@ mod tests {
         assert_eq!(
             manifest.validate().unwrap_err(),
             "plugin manifest download for linux-x64 must be an https URL: ftp://acme.dev/x.zip"
+        );
+    }
+
+    #[test]
+    fn manifest_downloads_read_null_as_none_and_keep_listed_platforms() {
+        let base = r#""schema":"planeai.plugin.v1","id":"acme","name":"Acme","version":"1.0.0","host_api_version":"planeai.plugin-host.v1","source_kind":"local","backend_entrypoints":{}"#;
+        let null: PluginManifest =
+            serde_json::from_str(&format!(r#"{{{base},"downloads":null}}"#)).unwrap();
+        assert_eq!(null.downloads, BTreeMap::new());
+
+        let listed: PluginManifest = serde_json::from_str(&format!(
+            r#"{{{base},"downloads":{{"linux-x64":"https://acme.dev/acme-linux-x64.zip"}}}}"#
+        ))
+        .unwrap();
+        assert_eq!(
+            listed.downloads,
+            BTreeMap::from([(
+                "linux-x64".to_string(),
+                "https://acme.dev/acme-linux-x64.zip".to_string()
+            )])
         );
     }
 
