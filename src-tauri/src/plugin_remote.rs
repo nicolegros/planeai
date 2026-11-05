@@ -630,9 +630,17 @@ fn extract_tar_gz(archive: &Path, destination: &Path) -> Result<(), String> {
             ));
         }
         let target = destination.join(safe_entry_path(&raw)?);
-        entry
-            .unpack(&target)
-            .map_err(|error| format!("failed to extract plugin archive entry {raw}: {error}"))?;
+        let entry_error =
+            |error: std::io::Error| format!("failed to extract plugin archive entry {raw}: {error}");
+        // Unpack does not create parents, and a tar may omit directory entries entirely.
+        if kind.is_dir() {
+            fs::create_dir_all(&target).map_err(entry_error)?;
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(entry_error)?;
+        }
+        entry.unpack(&target).map_err(entry_error)?;
     }
     Ok(())
 }
@@ -1351,6 +1359,29 @@ mod tests {
                 0o755
             );
         }
+    }
+
+    #[test]
+    fn extracts_a_tar_gz_that_carries_no_directory_entries() {
+        let temp = TempDir::new().unwrap();
+        let archive = write_archive(
+            &temp,
+            "flat.tar.gz",
+            &tar_gz(&[
+                (
+                    "acme/planeai-plugin.json",
+                    TarEntry::File(manifest_json("acme").into_bytes(), 0o644),
+                ),
+                (
+                    "acme/bin/plugin",
+                    TarEntry::File(b"#!/bin/sh\n".to_vec(), 0o755),
+                ),
+            ]),
+        );
+        let root =
+            extract_archive(&archive, ArchiveFormat::TarGz, &temp.path().join("flat")).unwrap();
+        assert_eq!(root, temp.path().join("flat").join("acme"));
+        assert_eq!(fs::read(root.join("bin/plugin")).unwrap(), b"#!/bin/sh\n");
     }
 
     #[test]
