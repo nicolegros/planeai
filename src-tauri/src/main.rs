@@ -302,19 +302,20 @@ fn main() {
             app.manage(NotifyHandle(notify_state.clone()));
 
             // Register active sessions in NotifyState (must happen after notify_state exists)
+            // Before sessions register: whether an agent has hooks decides how its status is
+            // read, and Claude's are only written here on the first run after upgrading.
+            planeai_core::agent_hooks::refresh_hook_scripts(
+                &config::home_dir(),
+                &planeai_paths::app_data_dir(),
+            );
+            commands::sessions::helpers::invalidate_hook_cache();
+
             {
                 let conn = db_arc.lock().unwrap();
                 let cfg_state = app.state::<ConfigState>();
                 let cfg = cfg_state.0.lock().unwrap();
                 startup::register_active_sessions(&conn, &cfg, &notify_state);
             }
-
-            // Refresh hook scripts to latest bundled version (idempotent, only updates
-            // scripts for hooks that are already installed on the user's system).
-            planeai_core::agent_hooks::refresh_hook_scripts(
-                &config::home_dir(),
-                &planeai_paths::app_data_dir(),
-            );
 
             // PTY manager with notify wired in
             let tabs = Arc::new(terminal_tabs::TerminalTabs::new(
