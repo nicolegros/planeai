@@ -71,15 +71,148 @@ pub fn socket_path(channel: Channel, app_dir: &Path) -> PathBuf {
 pub fn daemon_socket_path() -> PathBuf {
     #[cfg(unix)]
     {
-        if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
-            PathBuf::from(dir).join("planeai").join("daemon.sock")
-        } else {
-            let uid = unsafe { libc::getuid() };
-            PathBuf::from(format!("/tmp/planeai-{uid}")).join("daemon.sock")
-        }
+        let home = std::env::var_os("HOME");
+        runtime_dir(
+            std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+            unsafe { libc::getuid() },
+            home.as_deref().map(Path::new),
+            account_home().as_deref(),
+        )
+        .join("daemon.sock")
     }
     #[cfg(windows)]
     {
         PathBuf::from(r"\\.\pipe\planeai-daemon")
+    }
+}
+
+/// The directory holding the PTY and rmux daemon sockets. A process whose `HOME` is not the
+/// account's home, such as an app run with an isolated data folder, gets its own, since the
+/// daemons' sessions belong to one database and each app closes panes its database does not own.
+#[cfg(unix)]
+fn runtime_dir(
+    xdg_runtime_dir: Option<PathBuf>,
+    uid: u32,
+    home: Option<&Path>,
+    account_home: Option<&Path>,
+) -> PathBuf {
+    let resolved = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let suffix = match home {
+        Some(home) if Some(resolved(home)) != account_home.map(resolved) => {
+            format!("-{:016x}", fnv1a(home))
+        }
+        _ => String::new(),
+    };
+    match xdg_runtime_dir {
+        Some(dir) => dir.join(format!("planeai{suffix}")),
+        None => PathBuf::from(format!("/tmp/planeai-{uid}{suffix}")),
+    }
+}
+
+/// A hash that stays the same across builds, unlike `std`'s hasher.
+#[cfg(unix)]
+fn fnv1a(path: &Path) -> u64 {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str()
+        .as_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+        })
+}
+
+#[cfg(unix)]
+fn account_home() -> Option<PathBuf> {
+    use std::ffi::CStr;
+    use std::os::unix::ffi::OsStrExt;
+    let mut passwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
+    let mut buffer = vec![0 as libc::c_char; 4096];
+    let mut result = std::ptr::null_mut();
+    // SAFETY: getpwuid_r writes into `passwd` and `buffer`, which outlive the read below.
+    let status = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            passwd.as_mut_ptr(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if status != 0 || result.is_null() {
+        return None;
+    }
+    // SAFETY: on success `pw_dir` points to a NUL-terminated string inside `buffer`.
+    let dir = unsafe { CStr::from_ptr((*result).pw_dir) };
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes())))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_account_home_keeps_the_shared_runtime_dir() {
+        let home = Path::new("/Users/me");
+        assert_eq!(
+            runtime_dir(None, 501, Some(home), Some(home)),
+            PathBuf::from("/tmp/planeai-501")
+        );
+        assert_eq!(
+            runtime_dir(None, 501, None, Some(home)),
+            PathBuf::from("/tmp/planeai-501")
+        );
+        assert_eq!(
+            runtime_dir(Some("/run/user/501".into()), 501, Some(home), Some(home)),
+            PathBuf::from("/run/user/501/planeai")
+        );
+    }
+
+    #[test]
+    fn another_spelling_of_the_account_home_keeps_the_shared_runtime_dir() {
+        let account = tempfile::tempdir().unwrap();
+        let link = tempfile::tempdir().unwrap();
+        let linked_home = link.path().join("home");
+        std::os::unix::fs::symlink(account.path(), &linked_home).unwrap();
+        let trailing_slash = PathBuf::from(format!("{}/", account.path().display()));
+        for home in [linked_home, trailing_slash] {
+            assert_eq!(
+                runtime_dir(None, 501, Some(&home), Some(account.path())),
+                PathBuf::from("/tmp/planeai-501")
+            );
+        }
+    }
+
+    #[test]
+    fn another_home_gets_its_own_short_runtime_dir() {
+        let account = Path::new("/Users/me");
+        let isolated = runtime_dir(None, 501, Some(Path::new("/tmp/e2e")), Some(account));
+        assert_ne!(isolated, PathBuf::from("/tmp/planeai-501"));
+        assert!(isolated.to_string_lossy().starts_with("/tmp/planeai-501-"));
+        assert_eq!(
+            isolated,
+            runtime_dir(None, 501, Some(Path::new("/tmp/e2e")), Some(account)),
+            "the same home always finds the same daemons"
+        );
+        assert_ne!(
+            isolated,
+            runtime_dir(None, 501, Some(Path::new("/tmp/e2e2")), Some(account))
+        );
+        // Unix socket paths are limited to about 104 bytes.
+        assert!(isolated.join("daemon.sock").as_os_str().len() < 60);
+        assert_eq!(
+            runtime_dir(
+                Some("/run/user/501".into()),
+                501,
+                Some(Path::new("/tmp/e2e")),
+                Some(account)
+            )
+            .parent(),
+            Some(Path::new("/run/user/501"))
+        );
+    }
+
+    #[test]
+    fn this_process_resolves_the_account_home() {
+        assert!(account_home().is_some_and(|home| home.is_absolute()));
     }
 }
