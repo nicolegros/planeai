@@ -301,7 +301,6 @@ fn main() {
             notify::start_silence_checker(notify_state.clone(), app.handle().clone());
             app.manage(NotifyHandle(notify_state.clone()));
 
-            // Register active sessions in NotifyState (must happen after notify_state exists)
             // Before sessions register: whether an agent has hooks decides how its status is
             // read, and Claude's are only written here on the first run after upgrading.
             planeai_core::agent_hooks::refresh_hook_scripts(
@@ -311,6 +310,7 @@ fn main() {
             commands::sessions::helpers::invalidate_hook_cache();
             startup::spawn_legacy_claude_hooks_cleanup();
 
+            // Register active sessions in NotifyState (must happen after notify_state exists)
             {
                 let conn = db_arc.lock().unwrap();
                 let cfg_state = app.state::<ConfigState>();

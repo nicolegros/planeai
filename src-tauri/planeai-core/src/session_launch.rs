@@ -361,7 +361,7 @@ pub fn agent_launch_args(
 ) -> Option<String> {
     let hooks = (crate::agent_hooks::AgentKind::from_command(command)
         == Some(crate::agent_hooks::AgentKind::Claude))
-    .then(|| crate::agent_hooks::claude_launch_args(&crate::app_data_dir()));
+    .then(crate::agent_hooks::installed_claude_launch_args);
     let args: Vec<String> = hooks
         .into_iter()
         .chain(mcp_launch_args(mcp_args, mcp))
@@ -729,7 +729,7 @@ mod tests {
 
     #[test]
     fn claude_launches_load_planeais_hooks_before_the_mcp_arguments() {
-        let hooks = crate::agent_hooks::claude_launch_args(&crate::app_data_dir());
+        let hooks = crate::agent_hooks::installed_claude_launch_args();
         assert_eq!(
             agent_launch_args(
                 "/opt/homebrew/bin/claude --resume",

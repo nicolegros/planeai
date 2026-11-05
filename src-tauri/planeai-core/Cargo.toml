@@ -9,6 +9,7 @@ test-support = []
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+planeai-paths = { path = "../planeai-paths" }
 jsonc-parser = { workspace = true }
 regex = { workspace = true }
 tokio = { workspace = true }

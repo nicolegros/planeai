@@ -341,13 +341,18 @@ const LEGACY_CLAUDE_SCRIPT: &str = "planeai-stop-notify-claude.sh";
 #[cfg(windows)]
 const LEGACY_CLAUDE_SCRIPT: &str = "planeai-stop-notify-claude.ps1";
 
-pub fn claude_settings_path(app_dir: &Path) -> PathBuf {
+fn claude_settings_path(app_dir: &Path) -> PathBuf {
     app_dir.join("hooks").join(CLAUDE_SETTINGS_FILE)
 }
 
 /// The `--settings` argument loading PlaneAI's hooks into a Claude launch.
 pub fn claude_launch_args(app_dir: &Path) -> String {
     format!("--settings {}", quote_path(&claude_settings_path(app_dir)))
+}
+
+/// [`claude_launch_args`] for PlaneAI's data folder, what every Claude launch carries.
+pub fn installed_claude_launch_args() -> String {
+    claude_launch_args(&crate::app_data_dir())
 }
 
 fn quote_path(path: &Path) -> String {
@@ -383,7 +388,7 @@ fn claude_hook_settings(script: &Path) -> serde_json::Value {
 }
 
 /// Writes the script and the settings file Claude launches load.
-pub fn install_claude_launch_hooks(app_dir: &Path) -> Result<(), String> {
+fn install_claude_launch_hooks(app_dir: &Path) -> Result<(), String> {
     let settings_path = claude_settings_path(app_dir);
     let hooks_dir = settings_path
         .parent()
@@ -446,8 +451,15 @@ pub fn remove_legacy_claude_hooks_at(settings_path: &Path) -> Result<bool, Strin
         settings.as_object_mut().unwrap().remove("hooks");
     }
     let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(settings_path, output)
-        .map_err(|e| format!("failed to write {}: {e}", settings_path.display()))?;
+    // Running agents watch this file, so it is replaced whole, through a symlink to it.
+    let target = std::fs::canonicalize(settings_path).map_err(|e| e.to_string())?;
+    let temporary = target.with_extension("json.planeai-tmp");
+    let written = std::fs::write(&temporary, output)
+        .and_then(|()| planeai_paths::replace_file_atomically(&temporary, &target));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!("failed to write {}: {e}", target.display()));
+    }
     Ok(true)
 }
 
@@ -578,10 +590,7 @@ fn codex_script_command(script_path: &Path, custom_codex_home: bool) -> String {
         )
     } else if custom_codex_home {
         // POSIX single quotes so `$`, backticks or `"` in CODEX_HOME stay literal.
-        format!(
-            "'{}'",
-            script_path.display().to_string().replace('\'', r"'\''")
-        )
+        crate::template::shell_escape(&script_path.display().to_string())
     } else {
         // Keep `$HOME` unexpanded (Codex runs hooks through a shell) so a hooks.json
         // kept in dotfiles stays portable across machines.
@@ -1130,6 +1139,33 @@ mod tests {
         .unwrap();
         assert!(remove_legacy_claude_hooks_at(&settings_path).unwrap());
         assert_eq!(std::fs::read_to_string(&settings_path).unwrap(), "{}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removing_legacy_claude_hooks_replaces_a_linked_settings_file_through_its_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("dotfiles-settings.json");
+        std::fs::write(
+            &real,
+            r#"{"hooks":{"Stop":[{"hooks":[{"command":"planeai-stop-notify-claude.sh"}]}]}}"#,
+        )
+        .unwrap();
+        let link = dir.path().join("settings.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert!(remove_legacy_claude_hooks_at(&link).unwrap());
+
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "{}");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            2,
+            "no temporary file is left behind"
+        );
     }
 
     // ─── Hook detection tests ────────────────────────────────────────────────

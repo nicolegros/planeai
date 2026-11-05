@@ -944,7 +944,7 @@ mod tests {
             ops.daemon_calls.borrow()[0].1,
             format!(
                 "claude --resume {}",
-                planeai_core::agent_hooks::claude_launch_args(&planeai_core::app_data_dir())
+                planeai_core::agent_hooks::installed_claude_launch_args()
             )
         );
         assert_eq!(*ops.daemon_mcp.borrow(), vec![None]);

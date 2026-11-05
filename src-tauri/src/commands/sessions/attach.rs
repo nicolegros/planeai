@@ -750,7 +750,7 @@ mod tests {
                 *command,
                 format!(
                     "claude {}",
-                    planeai_core::agent_hooks::claude_launch_args(&planeai_core::app_data_dir())
+                    planeai_core::agent_hooks::installed_claude_launch_args()
                 )
             ),
             other => panic!("expected a shell target, got {other:?}"),
@@ -853,7 +853,7 @@ mod tests {
                 "kiro-cli chat -- '- Fix the login redirect'".to_string(),
                 format!(
                     "claude {} -- '- Fix the login redirect'",
-                    planeai_core::agent_hooks::claude_launch_args(&planeai_core::app_data_dir())
+                    planeai_core::agent_hooks::installed_claude_launch_args()
                 ),
                 "copilot --interactive='- Fix the login redirect'".to_string(),
                 "codex -- '- Fix the login redirect'".to_string(),
