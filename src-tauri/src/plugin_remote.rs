@@ -504,9 +504,10 @@ pub(crate) struct Downloader {
     client: reqwest::Client,
 }
 
-/// Why a redirect must not be followed, when it must not.
+/// Why a redirect must not be followed, when it must not. `hops` counts the initial URL, as
+/// reqwest's `previous()` does, so it equals the number of this redirect in the chain.
 fn redirect_rejection(hops: usize, next: &reqwest::Url) -> Option<&'static str> {
-    if hops >= MAX_REDIRECTS {
+    if hops > MAX_REDIRECTS {
         Some("too many redirects")
     } else if next.scheme() != "https" {
         Some("redirected to a non-https URL")
@@ -2074,12 +2075,13 @@ mod tests {
             )
         );
 
+        // reqwest counts the initial URL among the previous ones, so hop 5 is the fifth redirect.
         let https = reqwest::Url::parse("https://cdn.acme.dev/acme.tar.gz").unwrap();
         let http = reqwest::Url::parse("http://cdn.acme.dev/acme.tar.gz").unwrap();
-        assert_eq!(redirect_rejection(4, &https), None);
-        assert_eq!(redirect_rejection(5, &https), Some("too many redirects"));
+        assert_eq!(redirect_rejection(5, &https), None);
+        assert_eq!(redirect_rejection(6, &https), Some("too many redirects"));
         assert_eq!(
-            redirect_rejection(0, &http),
+            redirect_rejection(1, &http),
             Some("redirected to a non-https URL")
         );
     }
