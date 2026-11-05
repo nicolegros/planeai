@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -23,6 +23,7 @@ use crate::plugins::{
 const GH_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const DOWNLOAD_LIMIT_BYTES: u64 = 100 * 1024 * 1024;
+const EXTRACT_LIMIT_BYTES: u64 = 500 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
 pub const EXPIRED_STAGING: &str = "This install review expired. Start again.";
 
@@ -594,16 +595,51 @@ pub fn extract_archive(
     format: ArchiveFormat,
     destination: &Path,
 ) -> Result<PathBuf, String> {
+    extract_archive_within(archive, format, destination, EXTRACT_LIMIT_BYTES)
+}
+
+fn extract_archive_within(
+    archive: &Path,
+    format: ArchiveFormat,
+    destination: &Path,
+    limit: u64,
+) -> Result<PathBuf, String> {
     fs::create_dir_all(destination)
         .map_err(|error| format!("failed to create plugin extraction directory: {error}"))?;
+    let mut budget = ExtractionBudget {
+        limit,
+        remaining: limit,
+    };
     match format {
-        ArchiveFormat::TarGz => extract_tar_gz(archive, destination)?,
-        ArchiveFormat::Zip => extract_zip(archive, destination)?,
+        ArchiveFormat::TarGz => extract_tar_gz(archive, destination, &mut budget)?,
+        ArchiveFormat::Zip => extract_zip(archive, destination, &mut budget)?,
     }
     package_root(destination)
 }
 
-fn extract_tar_gz(archive: &Path, destination: &Path) -> Result<(), String> {
+/// Total extracted bytes allowed across every entry, so a small archive cannot fill the disk.
+struct ExtractionBudget {
+    limit: u64,
+    remaining: u64,
+}
+
+impl ExtractionBudget {
+    fn charge(&mut self, bytes: u64) -> Result<(), String> {
+        self.remaining = self.remaining.checked_sub(bytes).ok_or_else(|| {
+            format!(
+                "plugin archive expands beyond the {} MB limit",
+                self.limit / (1024 * 1024)
+            )
+        })?;
+        Ok(())
+    }
+}
+
+fn extract_tar_gz(
+    archive: &Path,
+    destination: &Path,
+    budget: &mut ExtractionBudget,
+) -> Result<(), String> {
     let file = fs::File::open(archive)
         .map_err(|error| format!("failed to open plugin archive: {error}"))?;
     let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
@@ -630,8 +666,9 @@ fn extract_tar_gz(archive: &Path, destination: &Path) -> Result<(), String> {
             ));
         }
         let target = destination.join(safe_entry_path(&raw)?);
-        let entry_error =
-            |error: std::io::Error| format!("failed to extract plugin archive entry {raw}: {error}");
+        let entry_error = |error: std::io::Error| {
+            format!("failed to extract plugin archive entry {raw}: {error}")
+        };
         // Unpack does not create parents, and a tar may omit directory entries entirely.
         if kind.is_dir() {
             fs::create_dir_all(&target).map_err(entry_error)?;
@@ -640,12 +677,18 @@ fn extract_tar_gz(archive: &Path, destination: &Path) -> Result<(), String> {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(entry_error)?;
         }
+        // The tar reader yields exactly the header size, so charging it up front is exact.
+        budget.charge(entry.size())?;
         entry.unpack(&target).map_err(entry_error)?;
     }
     Ok(())
 }
 
-fn extract_zip(archive: &Path, destination: &Path) -> Result<(), String> {
+fn extract_zip(
+    archive: &Path,
+    destination: &Path,
+    budget: &mut ExtractionBudget,
+) -> Result<(), String> {
     let file = fs::File::open(archive)
         .map_err(|error| format!("failed to open plugin archive: {error}"))?;
     let mut zip =
@@ -675,8 +718,13 @@ fn extract_zip(archive: &Path, destination: &Path) -> Result<(), String> {
         }
         let mut output = fs::File::create(&target)
             .map_err(|error| format!("failed to extract plugin archive entry {raw}: {error}"))?;
-        std::io::copy(&mut entry, &mut output)
-            .map_err(|error| format!("failed to extract plugin archive entry {raw}: {error}"))?;
+        // Zip headers can understate the size, so count what actually inflates.
+        let written = std::io::copy(
+            &mut (&mut entry).take(budget.remaining.saturating_add(1)),
+            &mut output,
+        )
+        .map_err(|error| format!("failed to extract plugin archive entry {raw}: {error}"))?;
+        budget.charge(written)?;
         output
             .flush()
             .map_err(|error| format!("failed to extract plugin archive entry {raw}: {error}"))?;
@@ -1382,6 +1430,58 @@ mod tests {
             extract_archive(&archive, ArchiveFormat::TarGz, &temp.path().join("flat")).unwrap();
         assert_eq!(root, temp.path().join("flat").join("acme"));
         assert_eq!(fs::read(root.join("bin/plugin")).unwrap(), b"#!/bin/sh\n");
+    }
+
+    #[test]
+    fn stops_extracting_once_the_archive_expands_past_the_budget() {
+        let temp = TempDir::new().unwrap();
+        let manifest = manifest_json("acme").into_bytes();
+        let zeros = vec![0u8; 2 * 1024 * 1024];
+        let one_mb = 1024 * 1024;
+
+        let tar = write_archive(
+            &temp,
+            "bomb.tar.gz",
+            &tar_gz(&[
+                ("acme/", TarEntry::Dir),
+                (
+                    "acme/planeai-plugin.json",
+                    TarEntry::File(manifest.clone(), 0o644),
+                ),
+                ("acme/blob", TarEntry::File(zeros.clone(), 0o644)),
+            ]),
+        );
+        assert_eq!(
+            extract_archive_within(&tar, ArchiveFormat::TarGz, &temp.path().join("tar"), one_mb)
+                .unwrap_err(),
+            "plugin archive expands beyond the 1 MB limit"
+        );
+        assert!(!temp.path().join("tar/acme/blob").exists());
+
+        let zip = write_archive(
+            &temp,
+            "bomb.zip",
+            &zip_bytes(&[
+                ("acme/planeai-plugin.json", Some(&manifest), 0o644),
+                ("acme/blob", Some(&zeros), 0o644),
+            ]),
+        );
+        assert!(
+            fs::metadata(&zip).unwrap().len() < one_mb / 10,
+            "the fixture compresses"
+        );
+        assert_eq!(
+            extract_archive_within(&zip, ArchiveFormat::Zip, &temp.path().join("zip"), one_mb)
+                .unwrap_err(),
+            "plugin archive expands beyond the 1 MB limit"
+        );
+        assert!(
+            fs::metadata(temp.path().join("zip/acme/blob"))
+                .unwrap()
+                .len()
+                <= one_mb + 1,
+            "extraction stops at the budget instead of draining the entry"
+        );
     }
 
     #[test]
