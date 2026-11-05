@@ -512,14 +512,17 @@ impl Downloader {
                 response.status().as_u16()
             ));
         }
+        let over_limit = || {
+            format!(
+                "plugin download exceeds the {} MB limit",
+                DOWNLOAD_LIMIT_BYTES / (1024 * 1024)
+            )
+        };
         if response
             .content_length()
             .is_some_and(|length| length > DOWNLOAD_LIMIT_BYTES)
         {
-            return Err(format!(
-                "plugin download exceeds the {} MB limit",
-                DOWNLOAD_LIMIT_BYTES / (1024 * 1024)
-            ));
+            return Err(over_limit());
         }
         let mut file = tokio::fs::File::create(destination)
             .await
@@ -534,10 +537,7 @@ impl Downloader {
         {
             received += chunk.len() as u64;
             if received > DOWNLOAD_LIMIT_BYTES {
-                return Err(format!(
-                    "plugin download exceeds the {} MB limit",
-                    DOWNLOAD_LIMIT_BYTES / (1024 * 1024)
-                ));
+                return Err(over_limit());
             }
             hasher.update(&chunk);
             tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
@@ -572,19 +572,19 @@ pub fn check_integrity(sha256: String, expected: Option<&str>) -> Result<Package
 
 /// A relative archive entry path with no absolute, root, prefix, or parent components.
 pub fn safe_entry_path(raw: &str) -> Result<PathBuf, String> {
-    let path = Path::new(raw);
+    let escapes = || format!("plugin archive entry escapes the package: {raw}");
     let mut safe = PathBuf::new();
-    for component in path.components() {
+    for component in Path::new(raw).components() {
         match component {
             Component::Normal(part) => safe.push(part),
             Component::CurDir => {}
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(format!("plugin archive entry escapes the package: {raw}"))
+                return Err(escapes())
             }
         }
     }
     if raw.starts_with('/') || raw.starts_with('\\') || safe.as_os_str().is_empty() {
-        return Err(format!("plugin archive entry escapes the package: {raw}"));
+        return Err(escapes());
     }
     Ok(safe)
 }
@@ -705,29 +705,25 @@ fn extract_zip(
             return Err(format!("plugin archive contains a link: {raw}"));
         }
         let target = destination.join(safe_entry_path(&raw)?);
+        let entry_error = |error: std::io::Error| {
+            format!("failed to extract plugin archive entry {raw}: {error}")
+        };
         if entry.is_dir() {
-            fs::create_dir_all(&target).map_err(|error| {
-                format!("failed to extract plugin archive entry {raw}: {error}")
-            })?;
+            fs::create_dir_all(&target).map_err(entry_error)?;
             continue;
         }
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                format!("failed to extract plugin archive entry {raw}: {error}")
-            })?;
+            fs::create_dir_all(parent).map_err(entry_error)?;
         }
-        let mut output = fs::File::create(&target)
-            .map_err(|error| format!("failed to extract plugin archive entry {raw}: {error}"))?;
+        let mut output = fs::File::create(&target).map_err(entry_error)?;
         // Zip headers can understate the size, so count what actually inflates.
         let written = std::io::copy(
             &mut (&mut entry).take(budget.remaining.saturating_add(1)),
             &mut output,
         )
-        .map_err(|error| format!("failed to extract plugin archive entry {raw}: {error}"))?;
+        .map_err(entry_error)?;
         budget.charge(written)?;
-        output
-            .flush()
-            .map_err(|error| format!("failed to extract plugin archive entry {raw}: {error}"))?;
+        output.flush().map_err(entry_error)?;
         #[cfg(unix)]
         if let Some(mode) = entry.unix_mode() {
             use std::os::unix::fs::PermissionsExt;
