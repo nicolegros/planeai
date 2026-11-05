@@ -19,6 +19,9 @@ cd planeai
 pnpm install
 ```
 
+`pnpm install` points git at `.githooks/`, whose pre-commit hook rejects commits that fail `pnpm fmt:check` or `cargo fmt --check`.
+Run `make fmt` to fix them.
+
 ### Environment Variables
 
 Copy `.env.example` to `.env` and fill in the values:

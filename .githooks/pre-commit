@@ -1,0 +1,4 @@
+#!/bin/sh
+set -e
+pnpm --silent fmt:check
+(cd src-tauri && cargo fmt --all -- --check)
