@@ -10,6 +10,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use planeai_core::command::{augmented_path, no_window_tokio};
+
+use crate::plugin_packages::hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::time::timeout;
@@ -250,9 +252,14 @@ impl RemoteRepo {
         release.assets.iter().find(|asset| asset.name == asset_name)
     }
 
+    /// The conventional release asset name for `platform`, before its archive extension.
+    fn asset_stem(&self, platform: &str) -> String {
+        format!("{}-{platform}", self.repo.name())
+    }
+
     fn fallback_asset(&self, platform: &str) -> Option<(&ReleaseAsset, ArchiveFormat)> {
         let release = self.latest_release.as_ref()?;
-        let stem = format!("{}-{platform}", self.repo.name());
+        let stem = self.asset_stem(platform);
         release.assets.iter().find_map(|asset| {
             let format = if asset.name == format!("{stem}.tar.gz") {
                 ArchiveFormat::TarGz
@@ -295,7 +302,7 @@ impl RemoteRepo {
                 },
             });
         }
-        let stem = format!("{}-{platform}", self.repo.name());
+        let stem = self.asset_stem(platform);
         match (&self.latest_release, self.fallback_asset(platform)) {
             (Some(release), Some((asset, format))) => Ok(PackageSource {
                 url: asset.browser_download_url.clone(),
@@ -381,11 +388,7 @@ pub fn replacement(
     let Some(installed) = inventory.iter().find(|plugin| plugin.id == manifest_id) else {
         return Ok(StagedReplacement::None);
     };
-    if installed.source_kind != PluginSourceKind::Local {
-        return Err(format!(
-            "plugin id is reserved by a bundled plugin: {manifest_id}"
-        ));
-    }
+    installed.ensure_replaceable()?;
     Ok(match installed.remote_origin {
         Some(_) => StagedReplacement::Repo {
             installed_version: installed.version.clone(),
@@ -615,10 +618,6 @@ impl Downloader {
             .map_err(|error| format!("failed to write plugin download: {error}"))?;
         Ok(hex(&hasher.finalize()))
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Fails closed when the downloaded bytes differ from the release asset digest.

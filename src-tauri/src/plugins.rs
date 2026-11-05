@@ -593,12 +593,7 @@ fn plan_install(
             enable_after: remote,
         });
     };
-    if existing.source_kind != PluginSourceKind::Local {
-        return Err(format!(
-            "plugin id is reserved by a bundled plugin: {}",
-            existing.id
-        ));
-    }
+    existing.ensure_replaceable()?;
     // Identical bytes still rewrite the row whenever provenance would change, so a repository
     // reinstall records its origin and a folder install over it clears that origin.
     let same_folder_bytes = !remote
@@ -633,6 +628,20 @@ pub struct PluginInventory {
     pub state: PluginRuntimeState,
     pub last_error: Option<String>,
     pub log_path: Option<String>,
+}
+
+impl PluginInventory {
+    /// Only local installs may be replaced or updated; a bundled id is never overwritten.
+    pub(crate) fn ensure_replaceable(&self) -> Result<(), String> {
+        if self.source_kind == PluginSourceKind::Local {
+            Ok(())
+        } else {
+            Err(format!(
+                "plugin id is reserved by a bundled plugin: {}",
+                self.id
+            ))
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1029,12 +1038,7 @@ pub fn replace_local_inventory(
     let existing = get_inventory(conn, &manifest.id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("plugin inventory entry not found: {}", manifest.id))?;
-    if existing.source_kind != PluginSourceKind::Local {
-        return Err(format!(
-            "plugin id is reserved by a bundled plugin: {}",
-            manifest.id
-        ));
-    }
+    existing.ensure_replaceable()?;
     manifest.validate()?;
     validate_shortcut_collisions(conn, manifest)?;
     let ManifestColumns {
