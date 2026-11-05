@@ -4039,15 +4039,15 @@ impl PluginRuntimeSupervisor {
                         }
                         Err(error) => {
                             tracing::warn!(plugin_id = %plugin_id, generation, method = %service.method, %error, "plugin background service failed");
-                            // A broken lane means the runtime is being retired, by whichever
-                            // request broke it, with that request's error.
+                            // A broken lane is retired by the request that broke it; disabling
+                            // the plugin waits for this worker while holding the lifecycle lock.
                             if process.requests.is_broken() {
-                                // Disabling the plugin holds the lifecycle lock while it waits
-                                // for this worker, and stops the process itself.
-                                if let (true, Some(supervisor)) = (error.is_fatal(), supervisor.upgrade()) {
-                                    tokio::select! {
-                                        _ = worker_cancel.cancelled() => {}
-                                        _ = supervisor.retire_broken_process(&plugin_id, process.clone(), &error) => {}
+                                if error.is_fatal() {
+                                    if let Some(supervisor) = supervisor.upgrade() {
+                                        tokio::select! {
+                                            _ = worker_cancel.cancelled() => {}
+                                            _ = supervisor.retire_broken_process(&plugin_id, process.clone(), &error) => {}
+                                        }
                                     }
                                 }
                                 return;
