@@ -5,8 +5,8 @@ use tauri::State;
 use tokio::sync::Semaphore;
 
 use crate::plugin_remote::{
-    fetch_remote_repo, run_gh, stage_package, DiscoveryCardState, Downloader, RepoFullName,
-    StagedPluginInstall, StagingStore, EXPIRED_STAGING,
+    fetch_remote_repo, remove_staging_dir, run_gh, stage_package, DiscoveryCardState, Downloader,
+    RepoFullName, StagedPluginInstall, StagingStore, EXPIRED_STAGING,
 };
 use crate::plugins::{PluginInventory, PluginRuntimeHandle};
 
@@ -155,7 +155,7 @@ pub async fn stage_remote_plugin(
             Ok(preview)
         }
         Err(error) => {
-            let _ = crate::commands::blocking(move || crate::plugin_remote::remove_dir(&dir)).await;
+            remove_staging_dir(dir).await;
             Err(error)
         }
     }
@@ -176,11 +176,7 @@ pub async fn commit_staged_plugin(
         .install_remote(staged.package_root, staged.origin)
         .await;
     // The import copied the package, so staging is removable whether or not it succeeded.
-    if let Err(error) =
-        crate::commands::blocking(move || crate::plugin_remote::remove_dir(&staged.dir)).await
-    {
-        tracing::warn!(%error, "failed to remove committed plugin staging directory");
-    }
+    remove_staging_dir(staged.dir).await;
     result
 }
 
@@ -189,13 +185,10 @@ pub async fn discard_staged_plugin(
     staging_id: String,
     remote: State<'_, PluginRemoteState>,
 ) -> Result<(), String> {
-    let staged = remote.staging.take(&staging_id)?;
-    match staged {
-        Some(staged) => {
-            crate::commands::blocking(move || crate::plugin_remote::remove_dir(&staged.dir)).await
-        }
-        None => Ok(()),
+    if let Some(staged) = remote.staging.take(&staging_id)? {
+        remove_staging_dir(staged.dir).await;
     }
+    Ok(())
 }
 
 #[cfg(test)]

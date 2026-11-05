@@ -961,12 +961,21 @@ impl StagingStore {
     }
 }
 
-pub(crate) fn remove_dir(dir: &Path) -> Result<(), String> {
+fn remove_dir(dir: &Path) -> Result<(), String> {
     if dir.exists() {
         fs::remove_dir_all(dir)
             .map_err(|error| format!("failed to remove plugin staging directory: {error}"))?;
     }
     Ok(())
+}
+
+/// Removes a staging directory off the main thread. A leftover is only logged: the next startup
+/// wipes the staging root, and the caller's own outcome matters more than the cleanup.
+pub(crate) async fn remove_staging_dir(dir: PathBuf) {
+    let path = dir.display().to_string();
+    if let Err(error) = crate::commands::blocking(move || remove_dir(&dir)).await {
+        tracing::warn!(%error, path, "failed to remove plugin staging directory");
+    }
 }
 
 /// Downloads, verifies, extracts and inspects `source` under `dir`: the package to keep in the
