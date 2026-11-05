@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -655,18 +655,18 @@ fn extract_archive_within(
 ) -> Result<PathBuf, String> {
     fs::create_dir_all(destination)
         .map_err(|error| format!("failed to create plugin extraction directory: {error}"))?;
-    let mut budget = ExtractionBudget {
+    let budget = ExtractionBudget {
         limit,
         remaining: limit,
     };
     match format {
-        ArchiveFormat::TarGz => extract_tar_gz(archive, destination, &mut budget)?,
-        ArchiveFormat::Zip => extract_zip(archive, destination, &mut budget)?,
+        ArchiveFormat::TarGz => extract_tar_gz(archive, destination, budget)?,
+        ArchiveFormat::Zip => extract_zip(archive, destination, budget)?,
     }
     package_root(destination)
 }
 
-/// Total extracted bytes allowed across every entry, so a small archive cannot fill the disk.
+/// Total decompressed bytes allowed, so a small archive cannot fill the disk or memory.
 struct ExtractionBudget {
     limit: u64,
     remaining: u64,
@@ -684,19 +684,69 @@ impl ExtractionBudget {
     }
 }
 
+/// Charges every decompressed byte, headers included. The tar reader buffers GNU long-name and
+/// PAX headers in memory before it yields an entry, so a per-entry charge comes too late.
+struct BudgetedReader<R> {
+    inner: R,
+    budget: ExtractionBudget,
+}
+
+impl<R: Read> Read for BudgetedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        self.budget
+            .charge(read as u64)
+            .map_err(|message| io::Error::other(BudgetExceeded(message)))?;
+        Ok(read)
+    }
+}
+
+#[derive(Debug)]
+struct BudgetExceeded(String);
+
+impl std::fmt::Display for BudgetExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for BudgetExceeded {}
+
+/// The budget message behind a tar error, which may wrap the reader's error in its own context.
+fn exceeded_budget(error: &io::Error) -> Option<String> {
+    let mut current: &(dyn std::error::Error + 'static) = error;
+    loop {
+        // An io::Error keeps its payload behind get_ref; source() skips to the payload's cause.
+        let inner = match current.downcast_ref::<io::Error>() {
+            Some(io) => io
+                .get_ref()
+                .map(|payload| payload as &(dyn std::error::Error + 'static)),
+            None => current.source(),
+        }?;
+        if let Some(exceeded) = inner.downcast_ref::<BudgetExceeded>() {
+            return Some(exceeded.0.clone());
+        }
+        current = inner;
+    }
+}
+
 fn extract_tar_gz(
     archive: &Path,
     destination: &Path,
-    budget: &mut ExtractionBudget,
+    budget: ExtractionBudget,
 ) -> Result<(), String> {
     let file = fs::File::open(archive)
         .map_err(|error| format!("failed to open plugin archive: {error}"))?;
-    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
-    let entries = tar
-        .entries()
-        .map_err(|error| format!("failed to read plugin archive: {error}"))?;
+    let mut tar = tar::Archive::new(BudgetedReader {
+        inner: flate2::read::GzDecoder::new(file),
+        budget,
+    });
+    let archive_error = |error: io::Error| {
+        exceeded_budget(&error).unwrap_or_else(|| format!("failed to read plugin archive: {error}"))
+    };
+    let entries = tar.entries().map_err(archive_error)?;
     for entry in entries {
-        let mut entry = entry.map_err(|error| format!("failed to read plugin archive: {error}"))?;
+        let mut entry = entry.map_err(archive_error)?;
         let kind = entry.header().entry_type();
         let raw = entry
             .path()
@@ -717,8 +767,9 @@ fn extract_tar_gz(
         let Some(target) = entry_target(destination, &raw, kind.is_dir())? else {
             continue;
         };
-        let entry_error = |error: std::io::Error| {
-            format!("failed to extract plugin archive entry {raw}: {error}")
+        let entry_error = |error: io::Error| {
+            exceeded_budget(&error)
+                .unwrap_or_else(|| format!("failed to extract plugin archive entry {raw}: {error}"))
         };
         // Unpack does not create parents, and a tar may omit directory entries entirely.
         if kind.is_dir() {
@@ -728,8 +779,6 @@ fn extract_tar_gz(
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(entry_error)?;
         }
-        // The tar reader yields exactly the header size, so charging it up front is exact.
-        budget.charge(entry.size())?;
         entry.unpack(&target).map_err(entry_error)?;
     }
     Ok(())
@@ -738,7 +787,7 @@ fn extract_tar_gz(
 fn extract_zip(
     archive: &Path,
     destination: &Path,
-    budget: &mut ExtractionBudget,
+    mut budget: ExtractionBudget,
 ) -> Result<(), String> {
     let file = fs::File::open(archive)
         .map_err(|error| format!("failed to open plugin archive: {error}"))?;
@@ -1459,6 +1508,7 @@ mod tests {
                     header.set_link_name(target).unwrap();
                     (tar::EntryType::Link, 0o644, &[])
                 }
+                TarEntry::LongName(bytes) => (tar::EntryType::GNULongName, 0o644, bytes),
             };
             header.set_entry_type(kind);
             header.set_mode(mode);
@@ -1474,6 +1524,8 @@ mod tests {
         File(Vec<u8>, u32),
         Symlink(&'static str),
         Hardlink(&'static str),
+        /// A GNU `L` header, whose body names the next entry.
+        LongName(Vec<u8>),
     }
 
     fn good_tar() -> Vec<u8> {
@@ -1671,7 +1723,13 @@ mod tests {
                 .unwrap_err(),
             "plugin archive expands beyond the 1 MB limit"
         );
-        assert!(!temp.path().join("tar/acme/blob").exists());
+        assert!(
+            fs::metadata(temp.path().join("tar/acme/blob"))
+                .unwrap()
+                .len()
+                <= one_mb,
+            "extraction stops at the budget instead of draining the entry"
+        );
 
         let zip = write_archive(
             &temp,
@@ -1697,6 +1755,76 @@ mod tests {
                 <= one_mb + 1,
             "extraction stops at the budget instead of draining the entry"
         );
+    }
+
+    /// The tar reader buffers GNU long-name and PAX headers in memory before yielding an entry,
+    /// so the budget has to bind the decompressed stream rather than the entries.
+    #[test]
+    fn long_name_headers_count_against_the_extraction_budget() {
+        let temp = TempDir::new().unwrap();
+        let one_mb = 1024 * 1024;
+        let bomb = write_archive(
+            &temp,
+            "longname.tar.gz",
+            &tar_gz(&[
+                ("acme/", TarEntry::Dir),
+                (
+                    "././@LongLink",
+                    TarEntry::LongName(vec![b'x'; 2 * one_mb as usize]),
+                ),
+                ("acme/x", TarEntry::File(b"x".to_vec(), 0o644)),
+            ]),
+        );
+        assert!(
+            fs::metadata(&bomb).unwrap().len() < one_mb / 10,
+            "the fixture compresses"
+        );
+        assert_eq!(
+            extract_archive_within(
+                &bomb,
+                ArchiveFormat::TarGz,
+                &temp.path().join("bomb"),
+                one_mb
+            )
+            .unwrap_err(),
+            "plugin archive expands beyond the 1 MB limit"
+        );
+
+        let long = format!("acme/{}/plugin", "n".repeat(150));
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(0o644);
+        header.set_size(1);
+        builder.append_data(&mut header, &long, &b"x"[..]).unwrap();
+        let manifest = manifest_json("acme").into_bytes();
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(0o644);
+        header.set_size(manifest.len() as u64);
+        builder
+            .append_data(&mut header, "acme/planeai-plugin.json", manifest.as_slice())
+            .unwrap();
+        let archive = write_archive(
+            &temp,
+            "long.tar.gz",
+            &builder.into_inner().unwrap().finish().unwrap(),
+        );
+        let root = extract_archive_within(
+            &archive,
+            ArchiveFormat::TarGz,
+            &temp.path().join("long"),
+            one_mb,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(temp.path().join("long").join(&long)).unwrap(),
+            b"x"
+        );
+        assert_eq!(root, temp.path().join("long").join("acme"));
     }
 
     #[test]
