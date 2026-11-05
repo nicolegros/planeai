@@ -547,6 +547,22 @@ impl PluginRuntimeState {
     }
 }
 
+/// Where a package installed from Discovery came from (ADR-0018).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteOrigin {
+    pub repo: String,
+    pub release_tag: Option<String>,
+    pub source_url: String,
+    pub archive_sha256: String,
+}
+
+/// How a local package reached PlaneAI; a later install of the same id replaces it whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackageProvenance {
+    Folder { original_display_path: String },
+    Remote(RemoteOrigin),
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginInventory {
     pub id: String,
@@ -563,6 +579,7 @@ pub struct PluginInventory {
     pub installed_hash: Option<String>,
     pub installed_path: Option<String>,
     pub original_display_path: Option<String>,
+    pub remote_origin: Option<RemoteOrigin>,
     pub enabled: bool,
     pub state: PluginRuntimeState,
     pub last_error: Option<String>,
@@ -649,6 +666,10 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ("background_service", "TEXT"),
         ("providers", "TEXT NOT NULL DEFAULT '[]'"),
         ("tools", "TEXT NOT NULL DEFAULT '[]'"),
+        ("remote_repo", "TEXT"),
+        ("remote_release_tag", "TEXT"),
+        ("remote_source_url", "TEXT"),
+        ("remote_archive_sha256", "TEXT"),
     ] {
         let has_column = conn
             .prepare("PRAGMA table_info(plugin_inventory)")?
@@ -860,13 +881,45 @@ impl ManifestColumns {
     }
 }
 
+/// The provenance columns of `plugin_inventory`: a folder path, or the remote origin.
+struct ProvenanceColumns<'a> {
+    original_display_path: Option<&'a str>,
+    remote_repo: Option<&'a str>,
+    remote_release_tag: Option<&'a str>,
+    remote_source_url: Option<&'a str>,
+    remote_archive_sha256: Option<&'a str>,
+}
+
+impl<'a> ProvenanceColumns<'a> {
+    fn of(provenance: &'a PackageProvenance) -> Self {
+        match provenance {
+            PackageProvenance::Folder {
+                original_display_path,
+            } => Self {
+                original_display_path: Some(original_display_path),
+                remote_repo: None,
+                remote_release_tag: None,
+                remote_source_url: None,
+                remote_archive_sha256: None,
+            },
+            PackageProvenance::Remote(origin) => Self {
+                original_display_path: None,
+                remote_repo: Some(&origin.repo),
+                remote_release_tag: origin.release_tag.as_deref(),
+                remote_source_url: Some(&origin.source_url),
+                remote_archive_sha256: Some(&origin.archive_sha256),
+            },
+        }
+    }
+}
+
 pub fn insert_local_inventory(
     conn: &Connection,
     manifest: &PluginManifest,
     backend_entrypoint: &str,
     content_hash: &str,
     package_dir: &Path,
-    original_display_path: &str,
+    provenance: &PackageProvenance,
 ) -> Result<PluginInventory, String> {
     if get_inventory(conn, &manifest.id)
         .map_err(|error| error.to_string())?
@@ -883,11 +936,19 @@ pub fn insert_local_inventory(
         providers,
         tools,
     } = ManifestColumns::of(manifest)?;
+    let ProvenanceColumns {
+        original_display_path,
+        remote_repo,
+        remote_release_tag,
+        remote_source_url,
+        remote_archive_sha256,
+    } = ProvenanceColumns::of(provenance);
     conn.execute(
         "INSERT INTO plugin_inventory (
             id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions, capabilities, background_service,
-            installed_hash, installed_path, original_display_path, enabled, runtime_state, providers, tools
-        ) VALUES (?1, ?2, ?3, ?4, 'local', ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 'disabled', ?12, ?13)",
+            installed_hash, installed_path, original_display_path, enabled, runtime_state, providers, tools,
+            remote_repo, remote_release_tag, remote_source_url, remote_archive_sha256
+        ) VALUES (?1, ?2, ?3, ?4, 'local', ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 'disabled', ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             manifest.id,
             manifest.name,
@@ -902,6 +963,10 @@ pub fn insert_local_inventory(
             original_display_path,
             providers,
             tools,
+            remote_repo,
+            remote_release_tag,
+            remote_source_url,
+            remote_archive_sha256,
         ],
     )
     .map_err(|error| format!("failed to persist imported local plugin: {error}"))?;
@@ -916,7 +981,7 @@ pub fn replace_local_inventory(
     backend_entrypoint: &str,
     content_hash: &str,
     package_dir: &Path,
-    original_display_path: &str,
+    provenance: &PackageProvenance,
 ) -> Result<PluginInventory, String> {
     let existing = get_inventory(conn, &manifest.id)
         .map_err(|error| error.to_string())?
@@ -936,13 +1001,21 @@ pub fn replace_local_inventory(
         providers,
         tools,
     } = ManifestColumns::of(manifest)?;
+    let ProvenanceColumns {
+        original_display_path,
+        remote_repo,
+        remote_release_tag,
+        remote_source_url,
+        remote_archive_sha256,
+    } = ProvenanceColumns::of(provenance);
     conn.execute(
         "UPDATE plugin_inventory SET
             name = ?2, version = ?3, host_api_version = ?4, backend_entrypoint = ?5,
             ui_contributions = ?6, capabilities = ?7, background_service = ?8,
             installed_hash = ?9, installed_path = ?10, original_display_path = ?11,
             enabled = 0, runtime_state = 'disabled', last_error = NULL, log_path = NULL,
-            providers = ?12, tools = ?13, updated_at = CURRENT_TIMESTAMP
+            providers = ?12, tools = ?13, updated_at = CURRENT_TIMESTAMP,
+            remote_repo = ?14, remote_release_tag = ?15, remote_source_url = ?16, remote_archive_sha256 = ?17
          WHERE id = ?1 AND source_kind = 'local'",
         params![
             manifest.id,
@@ -958,6 +1031,10 @@ pub fn replace_local_inventory(
             original_display_path,
             providers,
             tools,
+            remote_repo,
+            remote_release_tag,
+            remote_source_url,
+            remote_archive_sha256,
         ],
     )
     .map_err(|error| format!("failed to replace local plugin inventory: {error}"))?;
@@ -969,7 +1046,8 @@ pub fn replace_local_inventory(
 pub fn list_inventory(conn: &Connection) -> rusqlite::Result<Vec<PluginInventory>> {
     let mut statement = conn.prepare(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers, tools
+                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers, tools,
+                remote_repo, remote_release_tag, remote_source_url, remote_archive_sha256
          FROM plugin_inventory ORDER BY name COLLATE NOCASE",
     )?;
     let rows = statement.query_map([], row_to_inventory)?;
@@ -982,7 +1060,8 @@ pub fn get_inventory(
 ) -> rusqlite::Result<Option<PluginInventory>> {
     conn.query_row(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers, tools
+                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers, tools,
+                remote_repo, remote_release_tag, remote_source_url, remote_archive_sha256
          FROM plugin_inventory WHERE id = ?1",
         [plugin_id],
         row_to_inventory,
@@ -1081,6 +1160,15 @@ fn row_to_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInventory
         installed_hash: row.get(9)?,
         installed_path: row.get(10)?,
         original_display_path: row.get(11)?,
+        remote_origin: match row.get::<_, Option<String>>(18)? {
+            Some(repo) => Some(RemoteOrigin {
+                repo,
+                release_tag: row.get(19)?,
+                source_url: row.get::<_, Option<String>>(20)?.unwrap_or_default(),
+                archive_sha256: row.get::<_, Option<String>>(21)?.unwrap_or_default(),
+            }),
+            None => None,
+        },
         enabled: row.get(12)?,
         state: PluginRuntimeState::from_db(&state),
         last_error: row.get(14)?,
@@ -3030,7 +3118,9 @@ impl PluginRuntimeSupervisor {
         let backend = imported.backend_entrypoint.clone();
         let hash = imported.content_hash.clone();
         let package_dir = imported.package_dir.clone();
-        let original_path = imported.original_display_path.clone();
+        let provenance = PackageProvenance::Folder {
+            original_display_path: imported.original_display_path.clone(),
+        };
         let existing = self.inventory(&manifest.id).await?;
         let was_enabled = match existing.as_ref() {
             Some(inventory) if inventory.source_kind != PluginSourceKind::Local => {
@@ -3064,7 +3154,7 @@ impl PluginRuntimeSupervisor {
                         &backend,
                         &hash,
                         &package_dir,
-                        &original_path,
+                        &provenance,
                     )
                 } else {
                     insert_local_inventory(
@@ -3073,7 +3163,7 @@ impl PluginRuntimeSupervisor {
                         &backend,
                         &hash,
                         &package_dir,
-                        &original_path,
+                        &provenance,
                     )
                 }
             })
@@ -4710,7 +4800,9 @@ mod tests {
             "bin/plugin",
             "hash",
             package.path(),
-            "/source",
+            &PackageProvenance::Folder {
+                original_display_path: "/source".to_string(),
+            },
         )
         .unwrap();
 
@@ -4737,7 +4829,9 @@ mod tests {
             "bin/plugin",
             "hash",
             package.path(),
-            "/source",
+            &PackageProvenance::Folder {
+                original_display_path: "/source".to_string(),
+            },
         )
         .unwrap();
         conn.execute(
@@ -4768,7 +4862,9 @@ mod tests {
             "bin/plugin",
             "hash",
             package.path(),
-            "/source",
+            &PackageProvenance::Folder {
+                original_display_path: "/source".to_string(),
+            },
         )
         .unwrap();
 
@@ -4857,7 +4953,9 @@ mod tests {
             "bin/plugin",
             "hash",
             package.path(),
-            "/source",
+            &PackageProvenance::Folder {
+                original_display_path: "/source".to_string(),
+            },
         )
         .unwrap();
         let inventory = get_inventory(&conn, "sidebar-test").unwrap().unwrap();
@@ -4996,7 +5094,9 @@ mod tests {
             "bin/plugin",
             "content-hash",
             package.path(),
-            "/original/package",
+            &PackageProvenance::Folder {
+                original_display_path: "/original/package".to_string(),
+            },
         )
         .unwrap();
         let replacement = replace_local_inventory(
@@ -5005,7 +5105,9 @@ mod tests {
             "bin/plugin",
             "different-hash",
             package.path(),
-            "/different/package",
+            &PackageProvenance::Folder {
+                original_display_path: "/different/package".to_string(),
+            },
         )
         .unwrap();
         assert_eq!(
@@ -5024,6 +5126,54 @@ mod tests {
             .unwrap_err()
             .contains("local plugin"));
         assert!(get_inventory(&conn, "jira").unwrap().is_some());
+    }
+
+    #[test]
+    fn remote_provenance_round_trips_and_a_folder_install_clears_it() {
+        let conn = database();
+        let manifest = session_panel_manifest();
+        let package = tempfile::TempDir::new().unwrap();
+        let origin = RemoteOrigin {
+            repo: "acme/planeai-plugin-acme".to_string(),
+            release_tag: Some("v1.0.0".to_string()),
+            source_url: "https://github.com/acme/planeai-plugin-acme/releases/download/v1.0.0/planeai-plugin-acme-macos-arm64.tar.gz".to_string(),
+            archive_sha256: "0123abcd".to_string(),
+        };
+        let installed = insert_local_inventory(
+            &conn,
+            &manifest,
+            "bin/plugin",
+            "hash",
+            package.path(),
+            &PackageProvenance::Remote(origin.clone()),
+        )
+        .unwrap();
+        assert_eq!(installed.remote_origin, Some(origin.clone()));
+        assert_eq!(installed.original_display_path, None);
+        assert_eq!(
+            get_inventory(&conn, "panel-test")
+                .unwrap()
+                .unwrap()
+                .remote_origin,
+            Some(origin)
+        );
+
+        let replaced = replace_local_inventory(
+            &conn,
+            &manifest,
+            "bin/plugin",
+            "other-hash",
+            package.path(),
+            &PackageProvenance::Folder {
+                original_display_path: "/Users/me/panel".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(replaced.remote_origin, None);
+        assert_eq!(
+            replaced.original_display_path.as_deref(),
+            Some("/Users/me/panel")
+        );
     }
 
     #[test]
@@ -5144,7 +5294,9 @@ mod tests {
             "bin/plugin",
             "hash",
             package.path(),
-            "/source",
+            &PackageProvenance::Folder {
+                original_display_path: "/source".to_string(),
+            },
         )
         .unwrap();
 
@@ -5299,7 +5451,9 @@ mod tests {
             "bin/plugin",
             "hash",
             package.path(),
-            "/source",
+            &PackageProvenance::Folder {
+                original_display_path: "/source".to_string(),
+            },
         )
         .unwrap();
         assert_eq!(
