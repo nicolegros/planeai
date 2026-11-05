@@ -440,10 +440,13 @@ describe("PluginManager", () => {
       }),
     );
     commitStaged.mockResolvedValue(remoteAcmePlugin);
-    await mountWithDiscovery([candidate("acme/planeai-plugin-acme")]);
+    await mountWithDiscovery([
+      candidate("acme/planeai-plugin-acme"),
+      candidate("acme/planeai-plugin-other"),
+    ]);
 
     await vi.waitFor(() => expect(buttonLabeled(target, "Install v1.2.0")).toBeDefined());
-    buttonLabeled(target, "Install v1.2.0")?.click();
+    buttonLabeled(card("acme/planeai-plugin-acme")!, "Install v1.2.0")?.click();
     await vi.waitFor(() => expect(stageRemote).toHaveBeenCalledWith("acme/planeai-plugin-acme"));
     await vi.waitFor(() => expect(buttonLabeled(target, "Downloading…")?.disabled).toBe(true));
     expect(buttonLabeled(target, "Downloading…")?.getAttribute("aria-label")).toBe(
@@ -458,8 +461,12 @@ describe("PluginManager", () => {
     await vi.waitFor(() => expect(commitStaged).toHaveBeenCalledWith("stage-1"));
     await vi.waitFor(() => expect(reviewDialog()).toBeNull());
     await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(listCalls + 1));
-    await vi.waitFor(() => expect(resolveCandidate).toHaveBeenCalledTimes(2));
-    expect(resolveCandidate).toHaveBeenLastCalledWith("acme/planeai-plugin-acme");
+    // Installing one plugin can change what every other card replaces, so all cards re-resolve.
+    await vi.waitFor(() => expect(resolveCandidate).toHaveBeenCalledTimes(4));
+    expect(resolveCandidate.mock.calls.slice(2)).toEqual([
+      ["acme/planeai-plugin-acme"],
+      ["acme/planeai-plugin-other"],
+    ]);
     expect(discardStaged).not.toHaveBeenCalled();
   });
 

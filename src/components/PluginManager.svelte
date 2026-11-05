@@ -182,7 +182,8 @@
       await refresh();
       loadError = String(error);
     }
-    void resolveCard(staged.repo);
+    // The installed id can be the one another card matches, so every card re-resolves.
+    resolveAllCards();
   }
 
   function discardStaged() {
