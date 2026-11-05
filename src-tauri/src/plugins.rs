@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -66,6 +66,9 @@ pub struct PluginManifest {
     pub providers: Vec<PluginProvider>,
     #[serde(default)]
     pub tools: Vec<PluginTool>,
+    /// Platform key to https archive URL; read by Discovery installs, ignored by the runtime.
+    #[serde(default)]
+    pub downloads: BTreeMap<String, String>,
     #[serde(default, rename = "ui_entrypoint")]
     legacy_ui_entrypoint: LegacyUiEntrypoint,
 }
@@ -314,6 +317,7 @@ impl PluginManifest {
                     "background_service": self.background_service,
                     "providers": (!self.providers.is_empty()).then_some(&self.providers),
                     "tools": (!self.tools.is_empty()).then_some(&self.tools),
+                    "downloads": (!self.downloads.is_empty()).then_some(&self.downloads),
                 });
                 planeai_plugin_contract::validate_local_manifest(&manifest, platform)
                     .map_err(|error| error.to_string())?;
@@ -4669,6 +4673,23 @@ mod tests {
         .unwrap()
     }
 
+    #[test]
+    fn local_manifest_downloads_are_validated_and_otherwise_ignored() {
+        let mut manifest = session_panel_manifest();
+        manifest.downloads = BTreeMap::from([(
+            "macos-arm64".to_string(),
+            "https://github.com/acme/planeai-plugin-acme/releases/latest/download/planeai-plugin-acme-macos-arm64.tar.gz".to_string(),
+        )]);
+        manifest.validate().unwrap();
+
+        manifest.downloads =
+            BTreeMap::from([("linux-x64".to_string(), "ftp://acme.dev/x.zip".to_string())]);
+        assert_eq!(
+            manifest.validate().unwrap_err(),
+            "plugin manifest download for linux-x64 must be an https URL: ftp://acme.dev/x.zip"
+        );
+    }
+
     fn placements(conn: &Connection, plugin_id: &str) -> Vec<PluginUiPlacement> {
         get_inventory(conn, plugin_id)
             .unwrap()
@@ -4826,6 +4847,7 @@ mod tests {
             background_service: None,
             providers: Vec::new(),
             tools: Vec::new(),
+            downloads: BTreeMap::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
@@ -4927,6 +4949,7 @@ mod tests {
             background_service: None,
             providers: Vec::new(),
             tools: Vec::new(),
+            downloads: BTreeMap::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         sync_inventory(&conn, &[local]).unwrap();
@@ -4963,6 +4986,7 @@ mod tests {
             background_service: None,
             providers: Vec::new(),
             tools: Vec::new(),
+            downloads: BTreeMap::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
@@ -5198,6 +5222,7 @@ mod tests {
             background_service: None,
             providers: Vec::new(),
             tools: Vec::new(),
+            downloads: BTreeMap::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         assert!(manifest
@@ -5264,6 +5289,7 @@ mod tests {
             background_service: None,
             providers: Vec::new(),
             tools: Vec::new(),
+            downloads: BTreeMap::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();

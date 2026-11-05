@@ -93,6 +93,22 @@ After each successful call, PlaneAI tells the plugin's UI its data changed, unle
 
 The platform key is the current OS and architecture: `macos-arm64`, `macos-x64`, `linux-arm64`, `linux-x64`, `windows-arm64`, or `windows-x64`. Ship each declared binary at its declared path; a package may declare only the platforms it actually supports, but it cannot install on a platform without a matching binary. Windows backend filenames conventionally end in `.exe`.
 
+### Downloads
+
+PlaneAI can install a plugin straight from a Discovery card (see [Install from Discovery](#install-from-discovery)).
+It looks for the package archive in two places, in this order.
+
+1. The optional `downloads` object in the `planeai-plugin.json` on your repository's default branch, keyed by platform: `"downloads": { "macos-arm64": "https://github.com/acme/planeai-plugin-acme/releases/latest/download/planeai-plugin-acme-macos-arm64.tar.gz" }`.
+   Every URL must be `https`, and every key must be one of the platform keys above.
+   The installed copy of the manifest is validated the same way and the field is otherwise ignored.
+2. The latest non-draft, non-prerelease GitHub release, when the default-branch manifest is missing, unparseable, or has no entry for the host platform.
+   The asset must be named `<repository name>-<platform>.tar.gz` or `<repository name>-<platform>.zip`, for example `planeai-plugin-acme-macos-arm64.tar.gz` in `acme/planeai-plugin-acme`.
+
+An archive must contain exactly one top-level directory, and that directory must hold `planeai-plugin.json` and the package laid out as above.
+Absolute entries, `..` components, symbolic links and hard links are rejected.
+Tag releases `vX.Y.Z` (the `v` is optional) and keep the manifest `version` equal to the tag, so Discovery can offer updates and the install review does not warn about a mismatch.
+When the archive is an asset of the latest release, PlaneAI verifies its SHA-256 against the digest GitHub reports for that asset; any other URL installs as unverified and the review shows the computed hash.
+
 ### Capabilities
 
 Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `sessions.start`, `tasks.read`, `tasks.create`, `tasks.transition`, `task-events`, `providers`, and `tools`; duplicates and all other local capabilities are rejected.
