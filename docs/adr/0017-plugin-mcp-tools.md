@@ -33,6 +33,7 @@ Agents should call them like PlaneAI's own tools: same server, same token, same 
   The plugin answers `{ text, is_error? }`, the shape PlaneAI's own tools return, and the server wraps it as one MCP text block.
   An invalid result, a JSON-RPC error, a plugin that is not running and a timeout all reach the agent as an error result, never as a protocol failure.
   `tool.call` is host-controlled like `provider.*`, so plugin UI cannot forge a caller.
+  After every call of a tool that is not read-only, failed ones included, the host tells the plugin's UI its data changed, as PlaneAI's task tools refresh the GUI: the plugin has no way to say so from its sidecar.
 - **Timeouts.** `timeoutMs` bounds a call, from 1 to 120000 milliseconds, 30000 by default.
   On expiry the host sends `$/cancelRequest` (ADR-0011).
   A plugin that acknowledges keeps running, and the agent reads that the plugin gave no answer within the timeout and the call was cancelled; one that does not acknowledge is stopped, and the agent reads that `tool.call` timed out.

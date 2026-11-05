@@ -3394,6 +3394,8 @@ impl PluginRuntimeSupervisor {
                 let plugin_id: Arc<str> = inventory.id.as_str().into();
                 let name: Arc<str> = tool.name.as_str().into();
                 let timeout = tool.timeout();
+                let refreshes_views =
+                    tool.effect(&inventory.id)? != planeai_core::mcp::Effect::Read;
                 crate::plugin_tools::plugin_tool_def(
                     &inventory.id,
                     tool,
@@ -3404,7 +3406,14 @@ impl PluginRuntimeSupervisor {
                             match supervisor.upgrade() {
                                 Some(supervisor) => {
                                     supervisor
-                                        .call_tool(&plugin_id, &name, timeout, arguments, caller)
+                                        .call_tool(
+                                            &plugin_id,
+                                            &name,
+                                            timeout,
+                                            refreshes_views,
+                                            arguments,
+                                            caller,
+                                        )
                                         .await
                                 }
                                 None => planeai::mcp::tools::ToolOutput::error(
@@ -3426,6 +3435,7 @@ impl PluginRuntimeSupervisor {
         plugin_id: &str,
         tool: &str,
         timeout: Duration,
+        refreshes_views: bool,
         arguments: serde_json::Map<String, Value>,
         caller: planeai_core::mcp::McpCaller,
     ) -> planeai::mcp::tools::ToolOutput {
@@ -3457,6 +3467,12 @@ impl PluginRuntimeSupervisor {
         };
         if let Err(error) = &result {
             tracing::warn!(plugin_id, tool, %error, "plugin tool.call failed");
+        }
+        // Like PlaneAI's task tools, even a failed call may have written part of its change.
+        if refreshes_views {
+            if let Err(error) = self.app.emit("plugin-data-changed", plugin_id) {
+                tracing::warn!(plugin_id, %error, "failed to emit plugin refresh event");
+            }
         }
         crate::plugin_tools::tool_output(plugin_id, timeout, result)
     }
