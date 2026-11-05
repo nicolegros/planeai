@@ -18,8 +18,8 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::plugins::{
-    null_as_default, PluginHostCapability, PluginInventory, PluginManifest, PluginSourceKind,
-    PluginTool, PluginUiContribution, RemoteOrigin,
+    null_as_default, PluginHostCapability, PluginInventory, PluginManifest, PluginTool,
+    PluginUiContribution, RemoteOrigin,
 };
 
 const GH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1027,7 +1027,7 @@ pub(crate) async fn stage_package(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::{PluginRuntimeState, RemoteOrigin};
+    use crate::plugins::{PluginRuntimeState, PluginSourceKind, RemoteOrigin};
     use tempfile::TempDir;
 
     fn repo() -> RepoFullName {
