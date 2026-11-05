@@ -135,6 +135,7 @@ planeai gives each supported agent a small notify script so the agent reports `b
 Claude gets it per launch: its launch and resume commands carry `--settings <app data>/hooks/claude-hooks.json`, a settings file planeai writes at startup next to the script, so the user's own Claude settings stay untouched and only planeai sessions report.
 Older versions added these hooks to `~/.claude/settings.json`, and Claude Code applies changes to it live, so removing them would silence every agent started before the upgrade.
 planeai keeps them, and their script in `~/.claude/hooks` current, until a startup finds no running `claude` process launched without `claude-hooks.json`; it then removes only its own entries, keeping the user's.
+On Windows the check does not run yet, so the legacy entries stay until removed by hand, and each Claude signal arrives twice.
 The other agents get it in their own config.
 `AgentKind` (`planeai-core/src/agent_hooks.rs`) identifies the agent from a provider command's executable name and owns detection, installation and the startup script refresh.
 

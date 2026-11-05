@@ -453,13 +453,8 @@ pub fn remove_legacy_claude_hooks_at(settings_path: &Path) -> Result<bool, Strin
     let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     // Running agents watch this file, so it is replaced whole, through a symlink to it.
     let target = std::fs::canonicalize(settings_path).map_err(|e| e.to_string())?;
-    let temporary = target.with_extension("json.planeai-tmp");
-    let written = std::fs::write(&temporary, output)
-        .and_then(|()| planeai_paths::replace_file_atomically(&temporary, &target));
-    if let Err(e) = written {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(format!("failed to write {}: {e}", target.display()));
-    }
+    planeai_paths::write_file_atomically(&target, output.as_bytes())
+        .map_err(|e| format!("failed to write {}: {e}", target.display()))?;
     Ok(true)
 }
 
