@@ -4,14 +4,38 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { plugins } from "../lib/api";
-  import type { GithubMigrationStatus, JiraMigrationStatus, PluginDiscoveryCandidate, PluginInventory } from "../lib/types";
+  import type {
+    DiscoveryCardState,
+    GithubMigrationStatus,
+    JiraMigrationStatus,
+    PluginDiscoveryCandidate,
+    PluginInventory,
+    StagedPluginInstall,
+  } from "../lib/types";
+  import PluginInstallReviewDialog from "./PluginInstallReviewDialog.svelte";
   import { Button, Dialog } from "./ui";
+
+  type CardResolution =
+    | { kind: "checking" }
+    | { kind: "resolved"; state: DiscoveryCardState }
+    | { kind: "failed"; error: string };
+
+  /** What a Discovery card renders beside its description: a note, an action, or both. */
+  type CardView = { note: string | null; tone: "muted" | "error"; action: string | null };
+
+  type RemoteInstall =
+    | { kind: "idle" }
+    | { kind: "staging"; repo: string }
+    | { kind: "reviewing"; staged: StagedPluginInstall }
+    | { kind: "installing"; staged: StagedPluginInstall };
 
   let { onInventoryChange = (_inventory: PluginInventory[]) => {} }: {
     onInventoryChange?: (inventory: PluginInventory[]) => void;
   } = $props();
   let inventory = $state<PluginInventory[]>([]);
   let discoveryCandidates = $state<PluginDiscoveryCandidate[] | null>(null);
+  let cardResolutions = $state<Record<string, CardResolution>>({});
+  let remoteInstall = $state<RemoteInstall>({ kind: "idle" });
   let jiraMigration = $state<JiraMigrationStatus | null>(null);
   let githubMigration = $state<GithubMigrationStatus | null>(null);
   let busyId = $state<string | null>(null);
@@ -19,6 +43,10 @@
   let discovering = $state(false);
   let loadError = $state<string | null>(null);
   let pendingRemoval = $state<PluginInventory | null>(null);
+
+  const stagedForReview = $derived(
+    remoteInstall.kind === "reviewing" || remoteInstall.kind === "installing" ? remoteInstall.staged : null,
+  );
 
   async function refresh() {
     try {
@@ -40,13 +68,86 @@
   async function discover() {
     discovering = true;
     try {
-      discoveryCandidates = await plugins.discover();
+      const candidates = await plugins.discover();
+      discoveryCandidates = candidates;
+      cardResolutions = {};
+      for (const candidate of candidates) void resolveCard(candidate.full_name);
       loadError = null;
     } catch (error) {
       loadError = String(error);
     } finally {
       discovering = false;
     }
+  }
+
+  async function resolveCard(repo: string) {
+    cardResolutions[repo] = { kind: "checking" };
+    try {
+      cardResolutions[repo] = { kind: "resolved", state: await plugins.resolveCandidate(repo) };
+    } catch (error) {
+      cardResolutions[repo] = { kind: "failed", error: String(error) };
+    }
+  }
+
+  function cardView(resolution: CardResolution | undefined): CardView {
+    if (!resolution || resolution.kind === "checking") return { note: "Checking…", tone: "muted", action: null };
+    if (resolution.kind === "failed") return { note: resolution.error, tone: "error", action: null };
+    const state = resolution.state;
+    switch (state.kind) {
+      case "unavailable":
+        return { note: state.reason, tone: "muted", action: null };
+      case "install":
+        return { note: null, tone: "muted", action: state.latest_version ? `Install v${state.latest_version}` : "Install" };
+      case "up_to_date":
+        return { note: `Up to date (v${state.installed_version})`, tone: "muted", action: null };
+      case "update":
+        return { note: null, tone: "muted", action: `Update to v${state.latest_version}` };
+      case "reinstall":
+        return { note: null, tone: "muted", action: "Reinstall latest" };
+      case "installed_locally":
+        return {
+          note: "Installed locally",
+          tone: "muted",
+          action: state.latest_version ? `Replace with v${state.latest_version}` : "Replace",
+        };
+    }
+  }
+
+  async function stageRemote(repo: string) {
+    if (remoteInstall.kind !== "idle") return;
+    remoteInstall = { kind: "staging", repo };
+    try {
+      remoteInstall = { kind: "reviewing", staged: await plugins.stageRemote(repo) };
+    } catch (error) {
+      loadError = String(error);
+      remoteInstall = { kind: "idle" };
+    }
+  }
+
+  async function commitStaged() {
+    if (remoteInstall.kind !== "reviewing") return;
+    const { staged } = remoteInstall;
+    remoteInstall = { kind: "installing", staged };
+    try {
+      await plugins.commitStaged(staged.staging_id);
+      remoteInstall = { kind: "idle" };
+      await refresh();
+    } catch (error) {
+      // The staging is consumed either way and refresh() clears loadError, so report after it.
+      remoteInstall = { kind: "idle" };
+      await refresh();
+      loadError = String(error);
+    }
+    void resolveCard(staged.repo);
+  }
+
+  function discardStaged() {
+    if (remoteInstall.kind !== "reviewing") return;
+    const { staging_id } = remoteInstall.staged;
+    remoteInstall = { kind: "idle" };
+    plugins.discardStaged(staging_id).catch((error) => {
+      loadError = String(error);
+    });
   }
 
   function formattedUpdatedDate(value: string): string {
@@ -159,16 +260,31 @@
     <section class="rounded-lg border border-border p-4 space-y-3" aria-live="polite">
       <div>
         <h3 class="text-sm font-medium text-t1">Community plugin candidates</h3>
-        <p class="mt-1 text-xs text-t3">Public, active, non-fork repositories tagged <span class="font-mono">planeai</span>, ordered by stars. Candidates are unverified: review a repository before importing a local package.</p>
+        <p class="mt-1 text-xs text-t3">Public, active, non-fork repositories tagged <span class="font-mono">planeai</span>, ordered by stars. Candidates are unverified community repositories. Install downloads the package for this platform and shows a review before anything is installed. Packages run as native code with your user permissions.</p>
       </div>
       {#each discoveryCandidates as candidate (candidate.url)}
+        {@const view = cardView(cardResolutions[candidate.full_name])}
+        {@const staging = remoteInstall.kind === "staging" && remoteInstall.repo === candidate.full_name}
         <article class="rounded border border-border p-3 space-y-2">
           <div class="flex items-start justify-between gap-3">
-            <div>
+            <div class="min-w-0">
               <h4 class="font-mono text-xs text-t1">{candidate.full_name}</h4>
               <p class="mt-1 text-xs text-t2">{candidate.description ?? "No description provided."}</p>
+              {#if view.note}
+                <p class="mt-1 text-xs break-words {view.tone === 'error' ? 'text-status-exited' : 'text-t3'}">{view.note}</p>
+              {/if}
             </div>
-            <button type="button" class="shrink-0 rounded bg-panel-hi px-3 py-1.5 text-xs font-medium text-t2 hover:bg-border" onclick={() => void openUrl(candidate.url)}>Open repository</button>
+            <div class="flex shrink-0 gap-2">
+              {#if view.action}
+                <button
+                  type="button"
+                  class="rounded bg-accent px-3 py-1.5 text-xs font-medium text-on-accent hover:opacity-90 disabled:opacity-50"
+                  disabled={remoteInstall.kind !== "idle"}
+                  onclick={() => void stageRemote(candidate.full_name)}
+                >{staging ? "Downloading…" : view.action}</button>
+              {/if}
+              <button type="button" class="rounded bg-panel-hi px-3 py-1.5 text-xs font-medium text-t2 hover:bg-border" onclick={() => void openUrl(candidate.url)}>Open repository</button>
+            </div>
           </div>
           <p class="text-[11px] text-t3">{candidate.language ?? "Unknown language"} · {candidate.stargazers_count.toLocaleString()} {candidate.stargazers_count === 1 ? "star" : "stars"} · Updated {formattedUpdatedDate(candidate.updated_at)}</p>
         </article>
@@ -219,7 +335,11 @@
       </div>
       {#if plugin.source_kind === "local"}
         <div class="space-y-1 text-[11px] text-t3">
-          {#if plugin.original_display_path}<p class="font-mono break-all">Source: {plugin.original_display_path}</p>{/if}
+          {#if plugin.remote_origin}
+            <p class="font-mono break-all">Source: github.com/{plugin.remote_origin.repo}{plugin.remote_origin.release_tag ? ` @ ${plugin.remote_origin.release_tag}` : ""}</p>
+          {:else if plugin.original_display_path}
+            <p class="font-mono break-all">Source: {plugin.original_display_path}</p>
+          {/if}
           {#if plugin.installed_hash}<p class="font-mono break-all">Installed SHA-256: {plugin.installed_hash}</p>{/if}
         </div>
       {/if}
@@ -300,3 +420,10 @@
     </div>
   {/if}
 </Dialog>
+
+<PluginInstallReviewDialog
+  staged={stagedForReview}
+  busy={remoteInstall.kind === "installing"}
+  onConfirm={() => void commitStaged()}
+  onCancel={discardStaged}
+/>

@@ -38,6 +38,7 @@ function plugin(id: string, overrides: Partial<PluginInventory> = {}): PluginInv
     installed_hash: "hash",
     installed_path: `/planeai/plugins/packages/sha256/${id}`,
     original_display_path: null,
+    remote_origin: null,
     enabled: true,
     state: "running",
     last_error: null,

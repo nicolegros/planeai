@@ -127,6 +127,7 @@ describe("PluginContributionHost", () => {
       installed_hash: null,
       installed_path: null,
       original_display_path: null,
+      remote_origin: null,
       enabled: true,
       state: "running",
       last_error: null,

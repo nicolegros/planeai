@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, unmount } from "svelte";
+import type {
+  DiscoveryCardState,
+  PluginDiscoveryCandidate,
+  StagedPluginInstall,
+} from "../../lib/types";
 
 const disabledPlugin = {
   id: "jira",
@@ -21,6 +26,7 @@ const disabledPlugin = {
   installed_hash: null,
   installed_path: null,
   original_display_path: null,
+  remote_origin: null,
   enabled: false,
   state: "disabled" as const,
   last_error: null,
@@ -37,7 +43,56 @@ const disabledGithubPlugin = {
   installed_hash: "plugin-hash",
   installed_path: "/planeai/plugins/github",
   original_display_path: "/tmp/planeai-plugin-github",
+  remote_origin: null,
 };
+
+const remoteAcmePlugin = {
+  ...disabledGithubPlugin,
+  id: "acme",
+  name: "Acme",
+  version: "1.2.0",
+  backend_entrypoint: "planeai-plugin-acme",
+  installed_hash: "acme-hash",
+  installed_path: "/planeai/plugins/acme",
+  original_display_path: "/planeai/plugins/staging/acme",
+  remote_origin: {
+    repo: "acme/planeai-plugin-acme",
+    release_tag: "v1.2.0",
+    source_url:
+      "https://github.com/acme/planeai-plugin-acme/releases/download/v1.2.0/planeai-plugin-acme-macos-arm64.tar.gz",
+    archive_sha256: "acme-archive-sha",
+  },
+};
+
+const stagedAcme: StagedPluginInstall = {
+  staging_id: "stage-1",
+  repo: "acme/planeai-plugin-acme",
+  source_url: remoteAcmePlugin.remote_origin.source_url,
+  release_tag: "v1.2.0",
+  integrity: { kind: "verified", sha256: "acme-archive-sha" },
+  manifest: {
+    id: "acme",
+    name: "Acme",
+    version: "1.2.0",
+    host_api_version: "planeai.plugin-host.v6",
+    capabilities: ["settings"],
+    ui_contributions: [],
+    tools: [],
+  },
+  replaces: { kind: "none" },
+  version_mismatch: null,
+};
+
+function candidate(fullName: string): PluginDiscoveryCandidate {
+  return {
+    full_name: fullName,
+    description: null,
+    url: `https://github.com/${fullName}`,
+    updated_at: "2026-11-01T00:00:00Z",
+    stargazers_count: 3,
+    language: "Rust",
+  };
+}
 
 const {
   list,
@@ -46,6 +101,11 @@ const {
   migrateLegacyJira,
   githubMigrationStatus,
   migrateLegacyGithub,
+  discover,
+  resolveCandidate,
+  stageRemote,
+  commitStaged,
+  discardStaged,
 } = vi.hoisted(() => ({
   list: vi.fn(),
   enable: vi.fn(),
@@ -53,6 +113,11 @@ const {
   migrateLegacyJira: vi.fn(),
   githubMigrationStatus: vi.fn(),
   migrateLegacyGithub: vi.fn(),
+  discover: vi.fn(),
+  resolveCandidate: vi.fn(),
+  stageRemote: vi.fn(),
+  commitStaged: vi.fn(),
+  discardStaged: vi.fn(),
 }));
 
 const { listen } = vi.hoisted(() => ({ listen: vi.fn() }));
@@ -65,6 +130,11 @@ vi.mock("../../lib/api", () => ({
     migrateLegacyJira,
     githubMigrationStatus,
     migrateLegacyGithub,
+    discover,
+    resolveCandidate,
+    stageRemote,
+    commitStaged,
+    discardStaged,
     disable: vi.fn(),
     reload: vi.fn(),
     installLocal: vi.fn(),
@@ -74,6 +144,7 @@ vi.mock("../../lib/api", () => ({
 
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
 import PluginManager from "../PluginManager.svelte";
 
@@ -112,6 +183,27 @@ describe("PluginManager", () => {
     target?.remove();
     vi.clearAllMocks();
   });
+
+  const buttons = (root: ParentNode) =>
+    Array.from(root.querySelectorAll<HTMLButtonElement>("button"));
+  const buttonLabeled = (root: ParentNode, label: string) =>
+    buttons(root).find((button) => button.textContent?.trim() === label);
+  const card = (repo: string) =>
+    Array.from(target.querySelectorAll("article")).find(
+      (article) => article.querySelector("h4")?.textContent?.trim() === repo,
+    );
+  const cardButtons = (repo: string) =>
+    buttons(card(repo)!).map((button) => button.textContent?.trim());
+  const reviewDialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
+
+  async function mountWithDiscovery(candidates: PluginDiscoveryCandidate[]) {
+    discover.mockResolvedValue(candidates);
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginManager, { target });
+    await vi.waitFor(() => expect(buttonLabeled(target, "Discover plugins")).toBeDefined());
+    buttonLabeled(target, "Discover plugins")?.click();
+  }
 
   it("publishes refreshed inventory after enabling a plugin", async () => {
     const runningPlugin = { ...disabledPlugin, enabled: true, state: "running" as const };
@@ -247,5 +339,141 @@ describe("PluginManager", () => {
       ),
     ).toBe(true);
     expect(enable).not.toHaveBeenCalled();
+  });
+
+  it("renders each Discovery card action from its resolved state", async () => {
+    const states: Record<string, DiscoveryCardState> = {
+      "acme/install": { kind: "install", latest_version: "1.2.0" },
+      "acme/current": { kind: "up_to_date", installed_version: "1.0.0" },
+      "acme/update": { kind: "update", installed_version: "1.0.0", latest_version: "2.0.0" },
+      "acme/reinstall": { kind: "reinstall", installed_version: "1.0.0" },
+      "acme/local": {
+        kind: "installed_locally",
+        plugin_id: "acme",
+        installed_version: "0.9.0",
+        latest_version: "1.2.0",
+      },
+      "acme/unavailable": {
+        kind: "unavailable",
+        reason: "Not available for macos-arm64: the latest release ships no matching asset.",
+      },
+    };
+    let settlePending: (state: DiscoveryCardState) => void = () => {};
+    const pending = new Promise<DiscoveryCardState>((resolve) => {
+      settlePending = resolve;
+    });
+    resolveCandidate.mockImplementation((repo: string) => {
+      if (repo === "acme/pending") return pending;
+      if (repo === "acme/broken") return Promise.reject(new Error("GitHub rate limit exceeded"));
+      return Promise.resolve(states[repo]);
+    });
+    list.mockResolvedValue([]);
+    await mountWithDiscovery(
+      [...Object.keys(states), "acme/pending", "acme/broken"].map(candidate),
+    );
+
+    await vi.waitFor(() =>
+      expect(cardButtons("acme/install")).toEqual(["Install v1.2.0", "Open repository"]),
+    );
+    expect(cardButtons("acme/current")).toEqual(["Open repository"]);
+    expect(card("acme/current")?.textContent).toContain("Up to date (v1.0.0)");
+    expect(cardButtons("acme/update")).toEqual(["Update to v2.0.0", "Open repository"]);
+    expect(cardButtons("acme/reinstall")).toEqual(["Reinstall latest", "Open repository"]);
+    expect(cardButtons("acme/local")).toEqual(["Replace with v1.2.0", "Open repository"]);
+    expect(card("acme/local")?.textContent).toContain("Installed locally");
+    expect(cardButtons("acme/unavailable")).toEqual(["Open repository"]);
+    expect(card("acme/unavailable")?.textContent).toContain(
+      "Not available for macos-arm64: the latest release ships no matching asset.",
+    );
+    await vi.waitFor(() =>
+      expect(card("acme/broken")?.textContent).toContain("GitHub rate limit exceeded"),
+    );
+    expect(cardButtons("acme/broken")).toEqual(["Open repository"]);
+    expect(card("acme/pending")?.textContent).toContain("Checking…");
+    expect(cardButtons("acme/pending")).toEqual(["Open repository"]);
+    expect(target.textContent).not.toContain("rate limit exceeded.");
+
+    settlePending({ kind: "install", latest_version: null });
+    await vi.waitFor(() =>
+      expect(cardButtons("acme/pending")).toEqual(["Install", "Open repository"]),
+    );
+  });
+
+  it("stages a Discovery install, reviews it, and commits it", async () => {
+    list.mockResolvedValue([]);
+    resolveCandidate.mockResolvedValue({ kind: "install", latest_version: "1.2.0" });
+    let finishStaging: (staged: StagedPluginInstall) => void = () => {};
+    stageRemote.mockReturnValue(
+      new Promise<StagedPluginInstall>((resolve) => {
+        finishStaging = resolve;
+      }),
+    );
+    commitStaged.mockResolvedValue(remoteAcmePlugin);
+    await mountWithDiscovery([candidate("acme/planeai-plugin-acme")]);
+
+    await vi.waitFor(() => expect(buttonLabeled(target, "Install v1.2.0")).toBeDefined());
+    buttonLabeled(target, "Install v1.2.0")?.click();
+    await vi.waitFor(() => expect(stageRemote).toHaveBeenCalledWith("acme/planeai-plugin-acme"));
+    await vi.waitFor(() => expect(buttonLabeled(target, "Downloading…")?.disabled).toBe(true));
+
+    finishStaging(stagedAcme);
+    await vi.waitFor(() => expect(reviewDialog()?.textContent).toContain("Install Acme?"));
+    const listCalls = list.mock.calls.length;
+    buttonLabeled(reviewDialog()!, "Install and enable")?.click();
+
+    await vi.waitFor(() => expect(commitStaged).toHaveBeenCalledWith("stage-1"));
+    await vi.waitFor(() => expect(reviewDialog()).toBeNull());
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(listCalls + 1));
+    await vi.waitFor(() => expect(resolveCandidate).toHaveBeenCalledTimes(2));
+    expect(resolveCandidate).toHaveBeenLastCalledWith("acme/planeai-plugin-acme");
+    expect(discardStaged).not.toHaveBeenCalled();
+  });
+
+  it("discards the staged package when the review is cancelled", async () => {
+    list.mockResolvedValue([]);
+    resolveCandidate.mockResolvedValue({ kind: "install", latest_version: "1.2.0" });
+    stageRemote.mockResolvedValue(stagedAcme);
+    discardStaged.mockResolvedValue(undefined);
+    await mountWithDiscovery([candidate("acme/planeai-plugin-acme")]);
+
+    await vi.waitFor(() => expect(buttonLabeled(target, "Install v1.2.0")).toBeDefined());
+    buttonLabeled(target, "Install v1.2.0")?.click();
+    await vi.waitFor(() => expect(reviewDialog()?.textContent).toContain("Install Acme?"));
+    buttonLabeled(reviewDialog()!, "Cancel")?.click();
+
+    await vi.waitFor(() => expect(discardStaged).toHaveBeenCalledWith("stage-1"));
+    await vi.waitFor(() => expect(reviewDialog()).toBeNull());
+    expect(commitStaged).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(buttonLabeled(target, "Install v1.2.0")?.disabled).toBe(false));
+  });
+
+  it("shows the GitHub origin instead of the import path for Discovery installs", async () => {
+    const untaggedPlugin = {
+      ...remoteAcmePlugin,
+      id: "acme-nightly",
+      name: "Acme Nightly",
+      remote_origin: {
+        ...remoteAcmePlugin.remote_origin,
+        repo: "acme/planeai-plugin-nightly",
+        release_tag: null,
+      },
+    };
+    list.mockResolvedValue([remoteAcmePlugin, untaggedPlugin, disabledGithubPlugin]);
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginManager, { target });
+
+    const sourceLines = () =>
+      Array.from(target.querySelectorAll("p"))
+        .map((line) => line.textContent?.trim() ?? "")
+        .filter((text) => text.startsWith("Source: "));
+    await vi.waitFor(() =>
+      expect(sourceLines()).toEqual([
+        "Source: github.com/acme/planeai-plugin-acme @ v1.2.0",
+        "Source: github.com/acme/planeai-plugin-nightly",
+        "Source: /tmp/planeai-plugin-github",
+      ]),
+    );
+    expect(target.textContent).toContain("Installed SHA-256: acme-hash");
   });
 });

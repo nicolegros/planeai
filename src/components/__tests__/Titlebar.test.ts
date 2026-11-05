@@ -17,6 +17,7 @@ const plugin: PluginInventory = {
   installed_hash: "hash",
   installed_path: "/plugin",
   original_display_path: "/plugin",
+  remote_origin: null,
   enabled: true,
   state: "running",
   last_error: null,
