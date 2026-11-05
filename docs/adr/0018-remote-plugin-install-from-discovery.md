@@ -31,7 +31,7 @@ What changes is who performs the mechanical steps, not who decides to trust the 
   `gh` stays the metadata client, so Discovery and installs share its authentication and rate limits.
   Extraction (`tar` + `flate2`, `zip` with deflate only) rejects absolute paths, `..` components, symbolic and hard links, stops once the archive decompresses past 500 MB in total (tar headers included, since the tar reader buffers long-name headers before yielding an entry), and requires exactly one top-level directory holding `planeai-plugin.json`.
 - **Integrity.** When the archive is an asset of the latest release (the fallback path, or a `downloads` URL of the form `https://github.com/{owner}/{name}/releases/latest/download/{asset}` or `.../releases/download/{latest tag}/{asset}`), its SHA-256 must equal the `digest` GitHub reports for that asset, and a mismatch fails closed before the review.
-  Any other URL installs as unverified and the review shows the computed hash.
+  Any other URL, and a release asset for which GitHub reports no digest, installs as unverified and the review shows the computed hash.
   Signing remains out of scope.
 - **Provenance.** The inventory records the repository, the release tag when the archive was a release asset, the source URL and the archive SHA-256 as `remote_origin`.
   A local package has exactly one provenance, a folder or a remote origin, and installing the same id again replaces it whole, so a later folder install clears the remote origin.

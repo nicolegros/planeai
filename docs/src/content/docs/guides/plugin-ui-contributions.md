@@ -107,7 +107,8 @@ It looks for the package archive in two places, in this order.
 An archive must contain exactly one top-level directory, and that directory must hold `planeai-plugin.json` and the package laid out as above.
 Absolute entries, `..` components, symbolic links and hard links are rejected.
 Tag releases `vX.Y.Z` (the `v` is optional) and keep the manifest `version` equal to the tag of the release that serves the archive, so Discovery can offer updates and the install review does not warn about a mismatch.
-When the archive is an asset of the latest release, PlaneAI verifies its SHA-256 against the digest GitHub reports for that asset; any other URL installs as unverified and the review shows the computed hash.
+When the archive is an asset of the latest release, PlaneAI verifies its SHA-256 against the digest GitHub reports for that asset.
+Any other URL, and a release asset for which GitHub reports no digest, installs as unverified and the review shows the computed hash.
 
 ### Capabilities
 

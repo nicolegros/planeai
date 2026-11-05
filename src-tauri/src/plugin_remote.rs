@@ -2363,6 +2363,53 @@ mod tests {
         );
     }
 
+    /// GitHub reports no digest for some assets, so a release asset can still install unverified.
+    #[tokio::test]
+    async fn a_release_asset_without_a_digest_installs_unverified() {
+        let bytes = good_tar();
+        let sha256 = hex(&Sha256::digest(&bytes));
+        let base = serve(bytes).await;
+        let url = format!("{base}/acme-macos-arm64.tar.gz");
+        let remote = RemoteRepo {
+            repo: repo(),
+            head: None,
+            latest_release: Some(Release {
+                tag_name: "v1.2.0".to_string(),
+                assets: vec![ReleaseAsset {
+                    name: "planeai-plugin-acme-macos-arm64.tar.gz".to_string(),
+                    browser_download_url: url.clone(),
+                    digest: None,
+                }],
+            }),
+        };
+        let source = remote.select_source("macos-arm64").unwrap();
+        assert_eq!(
+            source,
+            PackageSource {
+                url: url.clone(),
+                release_tag: Some("v1.2.0".to_string()),
+                expected_sha256: None,
+                format: ArchiveFormat::TarGz,
+            }
+        );
+
+        let temp = TempDir::new().unwrap();
+        let (id, dir) = StagingStore::new(temp.path()).create_dir().unwrap();
+        let (_, preview) = stage_package(
+            &Downloader::insecure_for_tests(),
+            &repo(),
+            &source,
+            &[],
+            id,
+            &dir,
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview.integrity, PackageIntegrity::Unverified { sha256 });
+        assert_eq!(preview.release_tag, Some("v1.2.0".to_string()));
+        assert_eq!(preview.source_url, url);
+    }
+
     /// `cargo test -- --ignored remote_install_real_catalog` stages the real GitHub plugin.
     #[tokio::test]
     #[ignore]
