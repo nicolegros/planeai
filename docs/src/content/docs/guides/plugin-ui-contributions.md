@@ -457,14 +457,16 @@ For example, local UI CSS can adopt or intentionally customize the host theme:
 - `call(method, params?)` — RPC scoped to the owning sidecar. Lifecycle methods are reserved.
 - `settings.get<T extends Record<string, unknown>>()` and `settings.replace<T>(settings)` — typed public JSON-object settings. These are the UI counterpart to the capability-gated sidecar settings callbacks; they never expose secrets.
 - `data.changed()` - tells PlaneAI the plugin's data changed, as do each run of the [background service](#background-service) and each call of a [tool](#tools) that is not read-only. A running `sidebar.section` remounts after this event.
-- `data.onChanged(listener)` returns an unsubscribe function and calls `listener` when the plugin's data changed. A local `session.indicator`, `session.meta`, `sidebar.header`, `main-pane`, `dialog`, or `titlebar` frame receives it in place and keeps its state, so subscribe to refresh what it shows; so does a local `session.panel` on host API `planeai.plugin-host.v5` or later, while an older one remounts instead. Other local frames never call it.
+- `data.onChanged(listener)` returns an unsubscribe function and calls `listener` when the plugin's data changed. A local `session.indicator`, `session.meta`, `sidebar.header`, `main-pane`, `dialog`, `titlebar`, or `interaction` frame receives it in place and keeps its state, so subscribe to refresh what it shows; so does a local `session.panel` on host API `planeai.plugin-host.v5` or later, while an older one remounts instead. Other local frames never call it.
 - `navigation.open(pluginId, contributionId)`, `navigation.close()`, and `navigation.openPreferences()`.
 - `sidebar.register(rows)`, `sidebar.select(rowId)`, and `sidebar.handleKeydown(event)` for sidebar navigation contributions. Always call the returned unregister function from your mount disposer.
+- `interaction` and `data.onTaskDataChanged(listener)` on host API `planeai.plugin-host.v7` or later, described in [Interaction bridge](#interaction-bridge-host-api-v7).
 
 The fixture UI calls `context.host.call("fixture.status")`, loads a saved greeting with `context.host.settings.get()`, replaces it when **Save greeting** is selected, calls `data.changed()`, and removes its click handler in its disposer.
 
 Each `ui_contributions` item requires a unique safe `id`, `label`, `placement`, and `entrypoint`.
-Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, `main-pane`, `dialog`, `session.panel`, `session.indicator`, `session.meta`, and `titlebar`.
+Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, `main-pane`, `dialog`, `session.panel`, `session.indicator`, `session.meta`, `titlebar`, and `interaction`.
+An `interaction` frame is mounted for as long as its plugin runs, draws nothing, and takes no pointer input or focus: it drives host-drawn toasts and forms through the [interaction bridge](#interaction-bridge-host-api-v7).
 Sidebar contributions may set integer `order`.
 `session.indicator` and `session.meta` are slots drawn on every sidebar row that has a session, with that row's session context; they take no shortcut and no order, and their frames get no pointer events and no focus.
 A `session.indicator` is a 16px square beside the row's status.
@@ -494,6 +496,24 @@ Use the placement's available space conservatively; the host owns focus, navigat
 Inside a local plugin frame, PlaneAI forwards Cmd/Ctrl chords to its own shortcut router, so app shortcuts such as Mod+[ keep working while the frame has focus.
 Call `preventDefault()` on a chord to keep it for your UI; Ctrl+Tab and Mod+N always reach PlaneAI.
 A provider session's UI owns the keyboard like a terminal: PlaneAI takes focus out of its frame when the sidebar or a dialog takes over, and gives it back when its pane does.
+
+### Interaction bridge (host API v7)
+
+On host API `planeai.plugin-host.v7` or later, every local frame's `context.host` also has `interaction` and `data.onTaskDataChanged`; on older host APIs both are absent, and PlaneAI refuses the underlying messages.
+
+- `interaction.showToast({ id, kind?, message, detail?, actions?, dismiss? })` shows a toast PlaneAI draws and resolves with `id` once it shows.
+  `id` is scoped to your plugin, so it never collides with another plugin's, and showing the same `id` again replaces that toast in place.
+  `kind` is `info` (the default), `success`, `warning`, or `error`.
+  `actions` is a list of `{ key, label, run }`, where `key` is a single lowercase letter other than `d` or `c`, or `Enter`, and `run` is a function PlaneAI calls in your frame when the user picks the action.
+  `dismiss` is `"enabled"` (the default) to let the user dismiss the toast, `"disabled"` to refuse, or a function PlaneAI calls in your frame once the user dismissed it.
+  Picking an action or dismissing removes the toast before your callback runs, so the callback may show the next toast under the same `id`.
+  A callback that throws or rejects shows its error as a PlaneAI notification.
+- `interaction.dismissToast(id)` removes one of your toasts without running its callbacks.
+- `interaction.openProjectForm()` opens PlaneAI's Add Project form and resolves with the new project's `{ id, name, path }`, or `null` when the user cancels.
+- `data.onTaskDataChanged(listener)` returns an unsubscribe function and calls `listener` whenever PlaneAI's task data changes, for a plugin holding `tasks.sync`, for example to refresh child counts beside synced tasks.
+
+When your frame goes away, as when the plugin stops or reloads, PlaneAI removes the toasts it showed, since their callbacks went with it.
+The TypeScript shapes are `PluginFrameInteraction`, `PluginFrameToast`, and `PluginFrameProject` in `src/lib/plugin-sdk.ts`.
 
 ## Install, use, reload, and remove
 

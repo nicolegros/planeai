@@ -9,6 +9,9 @@ const {
   hostCall,
   eventListeners,
   showToast,
+  dismissToast,
+  openProjectForm,
+  listAll,
   appearance,
 } = vi.hoisted(() => ({
   pluginCall: vi.fn(() =>
@@ -28,6 +31,9 @@ const {
   hostCall: vi.fn(() => Promise.resolve({ projects: [] })),
   eventListeners: new Map<string, (event: { payload: string }) => void>(),
   showToast: vi.fn(),
+  dismissToast: vi.fn(),
+  openProjectForm: vi.fn(),
+  listAll: vi.fn(),
   appearance: { dark: false },
 }));
 
@@ -40,11 +46,17 @@ vi.mock("../../lib/api", () => ({
     updateSettings,
     dataChanged,
   },
+  tasks: { listAll },
 }));
 
 vi.mock("../../lib/toasts.svelte", () => ({
   showToast,
-  dismissToast: vi.fn(),
+  dismissToast,
+}));
+
+vi.mock("../../lib/plugin-modal-manager", () => ({
+  openPluginModal: vi.fn(),
+  openProjectForm,
 }));
 
 vi.mock("../../lib/settings.svelte", () => ({
@@ -58,6 +70,9 @@ import { getPluginSidebarRows } from "../../lib/plugin-sidebar-navigation.svelte
 import type { PluginInventory, PluginUiContribution } from "../../lib/types";
 import { focusTerminal, getActiveZone } from "../../lib/focus.svelte";
 import { shouldBypassSidebarKeyboard } from "../../lib/sidebar-nav.svelte";
+import * as taskStore from "../../lib/task-store.svelte";
+import type { PluginFrameInteraction, PluginUiHost } from "../../lib/plugin-sdk";
+import type { ToastOptions } from "../../lib/toasts.svelte";
 
 // Each bundled font answers with its own file name, so a test can tell the faces apart.
 vi.stubGlobal(
@@ -240,6 +255,7 @@ describe("PluginContributionHost", () => {
     ["main-pane", "planeai.plugin-host.v1"],
     ["dialog", "planeai.plugin-host.v1"],
     ["titlebar", "planeai.plugin-host.v1"],
+    ["interaction", "planeai.plugin-host.v1"],
     ["session.panel", "planeai.plugin-host.v5"],
   ] as const)(
     "tells a local %s frame on %s its plugin's data changed without remounting it",
@@ -942,5 +958,285 @@ describe("PluginContributionHost", () => {
       expect(parent.postMessage).toHaveBeenCalledWith({ type: "mounted" }, "*"),
     );
     expect(mounted).toBe(true);
+  });
+
+  /** The host surface a local frame's bundle receives, with the frame bridge running against the real host component. */
+  type FrameHost = Omit<PluginUiHost, "interaction" | "data"> & {
+    interaction?: PluginFrameInteraction;
+    data: PluginUiHost["data"];
+  };
+
+  async function bootLocalFrame(props: {
+    placement: PluginUiContribution["placement"];
+    hostApiVersion: string;
+    capabilities?: string[];
+  }): Promise<{ host: FrameHost; frameWindow: Window }> {
+    const source = Promise.withResolvers<string>();
+    localUiSource.mockReturnValue(source.promise);
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target, props }) as typeof component;
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    await vi.waitFor(() => expect(localUiSource).toHaveBeenCalled());
+    const frameWindow = frame.contentWindow!;
+    const frameListeners: Array<(event: { source: unknown; data: unknown }) => void> = [];
+    const parent = {
+      postMessage: (data: unknown) =>
+        window.dispatchEvent(
+          new MessageEvent("message", { source: frameWindow, data: structuredClone(data) }),
+        ),
+    };
+    vi.spyOn(frameWindow, "postMessage").mockImplementation(((data: unknown) => {
+      for (const listener of frameListeners)
+        listener({ source: parent, data: structuredClone(data) });
+    }) as Window["postMessage"]);
+    let host: FrameHost | undefined;
+    // A Function body cannot reach Node's module loader, so the bundle import is stubbed.
+    const importBundle = async () => ({
+      default: {
+        mount: (_root: unknown, context: { host: FrameHost }) => {
+          host = context.host;
+          return () => {};
+        },
+      },
+    });
+    const bridge = frame.srcdoc
+      .match(/<script>([\s\S]*)<\/script>/)![1]
+      .replace("await import(url)", "await importBundle(url)");
+    new Function(
+      "parent",
+      "addEventListener",
+      "removeEventListener",
+      "document",
+      "FontFace",
+      "URL",
+      "importBundle",
+      bridge,
+    )(
+      parent,
+      (type: string, listener: (event: { source: unknown; data: unknown }) => void) => {
+        if (type === "message") frameListeners.push(listener);
+      },
+      () => {},
+      { body: {}, fonts: { add: () => {} } },
+      class {
+        loaded = Promise.resolve();
+      },
+      { createObjectURL: () => "blob:bundle", revokeObjectURL: () => {} },
+      importBundle,
+    );
+    source.resolve("export default {};");
+    await vi.waitFor(() => expect(host).toBeTruthy());
+    return { host: host!, frameWindow };
+  }
+
+  const SYNC_HOST_API = "planeai.plugin-host.v7";
+
+  function lastToast(): ToastOptions {
+    return (showToast.mock.calls.at(-1) as unknown as [ToastOptions])[0];
+  }
+
+  it("round-trips a local frame's toast actions and dismissal to the frame's callbacks", async () => {
+    const { host } = await bootLocalFrame({
+      placement: "interaction",
+      hostApiVersion: SYNC_HOST_API,
+    });
+    const ran: string[] = [];
+
+    const id = await host.interaction!.showToast({
+      id: "departed",
+      kind: "warning",
+      message: "ENG-1 left your Linear view",
+      detail: "Fix login",
+      actions: [{ key: "Enter", label: "Done", run: () => void ran.push("done ENG-1") }],
+      dismiss: () => void ran.push("dismissed ENG-1"),
+    });
+    const first = lastToast();
+    first.actions![0].run();
+    await host.interaction!.showToast({
+      id: "departed",
+      kind: "warning",
+      message: "ENG-2 left your Linear view",
+      actions: [{ key: "Enter", label: "Done", run: () => void ran.push("done ENG-2") }],
+      dismiss: () => void ran.push("dismissed ENG-2"),
+    });
+    (lastToast().dismiss as () => void)();
+
+    expect(id).toBe("departed");
+    expect({
+      ...first,
+      actions: first.actions!.map(({ key, label }) => ({ key, label })),
+      dismiss: typeof first.dismiss,
+    }).toEqual({
+      id: "plugin:local-fixture:departed",
+      kind: "warning",
+      message: "ENG-1 left your Linear view",
+      detail: "Fix login",
+      actions: [{ key: "Enter", label: "Done" }],
+      dismiss: "function",
+    });
+    await vi.waitFor(() => expect(ran).toEqual(["done ENG-1", "dismissed ENG-2"]));
+  });
+
+  it("maps a local frame's dismiss setting and dismisses its toasts when asked and when it goes away", async () => {
+    const { host } = await bootLocalFrame({
+      placement: "interaction",
+      hostApiVersion: SYNC_HOST_API,
+    });
+
+    await host.interaction!.showToast({
+      id: "resolving",
+      message: "Marking ENG-1 done",
+      dismiss: "disabled",
+    });
+    const resolving = lastToast();
+    await host.interaction!.showToast({ id: "plain", message: "Synced" });
+    const plain = lastToast();
+    await host.interaction!.dismissToast("resolving");
+    const dismissedByFrame = dismissToast.mock.calls.map(([toastId]) => toastId);
+    unmount(component!);
+    component = undefined;
+
+    expect([resolving.dismiss, resolving.kind, plain.dismiss, plain.kind]).toEqual([
+      "disabled",
+      "info",
+      "default",
+      "info",
+    ]);
+    expect(dismissedByFrame).toEqual(["plugin:local-fixture:resolving"]);
+    expect(dismissToast.mock.calls.map(([toastId]) => toastId)).toEqual([
+      "plugin:local-fixture:resolving",
+      "plugin:local-fixture:plain",
+    ]);
+  });
+
+  it("opens PlaneAI's project form for a local frame and answers with the new project", async () => {
+    const { host } = await bootLocalFrame({ placement: "dialog", hostApiVersion: SYNC_HOST_API });
+    openProjectForm
+      .mockResolvedValueOnce({
+        id: "p1",
+        name: "Demo",
+        path: "/demo",
+        hidden: false,
+        path_missing: false,
+      })
+      .mockResolvedValueOnce(null);
+
+    const created = await host.interaction!.openProjectForm();
+    const cancelled = await host.interaction!.openProjectForm();
+
+    expect([created, cancelled]).toEqual([{ id: "p1", name: "Demo", path: "/demo" }, null]);
+  });
+
+  it("keeps the interaction bridge from local frames before host API v7", async () => {
+    const { host, frameWindow } = await bootLocalFrame({
+      placement: "interaction",
+      hostApiVersion: "planeai.plugin-host.v6",
+    });
+    const answers: unknown[] = [];
+    vi.mocked(frameWindow.postMessage).mockImplementation(((data: unknown) => {
+      answers.push(data);
+    }) as Window["postMessage"]);
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frameWindow,
+        data: { type: "toast-show", requestId: 41, toast: { id: "x", message: "Hello" } },
+      }),
+    );
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frameWindow,
+        data: { type: "project-form", requestId: 42 },
+      }),
+    );
+
+    expect(host.interaction).toBeUndefined();
+    expect(answers).toEqual([
+      {
+        type: "response",
+        requestId: 41,
+        ok: false,
+        error: "host.interaction requires host API planeai.plugin-host.v7",
+      },
+      {
+        type: "response",
+        requestId: 42,
+        ok: false,
+        error: "host.interaction requires host API planeai.plugin-host.v7",
+      },
+    ]);
+    expect(showToast.mock.calls).toEqual([]);
+  });
+
+  it("tells a local tasks.sync plugin's frame when PlaneAI task data changes", async () => {
+    const synced = await bootLocalFrame({
+      placement: "sidebar.section",
+      hostApiVersion: SYNC_HOST_API,
+      capabilities: ["tasks.read", "tasks.create", "tasks.sync"],
+    });
+    const changes: string[] = [];
+    synced.host.data.onTaskDataChanged!(() => changes.push("tasks.sync"));
+    const other = mount(PluginContributionHostLocalHarness, {
+      target: document.body.appendChild(document.createElement("div")),
+      props: {
+        placement: "sidebar.section",
+        hostApiVersion: SYNC_HOST_API,
+        capabilities: ["tasks.read"],
+      },
+    });
+    listAll.mockResolvedValue([
+      {
+        key: "PLA-1",
+        title: "Child",
+        status: "todo",
+        description: "",
+        priority: 0,
+        parent_key: "ENG-1",
+      },
+    ]);
+
+    await taskStore.loadTasks(["/repo"]);
+
+    await vi.waitFor(() => expect(changes).toEqual(["tasks.sync"]));
+    unmount(other);
+    await taskStore.loadTasks([]);
+  });
+
+  it("keeps a local interaction frame invisible and out of the way of pointer input", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "interaction", hostApiVersion: SYNC_HOST_API },
+    }) as typeof component;
+
+    const host = await vi.waitFor(() => {
+      const next = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");
+      expect(next?.shadowRoot?.querySelector("iframe")).toBeTruthy();
+      return next!;
+    });
+    const frame = host.shadowRoot!.querySelector<HTMLIFrameElement>("iframe")!;
+
+    expect(host.className).toBe("pointer-events-none");
+    expect({
+      width: frame.style.width,
+      height: frame.style.height,
+      pointerEvents: frame.style.pointerEvents,
+      tabIndex: frame.tabIndex,
+      hidden: frame.getAttribute("aria-hidden"),
+    }).toEqual({
+      width: "0px",
+      height: "0px",
+      pointerEvents: "none",
+      tabIndex: -1,
+      hidden: "true",
+    });
   });
 });

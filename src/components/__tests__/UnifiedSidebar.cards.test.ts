@@ -574,7 +574,12 @@ describe("UnifiedSidebar in the Cards layout", () => {
   );
 
   it("mounts session indicator and meta plugin slots on session cards", async () => {
-    const plugin = { id: "ci", name: "CI", source_kind: "builtin" } as PluginInventory;
+    const plugin = {
+      id: "ci",
+      name: "CI",
+      source_kind: "builtin",
+      capabilities: [] as string[],
+    } as PluginInventory;
     const slot = (placement: PluginUiContribution["placement"]) => ({
       plugin,
       contribution: { id: placement, label: placement, placement } as PluginUiContribution,
@@ -610,6 +615,7 @@ describe("UnifiedSidebar in the Cards layout", () => {
       name: "GitHub",
       source_kind: "local",
       host_api_version: "planeai.plugin-host.v5",
+      capabilities: [] as string[],
       ui_contributions: [
         contribution("pill", "session.meta"),
         contribution("panel", "session.panel"),

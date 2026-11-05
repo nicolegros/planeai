@@ -27,6 +27,7 @@ PlaneAI runs bundled and user-selected local plugins as separately compiled subp
   A `tasks.sync` plugin creates a task only under a key no task holds, PlaneAI records it as that task's owner in the same transaction (`plugin_task_owners`), and it updates only the tasks it owns.
   The bundled Jira plugin keeps its builtin-only `tasks.update` grant, guarded by its own link table.
   Removing a plugin releases its tasks.
+  The same host API gives local UI frames an `interaction` bridge (host-drawn toasts whose callbacks stay in the frame, and the Add Project form) and task data change notifications, which only bundled UIs had before.
   Settings are a host-owned JSON object with atomic full-document replacement and last-writer-wins behavior. Task events are post-commit, best-effort live batches with no replay, retry, or cross-batch ordering guarantee; plugins reconcile with `tasks.read`.
 - The frontend exposes only a typed, plugin-scoped host bridge. Plugin UI must not import PlaneAI Svelte stores, Tauri APIs, components, or internal frontend modules. A local UI entrypoint is a self-contained single-file browser ESM bundle mounted into a host-owned open Shadow Root and must return a disposer called before reload, disable, or unmount. Shadow DOM is a CSS/DOM composition boundary, not a security sandbox.
 - PlaneAI ships `planeai-cli plugin test` as a headless author harness. It validates a package and exercises handshake, callback settings, task-event delivery, malformed response detection, and lifecycle shutdown without launching the desktop app.
