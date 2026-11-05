@@ -481,6 +481,50 @@ describe("PluginManager", () => {
     await vi.waitFor(() => expect(buttonLabeled(target, "Install v1.2.0")?.disabled).toBe(false));
   });
 
+  it("discards a staged package that arrives after the manager unmounted", async () => {
+    const repo = "acme/planeai-plugin-acme";
+    list.mockResolvedValue([]);
+    resolveCandidate.mockResolvedValue({ kind: "install", latest_version: "1.2.0" });
+    let finishStaging: (staged: StagedPluginInstall) => void = () => {};
+    stageRemote.mockReturnValue(
+      new Promise<StagedPluginInstall>((resolve) => {
+        finishStaging = resolve;
+      }),
+    );
+    discardStaged.mockResolvedValue(undefined);
+    await mountWithDiscovery([candidate(repo)]);
+    await vi.waitFor(() => expect(buttonLabeled(target, "Install v1.2.0")).toBeDefined());
+    buttonLabeled(target, "Install v1.2.0")?.click();
+    await vi.waitFor(() => expect(stageRemote).toHaveBeenCalledWith(repo));
+
+    unmount(component!);
+    component = undefined;
+    expect(discardStaged).not.toHaveBeenCalled();
+    finishStaging(stagedAcme);
+
+    await vi.waitFor(() => expect(discardStaged).toHaveBeenCalledWith("stage-1"));
+    expect(reviewDialog()).toBeNull();
+    expect(commitStaged).not.toHaveBeenCalled();
+  });
+
+  it("discards the package under review when the manager unmounts", async () => {
+    list.mockResolvedValue([]);
+    resolveCandidate.mockResolvedValue({ kind: "install", latest_version: "1.2.0" });
+    stageRemote.mockResolvedValue(stagedAcme);
+    discardStaged.mockResolvedValue(undefined);
+    await mountWithDiscovery([candidate("acme/planeai-plugin-acme")]);
+    await vi.waitFor(() => expect(buttonLabeled(target, "Install v1.2.0")).toBeDefined());
+    buttonLabeled(target, "Install v1.2.0")?.click();
+    await vi.waitFor(() => expect(reviewDialog()?.textContent).toContain("Install Acme?"));
+
+    unmount(component!);
+    component = undefined;
+
+    await vi.waitFor(() => expect(discardStaged).toHaveBeenCalledWith("stage-1"));
+    await vi.waitFor(() => expect(reviewDialog()).toBeNull());
+    expect(commitStaged).not.toHaveBeenCalled();
+  });
+
   it("re-resolves Discovery cards after removing a plugin", async () => {
     const repo = "acme/planeai-plugin-acme";
     list.mockResolvedValueOnce([remoteAcmePlugin]).mockResolvedValue([]);

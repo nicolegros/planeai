@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -44,6 +44,7 @@
   let loadError = $state<string | null>(null);
   let pendingRemoval = $state<PluginInventory | null>(null);
   let resolveTicket = 0;
+  let destroyed = false;
   const latestResolve = new Map<string, number>();
 
   const stagedForReview = $derived(
@@ -145,12 +146,26 @@
   async function stageRemote(repo: string) {
     if (remoteInstall.kind !== "idle") return;
     remoteInstall = { kind: "staging", repo };
+    let staged: StagedPluginInstall;
     try {
-      remoteInstall = { kind: "reviewing", staged: await plugins.stageRemote(repo) };
+      staged = await plugins.stageRemote(repo);
     } catch (error) {
       loadError = String(error);
       remoteInstall = { kind: "idle" };
+      return;
     }
+    // Nobody is left to review a package that lands after the manager closed.
+    if (destroyed) {
+      discard(staged.staging_id);
+      return;
+    }
+    remoteInstall = { kind: "reviewing", staged };
+  }
+
+  function discard(stagingId: string) {
+    plugins.discardStaged(stagingId).catch((error) => {
+      loadError = String(error);
+    });
   }
 
   async function commitStaged() {
@@ -174,9 +189,7 @@
     if (remoteInstall.kind !== "reviewing") return;
     const { staging_id } = remoteInstall.staged;
     remoteInstall = { kind: "idle" };
-    plugins.discardStaged(staging_id).catch((error) => {
-      loadError = String(error);
-    });
+    discard(staging_id);
   }
 
   function formattedUpdatedDate(value: string): string {
@@ -271,6 +284,11 @@
     return () => {
       void unlistenGithubMigration.then((unlisten) => unlisten());
     };
+  });
+
+  onDestroy(() => {
+    destroyed = true;
+    discardStaged();
   });
 </script>
 
