@@ -44,8 +44,10 @@ impl TranscriptCache {
         pending
     }
 
-    pub fn forget(&mut self, path: &Path) {
-        self.read.remove(path);
+    /// Drops the transcripts not in `paths`, the ones still being decided.
+    pub fn keep_only<'a>(&mut self, paths: impl IntoIterator<Item = &'a Path>) {
+        let keep: std::collections::HashSet<&Path> = paths.into_iter().collect();
+        self.read.retain(|path, _| keep.contains(path.as_path()));
     }
 }
 
@@ -70,6 +72,8 @@ pub fn pending_background_subagents(transcript: impl BufRead) -> Option<usize> {
     let mut subagents = std::collections::BTreeSet::new();
     let mut waiting_on_own_work = std::collections::BTreeSet::new();
     let mut waiting_at_turn_end = std::collections::BTreeSet::new();
+    // Resumed after the last turn ended uncounted, so counted here until they report.
+    let mut handed_back_since_turn_end = std::collections::BTreeSet::new();
     for line in transcript.lines().map_while(Result::ok) {
         if !RELEVANT.iter().any(|needle| line.contains(needle)) {
             continue;
@@ -85,6 +89,7 @@ pub fn pending_background_subagents(transcript: impl BufRead) -> Option<usize> {
                 turn_closed = true;
                 finished_since_turn_end = 0;
                 waiting_at_turn_end = waiting_on_own_work.clone();
+                handed_back_since_turn_end.clear();
                 alive_at_turn_end = record
                     .get("pendingBackgroundAgentCount")
                     .and_then(|count| count.as_u64())
@@ -104,6 +109,7 @@ pub fn pending_background_subagents(transcript: impl BufRead) -> Option<usize> {
                     waiting_on_own_work.insert(task_id.to_string());
                 } else {
                     waiting_on_own_work.remove(task_id);
+                    handed_back_since_turn_end.remove(task_id);
                     if turn_closed && !waiting_at_turn_end.contains(task_id) {
                         finished_since_turn_end += 1;
                     }
@@ -115,7 +121,12 @@ pub fn pending_background_subagents(transcript: impl BufRead) -> Option<usize> {
                 if record.pointer("/origin/handback") == Some(&serde_json::json!(true)) =>
             {
                 if let Some(agent_id) = record.pointer("/origin/from").and_then(|id| id.as_str()) {
-                    waiting_on_own_work.remove(agent_id);
+                    if waiting_on_own_work.remove(agent_id)
+                        && turn_closed
+                        && waiting_at_turn_end.contains(agent_id)
+                    {
+                        handed_back_since_turn_end.insert(agent_id.to_string());
+                    }
                 }
             }
             Some("user") => {
@@ -127,7 +138,9 @@ pub fn pending_background_subagents(transcript: impl BufRead) -> Option<usize> {
         }
     }
     turn_closed.then(|| {
-        alive_at_turn_end.saturating_sub(finished_since_turn_end) + waiting_on_own_work.len()
+        alive_at_turn_end.saturating_sub(finished_since_turn_end)
+            + waiting_on_own_work.len()
+            + handed_back_since_turn_end.len()
     })
 }
 
@@ -244,7 +257,13 @@ mod tests {
         records.extend([notification("a361", WAITING), assistant(), turn_end(None)]);
         assert_eq!(pending(&records), Some(1), "waiting on its own work");
 
-        records.extend([hand_back("a361"), assistant(), turn_end(Some(1))]);
+        records.push(hand_back("a361"));
+        assert_eq!(
+            pending(&records),
+            Some(1),
+            "resumed before the turn its report starts"
+        );
+        records.extend([assistant(), turn_end(Some(1))]);
         assert_eq!(
             pending(&records),
             Some(1),

@@ -407,22 +407,20 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
                 let running = transcript
                     .as_deref()
                     .and_then(|path| transcripts.pending_background_subagents(path));
-                (id, transcript, running)
+                (id, running)
             })
             .collect();
         {
             let mut s = state.lock().unwrap();
-            for (id, transcript, running) in pending {
+            for (id, running) in pending {
                 let held = s.is_held(&id);
                 if s.resolve_turn_end(&id, running) {
-                    if let Some(path) = transcript {
-                        transcripts.forget(&path);
-                    }
                     to_notify.push(id);
                 } else if !held && s.is_held(&id) {
                     tracing::info!(session_id = %id, running, "turn ended with background subagents running; holding");
                 }
             }
+            transcripts.keep_only(s.deciding_transcripts().iter().map(|p| p.as_path()));
             // Emitted under the lock so a busy signal cannot publish its resume before this Idle.
             for id in &to_notify {
                 emit_state_change(&app, id, AgentState::Idle);
