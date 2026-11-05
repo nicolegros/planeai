@@ -15,6 +15,10 @@ const WAITING_ON_OWN_WORK: &str = "waiting on its own background work";
 /// A turn's `pendingBackgroundAgentCount` still counts a subagent whose report started that
 /// turn, and the subagent's final notice may land after it without starting another, so
 /// notices after the last turn count down from it.
+///
+/// The count leaves out a subagent that stopped while its own background work runs, so its
+/// notice holds the turn until it reports again. A subagent stopped by hand never does, so a
+/// prompt the user types drops those notices.
 pub fn pending_background_subagents(transcript: impl BufRead) -> Option<usize> {
     let mut turn_closed = false;
     let mut alive_at_turn_end = 0;
@@ -25,7 +29,8 @@ pub fn pending_background_subagents(transcript: impl BufRead) -> Option<usize> {
         let relevant = line.contains("\"assistant\"")
             || line.contains("turn_duration")
             || line.contains("async_launched")
-            || line.contains("task-notification");
+            || line.contains("task-notification")
+            || line.contains("\"human\"");
         if !relevant {
             continue;
         }
@@ -63,6 +68,7 @@ pub fn pending_background_subagents(transcript: impl BufRead) -> Option<usize> {
                     }
                 }
             }
+            Some("user") if is_typed_by_the_user(&record) => waiting_on_own_work.clear(),
             Some("user") => {
                 if let Some(agent_id) = launched_subagent(&record) {
                     subagents.insert(agent_id.to_string());
@@ -84,6 +90,13 @@ fn launched_subagent(record: &serde_json::Value) -> Option<&str> {
     launched
         .then(|| result.get("agentId").and_then(|id| id.as_str()))
         .flatten()
+}
+
+fn is_typed_by_the_user(record: &serde_json::Value) -> bool {
+    record
+        .pointer("/origin/kind")
+        .and_then(|kind| kind.as_str())
+        == Some("human")
 }
 
 fn is_task_notification(record: &serde_json::Value) -> bool {
@@ -195,6 +208,26 @@ mod tests {
             Some(0),
             "the final notice after the turn ends it"
         );
+    }
+
+    fn typed_prompt() -> serde_json::Value {
+        json!({ "type": "user", "origin": { "kind": "human" }, "message": { "content": "next" } })
+    }
+
+    /// A subagent stopped by hand while it waited on its own work never reports again.
+    #[test]
+    fn a_prompt_the_user_types_drops_waiting_notices_that_never_resolved() {
+        let mut records = vec![
+            launch("a1"),
+            assistant(),
+            turn_end(Some(1)),
+            notification("a1", WAITING),
+            assistant(),
+            turn_end(None),
+        ];
+        assert_eq!(pending(&records), Some(1));
+        records.extend([typed_prompt(), assistant(), turn_end(None)]);
+        assert_eq!(pending(&records), Some(0));
     }
 
     #[test]
