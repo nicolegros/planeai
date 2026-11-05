@@ -197,6 +197,7 @@ pub struct PackageSource {
     /// Set when the archive is an asset of the latest release.
     pub release_tag: Option<String>,
     pub expected_sha256: Option<String>,
+    pub format: ArchiveFormat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,11 +250,18 @@ impl RemoteRepo {
         release.assets.iter().find(|asset| asset.name == asset_name)
     }
 
-    fn fallback_asset(&self, platform: &str) -> Option<&ReleaseAsset> {
+    fn fallback_asset(&self, platform: &str) -> Option<(&ReleaseAsset, ArchiveFormat)> {
         let release = self.latest_release.as_ref()?;
         let stem = format!("{}-{platform}", self.repo.name());
-        release.assets.iter().find(|asset| {
-            asset.name == format!("{stem}.tar.gz") || asset.name == format!("{stem}.zip")
+        release.assets.iter().find_map(|asset| {
+            let format = if asset.name == format!("{stem}.tar.gz") {
+                ArchiveFormat::TarGz
+            } else if asset.name == format!("{stem}.zip") {
+                ArchiveFormat::Zip
+            } else {
+                return None;
+            };
+            Some((asset, format))
         })
     }
 
@@ -268,7 +276,7 @@ impl RemoteRepo {
                     "Not available for {platform}: the repository manifest download is not an https URL."
                 ));
             }
-            ArchiveFormat::from_url(url)?;
+            let format = ArchiveFormat::from_url(url)?;
             return Ok(match self.release_asset_for_url(url) {
                 Some(asset) => PackageSource {
                     url: url.clone(),
@@ -277,20 +285,23 @@ impl RemoteRepo {
                         .as_ref()
                         .map(|release| release.tag_name.clone()),
                     expected_sha256: asset.sha256(),
+                    format,
                 },
                 None => PackageSource {
                     url: url.clone(),
                     release_tag: None,
                     expected_sha256: None,
+                    format,
                 },
             });
         }
         let stem = format!("{}-{platform}", self.repo.name());
         match (&self.latest_release, self.fallback_asset(platform)) {
-            (Some(release), Some(asset)) => Ok(PackageSource {
+            (Some(release), Some((asset, format))) => Ok(PackageSource {
                 url: asset.browser_download_url.clone(),
                 release_tag: Some(release.tag_name.clone()),
                 expected_sha256: asset.sha256(),
+                format,
             }),
             (Some(release), None) => Err(format!(
                 "Not available for {platform}: the repository manifest lists no download and release {} has no {stem}.tar.gz or {stem}.zip asset.",
@@ -934,6 +945,7 @@ mod tests {
                 url: "https://github.com/acme/planeai-plugin-acme/releases/latest/download/planeai-plugin-acme-macos-arm64.tar.gz".to_string(),
                 release_tag: Some("v1.2.0".to_string()),
                 expected_sha256: Some("abcdef".to_string()),
+                format: ArchiveFormat::TarGz,
             }
         );
 
@@ -959,6 +971,7 @@ mod tests {
                 url: "https://cdn.acme.dev/acme.zip".to_string(),
                 release_tag: None,
                 expected_sha256: None,
+                format: ArchiveFormat::Zip,
             }
         );
 
@@ -994,6 +1007,7 @@ mod tests {
                 url: "https://github.com/acme/planeai-plugin-acme/releases/download/v1.2.0/planeai-plugin-acme-linux-x64.zip".to_string(),
                 release_tag: Some("v1.2.0".to_string()),
                 expected_sha256: None,
+                format: ArchiveFormat::Zip,
             }
         );
         assert_eq!(
@@ -1675,7 +1689,7 @@ mod tests {
         let remote = fetch_remote_repo(repo).await.unwrap();
         let platform = crate::plugin_packages::current_platform_key();
         let source = remote.select_source(platform).unwrap();
-        let format = ArchiveFormat::from_url(&source.url).unwrap();
+        let format = source.format;
         let temp = TempDir::new().unwrap();
         let archive = temp.path().join(format.file_name());
         let sha256 = Downloader::new()

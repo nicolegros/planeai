@@ -8,9 +8,9 @@ use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 use crate::plugin_remote::{
-    check_integrity, fetch_remote_repo, replacement, version_mismatch, ArchiveFormat,
-    DiscoveryCardState, Downloader, RepoFullName, StagedManifest, StagedPackage,
-    StagedPluginInstall, StagingStore, EXPIRED_STAGING,
+    check_integrity, fetch_remote_repo, replacement, version_mismatch, DiscoveryCardState,
+    Downloader, RepoFullName, StagedManifest, StagedPackage, StagedPluginInstall, StagingStore,
+    EXPIRED_STAGING,
 };
 use crate::plugins::{PluginInventory, PluginRuntimeHandle, RemoteOrigin};
 
@@ -164,9 +164,8 @@ pub async fn stage_remote_plugin(
     let remote_repo = fetch_remote_repo(repo.clone()).await?;
     let platform = crate::plugin_packages::current_platform_key();
     let source = remote_repo.select_source(platform)?;
-    let format = ArchiveFormat::from_url(&source.url)?;
     let (staging_id, dir) = remote.staging.create_dir()?;
-    let staged = stage_into(&remote, &runtime, &remote_repo, &source, format, &dir).await;
+    let staged = stage_into(&remote, &runtime, &remote_repo, &source, &dir).await;
     match staged {
         Ok((package, preview)) => {
             remote.staging.insert(staging_id.clone(), package)?;
@@ -187,9 +186,9 @@ async fn stage_into(
     runtime: &PluginRuntimeHandle,
     remote_repo: &crate::plugin_remote::RemoteRepo,
     source: &crate::plugin_remote::PackageSource,
-    format: ArchiveFormat,
     dir: &Path,
 ) -> Result<(StagedPackage, StagedPluginInstall), String> {
+    let format = source.format;
     let archive = dir.join(format.file_name());
     let sha256 = remote.downloader.download(&source.url, &archive).await?;
     let integrity = check_integrity(sha256.clone(), source.expected_sha256.as_deref())?;
