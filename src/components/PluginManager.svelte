@@ -71,13 +71,17 @@
       const candidates = await plugins.discover();
       discoveryCandidates = candidates;
       cardResolutions = {};
-      for (const candidate of candidates) void resolveCard(candidate.full_name);
+      resolveAllCards();
       loadError = null;
     } catch (error) {
       loadError = String(error);
     } finally {
       discovering = false;
     }
+  }
+
+  function resolveAllCards() {
+    for (const candidate of discoveryCandidates ?? []) void resolveCard(candidate.full_name);
   }
 
   async function resolveCard(repo: string) {
@@ -167,6 +171,7 @@
     try {
       await plugins.installLocal(selected);
       await refresh();
+      resolveAllCards();
     } catch (error) {
       loadError = String(error);
       await refresh();
@@ -198,6 +203,7 @@
       await plugins.removeLocal(plugin.id);
       pendingRemoval = null;
       await refresh();
+      resolveAllCards();
     } catch (error) {
       loadError = String(error);
       await refresh();

@@ -107,6 +107,7 @@ const {
   stageRemote,
   commitStaged,
   discardStaged,
+  removeLocal,
 } = vi.hoisted(() => ({
   list: vi.fn(),
   enable: vi.fn(),
@@ -119,6 +120,7 @@ const {
   stageRemote: vi.fn(),
   commitStaged: vi.fn(),
   discardStaged: vi.fn(),
+  removeLocal: vi.fn(),
 }));
 
 const { listen } = vi.hoisted(() => ({ listen: vi.fn() }));
@@ -139,7 +141,7 @@ vi.mock("../../lib/api", () => ({
     disable: vi.fn(),
     reload: vi.fn(),
     installLocal: vi.fn(),
-    removeLocal: vi.fn(),
+    removeLocal,
   },
 }));
 
@@ -448,6 +450,26 @@ describe("PluginManager", () => {
     await vi.waitFor(() => expect(reviewDialog()).toBeNull());
     expect(commitStaged).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(buttonLabeled(target, "Install v1.2.0")?.disabled).toBe(false));
+  });
+
+  it("re-resolves Discovery cards after removing a plugin", async () => {
+    const repo = "acme/planeai-plugin-acme";
+    list.mockResolvedValueOnce([remoteAcmePlugin]).mockResolvedValue([]);
+    resolveCandidate
+      .mockResolvedValueOnce({ kind: "up_to_date", installed_version: "1.2.0" })
+      .mockResolvedValue({ kind: "install", latest_version: "1.2.0" });
+    removeLocal.mockResolvedValue(undefined);
+    await mountWithDiscovery([candidate(repo)]);
+    await vi.waitFor(() => expect(card(repo)?.textContent).toContain("Up to date (v1.2.0)"));
+
+    buttonLabeled(target, "Remove")?.click();
+    await vi.waitFor(() => expect(buttonLabeled(document.body, "Remove plugin")).toBeDefined());
+    buttonLabeled(document.body, "Remove plugin")?.click();
+
+    await vi.waitFor(() => expect(removeLocal).toHaveBeenCalledWith("acme"));
+    await vi.waitFor(() =>
+      expect(cardButtons(repo)).toEqual(["Install v1.2.0", "Open repository"]),
+    );
   });
 
   it("reports a failed commit once the review closes and re-resolves the card", async () => {
