@@ -3103,6 +3103,23 @@ impl PluginRuntimeSupervisor {
     }
 
     pub async fn install_local(&self, source_path: String) -> Result<PluginInventory, String> {
+        self.install_package(PathBuf::from(source_path), None).await
+    }
+
+    /// Installs a staged Discovery package and enables it (ADR-0018).
+    pub async fn install_remote(
+        &self,
+        package_root: PathBuf,
+        origin: RemoteOrigin,
+    ) -> Result<PluginInventory, String> {
+        self.install_package(package_root, Some(origin)).await
+    }
+
+    async fn install_package(
+        &self,
+        source: PathBuf,
+        origin: Option<RemoteOrigin>,
+    ) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
         let app = self.app.clone();
         let imported = commands::blocking(move || {
@@ -3111,15 +3128,19 @@ impl PluginRuntimeSupervisor {
                 .path()
                 .app_data_dir()
                 .map_err(|error| format!("failed to resolve PlaneAI plugin storage: {error}"))?;
-            crate::plugin_packages::import_local_package(&app_data, Path::new(&source_path))
+            crate::plugin_packages::import_local_package(&app_data, &source)
         })
         .await?;
         let manifest = imported.manifest.clone();
         let backend = imported.backend_entrypoint.clone();
         let hash = imported.content_hash.clone();
         let package_dir = imported.package_dir.clone();
-        let provenance = PackageProvenance::Folder {
-            original_display_path: imported.original_display_path.clone(),
+        let remote = origin.is_some();
+        let provenance = match origin {
+            Some(origin) => PackageProvenance::Remote(origin),
+            None => PackageProvenance::Folder {
+                original_display_path: imported.original_display_path.clone(),
+            },
         };
         let existing = self.inventory(&manifest.id).await?;
         let was_enabled = match existing.as_ref() {
@@ -3132,7 +3153,8 @@ impl PluginRuntimeSupervisor {
                 }
                 return Err(error);
             }
-            Some(inventory) if inventory.installed_hash.as_deref() == Some(&hash) => {
+            // A remote reinstall of identical bytes still rewrites the row so provenance converges.
+            Some(inventory) if !remote && inventory.installed_hash.as_deref() == Some(&hash) => {
                 return Ok(inventory.clone());
             }
             Some(inventory) => inventory.enabled,
@@ -3179,7 +3201,7 @@ impl PluginRuntimeSupervisor {
                 return Err(error);
             }
         };
-        if was_enabled {
+        if was_enabled || remote {
             self.ensure_plugin_migration_ready(&inventory.id).await?;
             return self.enable_inner(&inventory.id).await;
         }

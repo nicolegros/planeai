@@ -19,6 +19,7 @@ mod output_observer;
 mod paths;
 mod plugin_packages;
 mod plugin_providers;
+mod plugin_remote;
 mod plugin_rpc;
 mod plugin_tools;
 mod plugins;
@@ -293,6 +294,10 @@ fn main() {
                 app.handle().clone(),
                 mcp_tools,
             ));
+            app.manage(
+                commands::PluginRemoteState::new(&app_dir)
+                    .expect("failed to initialize plugin staging"),
+            );
 
             // Notification system
             let notify_state: notify::SharedNotifyState =
@@ -495,6 +500,10 @@ fn main() {
             list_plugins,
             list_plugin_session_actions,
             discover_plugins,
+            resolve_plugin_candidate,
+            stage_remote_plugin,
+            commit_staged_plugin,
+            discard_staged_plugin,
             install_local_plugin,
             remove_local_plugin,
             plugin_call,

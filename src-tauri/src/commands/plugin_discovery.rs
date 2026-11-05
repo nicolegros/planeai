@@ -1,10 +1,169 @@
+use std::path::Path;
 use std::time::Duration;
 
 use planeai_core::command::{augmented_path, no_window_tokio};
 use serde::{Deserialize, Serialize};
+use tauri::State;
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
+use crate::plugin_remote::{
+    check_integrity, fetch_remote_repo, replacement, version_mismatch, ArchiveFormat,
+    DiscoveryCardState, Downloader, RepoFullName, StagedManifest, StagedPackage,
+    StagedPluginInstall, StagingStore, EXPIRED_STAGING,
+};
+use crate::plugins::{PluginInventory, PluginRuntimeHandle, RemoteOrigin};
+
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Discovery resolves every card at once; this caps the concurrent `gh` processes.
+const RESOLVE_CONCURRENCY: usize = 8;
+
+/// Staging and the shared download client for Discovery installs (ADR-0018).
+pub struct PluginRemoteState {
+    pub staging: StagingStore,
+    resolve_permits: Semaphore,
+    downloader: Downloader,
+}
+
+impl PluginRemoteState {
+    pub fn new(app_data_dir: &Path) -> Result<Self, String> {
+        let staging = StagingStore::new(app_data_dir);
+        staging.reset()?;
+        Ok(Self {
+            staging,
+            resolve_permits: Semaphore::new(RESOLVE_CONCURRENCY),
+            downloader: Downloader::new()?,
+        })
+    }
+}
+
+#[tauri::command]
+pub async fn resolve_plugin_candidate(
+    repo: String,
+    remote: State<'_, PluginRemoteState>,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<DiscoveryCardState, String> {
+    let repo = RepoFullName::parse(&repo)?;
+    let _permit = remote
+        .resolve_permits
+        .acquire()
+        .await
+        .map_err(|error| error.to_string())?;
+    let remote_repo = fetch_remote_repo(repo).await?;
+    let inventory = runtime.0.list().await?;
+    Ok(remote_repo.card_state(&inventory, crate::plugin_packages::current_platform_key()))
+}
+
+#[tauri::command]
+pub async fn stage_remote_plugin(
+    repo: String,
+    remote: State<'_, PluginRemoteState>,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<StagedPluginInstall, String> {
+    let repo = RepoFullName::parse(&repo)?;
+    let remote_repo = fetch_remote_repo(repo.clone()).await?;
+    let platform = crate::plugin_packages::current_platform_key();
+    let source = remote_repo.select_source(platform)?;
+    let format = ArchiveFormat::from_url(&source.url)?;
+    let (staging_id, dir) = remote.staging.create_dir()?;
+    let staged = stage_into(&remote, &runtime, &remote_repo, &source, format, &dir).await;
+    match staged {
+        Ok((package, preview)) => {
+            remote.staging.insert(staging_id.clone(), package)?;
+            Ok(StagedPluginInstall {
+                staging_id,
+                ..preview
+            })
+        }
+        Err(error) => {
+            let _ = crate::commands::blocking(move || crate::plugin_remote::remove_dir(&dir)).await;
+            Err(error)
+        }
+    }
+}
+
+async fn stage_into(
+    remote: &PluginRemoteState,
+    runtime: &PluginRuntimeHandle,
+    remote_repo: &crate::plugin_remote::RemoteRepo,
+    source: &crate::plugin_remote::PackageSource,
+    format: ArchiveFormat,
+    dir: &Path,
+) -> Result<(StagedPackage, StagedPluginInstall), String> {
+    let archive = dir.join(format.file_name());
+    let sha256 = remote.downloader.download(&source.url, &archive).await?;
+    let integrity = check_integrity(sha256.clone(), source.expected_sha256.as_deref())?;
+    let extracted = dir.join("extracted");
+    let inspected = crate::commands::blocking(move || {
+        let root = crate::plugin_remote::extract_archive(&archive, format, &extracted)?;
+        crate::plugin_packages::inspect_package(&root)
+    })
+    .await?;
+    let inventory = runtime.0.list().await?;
+    let replaces = replacement(&inventory, &inspected.manifest.id)?;
+    let latest_tag = remote_repo
+        .latest_release
+        .as_ref()
+        .map(|release| release.tag_name.as_str());
+    let preview = StagedPluginInstall {
+        staging_id: String::new(),
+        repo: remote_repo.repo.as_str().to_string(),
+        source_url: source.url.clone(),
+        release_tag: source.release_tag.clone(),
+        integrity,
+        manifest: StagedManifest::from(&inspected.manifest),
+        replaces,
+        version_mismatch: version_mismatch(latest_tag, &inspected.manifest.version),
+    };
+    let package = StagedPackage {
+        dir: dir.to_path_buf(),
+        package_root: inspected.source,
+        origin: RemoteOrigin {
+            repo: remote_repo.repo.as_str().to_string(),
+            release_tag: source.release_tag.clone(),
+            source_url: source.url.clone(),
+            archive_sha256: sha256,
+        },
+    };
+    Ok((package, preview))
+}
+
+#[tauri::command]
+pub async fn commit_staged_plugin(
+    staging_id: String,
+    remote: State<'_, PluginRemoteState>,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<PluginInventory, String> {
+    let staged = remote
+        .staging
+        .take(&staging_id)?
+        .ok_or_else(|| EXPIRED_STAGING.to_string())?;
+    let result = runtime
+        .0
+        .install_remote(staged.package_root, staged.origin)
+        .await;
+    // The import copied the package, so staging is removable whether or not it succeeded.
+    if let Err(error) =
+        crate::commands::blocking(move || crate::plugin_remote::remove_dir(&staged.dir)).await
+    {
+        tracing::warn!(%error, "failed to remove committed plugin staging directory");
+    }
+    result
+}
+
+#[tauri::command]
+pub async fn discard_staged_plugin(
+    staging_id: String,
+    remote: State<'_, PluginRemoteState>,
+) -> Result<(), String> {
+    let staged = remote.staging.take(&staging_id)?;
+    match staged {
+        Some(staged) => {
+            crate::commands::blocking(move || crate::plugin_remote::remove_dir(&staged.dir)).await
+        }
+        None => Ok(()),
+    }
+}
 const DISCOVERY_ARGS: &[&str] = &[
     "search",
     "repos",
