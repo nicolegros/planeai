@@ -117,18 +117,18 @@ pub(crate) enum StagedReplacement {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct VersionMismatch {
-    pub(crate) release_tag: String,
-    pub(crate) manifest_version: String,
+    release_tag: String,
+    manifest_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct StagedManifest {
-    pub(crate) id: String,
-    pub(crate) name: String,
-    pub(crate) version: String,
-    pub(crate) capabilities: Vec<PluginHostCapability>,
-    pub(crate) ui_contributions: Vec<PluginUiContribution>,
-    pub(crate) tools: Vec<PluginTool>,
+    id: String,
+    name: String,
+    version: String,
+    capabilities: Vec<PluginHostCapability>,
+    ui_contributions: Vec<PluginUiContribution>,
+    tools: Vec<PluginTool>,
 }
 
 impl From<&PluginManifest> for StagedManifest {
@@ -147,14 +147,14 @@ impl From<&PluginManifest> for StagedManifest {
 /// What the user reviews before a staged package is committed.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct StagedPluginInstall {
-    pub(crate) staging_id: String,
-    pub(crate) repo: String,
-    pub(crate) source_url: String,
-    pub(crate) release_tag: Option<String>,
-    pub(crate) integrity: PackageIntegrity,
-    pub(crate) manifest: StagedManifest,
-    pub(crate) replaces: StagedReplacement,
-    pub(crate) version_mismatch: Option<VersionMismatch>,
+    staging_id: String,
+    repo: String,
+    source_url: String,
+    release_tag: Option<String>,
+    integrity: PackageIntegrity,
+    manifest: StagedManifest,
+    replaces: StagedReplacement,
+    version_mismatch: Option<VersionMismatch>,
 }
 
 /// The default-branch manifest, read leniently because HEAD may target a newer host.
@@ -210,7 +210,7 @@ pub(crate) struct PackageSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ArchiveFormat {
+enum ArchiveFormat {
     TarGz,
     Zip,
 }
