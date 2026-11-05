@@ -30,7 +30,7 @@ tokio = { version = "1", features = [
   "io-std",
   "net",
 ] }
-tokio-util = { version = "0.7", features = ["io"] }
+tokio-util = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
@@ -104,6 +104,8 @@ semver = "=1.0.28"
 [dev-dependencies]
 tempfile = { workspace = true }
 planeai-core = { path = "planeai-core", features = ["test-support"] }
+# ReaderStream serves chunked bodies to the plugin download tests.
+tokio-util = { workspace = true, features = ["io"] }
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
