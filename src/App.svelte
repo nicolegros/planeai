@@ -19,7 +19,8 @@
   import { applyDoneNow, applyInterruptedDone, canUndoTaskChange, commitPendingDone, completeTask, undoLastTaskChange } from "./lib/task-moves";
   import { closeCustomSnooze, closeSnoozeMenu, getCustomSnooze, getSnoozeMenu, snoozeCustom, snoozeMenuItems, snoozeOrWake } from "./lib/snooze-picker.svelte";
   import SnoozeCustomDialog from "./components/SnoozeCustomDialog.svelte";
-import ChoiceDialog from "./components/ChoiceDialog.svelte";
+  import ChoiceDialog from "./components/ChoiceDialog.svelte";
+  import { newTaskProjectPath } from "./lib/new-task-project";
   import { startSnoozeClock } from "./lib/snooze-clock.svelte";
   import ContextMenu from "./components/ui/ContextMenu.svelte";
   import { getSidebarModel, getVisibleNavigationOrder, setOpenTaskWorkspace } from "./lib/sidebar-model-store.svelte";
@@ -773,8 +774,8 @@ import ChoiceDialog from "./components/ChoiceDialog.svelte";
   }
 
   function startNewSession(): void {
-    if (projects.length === 0) openAddProject();
-    else openNewSessionForm();
+    if (projects.length === 0) { openAddProject(); return; }
+    openNewSessionForm();
   }
 
   function openNewTaskForm(): void {
@@ -783,16 +784,9 @@ import ChoiceDialog from "./components/ChoiceDialog.svelte";
     showTaskForm = true;
   }
 
-  const newTaskProjectPath = $derived(
-    activeTaskWorkspace?.project.path
-      ?? projects.find((p) => p.id === activeSession?.project_id)?.path
-      ?? projects[0]?.path
-      ?? "",
-  );
-
   const newTabChoices = $derived([
     { id: "agent", label: "Agent session", glyph: "›_", key: "a" },
-    { id: "terminal", label: "Terminal", glyph: "$", key: "t", disabled: !activeSessionId },
+    { id: "terminal", label: "Terminal", glyph: "$", key: "t", disabled: !activeSessionId, disabledHint: "Open a session first" },
   ] as const);
 
   function chooseNewTab(choice: (typeof newTabChoices)[number]["id"]): void {
@@ -1012,9 +1006,10 @@ import ChoiceDialog from "./components/ChoiceDialog.svelte";
 
     const cleanup = installKeyboardRouter(
       (action) => {
+        // Any other chord dismisses the selector, so it never sits under another overlay or keeps a stale pane.
+        if (newTabTarget && action.type !== "new_tab") newTabTarget = null;
         if (action.type === "new_task") {
-          newTabTarget = null;
-          openNewTaskForm();
+          if (!keyboardModalOpen) openNewTaskForm();
         } else if (action.type === "new_project") { openAddProject(); }
         else if (action.type === "toggle_sidebar") { sidebarVisible = !sidebarVisible; if (sidebarVisible) focusSidebar(); else focusTerminal(); }
         else if (action.type === "jump_to_session") { jumpToSidebarRow(action.index); }
@@ -1035,7 +1030,7 @@ import ChoiceDialog from "./components/ChoiceDialog.svelte";
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; commandMenuRenameId = null; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
-        else if (action.type === "new_tab") { newTabTarget = {}; }
+        else if (action.type === "new_tab") { if (!keyboardModalOpen) newTabTarget = {}; }
         else if (action.type === "close_tab") { closeFocusedTab(); }
         else if (action.type === "next_tab") { cycleTab(1); }
         else if (action.type === "prev_tab") { cycleTab(-1); }
@@ -1224,7 +1219,7 @@ import ChoiceDialog from "./components/ChoiceDialog.svelte";
           tags: taskWorkspaceToEdit.task.tags,
           baseBranch: taskWorkspaceToEdit.task.base_branch,
           projectPath: taskWorkspaceToEdit.project.path,
-        } : { projectPath: newTaskProjectPath }}
+        } : { projectPath: newTaskProjectPath(activeTaskWorkspace?.project, activeSession?.project_id, projects) }}
         onSubmitted={() => { taskWorkspaceToEdit = null; showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
         onCancel={() => { taskWorkspaceToEdit = null; showTaskForm = false; tick().then(() => refocusTerminal()); }}
         onSessionCreated={(session) => { leavePluginWorkspace(); taskWorkspaceToEdit = null; showTaskForm = false; orchestrator.createSession(session); focusTerminal(); }}

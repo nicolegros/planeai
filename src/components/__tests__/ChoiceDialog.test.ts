@@ -14,7 +14,14 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-type Option = { id: string; label: string; glyph: string; key: string; disabled?: boolean };
+type Option = {
+  id: string;
+  label: string;
+  glyph: string;
+  key: string;
+  disabled?: boolean;
+  disabledHint?: string;
+};
 
 async function openDialog(options: Option[]) {
   const onChoose = vi.fn();
@@ -53,8 +60,36 @@ describe("ChoiceDialog", () => {
     await openDialog(newTabOptions);
 
     expect(document.body.textContent).toContain("New tab");
-    expect(row("Agent session").textContent).toContain("a");
-    expect(row("Terminal").textContent).toContain("t");
+    expect(row("Agent session").getAttribute("aria-keyshortcuts")).toBe("a");
+    expect(row("Terminal").getAttribute("aria-keyshortcuts")).toBe("t");
+  });
+
+  it("marks the highlighted option as selected and follows the arrow keys", async () => {
+    await openDialog(newTabOptions);
+    expect(row("Agent session").getAttribute("aria-selected")).toBe("true");
+    expect(row("Terminal").getAttribute("aria-selected")).toBe("false");
+
+    press("ArrowDown");
+
+    expect(row("Agent session").getAttribute("aria-selected")).toBe("false");
+    expect(row("Terminal").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("explains why a disabled option is unavailable", async () => {
+    await openDialog([
+      { id: "agent", label: "Agent session", glyph: "›_", key: "a" },
+      {
+        id: "terminal",
+        label: "Terminal",
+        glyph: "$",
+        key: "t",
+        disabled: true,
+        disabledHint: "Open a session first",
+      },
+    ]);
+
+    expect(row("Terminal").title).toBe("Open a session first");
+    expect(row("Agent session").title).toBe("");
   });
 
   it("picks an option by its key", async () => {

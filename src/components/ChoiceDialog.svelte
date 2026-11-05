@@ -5,6 +5,8 @@
     glyph: string;
     key: string;
     disabled?: boolean;
+    /** Why the option is unavailable, shown on hover. */
+    disabledHint?: string;
   }
 </script>
 
@@ -21,15 +23,15 @@
   let { title, options, onChoose, onClose }: Props = $props();
 
   const enabled = $derived(options.filter((o) => !o.disabled));
-  let pickedId = $state<Id | null>(null);
+  let requestedId = $state<Id | null>(null);
   const highlightedId = $derived(
-    enabled.some((o) => o.id === pickedId) ? pickedId : (enabled[0]?.id ?? null),
+    enabled.some((o) => o.id === requestedId) ? requestedId : (enabled[0]?.id ?? null),
   );
 
   function move(step: 1 | -1): void {
     if (enabled.length === 0) return;
     const index = enabled.findIndex((o) => o.id === highlightedId);
-    pickedId = enabled[(index + step + enabled.length) % enabled.length].id;
+    requestedId = enabled[(index + step + enabled.length) % enabled.length].id;
   }
 
   // Capture on window: the dialog leaves focus in the terminal, which would otherwise eat these keys.
@@ -65,15 +67,19 @@
       <span class="text-[13px] font-semibold text-t1">{title}</span>
       <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
     </div>
-    <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
+    <div class="px-2 pb-[9px] flex flex-col gap-[2px]" role="listbox" aria-label={title}>
       {#each options as option (option.id)}
         {@const highlighted = option.id === highlightedId}
         <button
           class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] transition-colors disabled:opacity-40 {highlighted ? 'bg-accent-bg' : ''}"
+          role="option"
+          aria-selected={highlighted}
           disabled={option.disabled}
+          aria-disabled={option.disabled}
+          title={option.disabled ? option.disabledHint : undefined}
           aria-keyshortcuts={option.key}
           onpointermove={() => {
-            if (!option.disabled) pickedId = option.id;
+            if (!option.disabled) requestedId = option.id;
           }}
           onclick={() => onChoose(option.id)}
         >
