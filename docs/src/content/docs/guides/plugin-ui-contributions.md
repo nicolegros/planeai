@@ -366,7 +366,7 @@ Answer `{ "text": "...", "is_error": false }`; `is_error` defaults to `false`.
 The agent reads `text` as the tool's whole result, so keep it compact (PlaneAI's own tools answer in TOON) and within the 64 KiB frame.
 Report a failure the agent should read, such as an unknown key, with `is_error: true`.
 A JSON-RPC error answer also reaches the agent as an error with its message.
-After every call of a tool that is not read-only, failed ones included, PlaneAI tells the plugin's UI its data changed, as `data.changed()` does.
+After PlaneAI sends a call of a tool that is not read-only, whatever the plugin answers, it tells the plugin's UI its data changed, as `data.changed()` does.
 
 PlaneAI waits `timeoutMs`, then cancels the request as described in [Native sidecar protocol](#native-sidecar-protocol).
 A plugin that acknowledges the cancellation keeps running, and the agent reads that the plugin gave no answer within the timeout and the call was cancelled.

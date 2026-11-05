@@ -5,27 +5,39 @@ use std::time::Duration;
 
 use planeai::mcp::plugin_tool::PluginTool;
 use planeai::mcp::tools::{ToolDef, ToolFuture, ToolOutput};
-use planeai_core::mcp::McpCaller;
+use planeai_core::mcp::{Effect, McpCaller};
 use planeai_plugin_contract::{ToolCallResult, ToolCaller, ToolProject, ToolTask};
 use rusqlite::Connection;
 use serde_json::{Map, Value};
 
 use crate::plugin_rpc::PluginRpcError;
 
-/// The registry entry serving a plugin's declared tool under its served name.
+/// The registry entry serving a plugin's declared tool under its served name, with its
+/// effect from [`PluginTool::effect`].
 pub(crate) fn plugin_tool_def(
     plugin_id: &str,
     tool: &PluginTool,
+    effect: Effect,
     run: impl Fn(McpCaller, Map<String, Value>) -> ToolFuture + Send + Sync + 'static,
 ) -> Result<ToolDef, String> {
     Ok(ToolDef::plugin(
         tool.served_name(plugin_id)?,
         tool.description.clone(),
         tool.input_schema.clone(),
-        tool.effect(plugin_id)?,
+        effect,
         tool.annotations.open_world(),
         run,
     ))
+}
+
+/// A call the plugin received may have changed its data, even when it failed, as with
+/// PlaneAI's task tools; a read-only one did not.
+pub(crate) fn refreshes_views(effect: Effect, result: &Result<Value, PluginRpcError>) -> bool {
+    effect != Effect::Read
+        && !matches!(
+            result,
+            Err(PluginRpcError::NotSent(_) | PluginRpcError::NotRunning(_))
+        )
 }
 
 /// The calling session as `tool.call` describes it to the plugin.
@@ -91,7 +103,9 @@ mod tests {
             .unwrap()
         };
         let served = |annotations: Value| {
-            let def = plugin_tool_def("issues", &tool(annotations), |_, _| {
+            let tool = tool(annotations);
+            let effect = tool.effect("issues").unwrap();
+            let def = plugin_tool_def("issues", &tool, effect, |_, _| {
                 Box::pin(async { planeai::mcp::tools::ToolOutput::error("unused") })
             })
             .unwrap()
@@ -121,6 +135,35 @@ mod tests {
             tool(serde_json::json!({})).timeout(),
             Duration::from_secs(30)
         );
+    }
+
+    #[test]
+    fn calls_that_reached_the_plugin_refresh_its_views_unless_read_only() {
+        let answered = Ok(serde_json::json!({ "text": "ok" }));
+        let failed = Err(PluginRpcError::Rpc {
+            code: -32000,
+            message: "GitHub is down".into(),
+        });
+        for effect in [Effect::Write { idempotent: true }, Effect::Delete] {
+            assert!(refreshes_views(effect, &answered));
+            assert!(
+                refreshes_views(effect, &failed),
+                "a failed call may have written"
+            );
+            assert!(refreshes_views(
+                effect,
+                &Err(timed_out_request_error("tool.call"))
+            ));
+            assert!(!refreshes_views(
+                effect,
+                &Err(PluginRpcError::NotRunning("stopped".into()))
+            ));
+            assert!(!refreshes_views(
+                effect,
+                &Err(PluginRpcError::NotSent("too large".into()))
+            ));
+        }
+        assert!(!refreshes_views(Effect::Read, &answered));
     }
 
     #[test]
