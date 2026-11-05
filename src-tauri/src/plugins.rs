@@ -1688,23 +1688,19 @@ impl RuntimeProcess {
 
     async fn request_shutdown(&self, deadline: Instant) -> Result<Value, String> {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        self.requests
-            .run("plugin.shutdown", remaining, || async {
-                let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1;
-                let frame = encode_json_rpc_line(request_id, "plugin.shutdown", Value::Null)
-                    .map_err(PluginRpcError::NotSent)?;
-                self.write_shutdown_frame(&frame, deadline)
-                    .await
-                    .map_err(PluginRpcError::Broken)?;
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                let frame = timeout(remaining, self.read_matching_response())
-                    .await
-                    .map_err(|_| timed_out_request_error("plugin.shutdown"))?
-                    .map_err(PluginRpcError::Broken)?;
-                decode_json_rpc_frame(&frame, request_id)
-            })
+        let _turn = self
+            .requests
+            .shutdown_turn(remaining)
             .await
-            .map_err(|error| error.to_string())
+            .ok_or_else(|| "plugin shutdown request timed out".to_string())?;
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1;
+        let frame = encode_json_rpc_line(request_id, "plugin.shutdown", Value::Null)?;
+        self.write_shutdown_frame(&frame, deadline).await?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let frame = timeout(remaining, self.read_matching_response())
+            .await
+            .map_err(|_| "plugin shutdown request timed out".to_string())??;
+        decode_json_rpc_frame(&frame, request_id).map_err(String::from)
     }
 
     /// This instance no longer drives sessions; see `plugin_providers::runtime_stopped`.
@@ -4043,7 +4039,8 @@ impl PluginRuntimeSupervisor {
                         }
                         Err(error) => {
                             tracing::warn!(plugin_id = %plugin_id, generation, method = %service.method, %error, "plugin background service failed");
-                            if error.is_fatal() {
+                            // A runtime a regular call retired leaves its lane broken.
+                            if error.is_fatal() || process.requests.is_broken() {
                                 // Disabling the plugin holds the lifecycle lock while it waits
                                 // for this worker, and stops the process itself.
                                 if let Some(supervisor) = supervisor.upgrade() {

@@ -309,7 +309,16 @@ impl RequestLane {
         result
     }
 
-    fn is_broken(&self) -> bool {
+    /// Waits for the turn even on a broken lane: a shutdown request is safe there, since its
+    /// answer is never trusted.
+    pub(crate) async fn shutdown_turn(
+        &self,
+        wait: std::time::Duration,
+    ) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        tokio::time::timeout(wait, self.turn.lock()).await.ok()
+    }
+
+    pub(crate) fn is_broken(&self) -> bool {
         self.broken.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
