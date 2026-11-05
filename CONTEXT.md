@@ -142,6 +142,10 @@ planeai installs a small notify script into each supported agent's own config so
 | Codex   | `$CODEX_HOME/hooks.json` (default `~/.codex`) | `UserPromptSubmit`/`PostToolUse` -> busy, `Stop` -> stop                                               |
 
 `PostToolUse` flips a session back to busy after a permission prompt is approved, since PTY output does not override the idle state of a hook-enabled session.
+Claude Code fires `Stop` at the end of every turn, even while subagents it launched in the background keep working, and reports an `idle_prompt` notification a minute later.
+So the Claude script also forwards the hook's `transcript_path` and `notification_type`, and when a `Stop` comes due planeai reads the transcript (`planeai-core/src/background_work.rs`): while background subagents still run, including one that stopped while its own background work runs, the turn is held, the session stays busy, `idle_prompt` is ignored, and the transcript is reread every 5 seconds until they finish.
+Background shell commands and monitors do not hold a turn, since they are as often a dev server as a wait.
+A `Stop` that arrives before its session registers is still debounced as a hook.
 Notify scripts ignore any event they do not map explicitly, so a hook config newer than its script can never flood the user with alerts.
 Codex `PermissionRequest` is not hooked: with `approvals_reviewer = "auto_review"` it fires for every escalated command even though no human is needed.
 Codex only runs hooks the user has trusted: it asks on the first launch after installation.

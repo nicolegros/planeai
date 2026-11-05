@@ -126,11 +126,21 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
         NotifyEvent::Notification => {
             let fired = {
                 let mut s = state.lock().unwrap();
+                if let Some(path) = &msg.transcript_path {
+                    s.note_transcript(&msg.session_id, path.clone());
+                }
                 let name = s
                     .get_meta(&msg.session_id)
-                    .map(|m| m.name.as_str())
-                    .unwrap_or("?");
-                tracing::info!(session_id = %msg.session_id, name, "immediate notification signal received");
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| "?".into());
+                // Claude Code reports an idle prompt while background subagents still work.
+                if msg.notification_type.as_deref() == Some("idle_prompt")
+                    && s.is_held(&msg.session_id)
+                {
+                    tracing::info!(session_id = %msg.session_id, %name, "idle prompt ignored: background subagents still running");
+                    return;
+                }
+                tracing::info!(session_id = %msg.session_id, %name, "immediate notification signal received");
                 s.notify_stop_immediate(&msg.session_id)
             };
             if fired {
@@ -140,11 +150,15 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
         }
         NotifyEvent::Stop => {
             let mut s = state.lock().unwrap();
+            if let Some(path) = &msg.transcript_path {
+                s.note_transcript(&msg.session_id, path.clone());
+            }
             let name = s
                 .get_meta(&msg.session_id)
                 .map(|m| m.name.clone())
                 .unwrap_or_else(|| "?".into());
-            let hook_enabled = s.get_meta(&msg.session_id).is_some_and(|m| m.hook_enabled);
+            // A Stop before the session registers still comes from a hook.
+            let hook_enabled = s.get_meta(&msg.session_id).is_none_or(|m| m.hook_enabled);
             if hook_enabled {
                 tracing::info!(session_id = %msg.session_id, %name, "stop received, debouncing 2s");
                 s.notify_stop_debounced(&msg.session_id);
@@ -375,7 +389,7 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
     thread::spawn(move || loop {
         thread::sleep(SILENCE_CHECK_INTERVAL);
         let mut to_notify: Vec<String> = Vec::new();
-        {
+        let due = {
             let mut s = state.lock().unwrap();
             let busy = s.busy_sessions();
             for id in busy {
@@ -383,10 +397,30 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
                     to_notify.push(id);
                 }
             }
-            let debounced = s.debounced_sessions();
-            for id in debounced {
-                if s.check_debounce(&id) {
+            s.turn_ends_due()
+        };
+        // Transcripts are read outside the lock: hooks and the PTY reader take it too.
+        let pending: Vec<(String, Option<usize>)> = due
+            .into_iter()
+            .map(|(id, transcript)| {
+                let running = transcript.and_then(|path| {
+                    std::fs::File::open(path).ok().map(|file| {
+                        planeai_core::background_work::pending_background_subagents(
+                            std::io::BufReader::new(file),
+                        )
+                    })
+                });
+                (id, running.flatten())
+            })
+            .collect();
+        {
+            let mut s = state.lock().unwrap();
+            for (id, running) in pending {
+                let held = s.is_held(&id);
+                if s.resolve_turn_end(&id, running) {
                     to_notify.push(id);
+                } else if !held && s.is_held(&id) {
+                    tracing::info!(session_id = %id, running, "turn ended with background subagents running; holding");
                 }
             }
             // Emitted under the lock so a busy signal cannot publish its resume before this Idle.

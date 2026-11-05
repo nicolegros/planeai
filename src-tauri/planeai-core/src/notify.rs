@@ -6,6 +6,10 @@ use crate::task_lifecycle::TaskLifecycleBatch;
 
 pub const SILENCE_THRESHOLD: Duration = Duration::from_secs(5);
 pub const DEBOUNCE_THRESHOLD: Duration = Duration::from_secs(2);
+/// How long after a Stop its transcript may still lack the turn's end before the turn settles anyway.
+pub const TURN_CLOSE_GRACE: Duration = Duration::from_secs(10);
+/// How often a turn held by background subagents rereads its transcript.
+pub const HELD_RECHECK: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum AgentState {
@@ -32,6 +36,10 @@ pub struct NotifyMessage {
     pub event: NotifyEvent,
     pub text: Option<String>,
     pub lifecycle_batch: Option<TaskLifecycleBatch>,
+    /// The agent's transcript, from Claude Code's hook input.
+    pub transcript_path: Option<std::path::PathBuf>,
+    /// Why Claude Code notified, such as `idle_prompt` or `permission_prompt`.
+    pub notification_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +55,9 @@ pub struct NotifyState {
     meta: HashMap<String, SessionMeta>,
     notified: std::collections::HashSet<String>,
     idle_since: HashMap<String, Instant>,
+    transcripts: HashMap<String, std::path::PathBuf>,
+    /// Ended turns whose background subagents still run, with when they were last checked.
+    held: HashMap<String, Instant>,
     /// Sessions whose status comes only from their plugin provider (ADR-0014).
     provider_owned: std::collections::HashSet<String>,
     #[cfg(any(test, feature = "test-support"))]
@@ -67,6 +78,8 @@ impl NotifyState {
             meta: HashMap::new(),
             notified: std::collections::HashSet::new(),
             idle_since: HashMap::new(),
+            transcripts: HashMap::new(),
+            held: HashMap::new(),
             provider_owned: std::collections::HashSet::new(),
             #[cfg(any(test, feature = "test-support"))]
             time_offset: HashMap::new(),
@@ -152,6 +165,10 @@ impl NotifyState {
 
     pub fn notify_stop_immediate(&mut self, session_id: &str) -> bool {
         self.idle_since.remove(session_id);
+        // A held turn never told anyone it ended, so a request for the user surfaces.
+        if self.held.remove(session_id).is_some() {
+            return self.notified.insert(session_id.to_string());
+        }
         self.notify_stop(session_id)
     }
 
@@ -164,19 +181,76 @@ impl NotifyState {
         false
     }
 
-    pub fn check_debounce(&mut self, session_id: &str) -> bool {
-        if let Some(&since) = self.idle_since.get(session_id) {
-            let elapsed = self.elapsed_since(session_id, since);
-            if elapsed >= DEBOUNCE_THRESHOLD {
-                self.idle_since.remove(session_id);
-                if self.notified.contains(session_id) {
-                    return false;
-                }
-                self.notified.insert(session_id.to_string());
-                return true;
+    pub fn note_transcript(&mut self, session_id: &str, path: std::path::PathBuf) {
+        self.transcripts.insert(session_id.to_string(), path);
+    }
+
+    /// The turn ends to decide now, each with the session's transcript: a Stop whose debounce
+    /// elapsed, or a held turn due a recheck.
+    pub fn turn_ends_due(&mut self) -> Vec<(String, Option<std::path::PathBuf>)> {
+        let debounced = self
+            .idle_since
+            .iter()
+            .filter(|(id, &since)| self.elapsed_since(id, since) >= DEBOUNCE_THRESHOLD);
+        let rechecks = self
+            .held
+            .iter()
+            .filter(|(id, &checked)| self.elapsed_since(id, checked) >= HELD_RECHECK);
+        let due: Vec<String> = debounced
+            .chain(rechecks)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &due {
+            if self.held.contains_key(id) {
+                let now = self.stamp(id);
+                self.held.insert(id.clone(), now);
             }
         }
-        false
+        due.into_iter()
+            .map(|id| {
+                let transcript = self.transcripts.get(&id).cloned();
+                (id, transcript)
+            })
+            .collect()
+    }
+
+    /// Decides a due turn end from the background subagents its transcript still shows running
+    /// (`None` while the transcript has not closed the turn). Returns whether it settles now.
+    pub fn resolve_turn_end(&mut self, session_id: &str, pending: Option<usize>) -> bool {
+        if self.get_state(session_id) != Some(AgentState::Idle) {
+            self.held.remove(session_id);
+            return false;
+        }
+        let held = self.held.contains_key(session_id);
+        match pending {
+            Some(running) if running > 0 => {
+                self.idle_since.remove(session_id);
+                if !held {
+                    let now = self.stamp(session_id);
+                    self.held.insert(session_id.to_string(), now);
+                }
+                return false;
+            }
+            None if held => return false,
+            None => {
+                let closing = self
+                    .idle_since
+                    .get(session_id)
+                    .is_some_and(|&since| self.elapsed_since(session_id, since) < TURN_CLOSE_GRACE);
+                if closing && self.transcripts.contains_key(session_id) {
+                    return false;
+                }
+            }
+            Some(_) => {}
+        }
+        self.idle_since.remove(session_id);
+        self.held.remove(session_id);
+        self.notified.insert(session_id.to_string())
+    }
+
+    /// The session's turn ended, but background subagents it started still run.
+    pub fn is_held(&self, session_id: &str) -> bool {
+        self.held.contains_key(session_id)
     }
 
     pub fn notify_output(&mut self, session_id: &str) {
@@ -195,6 +269,7 @@ impl NotifyState {
         self.last_output
             .insert(session_id.to_string(), Instant::now());
         self.idle_since.remove(session_id);
+        self.held.remove(session_id);
         self.notified.remove(session_id);
     }
 
@@ -210,6 +285,7 @@ impl NotifyState {
         self.last_output
             .insert(session_id.to_string(), Instant::now());
         self.idle_since.remove(session_id);
+        self.held.remove(session_id);
         self.notified.remove(session_id);
         resumed
     }
@@ -254,8 +330,11 @@ impl NotifyState {
             .collect()
     }
 
-    pub fn debounced_sessions(&self) -> Vec<String> {
-        self.idle_since.keys().cloned().collect()
+    /// A due debounce settling without a transcript to read.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn check_debounce(&mut self, session_id: &str) -> bool {
+        let due = self.turn_ends_due().iter().any(|(id, _)| id == session_id);
+        due && self.resolve_turn_end(session_id, None)
     }
 
     pub fn get_state(&self, session_id: &str) -> Option<AgentState> {
@@ -265,6 +344,22 @@ impl NotifyState {
     #[cfg(not(any(test, feature = "test-support")))]
     fn elapsed_since(&self, _session_id: &str, since: Instant) -> Duration {
         since.elapsed()
+    }
+
+    /// Now, on the clock `elapsed_since` reads.
+    #[cfg(not(any(test, feature = "test-support")))]
+    fn stamp(&self, _session_id: &str) -> Instant {
+        Instant::now()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn stamp(&self, session_id: &str) -> Instant {
+        Instant::now()
+            + self
+                .time_offset
+                .get(session_id)
+                .copied()
+                .unwrap_or_default()
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -312,11 +407,18 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
             .get("batch")
             .cloned()
             .and_then(|batch| serde_json::from_value(batch).ok());
+        let field = |name: &str| {
+            v.get(name)
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        };
         NotifyMessage {
             session_id,
             event,
             text,
             lifecycle_batch,
+            transcript_path: field("transcript_path").map(std::path::PathBuf::from),
+            notification_type: field("notification_type"),
         }
     } else {
         NotifyMessage {
@@ -324,6 +426,8 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
             event: NotifyEvent::Stop,
             text: None,
             lifecycle_batch: None,
+            transcript_path: None,
+            notification_type: None,
         }
     }
 }
@@ -486,6 +590,95 @@ mod tests {
         assert!(!state.check_debounce("s1"));
     }
 
+    fn stopped(transcript: bool) -> NotifyState {
+        let mut state = NotifyState::new();
+        state.register_session("s1", "test", "project", true);
+        state.notify_busy("s1");
+        if transcript {
+            state.note_transcript("s1", "/t.jsonl".into());
+        }
+        state.notify_stop_debounced("s1");
+        state
+    }
+
+    fn due(state: &mut NotifyState) -> Vec<String> {
+        state
+            .turn_ends_due()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    #[test]
+    fn a_turn_with_background_subagents_running_is_held_until_they_finish() {
+        let mut state = stopped(true);
+        state.advance_time("s1", DEBOUNCE_THRESHOLD);
+        assert_eq!(
+            state.turn_ends_due(),
+            vec![("s1".to_string(), Some("/t.jsonl".into()))]
+        );
+        assert!(!state.resolve_turn_end("s1", Some(1)));
+        assert!(state.is_held("s1"));
+
+        assert!(due(&mut state).is_empty(), "rechecks wait {HELD_RECHECK:?}");
+        state.advance_time("s1", HELD_RECHECK);
+        assert_eq!(due(&mut state), ["s1"]);
+        assert!(!state.resolve_turn_end("s1", Some(1)));
+        assert!(
+            !state.resolve_turn_end("s1", None),
+            "a held turn keeps holding while the transcript is unreadable"
+        );
+
+        state.advance_time("s1", HELD_RECHECK);
+        assert_eq!(due(&mut state), ["s1"]);
+        assert!(state.resolve_turn_end("s1", Some(0)));
+        assert!(!state.is_held("s1"));
+        assert!(due(&mut state).is_empty());
+    }
+
+    #[test]
+    fn a_turn_its_transcript_has_not_closed_waits_a_grace_then_settles() {
+        let mut state = stopped(true);
+        state.advance_time("s1", DEBOUNCE_THRESHOLD);
+        assert_eq!(due(&mut state), ["s1"]);
+        assert!(!state.resolve_turn_end("s1", None));
+        state.advance_time("s1", TURN_CLOSE_GRACE);
+        assert_eq!(due(&mut state), ["s1"]);
+        assert!(state.resolve_turn_end("s1", None));
+
+        let mut state = stopped(false);
+        state.advance_time("s1", DEBOUNCE_THRESHOLD);
+        assert_eq!(due(&mut state), ["s1"]);
+        assert!(
+            state.resolve_turn_end("s1", None),
+            "without a transcript the debounce alone decides"
+        );
+    }
+
+    #[test]
+    fn a_new_turn_ends_a_hold_and_a_request_for_the_user_surfaces_through_it() {
+        let mut state = stopped(true);
+        state.advance_time("s1", DEBOUNCE_THRESHOLD);
+        due(&mut state);
+        state.resolve_turn_end("s1", Some(1));
+        assert!(
+            state.notify_stop_immediate("s1"),
+            "a permission prompt notifies"
+        );
+        assert!(!state.is_held("s1"));
+
+        let mut state = stopped(true);
+        state.advance_time("s1", DEBOUNCE_THRESHOLD);
+        due(&mut state);
+        state.resolve_turn_end("s1", Some(1));
+        assert!(state.notify_busy("s1"));
+        assert!(!state.is_held("s1"));
+        assert!(
+            !state.resolve_turn_end("s1", Some(0)),
+            "a busy session never settles"
+        );
+    }
+
     #[test]
     fn immediate_notification_fires_instantly() {
         let mut state = NotifyState::new();
@@ -629,6 +822,17 @@ mod tests {
     }
 
     // ─── parse_notify_message tests ──────────────────────────────────────────
+
+    #[test]
+    fn parses_the_transcript_and_notification_type_of_a_hook() {
+        let msg = parse_notify_message(
+            r#"{"session_id":"s","event":"notification","transcript_path":"/t.jsonl","notification_type":"idle_prompt"}"#,
+        );
+        assert_eq!(msg.transcript_path, Some("/t.jsonl".into()));
+        assert_eq!(msg.notification_type.as_deref(), Some("idle_prompt"));
+        let bare = parse_notify_message(r#"{"session_id":"s","event":"stop"}"#);
+        assert_eq!((bare.transcript_path, bare.notification_type), (None, None));
+    }
 
     #[test]
     fn parse_json_stop_event() {

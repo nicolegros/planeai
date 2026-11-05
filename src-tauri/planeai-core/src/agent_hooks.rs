@@ -904,6 +904,15 @@ mod tests {
                 "{event}"
             );
         }
+        let stdin = r#"{"hook_event_name":"Notification","notification_type":"idle_prompt","transcript_path":"/tmp/a \"b\".jsonl","cwd":"/x"}"#;
+        assert_eq!(
+            run_notify_script(claude, None, stdin),
+            Some(
+                r#"{"session_id":"s-1","event":"notification","transcript_path":"/tmp/a \"b\".jsonl","notification_type":"idle_prompt"}"#
+                    .into()
+            ),
+            "the transcript and notification type ride along, JSON-escaped"
+        );
     }
 
     #[cfg(unix)]

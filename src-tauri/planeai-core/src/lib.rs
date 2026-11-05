@@ -1,4 +1,5 @@
 pub mod agent_hooks;
+pub mod background_work;
 pub mod capture_cursor;
 pub mod cleanup;
 pub mod command;
