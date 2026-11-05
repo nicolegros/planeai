@@ -4,7 +4,50 @@
 //! background keep working; it resumes on its own when they report. Background shell commands
 //! and monitors do not hold a session: they are as often a dev server as a wait.
 
+use std::collections::HashMap;
 use std::io::BufRead;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+/// A cheap filter before parsing: every record the parser reads contains one of these.
+const RELEVANT: [&str; 6] = [
+    "\"assistant\"",
+    "turn_duration",
+    "async_launched",
+    "task-notification",
+    "\"human\"",
+    "\"handback\"",
+];
+
+/// Rereads a transcript only when it changed since the last read: a turn held by background
+/// subagents is rechecked every few seconds and a long session's transcript runs to megabytes.
+#[derive(Default)]
+pub struct TranscriptCache {
+    read: HashMap<PathBuf, (SystemTime, u64, Option<usize>)>,
+}
+
+impl TranscriptCache {
+    /// [`pending_background_subagents`] for the transcript at `path`; `None` when unreadable.
+    pub fn pending_background_subagents(&mut self, path: &Path) -> Option<usize> {
+        let metadata = std::fs::metadata(path).ok()?;
+        // Transcripts only grow, so their length changes even when the clock is coarse.
+        let version = (metadata.modified().ok()?, metadata.len());
+        if let Some(&(modified, len, pending)) = self.read.get(path) {
+            if (modified, len) == version {
+                return pending;
+            }
+        }
+        let file = std::fs::File::open(path).ok()?;
+        let pending = pending_background_subagents(std::io::BufReader::new(file));
+        self.read
+            .insert(path.to_path_buf(), (version.0, version.1, pending));
+        pending
+    }
+
+    pub fn forget(&mut self, path: &Path) {
+        self.read.remove(path);
+    }
+}
 
 /// The summary Claude Code gives a subagent that stopped while its own background work runs.
 const WAITING_ON_OWN_WORK: &str = "waiting on its own background work";
@@ -17,21 +60,18 @@ const WAITING_ON_OWN_WORK: &str = "waiting on its own background work";
 /// notices after the last turn count down from it.
 ///
 /// The count leaves out a subagent that stopped while its own background work runs, so its
-/// notice holds the turn until it reports again. A subagent stopped by hand never does, so a
-/// prompt the user types drops those notices.
+/// notice holds the turn until it hands back or reports again, and its final notice does not
+/// count down. A subagent stopped by hand never reports, so a prompt the user types drops those
+/// notices.
 pub fn pending_background_subagents(transcript: impl BufRead) -> Option<usize> {
     let mut turn_closed = false;
     let mut alive_at_turn_end = 0;
     let mut finished_since_turn_end = 0;
     let mut subagents = std::collections::BTreeSet::new();
     let mut waiting_on_own_work = std::collections::BTreeSet::new();
+    let mut waiting_at_turn_end = std::collections::BTreeSet::new();
     for line in transcript.lines().map_while(Result::ok) {
-        let relevant = line.contains("\"assistant\"")
-            || line.contains("turn_duration")
-            || line.contains("async_launched")
-            || line.contains("task-notification")
-            || line.contains("\"human\"");
-        if !relevant {
+        if !RELEVANT.iter().any(|needle| line.contains(needle)) {
             continue;
         }
         let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else {
@@ -44,6 +84,7 @@ pub fn pending_background_subagents(transcript: impl BufRead) -> Option<usize> {
             {
                 turn_closed = true;
                 finished_since_turn_end = 0;
+                waiting_at_turn_end = waiting_on_own_work.clone();
                 alive_at_turn_end = record
                     .get("pendingBackgroundAgentCount")
                     .and_then(|count| count.as_u64())
@@ -63,12 +104,20 @@ pub fn pending_background_subagents(transcript: impl BufRead) -> Option<usize> {
                     waiting_on_own_work.insert(task_id.to_string());
                 } else {
                     waiting_on_own_work.remove(task_id);
-                    if turn_closed {
+                    if turn_closed && !waiting_at_turn_end.contains(task_id) {
                         finished_since_turn_end += 1;
                     }
                 }
             }
             Some("user") if is_typed_by_the_user(&record) => waiting_on_own_work.clear(),
+            // A hand-back means the subagent resumed, so Claude Code counts it again.
+            Some("user")
+                if record.pointer("/origin/handback") == Some(&serde_json::json!(true)) =>
+            {
+                if let Some(agent_id) = record.pointer("/origin/from").and_then(|id| id.as_str()) {
+                    waiting_on_own_work.remove(agent_id);
+                }
+            }
             Some("user") => {
                 if let Some(agent_id) = launched_subagent(&record) {
                     subagents.insert(agent_id.to_string());
@@ -195,11 +244,11 @@ mod tests {
         records.extend([notification("a361", WAITING), assistant(), turn_end(None)]);
         assert_eq!(pending(&records), Some(1), "waiting on its own work");
 
-        records.extend([assistant(), turn_end(Some(1))]);
+        records.extend([hand_back("a361"), assistant(), turn_end(Some(1))]);
         assert_eq!(
             pending(&records),
-            Some(2),
-            "its hand-back turn still counts it"
+            Some(1),
+            "its hand-back turn counts it once"
         );
 
         records.push(notification("a361", FINISHED));
@@ -208,6 +257,32 @@ mod tests {
             Some(0),
             "the final notice after the turn ends it"
         );
+    }
+
+    fn hand_back(agent_id: &str) -> serde_json::Value {
+        json!({
+            "type": "user",
+            "isMeta": true,
+            "origin": { "kind": "peer", "from": agent_id, "handback": true },
+            "message": { "content": "Another Claude session sent a message" },
+        })
+    }
+
+    /// Claude Code leaves a waiting subagent out of its count, so its final notice must not
+    /// count down another subagent that still runs.
+    #[test]
+    fn a_waiting_subagents_final_notice_leaves_the_others_counted() {
+        let records = [
+            launch("a"),
+            launch("b"),
+            assistant(),
+            turn_end(Some(2)),
+            notification("a", WAITING),
+            assistant(),
+            turn_end(Some(1)),
+            notification("a", FINISHED),
+        ];
+        assert_eq!(pending(&records), Some(1), "b still runs");
     }
 
     fn typed_prompt() -> serde_json::Value {
@@ -228,6 +303,61 @@ mod tests {
         assert_eq!(pending(&records), Some(1));
         records.extend([typed_prompt(), assistant(), turn_end(None)]);
         assert_eq!(pending(&records), Some(0));
+    }
+
+    #[test]
+    fn every_record_the_parser_reads_passes_the_filter() {
+        for record in [
+            assistant(),
+            turn_end(None),
+            launch("a1"),
+            notification("a1", WAITING),
+            typed_prompt(),
+            hand_back("a1"),
+        ] {
+            let line = record.to_string();
+            assert!(
+                RELEVANT.iter().any(|needle| line.contains(needle)),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_cache_rereads_a_transcript_only_once_it_grew() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        let lines = |records: &[serde_json::Value]| {
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>()
+        };
+        let mut cache = TranscriptCache::default();
+        assert_eq!(
+            cache.pending_background_subagents(&path),
+            None,
+            "missing file"
+        );
+
+        std::fs::write(
+            &path,
+            lines(&[launch("a1"), assistant(), turn_end(Some(1))]),
+        )
+        .unwrap();
+        assert_eq!(cache.pending_background_subagents(&path), Some(1));
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(&mut file, lines(&[notification("a1", FINISHED)]).as_bytes())
+            .unwrap();
+        assert_eq!(
+            cache.pending_background_subagents(&path),
+            Some(0),
+            "an append within the same clock tick still counts"
+        );
     }
 
     #[test]

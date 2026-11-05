@@ -128,6 +128,7 @@ pub async fn mark_exited(
     .await?;
     if let Some(transition) = exited {
         crate::task_activity::record(&app, &session_id, crate::task_activity::Activity::Exited);
+        crate::notify::agent_exited(&app, &session_id);
         runtime.0.dispatch_session_lifecycle(transition);
     }
     Ok(())

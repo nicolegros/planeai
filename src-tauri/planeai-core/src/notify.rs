@@ -58,6 +58,8 @@ pub struct NotifyState {
     transcripts: HashMap<String, std::path::PathBuf>,
     /// Ended turns whose background subagents still run, with when they were last checked.
     held: HashMap<String, Instant>,
+    /// Held turns whose last recheck found nothing running; the next one settles them.
+    held_ended: std::collections::HashSet<String>,
     /// Sessions whose status comes only from their plugin provider (ADR-0014).
     provider_owned: std::collections::HashSet<String>,
     #[cfg(any(test, feature = "test-support"))]
@@ -80,6 +82,7 @@ impl NotifyState {
             idle_since: HashMap::new(),
             transcripts: HashMap::new(),
             held: HashMap::new(),
+            held_ended: std::collections::HashSet::new(),
             provider_owned: std::collections::HashSet::new(),
             #[cfg(any(test, feature = "test-support"))]
             time_offset: HashMap::new(),
@@ -166,7 +169,7 @@ impl NotifyState {
     pub fn notify_stop_immediate(&mut self, session_id: &str) -> bool {
         self.idle_since.remove(session_id);
         // A held turn never told anyone it ended, so a request for the user surfaces.
-        if self.held.remove(session_id).is_some() {
+        if self.release_hold(session_id) {
             return self.notified.insert(session_id.to_string());
         }
         self.notify_stop(session_id)
@@ -218,13 +221,14 @@ impl NotifyState {
     /// (`None` while the transcript has not closed the turn). Returns whether it settles now.
     pub fn resolve_turn_end(&mut self, session_id: &str, pending: Option<usize>) -> bool {
         if self.get_state(session_id) != Some(AgentState::Idle) {
-            self.held.remove(session_id);
+            self.release_hold(session_id);
             return false;
         }
         let held = self.held.contains_key(session_id);
         match pending {
             Some(running) if running > 0 => {
                 self.idle_since.remove(session_id);
+                self.held_ended.remove(session_id);
                 if !held {
                     let now = self.stamp(session_id);
                     self.held.insert(session_id.to_string(), now);
@@ -232,6 +236,9 @@ impl NotifyState {
                 return false;
             }
             None if held => return false,
+            // A subagent's last notice lands just before the turn it starts: a second recheck
+            // lets that turn's busy signal end the hold first.
+            Some(_) if held && self.held_ended.insert(session_id.to_string()) => return false,
             None => {
                 let closing = self
                     .idle_since
@@ -244,13 +251,26 @@ impl NotifyState {
             Some(_) => {}
         }
         self.idle_since.remove(session_id);
-        self.held.remove(session_id);
+        self.release_hold(session_id);
         self.notified.insert(session_id.to_string())
     }
 
     /// The session's turn ended, but background subagents it started still run.
     pub fn is_held(&self, session_id: &str) -> bool {
         self.held.contains_key(session_id)
+    }
+
+    /// Ends a hold; returns whether there was one.
+    fn release_hold(&mut self, session_id: &str) -> bool {
+        self.held_ended.remove(session_id);
+        self.held.remove(session_id).is_some()
+    }
+
+    /// The session's agent exited: a held or debounced turn of it never ends.
+    pub fn forget_turn(&mut self, session_id: &str) {
+        self.release_hold(session_id);
+        self.idle_since.remove(session_id);
+        self.transcripts.remove(session_id);
     }
 
     pub fn notify_output(&mut self, session_id: &str) {
@@ -269,7 +289,7 @@ impl NotifyState {
         self.last_output
             .insert(session_id.to_string(), Instant::now());
         self.idle_since.remove(session_id);
-        self.held.remove(session_id);
+        self.release_hold(session_id);
         self.notified.remove(session_id);
     }
 
@@ -285,7 +305,7 @@ impl NotifyState {
         self.last_output
             .insert(session_id.to_string(), Instant::now());
         self.idle_since.remove(session_id);
-        self.held.remove(session_id);
+        self.release_hold(session_id);
         self.notified.remove(session_id);
         resumed
     }
@@ -631,9 +651,27 @@ mod tests {
 
         state.advance_time("s1", HELD_RECHECK);
         assert_eq!(due(&mut state), ["s1"]);
+        assert!(
+            !state.resolve_turn_end("s1", Some(0)),
+            "the turn a last notice starts gets a recheck to report busy"
+        );
+        state.advance_time("s1", HELD_RECHECK);
+        assert_eq!(due(&mut state), ["s1"]);
         assert!(state.resolve_turn_end("s1", Some(0)));
         assert!(!state.is_held("s1"));
         assert!(due(&mut state).is_empty());
+
+        let mut state = stopped(true);
+        state.advance_time("s1", DEBOUNCE_THRESHOLD);
+        due(&mut state);
+        state.resolve_turn_end("s1", Some(1));
+        state.forget_turn("s1");
+        state.advance_time("s1", HELD_RECHECK);
+        assert!(!state.is_held("s1"));
+        assert!(
+            due(&mut state).is_empty(),
+            "an exited agent's turn is never rechecked"
+        );
     }
 
     #[test]
