@@ -43,6 +43,8 @@
   let discovering = $state(false);
   let loadError = $state<string | null>(null);
   let pendingRemoval = $state<PluginInventory | null>(null);
+  let resolveTicket = 0;
+  const latestResolve = new Map<string, number>();
 
   const stagedForReview = $derived(
     remoteInstall.kind === "reviewing" || remoteInstall.kind === "installing" ? remoteInstall.staged : null,
@@ -71,6 +73,7 @@
       const candidates = await plugins.discover();
       discoveryCandidates = candidates;
       cardResolutions = {};
+      latestResolve.clear();
       resolveAllCards();
       loadError = null;
     } catch (error) {
@@ -85,12 +88,18 @@
   }
 
   async function resolveCard(repo: string) {
+    const ticket = ++resolveTicket;
+    latestResolve.set(repo, ticket);
     cardResolutions[repo] = { kind: "checking" };
+    let resolution: CardResolution;
     try {
-      cardResolutions[repo] = { kind: "resolved", state: await plugins.resolveCandidate(repo) };
+      resolution = { kind: "resolved", state: await plugins.resolveCandidate(repo) };
     } catch (error) {
-      cardResolutions[repo] = { kind: "failed", error: String(error) };
+      resolution = { kind: "failed", error: String(error) };
     }
+    // A newer request for this card, or a fresh discovery, supersedes this one.
+    if (latestResolve.get(repo) !== ticket) return;
+    cardResolutions[repo] = resolution;
   }
 
   function cardView(resolution: CardResolution | undefined): CardView {

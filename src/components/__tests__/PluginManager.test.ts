@@ -472,6 +472,32 @@ describe("PluginManager", () => {
     );
   });
 
+  it("drops a card resolution that settles after a newer one for the same card", async () => {
+    const repo = "acme/planeai-plugin-acme";
+    const settlers: Array<(state: DiscoveryCardState) => void> = [];
+    resolveCandidate.mockImplementation(
+      () => new Promise<DiscoveryCardState>((resolve) => settlers.push(resolve)),
+    );
+    list.mockResolvedValueOnce([remoteAcmePlugin]).mockResolvedValue([]);
+    removeLocal.mockResolvedValue(undefined);
+    await mountWithDiscovery([candidate(repo)]);
+    await vi.waitFor(() => expect(settlers).toHaveLength(1));
+
+    buttonLabeled(target, "Remove")?.click();
+    await vi.waitFor(() => expect(buttonLabeled(document.body, "Remove plugin")).toBeDefined());
+    buttonLabeled(document.body, "Remove plugin")?.click();
+    await vi.waitFor(() => expect(settlers).toHaveLength(2));
+
+    settlers[1]({ kind: "install", latest_version: "1.2.0" });
+    await vi.waitFor(() =>
+      expect(cardButtons(repo)).toEqual(["Install v1.2.0", "Open repository"]),
+    );
+    settlers[0]({ kind: "up_to_date", installed_version: "1.2.0" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(cardButtons(repo)).toEqual(["Install v1.2.0", "Open repository"]);
+    expect(card(repo)?.textContent).not.toContain("Up to date");
+  });
+
   it("reports a failed commit once the review closes and re-resolves the card", async () => {
     const repo = "acme/planeai-plugin-acme";
     list.mockResolvedValue([]);
