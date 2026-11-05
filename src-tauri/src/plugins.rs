@@ -5559,6 +5559,17 @@ mod tests {
     }
 
     #[test]
+    fn bundled_jira_is_granted_the_task_lifecycle_its_writeback_listens_to() {
+        let jira = bundled_manifests().unwrap().remove(0);
+        let capabilities = jira.capabilities.into_iter().collect::<HashSet<_>>();
+
+        assert!(lifecycle_subscription_is_granted(
+            &capabilities,
+            &HashSet::from(["task.lifecycle".to_string()])
+        ));
+    }
+
+    #[test]
     fn bundled_plugins_cannot_declare_tools() {
         let mut jira = bundled_manifests().unwrap().remove(0);
         jira.tools = tools_manifest("jira", "show").tools;
