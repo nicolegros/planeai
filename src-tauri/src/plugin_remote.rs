@@ -350,15 +350,10 @@ impl RemoteRepo {
                 Err(reason) => DiscoveryCardState::Unavailable { reason },
             };
         };
-        if installed.source_kind != PluginSourceKind::Local {
-            return DiscoveryCardState::Unavailable {
-                reason: format!(
-                    "Plugin id {} is reserved by a bundled plugin.",
-                    installed.id
-                ),
-            };
-        }
-        if let Err(reason) = self.select_source(platform) {
+        if let Err(reason) = installed
+            .ensure_replaceable()
+            .and_then(|()| self.select_source(platform).map(drop))
+        {
             return DiscoveryCardState::Unavailable { reason };
         }
         let installed_version = installed.version.clone();
@@ -1403,7 +1398,7 @@ mod tests {
                     ..inventory("jira", "0.1.0", None)
                 }],
                 DiscoveryCardState::Unavailable {
-                    reason: "Plugin id jira is reserved by a bundled plugin.".to_string(),
+                    reason: "plugin id is reserved by a bundled plugin: jira".to_string(),
                 },
             ),
         ];
