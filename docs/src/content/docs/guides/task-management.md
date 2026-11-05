@@ -158,24 +158,29 @@ planeai-cli task add "Fix Safari login redirect" \
 
 See the [CLI Reference](/planeai/reference/cli/) for the full set of task commands (`task add`, `task ls`, `task show`, `task move`, `task edit`, `task delete`).
 
-### From agent sessions (skills)
+### From agent sessions
 
 This is the most powerful workflow: **agents create tasks for other agents**.
 
-planeai ships with agent skills that let a running agent create follow-up tasks directly. When an agent finishes a piece of work and identifies follow-up items, it can use the built-in skills to:
+A running agent can create follow-up tasks directly.
+When it finishes a piece of work and identifies follow-up items, it can:
 
-- **Create a single task** — the agent describes the work, and it appears on your task board immediately
-- **Break a plan into tasks** — the agent takes a plan or spec and produces a structured set of tasks with parent/subtask relationships and dependency ordering
+- **Create a single task**: the agent describes the work, and it appears on your task board immediately
+- **Break a plan into tasks**: the agent takes a plan or spec and produces a structured set of tasks with parent/subtask relationships and dependency ordering
 
 This enables a flywheel: you describe a feature to one agent, it breaks the work into tasks, and auto-dispatch assigns those tasks to other agents running in parallel.
 
-Install the skills with:
+Claude Code and Codex sessions started by planeai get native `mcp__planeai__*` tools for tasks and sessions through the [MCP server](/planeai/guides/configuration/#planeai-tools-mcp).
+Other agents use `planeai-cli axi`.
+
+planeai also ships agent skills that teach either interface: they use the PlaneAI tools when the agent has them and the CLI otherwise.
+Install them with:
 
 ```bash
 skl install nicolegros/planeai --all
 ```
 
-Once installed, agents that support skill/tool loading (like Kiro or Claude) can use them automatically.
+Once installed, agents that support skills (like Kiro or Claude) can use them automatically.
 
 ## Changing status from the keyboard
 
