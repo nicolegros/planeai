@@ -5,8 +5,8 @@ use tauri::State;
 use tokio::sync::Semaphore;
 
 use crate::plugin_remote::{
-    fetch_remote_repo, remove_staging_dir, run_gh, stage_package, DiscoveryCardState, Downloader,
-    RepoFullName, StagedPluginInstall, StagingStore, EXPIRED_STAGING,
+    fetch_remote_repo, run_gh, DiscoveryCardState, Downloader, RepoFullName, StagedPluginInstall,
+    StagingStore,
 };
 use crate::plugins::{PluginInventory, PluginRuntimeHandle};
 
@@ -143,26 +143,10 @@ pub async fn stage_remote_plugin(
         .await?
         .select_source(crate::plugin_packages::current_platform_key())?;
     let inventory = runtime.0.list().await?;
-    let (staging_id, dir) = remote.staging.create_dir()?;
-    let staged = stage_package(
-        downloader,
-        &repo,
-        &source,
-        &inventory,
-        staging_id.clone(),
-        &dir,
-    )
-    .await;
-    match staged {
-        Ok((package, preview)) => {
-            remote.staging.insert(staging_id, package)?;
-            Ok(preview)
-        }
-        Err(error) => {
-            remove_staging_dir(dir).await;
-            Err(error)
-        }
-    }
+    remote
+        .staging
+        .stage(downloader, &repo, &source, &inventory)
+        .await
 }
 
 #[tauri::command]
@@ -171,17 +155,12 @@ pub async fn commit_staged_plugin(
     remote: State<'_, PluginRemoteState>,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<PluginInventory, String> {
-    let staged = remote
+    remote
         .staging
-        .take(&staging_id)?
-        .ok_or_else(|| EXPIRED_STAGING.to_string())?;
-    let result = runtime
-        .0
-        .install_remote(staged.package_root, staged.origin)
-        .await;
-    // The import copied the package, so staging is removable whether or not it succeeded.
-    remove_staging_dir(staged.dir).await;
-    result
+        .commit(&staging_id, |package_root, origin| {
+            runtime.0.install_remote(package_root, origin)
+        })
+        .await
 }
 
 #[tauri::command]
@@ -189,10 +168,7 @@ pub async fn discard_staged_plugin(
     staging_id: String,
     remote: State<'_, PluginRemoteState>,
 ) -> Result<(), String> {
-    if let Some(staged) = remote.staging.take(&staging_id)? {
-        remove_staging_dir(staged.dir).await;
-    }
-    Ok(())
+    remote.staging.discard(&staging_id).await
 }
 
 #[cfg(test)]

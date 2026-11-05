@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::future::Future;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
@@ -27,7 +28,7 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const DOWNLOAD_LIMIT_BYTES: u64 = 100 * 1024 * 1024;
 const EXTRACT_LIMIT_BYTES: u64 = 500 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
-pub(crate) const EXPIRED_STAGING: &str = "This install review expired. Start again.";
+const EXPIRED_STAGING: &str = "This install review expired. Start again.";
 
 /// A GitHub `owner/name`, validated at the command boundary so commands never take URLs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -925,12 +926,13 @@ fn package_root(destination: &Path) -> Result<PathBuf, String> {
 
 /// A downloaded, verified and extracted package waiting for the user's decision.
 #[derive(Debug)]
-pub(crate) struct StagedPackage {
-    pub(crate) dir: PathBuf,
-    pub(crate) package_root: PathBuf,
-    pub(crate) origin: RemoteOrigin,
+struct StagedPackage {
+    dir: PathBuf,
+    package_root: PathBuf,
+    origin: RemoteOrigin,
 }
 
+/// The staging lifecycle: stage a package for review, then commit or discard it by id.
 #[derive(Debug)]
 pub(crate) struct StagingStore {
     root: PathBuf,
@@ -955,15 +957,54 @@ impl StagingStore {
         Ok(())
     }
 
-    pub(crate) fn create_dir(&self) -> Result<(String, PathBuf), String> {
-        let id = Uuid::new_v4().to_string();
-        let dir = self.root.join(&id);
-        fs::create_dir_all(&dir)
-            .map_err(|error| format!("failed to create plugin staging directory: {error}"))?;
-        Ok((id, dir))
+    /// Stages `source` in a fresh directory and keeps the package until commit or discard.
+    /// A failed stage leaves no directory behind.
+    pub(crate) async fn stage(
+        &self,
+        downloader: &Downloader,
+        repo: &RepoFullName,
+        source: &PackageSource,
+        inventory: &[PluginInventory],
+    ) -> Result<StagedPluginInstall, String> {
+        let root = self.root.clone();
+        let (id, dir) = crate::commands::blocking(move || create_staging_dir(&root)).await?;
+        let staged = stage_package(downloader, repo, source, inventory, id.clone(), &dir)
+            .await
+            .and_then(|(package, preview)| {
+                self.insert(id, package)?;
+                Ok(preview)
+            });
+        if staged.is_err() {
+            remove_staging_dir(dir).await;
+        }
+        staged
     }
 
-    pub(crate) fn insert(&self, id: String, staged: StagedPackage) -> Result<(), String> {
+    /// Hands the staged package root and origin to `install`, then removes the staging directory
+    /// whether or not the install succeeded: the import copies the package.
+    pub(crate) async fn commit<T, Fut>(
+        &self,
+        id: &str,
+        install: impl FnOnce(PathBuf, RemoteOrigin) -> Fut,
+    ) -> Result<T, String>
+    where
+        Fut: Future<Output = Result<T, String>>,
+    {
+        let staged = self.take(id)?.ok_or_else(|| EXPIRED_STAGING.to_string())?;
+        let result = install(staged.package_root, staged.origin).await;
+        remove_staging_dir(staged.dir).await;
+        result
+    }
+
+    /// Removes a staged package; an unknown or already handled id is a no-op.
+    pub(crate) async fn discard(&self, id: &str) -> Result<(), String> {
+        if let Some(staged) = self.take(id)? {
+            remove_staging_dir(staged.dir).await;
+        }
+        Ok(())
+    }
+
+    fn insert(&self, id: String, staged: StagedPackage) -> Result<(), String> {
         self.entries
             .lock()
             .map_err(|e| e.to_string())?
@@ -971,9 +1012,17 @@ impl StagingStore {
         Ok(())
     }
 
-    pub(crate) fn take(&self, id: &str) -> Result<Option<StagedPackage>, String> {
+    fn take(&self, id: &str) -> Result<Option<StagedPackage>, String> {
         Ok(self.entries.lock().map_err(|e| e.to_string())?.remove(id))
     }
+}
+
+fn create_staging_dir(root: &Path) -> Result<(String, PathBuf), String> {
+    let id = Uuid::new_v4().to_string();
+    let dir = root.join(&id);
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("failed to create plugin staging directory: {error}"))?;
+    Ok((id, dir))
 }
 
 fn remove_dir(dir: &Path) -> Result<(), String> {
@@ -986,7 +1035,7 @@ fn remove_dir(dir: &Path) -> Result<(), String> {
 
 /// Removes a staging directory off the main thread. A leftover is only logged: the next startup
 /// wipes the staging root, and the caller's own outcome matters more than the cleanup.
-pub(crate) async fn remove_staging_dir(dir: PathBuf) {
+async fn remove_staging_dir(dir: PathBuf) {
     let path = dir.display().to_string();
     if let Err(error) = crate::commands::blocking(move || remove_dir(&dir)).await {
         tracing::warn!(%error, path, "failed to remove plugin staging directory");
@@ -995,7 +1044,7 @@ pub(crate) async fn remove_staging_dir(dir: PathBuf) {
 
 /// Downloads, verifies, extracts and inspects `source` under `dir`: the package to keep in the
 /// staging store and the preview the user reviews before committing it.
-pub(crate) async fn stage_package(
+async fn stage_package(
     downloader: &Downloader,
     repo: &RepoFullName,
     source: &PackageSource,
@@ -2048,54 +2097,6 @@ mod tests {
         assert!(!temp.path().join("evil").exists());
     }
 
-    #[test]
-    fn staged_packages_are_taken_once_and_removal_is_idempotent() {
-        let temp = TempDir::new().unwrap();
-        let store = StagingStore::new(temp.path());
-        let (id, dir) = store.create_dir().unwrap();
-        fs::write(dir.join("package.zip"), b"bytes").unwrap();
-        store
-            .insert(
-                id.clone(),
-                StagedPackage {
-                    dir: dir.clone(),
-                    package_root: dir.join("extracted").join("acme"),
-                    origin: origin("acme/planeai-plugin-acme"),
-                },
-            )
-            .unwrap();
-
-        let taken = store.take(&id).unwrap().unwrap();
-        assert_eq!(taken.dir, dir);
-        assert!(
-            store.take(&id).unwrap().is_none(),
-            "a commit consumes the staging"
-        );
-
-        let (second, second_dir) = store.create_dir().unwrap();
-        store
-            .insert(
-                second.clone(),
-                StagedPackage {
-                    dir: second_dir.clone(),
-                    package_root: second_dir.clone(),
-                    origin: origin("acme/planeai-plugin-acme"),
-                },
-            )
-            .unwrap();
-        let discarded = store.take(&second).unwrap().unwrap();
-        remove_dir(&discarded.dir).unwrap();
-        assert!(!second_dir.exists());
-        remove_dir(&discarded.dir).unwrap();
-        assert!(store.take(&second).unwrap().is_none());
-        assert!(store.take("never-staged").unwrap().is_none());
-
-        let (_, leftover) = store.create_dir().unwrap();
-        assert!(leftover.exists());
-        store.reset().unwrap();
-        assert!(!temp.path().join("plugins").join("staging").exists());
-    }
-
     const ONE_MB: u64 = 1024 * 1024;
 
     /// Serves `body` at `/acme-macos-arm64.tar.gz`, a redirect to it, and a body one byte over
@@ -2239,7 +2240,7 @@ mod tests {
         let sha256 = hex(&Sha256::digest(&bytes));
         let base = serve(bytes).await;
         let temp = TempDir::new().unwrap();
-        let store = StagingStore::new(temp.path());
+        let staging_root = temp.path().join("staging");
         let url = format!("{base}/acme-macos-arm64.tar.gz");
         let source = PackageSource {
             url: url.clone(),
@@ -2248,7 +2249,7 @@ mod tests {
             format: ArchiveFormat::TarGz,
         };
 
-        let (id, dir) = store.create_dir().unwrap();
+        let (id, dir) = create_staging_dir(&staging_root).unwrap();
         let (package, preview) = stage_package(
             &Downloader::insecure_for_tests(),
             &repo(),
@@ -2301,7 +2302,7 @@ mod tests {
         );
 
         // The warning compares against the tag the archive came from, not the latest release.
-        let (id, dir) = store.create_dir().unwrap();
+        let (id, dir) = create_staging_dir(&staging_root).unwrap();
         let older = PackageSource {
             release_tag: Some("v1.1.0".to_string()),
             expected_sha256: None,
@@ -2338,7 +2339,7 @@ mod tests {
             })
         );
 
-        let (id, dir) = store.create_dir().unwrap();
+        let (id, dir) = create_staging_dir(&staging_root).unwrap();
         let tampered = PackageSource {
             expected_sha256: Some("0000".to_string()),
             ..source
@@ -2361,6 +2362,106 @@ mod tests {
             !dir.join("extracted").exists(),
             "nothing is extracted after a digest mismatch"
         );
+    }
+
+    #[tokio::test]
+    async fn the_staging_store_stages_commits_discards_and_expires() {
+        let bytes = good_tar();
+        let sha256 = hex(&Sha256::digest(&bytes));
+        let base = serve(bytes).await;
+        let temp = TempDir::new().unwrap();
+        let store = StagingStore::new(temp.path());
+        let staging_root = temp.path().join("plugins").join("staging");
+        let url = format!("{base}/acme-macos-arm64.tar.gz");
+        let source = PackageSource {
+            url: url.clone(),
+            release_tag: Some("v1.2.0".to_string()),
+            expected_sha256: None,
+            format: ArchiveFormat::TarGz,
+        };
+        let downloader = Downloader::insecure_for_tests();
+        let repo = repo();
+        let stage = || store.stage(&downloader, &repo, &source, &[]);
+
+        let preview = stage().await.unwrap();
+        let dir = staging_root.join(&preview.staging_id);
+        let package_root = dir.join("extracted").join("acme");
+        assert!(package_root.join("planeai-plugin.json").is_file());
+        let expected_root = package_root.canonicalize().unwrap();
+
+        let installed = store
+            .commit(&preview.staging_id, |root, origin| async move {
+                Ok::<_, String>((root, origin))
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            installed,
+            (
+                expected_root,
+                RemoteOrigin {
+                    repo: "acme/planeai-plugin-acme".to_string(),
+                    release_tag: Some("v1.2.0".to_string()),
+                    source_url: url.clone(),
+                    archive_sha256: sha256.clone(),
+                }
+            )
+        );
+        assert!(!dir.exists(), "commit removes the staging directory");
+
+        let expired = store
+            .commit(&preview.staging_id, |_, _| async { Ok(()) })
+            .await
+            .unwrap_err();
+        assert_eq!(expired, "This install review expired. Start again.");
+        let unknown = store
+            .commit("never-staged", |_, _| async { Ok(()) })
+            .await
+            .unwrap_err();
+        assert_eq!(unknown, "This install review expired. Start again.");
+
+        let preview = stage().await.unwrap();
+        let dir = staging_root.join(&preview.staging_id);
+        let failed = store
+            .commit(&preview.staging_id, |_, _| async {
+                Err::<(), _>("enable failed".to_string())
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(failed, "enable failed");
+        assert!(
+            !dir.exists(),
+            "the import copied the package, so a failed install still removes the staging"
+        );
+
+        let preview = stage().await.unwrap();
+        let dir = staging_root.join(&preview.staging_id);
+        store.discard(&preview.staging_id).await.unwrap();
+        assert!(!dir.exists(), "discard removes the staging directory");
+        store.discard(&preview.staging_id).await.unwrap();
+        store.discard("never-staged").await.unwrap();
+
+        let tampered = PackageSource {
+            expected_sha256: Some("0000".to_string()),
+            ..source.clone()
+        };
+        let error = store
+            .stage(&downloader, &repo, &tampered, &[])
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            format!("plugin archive SHA-256 {sha256} does not match the release asset digest 0000")
+        );
+        assert_eq!(
+            fs::read_dir(&staging_root).unwrap().count(),
+            0,
+            "a failed stage leaves no directory behind"
+        );
+
+        stage().await.unwrap();
+        store.reset().unwrap();
+        assert!(!staging_root.exists(), "startup wipes every staged package");
     }
 
     /// GitHub reports no digest for some assets, so a release asset can still install unverified.
@@ -2394,7 +2495,7 @@ mod tests {
         );
 
         let temp = TempDir::new().unwrap();
-        let (id, dir) = StagingStore::new(temp.path()).create_dir().unwrap();
+        let (id, dir) = create_staging_dir(&temp.path().join("staging")).unwrap();
         let (_, preview) = stage_package(
             &Downloader::insecure_for_tests(),
             &repo(),
@@ -2420,18 +2521,12 @@ mod tests {
             .select_source(crate::plugin_packages::current_platform_key())
             .unwrap();
         let temp = TempDir::new().unwrap();
-        let (id, dir) = StagingStore::new(temp.path()).create_dir().unwrap();
-        let (package, preview) = stage_package(
-            &Downloader::new().unwrap(),
-            &repo,
-            &source,
-            &[],
-            id.clone(),
-            &dir,
-        )
-        .await
-        .unwrap();
-        assert_eq!(preview.staging_id, id);
+        let store = StagingStore::new(temp.path());
+        let preview = store
+            .stage(&Downloader::new().unwrap(), &repo, &source, &[])
+            .await
+            .unwrap();
+        let package = store.take(&preview.staging_id).unwrap().unwrap();
         assert_eq!(preview.manifest.id, "github");
         let imported = crate::plugin_packages::import_local_package(
             &temp.path().join("app"),
