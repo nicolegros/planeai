@@ -330,19 +330,21 @@ impl RemoteRepo {
     }
 
     /// The installed plugin this repository stands for: by provenance first, then by HEAD id.
+    /// A renamed id leaves the old row beside the new one, and the HEAD id names the current one.
     fn installed<'a>(&self, inventory: &'a [PluginInventory]) -> Option<&'a PluginInventory> {
+        let head_id = self.head.as_ref().and_then(|head| head.id.as_deref());
+        let from_repo = |plugin: &&PluginInventory| {
+            plugin
+                .remote_origin
+                .as_ref()
+                .is_some_and(|origin| origin.repo == self.repo.as_str())
+        };
+        let has_head_id = |plugin: &&PluginInventory| head_id == Some(plugin.id.as_str());
         inventory
             .iter()
-            .find(|plugin| {
-                plugin
-                    .remote_origin
-                    .as_ref()
-                    .is_some_and(|origin| origin.repo == self.repo.as_str())
-            })
-            .or_else(|| {
-                let id = self.head.as_ref()?.id.as_deref()?;
-                inventory.iter().find(|plugin| plugin.id == id)
-            })
+            .find(|plugin| from_repo(plugin) && has_head_id(plugin))
+            .or_else(|| inventory.iter().find(from_repo))
+            .or_else(|| inventory.iter().find(has_head_id))
     }
 
     pub(crate) fn card_state(
@@ -404,6 +406,19 @@ fn replacement(
     manifest_id: &str,
     staging_repo: &RepoFullName,
 ) -> Result<StagedReplacement, String> {
+    // Removal deletes plugin data, so a renamed id is the user's call, never an automatic swap.
+    if let Some(previous) = inventory.iter().find(|plugin| {
+        plugin.id != manifest_id
+            && plugin
+                .remote_origin
+                .as_ref()
+                .is_some_and(|origin| origin.repo == staging_repo.as_str())
+    }) {
+        return Err(format!(
+            "This repository's plugin id changed from {old} to {manifest_id}. Remove {old} before installing the new id.",
+            old = previous.id
+        ));
+    }
     let Some(installed) = inventory.iter().find(|plugin| plugin.id == manifest_id) else {
         return Ok(StagedReplacement::None);
     };
@@ -1420,6 +1435,17 @@ mod tests {
                 },
             ),
             (
+                "two rows from this repo: the one with the HEAD id is the card's",
+                remote.clone(),
+                vec![
+                    inventory("old-acme", "1.0.0", Some(origin("acme/planeai-plugin-acme"))),
+                    inventory("acme", "1.2.0", Some(origin("acme/planeai-plugin-acme"))),
+                ],
+                DiscoveryCardState::UpToDate {
+                    installed_version: "1.2.0".to_string(),
+                },
+            ),
+            (
                 "installed but the platform is no longer served",
                 RemoteRepo {
                     latest_release: None,
@@ -1459,26 +1485,19 @@ mod tests {
 
     #[test]
     fn replacement_is_derived_from_the_staged_manifest_id_and_the_staging_repo() {
-        let plugins = vec![
-            inventory("local-one", "0.5.0", None),
-            inventory(
-                "remote-one",
-                "1.0.0",
-                Some(origin("acme/planeai-plugin-acme")),
-            ),
-            inventory(
-                "remote-other",
-                "1.1.0",
-                Some(origin("other/planeai-plugin-other")),
-            ),
-            PluginInventory {
-                source_kind: PluginSourceKind::Builtin,
-                ..inventory("jira", "0.1.0", None)
-            },
-        ];
-        let cases: Vec<(&str, Result<StagedReplacement, String>)> = vec![
-            ("new", Ok(StagedReplacement::None)),
+        let local = inventory("local-one", "0.5.0", None);
+        let from_this_repo = inventory("acme", "1.0.0", Some(origin("acme/planeai-plugin-acme")));
+        let from_other_repo =
+            inventory("acme", "1.1.0", Some(origin("other/planeai-plugin-other")));
+        let bundled = PluginInventory {
+            source_kind: PluginSourceKind::Builtin,
+            ..inventory("jira", "0.1.0", None)
+        };
+        let cases: Vec<(&str, Vec<PluginInventory>, &str, Result<StagedReplacement, String>)> = vec![
+            ("new", vec![local.clone()], "acme", Ok(StagedReplacement::None)),
             (
+                "local build",
+                vec![local.clone()],
                 "local-one",
                 Ok(StagedReplacement::Local {
                     installed_version: "0.5.0".to_string(),
@@ -1486,28 +1505,40 @@ mod tests {
                 }),
             ),
             (
-                "remote-one",
+                "same repo",
+                vec![local.clone(), from_this_repo.clone()],
+                "acme",
                 Ok(StagedReplacement::Repo {
                     installed_version: "1.0.0".to_string(),
                 }),
             ),
             (
-                "remote-other",
+                "other repo",
+                vec![from_other_repo],
+                "acme",
                 Ok(StagedReplacement::OtherRepo {
                     repo: "other/planeai-plugin-other".to_string(),
                     installed_version: "1.1.0".to_string(),
                 }),
             ),
             (
+                "bundled id",
+                vec![bundled],
                 "jira",
                 Err("plugin id is reserved by a bundled plugin: jira".to_string()),
             ),
+            (
+                "this repo renamed its id",
+                vec![local, from_this_repo],
+                "acme-next",
+                Err("This repository's plugin id changed from acme to acme-next. Remove acme before installing the new id.".to_string()),
+            ),
         ];
-        for (manifest_id, expected) in cases {
+        for (name, plugins, manifest_id, expected) in cases {
             assert_eq!(
                 replacement(&plugins, manifest_id, &repo()),
                 expected,
-                "{manifest_id}"
+                "{name}"
             );
         }
     }
