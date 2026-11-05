@@ -502,47 +502,80 @@ pub async fn fetch_remote_repo(repo: RepoFullName) -> Result<RemoteRepo, String>
 
 pub struct Downloader {
     client: reqwest::Client,
+    /// Production refuses plain http before any request; tests download from a local http server.
+    https_only: bool,
+}
+
+/// Why a redirect must not be followed, when it must not.
+fn redirect_rejection(hops: usize, next: &reqwest::Url) -> Option<&'static str> {
+    if hops >= MAX_REDIRECTS {
+        Some("too many redirects")
+    } else if next.scheme() != "https" {
+        Some("redirected to a non-https URL")
+    } else {
+        None
+    }
+}
+
+fn client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .timeout(DOWNLOAD_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::custom(
+            |attempt| match redirect_rejection(attempt.previous().len(), attempt.url()) {
+                Some(reason) => attempt.error(reason),
+                None => attempt.follow(),
+            },
+        ))
+}
+
+/// reqwest's Display stops at the error kind, so the redirect or connection cause is appended.
+fn download_failed(error: reqwest::Error) -> String {
+    let mut message = format!("plugin download failed: {error}");
+    let mut cause = std::error::Error::source(&error);
+    while let Some(current) = cause {
+        message.push_str(&format!(": {current}"));
+        cause = current.source();
+    }
+    message
 }
 
 impl Downloader {
     pub fn new() -> Result<Self, String> {
-        let client = reqwest::Client::builder()
-            .timeout(DOWNLOAD_TIMEOUT)
+        let client = client_builder()
             .https_only(true)
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() >= MAX_REDIRECTS {
-                    attempt.error("too many redirects")
-                } else if attempt.url().scheme() != "https" {
-                    attempt.error("redirected to a non-https URL")
-                } else {
-                    attempt.follow()
-                }
-            }))
             .build()
             .map_err(|error| format!("failed to build plugin download client: {error}"))?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            https_only: true,
+        })
     }
 
     /// Plain-http client for a local test server; production stays https-only.
     #[cfg(test)]
     pub fn insecure_for_tests() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .timeout(DOWNLOAD_TIMEOUT)
-                .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
-                .build()
-                .unwrap(),
+            client: client_builder().build().unwrap(),
+            https_only: false,
         }
     }
 
     /// Streams `url` into `destination`, returning the archive's SHA-256.
     pub async fn download(&self, url: &str, destination: &Path) -> Result<String, String> {
-        let response = self
-            .client
-            .get(url)
-            .send()
+        self.download_within(url, destination, DOWNLOAD_LIMIT_BYTES)
             .await
-            .map_err(|error| format!("plugin download failed: {error}"))?;
+    }
+
+    async fn download_within(
+        &self,
+        url: &str,
+        destination: &Path,
+        limit: u64,
+    ) -> Result<String, String> {
+        if self.https_only && !url.starts_with("https://") {
+            return Err(format!("plugin downloads must use https: {url}"));
+        }
+        let response = self.client.get(url).send().await.map_err(download_failed)?;
         if !response.status().is_success() {
             return Err(format!(
                 "plugin download failed with HTTP {}: {url}",
@@ -552,12 +585,12 @@ impl Downloader {
         let over_limit = || {
             format!(
                 "plugin download exceeds the {} MB limit",
-                DOWNLOAD_LIMIT_BYTES / (1024 * 1024)
+                limit / (1024 * 1024)
             )
         };
         if response
             .content_length()
-            .is_some_and(|length| length > DOWNLOAD_LIMIT_BYTES)
+            .is_some_and(|length| length > limit)
         {
             return Err(over_limit());
         }
@@ -567,13 +600,9 @@ impl Downloader {
         let mut hasher = Sha256::new();
         let mut received: u64 = 0;
         let mut response = response;
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|error| format!("plugin download failed: {error}"))?
-        {
+        while let Some(chunk) = response.chunk().await.map_err(download_failed)? {
             received += chunk.len() as u64;
-            if received > DOWNLOAD_LIMIT_BYTES {
+            if received > limit {
                 return Err(over_limit());
             }
             hasher.update(&chunk);
@@ -1963,10 +1992,16 @@ mod tests {
         assert!(!temp.path().join("plugins").join("staging").exists());
     }
 
+    const ONE_MB: u64 = 1024 * 1024;
+
+    /// Serves `body` at `/acme-macos-arm64.tar.gz`, a redirect to it, and a body one byte over
+    /// 1 MB both with a Content-Length and as a chunked stream.
     async fn serve(body: Vec<u8>) -> String {
         use axum::routing::get;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let big = vec![0u8; ONE_MB as usize + 1];
+        let chunked = big.clone();
         let router = axum::Router::new()
             .route(
                 "/acme-macos-arm64.tar.gz",
@@ -1975,6 +2010,15 @@ mod tests {
             .route(
                 "/moved.tar.gz",
                 get(|| async { axum::response::Redirect::permanent("/acme-macos-arm64.tar.gz") }),
+            )
+            .route("/big.tar.gz", get(move || async move { big.clone() }))
+            .route(
+                "/chunked.tar.gz",
+                get(move || async move {
+                    axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(
+                        std::io::Cursor::new(chunked.clone()),
+                    ))
+                }),
             );
         tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
@@ -1991,7 +2035,7 @@ mod tests {
         let destination = temp.path().join("package.tar.gz");
 
         let sha256 = Downloader::insecure_for_tests()
-            .download(&format!("{base}/moved.tar.gz"), &destination)
+            .download(&format!("{base}/acme-macos-arm64.tar.gz"), &destination)
             .await
             .unwrap();
         assert_eq!(sha256, expected);
@@ -2004,16 +2048,84 @@ mod tests {
                 .unwrap_err(),
             format!("plugin download failed with HTTP 404: {base}/missing.tar.gz")
         );
+    }
+
+    #[tokio::test]
+    async fn production_downloads_refuse_plain_http_before_any_request() {
+        let temp = TempDir::new().unwrap();
+        let destination = temp.path().join("package.tar.gz");
         assert_eq!(
             Downloader::new()
                 .unwrap()
-                .download(&format!("{base}/acme-macos-arm64.tar.gz"), &destination)
+                .download("http://127.0.0.1:9/acme-macos-arm64.tar.gz", &destination)
+                .await
+                .unwrap_err(),
+            "plugin downloads must use https: http://127.0.0.1:9/acme-macos-arm64.tar.gz"
+        );
+        assert!(!destination.exists());
+    }
+
+    /// The test client shares the production redirect policy, so a redirect to plain http is
+    /// refused even where the first request was allowed over http.
+    #[tokio::test]
+    async fn redirects_stay_on_https_and_stop_at_the_hop_limit() {
+        let base = serve(good_tar()).await;
+        let temp = TempDir::new().unwrap();
+        assert_eq!(
+            Downloader::insecure_for_tests()
+                .download(&format!("{base}/moved.tar.gz"), &temp.path().join("moved"))
                 .await
                 .unwrap_err(),
             format!(
-                "plugin download failed: builder error for url ({base}/acme-macos-arm64.tar.gz)"
+                "plugin download failed: error following redirect for url ({base}/moved.tar.gz): redirected to a non-https URL"
             )
         );
+
+        let https = reqwest::Url::parse("https://cdn.acme.dev/acme.tar.gz").unwrap();
+        let http = reqwest::Url::parse("http://cdn.acme.dev/acme.tar.gz").unwrap();
+        assert_eq!(redirect_rejection(4, &https), None);
+        assert_eq!(redirect_rejection(5, &https), Some("too many redirects"));
+        assert_eq!(
+            redirect_rejection(0, &http),
+            Some("redirected to a non-https URL")
+        );
+    }
+
+    #[tokio::test]
+    async fn downloads_stop_at_the_size_limit_with_and_without_a_content_length() {
+        let base = serve(good_tar()).await;
+        let temp = TempDir::new().unwrap();
+        let downloader = Downloader::insecure_for_tests();
+
+        let sized = temp.path().join("big.tar.gz");
+        assert_eq!(
+            downloader
+                .download_within(&format!("{base}/big.tar.gz"), &sized, ONE_MB)
+                .await
+                .unwrap_err(),
+            "plugin download exceeds the 1 MB limit"
+        );
+        assert!(!sized.exists(), "a declared oversize body is never opened");
+
+        let chunked = temp.path().join("chunked.tar.gz");
+        assert_eq!(
+            downloader
+                .download_within(&format!("{base}/chunked.tar.gz"), &chunked, ONE_MB)
+                .await
+                .unwrap_err(),
+            "plugin download exceeds the 1 MB limit"
+        );
+        assert!(
+            fs::metadata(&chunked).unwrap().len() <= ONE_MB,
+            "a chunked body stops at the limit instead of draining the stream"
+        );
+
+        let exact = temp.path().join("exact.tar.gz");
+        downloader
+            .download_within(&format!("{base}/big.tar.gz"), &exact, ONE_MB + 1)
+            .await
+            .unwrap();
+        assert_eq!(fs::metadata(&exact).unwrap().len(), ONE_MB + 1);
     }
 
     #[tokio::test]
