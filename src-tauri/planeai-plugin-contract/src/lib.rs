@@ -60,14 +60,20 @@ pub const SESSION_META_HOST_API_VERSION: &str = "planeai.plugin-host.v5";
 /// and `tool.call`); see ADR-0017.
 pub const TOOLS_HOST_API_VERSION: &str = "planeai.plugin-host.v6";
 
+/// Mirroring an external tracker's issues as PlaneAI tasks: the `tasks.sync` capability
+/// (`host.task.create` and `host.task.update` on tasks the plugin owns) and the local frame's
+/// `interaction` bridge (toasts, the project form, task data changes).
+pub const SYNC_HOST_API_VERSION: &str = "planeai.plugin-host.v7";
+
 /// Every host API this host serves, oldest first; each includes the ones before it.
-const HOST_API_VERSIONS: [&str; 6] = [
+const HOST_API_VERSIONS: [&str; 7] = [
     HOST_API_VERSION,
     RECIPIENT_HOST_API_VERSION,
     PROVIDER_HOST_API_VERSION,
     TASK_SESSION_HOST_API_VERSION,
     SESSION_META_HOST_API_VERSION,
     TOOLS_HOST_API_VERSION,
+    SYNC_HOST_API_VERSION,
 ];
 
 /// The host-to-plugin request that runs one of the plugin's tools.
@@ -239,6 +245,7 @@ const LOCAL_CAPABILITIES: &[&str] = &[
     "tasks.read",
     "tasks.create",
     "tasks.transition",
+    "tasks.sync",
     "task-events",
     "providers",
     "tools",
@@ -379,6 +386,9 @@ fn validate_capabilities(object: &Map<String, Value>) -> Result<()> {
         }
         if capability == "tools" {
             require_host_api(object, "the tools capability", TOOLS_HOST_API_VERSION)?;
+        }
+        if capability == "tasks.sync" {
+            require_host_api(object, "the tasks.sync capability", SYNC_HOST_API_VERSION)?;
         }
     }
     Ok(())
@@ -1147,6 +1157,23 @@ mod tests {
         assert_eq!(
             validate_local_manifest(&manifest, "macos-arm64").unwrap(),
             "bin/plugin"
+        );
+    }
+
+    #[test]
+    fn tasks_sync_requires_host_api_v7() {
+        let sync = |host_api_version: &str| {
+            let mut manifest = manifest();
+            manifest["host_api_version"] = json!(host_api_version);
+            manifest["capabilities"] = json!(["tasks.read", "tasks.create", "tasks.sync"]);
+            manifest["ui_contributions"][0]["placement"] = json!("interaction");
+            validate_local_manifest(&manifest, "macos-arm64").map_err(|error| error.to_string())
+        };
+
+        assert_eq!(sync("planeai.plugin-host.v7"), Ok("bin/plugin".into()));
+        assert_eq!(
+            sync("planeai.plugin-host.v6"),
+            Err("the tasks.sync capability requires host API planeai.plugin-host.v7".into())
         );
     }
 }

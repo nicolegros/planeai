@@ -21,7 +21,7 @@ my-plugin/
     └── entry.js
 ```
 
-`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers), `planeai.plugin-host.v4` for plugins that use the `sessions.start` capability or the `dialog` placement, `planeai.plugin-host.v5` for a `session.meta` slot with a tooltip that opens the plugin's session panel, or `planeai.plugin-host.v6` for plugins that contribute [tools](#tools) to agents (each version includes the ones before it); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
+`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers), `planeai.plugin-host.v4` for plugins that use the `sessions.start` capability or the `dialog` placement, `planeai.plugin-host.v5` for a `session.meta` slot with a tooltip that opens the plugin's session panel, `planeai.plugin-host.v6` for plugins that contribute [tools](#tools) to agents, or `planeai.plugin-host.v7` for plugins that mirror an external tracker's issues as PlaneAI tasks with the `tasks.sync` capability and the [interaction bridge](#interaction-bridge-host-api-v7) (each version includes the ones before it); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
 
 Every backend and UI path must be a package-relative file path: no absolute paths and no `..`. The active platform's backend must exist and be executable. On Unix, its executable mode is preserved in the imported copy.
 
@@ -112,7 +112,7 @@ Any other URL, and a release asset for which GitHub reports no digest, installs 
 
 ### Capabilities
 
-Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `sessions.start`, `tasks.read`, `tasks.create`, `tasks.transition`, `task-events`, `providers`, and `tools`; duplicates and all other local capabilities are rejected.
+Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `sessions.start`, `tasks.read`, `tasks.create`, `tasks.transition`, `tasks.sync`, `task-events`, `providers`, and `tools`; duplicates and all other local capabilities are rejected.
 
 - `settings` permits sidecar callbacks `host.settings.get` and `host.settings.replace`.
 - `projects.read` permits `host.projects.list`, returning non-hidden active projects.
@@ -132,7 +132,7 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
   A request PlaneAI refuses (bad params, an unknown or hidden project, a missing or foreign parent, a `start` naming a provider nothing configured or installed provides) answers `-32602`, which retrying cannot fix.
   A `start` naming the provider of an installed plugin that is not running, as right after PlaneAI launches, answers `-32004` and creates nothing, so retry it later.
   `-32603` is a host failure worth retrying.
-  `host.tasks.createChild` requires `project_path` (or `projectPath`), `parent_key` (or `parentKey`), `title`, `description`, and a plugin-scoped `operation_id` (or `operationId`); PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
+  `host.tasks.createChild` requires `project_path` (or `projectPath`), `parent_key` (or `parentKey`), `title`, `description`, and a plugin-scoped `operation_id` (or `operationId`); PlaneAI verifies the parent belongs to the project, or is a synced task the calling plugin owns (see `tasks.sync`), and returns the originally created child when the same operation is retried.
   Both return `{ "task": ... }`.
 - `sessions.start` lets `host.tasks.create` start the new task's session, as the task form's "Start session immediately" does.
   Add `start: { "provider"?: string | null, "use_worktree"?: boolean, "auto_approve"?: boolean }` to the request; omitted fields default to the configured default provider, a worktree, and auto-approve.
@@ -146,6 +146,16 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
   `sessions.start` also permits `host.sessions.providers`, returning `{ "default": "claude", "providers": [{ "key", "label", "auto_approve" }] }`: the configured providers, then those of running plugins, as the task form lists them.
   `auto_approve` is `false` for a plugin provider that does not support it.
   With the `local` session backend the agent spawns only when a terminal view attaches, so a session started this way waits until the user opens it.
+- `tasks.sync` (host API v7) is for a plugin that mirrors an external tracker's issues as PlaneAI tasks, as the bundled Jira plugin does.
+  It permits `host.task.create` and `host.task.update`, and the UI's `rpc.call("task.create")` and `rpc.call("task.update")`.
+  `host.task.create` takes `{ "key", "title", "description"?, "status"?, "priority"?, "tags"? }` and creates a project-less task with exactly that key.
+  `key` is required and must look like `PREFIX-N`: an uppercase letter, then uppercase letters or digits, a dash, and a number without leading zeros, as in `ENG-123`.
+  `status` is `todo`, `in_progress`, `in_review`, or `done` (default `todo`), and `priority` an integer (default `0`).
+  PlaneAI records the calling plugin as the task's owner in the same write, and a key that any task already holds answers `-32602`.
+  `host.task.update` takes `{ "key", "title"?, "description"?, "status"?, "priority"?, "tags"? }`, changes only the fields given, and succeeds only on a task the calling plugin owns; any other key, including one no task holds, answers not granted (`-32003`).
+  Both return the task.
+  Children go under a synced task with `host.tasks.createChild`, from any project, since the task belongs to none.
+  Removing the plugin releases its tasks: they stay, but nothing can update them through this capability, and a reinstalled plugin cannot take their keys back.
 - `tasks.transition` permits `host.sessions.transitionLinkedTask` with `{ "session_id", "status" }`. PlaneAI resolves the task strictly from that session's linked task key, changes its lifecycle status, and emits the normal task lifecycle batch (including automatic parent completion).
 - `task-events` permits event delivery only when the handshake also subscribes to `task.lifecycle`.
 - `providers` permits declaring `providers` (host API v3 only) and the provider session contract described in [Providers](#providers). It is required exactly when `providers` is declared.
@@ -559,7 +569,7 @@ Use the checked-in scenarios as executable examples. For a plugin that declares 
 ## v1 limitations and author checklist
 
 - Plugins are trusted and unsandboxed; network, process, filesystem, and credential safety are the author's responsibility.
-- Local plugin capabilities are limited to the explicit contracts above. `sessions.actions`, `sessions.advisories`, and `sessions.complete` are host-rendered requests, while `tasks.transition` is restricted to the linked task of an identified session; no direct session control/output, arbitrary task update, storage bridge, or arbitrary sidebar-navigation capability is available to local packages.
+- Local plugin capabilities are limited to the explicit contracts above. `sessions.actions`, `sessions.advisories`, and `sessions.complete` are host-rendered requests, while `tasks.transition` is restricted to the linked task of an identified session and `tasks.sync` to the tasks the plugin created; no direct session control/output, arbitrary task update, storage bridge, or arbitrary sidebar-navigation capability is available to local packages.
 - UI is a single self-contained ESM file loaded into a ShadowRoot. No relative imports, asset graph, global PlaneAI DOM access, or direct Tauri IPC.
 - UI settings are public JSON objects; secrets are backend-only. Never log secrets, including to stderr.
 - Stdout must remain newline-framed JSON-RPC. Correlate IDs, stay below 64 KiB, respond to shutdown, and treat host callbacks as nested RPC.
