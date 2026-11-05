@@ -557,7 +557,7 @@ impl PluginRuntimeState {
 }
 
 /// Where a package installed from Discovery came from (ADR-0018).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RemoteOrigin {
     pub repo: String,
     pub release_tag: Option<String>,
