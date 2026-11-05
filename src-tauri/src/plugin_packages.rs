@@ -16,7 +16,6 @@ pub struct ImportedLocalPackage {
     pub backend_entrypoint: String,
     pub content_hash: String,
     pub package_dir: PathBuf,
-    pub original_display_path: String,
     package_was_published: bool,
 }
 
@@ -94,7 +93,6 @@ pub fn import_local_package(
         backend_entrypoint,
         content_hash,
         package_dir,
-        original_display_path: source.display().to_string(),
         package_was_published,
     })
 }

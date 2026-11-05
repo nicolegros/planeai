@@ -563,7 +563,47 @@ pub enum PackageProvenance {
     Remote(RemoteOrigin),
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// What installing a package does to the inventory row with the same id.
+#[derive(Debug, PartialEq, Eq)]
+enum InstallPlan {
+    /// The same folder bytes are already installed from a folder; nothing changes.
+    Keep(Box<PluginInventory>),
+    Write {
+        enable_after: bool,
+    },
+}
+
+fn plan_install(
+    existing: Option<&PluginInventory>,
+    provenance: &PackageProvenance,
+    content_hash: &str,
+) -> Result<InstallPlan, String> {
+    let remote = matches!(provenance, PackageProvenance::Remote(_));
+    let Some(existing) = existing else {
+        return Ok(InstallPlan::Write {
+            enable_after: remote,
+        });
+    };
+    if existing.source_kind != PluginSourceKind::Local {
+        return Err(format!(
+            "plugin id is reserved by a bundled plugin: {}",
+            existing.id
+        ));
+    }
+    // Identical bytes still rewrite the row whenever provenance would change, so a repository
+    // reinstall records its origin and a folder install over it clears that origin.
+    let same_folder_bytes = !remote
+        && existing.remote_origin.is_none()
+        && existing.installed_hash.as_deref() == Some(content_hash);
+    if same_folder_bytes {
+        return Ok(InstallPlan::Keep(Box::new(existing.clone())));
+    }
+    Ok(InstallPlan::Write {
+        enable_after: existing.enabled || remote,
+    })
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PluginInventory {
     pub id: String,
     pub name: String,
@@ -3103,7 +3143,11 @@ impl PluginRuntimeSupervisor {
     }
 
     pub async fn install_local(&self, source_path: String) -> Result<PluginInventory, String> {
-        self.install_package(PathBuf::from(source_path), None).await
+        let provenance = PackageProvenance::Folder {
+            original_display_path: source_path.clone(),
+        };
+        self.install_package(PathBuf::from(source_path), provenance)
+            .await
     }
 
     /// Installs a staged Discovery package and enables it (ADR-0018).
@@ -3112,13 +3156,14 @@ impl PluginRuntimeSupervisor {
         package_root: PathBuf,
         origin: RemoteOrigin,
     ) -> Result<PluginInventory, String> {
-        self.install_package(package_root, Some(origin)).await
+        self.install_package(package_root, PackageProvenance::Remote(origin))
+            .await
     }
 
     async fn install_package(
         &self,
         source: PathBuf,
-        origin: Option<RemoteOrigin>,
+        provenance: PackageProvenance,
     ) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
         let app = self.app.clone();
@@ -3135,17 +3180,11 @@ impl PluginRuntimeSupervisor {
         let backend = imported.backend_entrypoint.clone();
         let hash = imported.content_hash.clone();
         let package_dir = imported.package_dir.clone();
-        let remote = origin.is_some();
-        let provenance = match origin {
-            Some(origin) => PackageProvenance::Remote(origin),
-            None => PackageProvenance::Folder {
-                original_display_path: imported.original_display_path.clone(),
-            },
-        };
         let existing = self.inventory(&manifest.id).await?;
-        let was_enabled = match existing.as_ref() {
-            Some(inventory) if inventory.source_kind != PluginSourceKind::Local => {
-                let error = format!("plugin id is reserved by a bundled plugin: {}", manifest.id);
+        let enable_after = match plan_install(existing.as_ref(), &provenance, &hash) {
+            Ok(InstallPlan::Keep(inventory)) => return Ok(*inventory),
+            Ok(InstallPlan::Write { enable_after }) => enable_after,
+            Err(error) => {
                 if let Err(cleanup_error) =
                     commands::blocking(move || imported.discard_if_newly_published()).await
                 {
@@ -3153,12 +3192,6 @@ impl PluginRuntimeSupervisor {
                 }
                 return Err(error);
             }
-            // A remote reinstall of identical bytes still rewrites the row so provenance converges.
-            Some(inventory) if !remote && inventory.installed_hash.as_deref() == Some(&hash) => {
-                return Ok(inventory.clone());
-            }
-            Some(inventory) => inventory.enabled,
-            None => false,
         };
         if existing
             .as_ref()
@@ -3201,7 +3234,7 @@ impl PluginRuntimeSupervisor {
                 return Err(error);
             }
         };
-        if was_enabled || remote {
+        if enable_after {
             self.ensure_plugin_migration_ready(&inventory.id).await?;
             return self.enable_inner(&inventory.id).await;
         }
@@ -5148,6 +5181,128 @@ mod tests {
             .unwrap_err()
             .contains("local plugin"));
         assert!(get_inventory(&conn, "jira").unwrap().is_some());
+    }
+
+    fn installed(
+        remote_origin: Option<RemoteOrigin>,
+        enabled: bool,
+        hash: &str,
+    ) -> PluginInventory {
+        PluginInventory {
+            id: "acme".to_string(),
+            name: "Acme".to_string(),
+            version: "1.0.0".to_string(),
+            host_api_version: "planeai.plugin-host.v6".to_string(),
+            source_kind: PluginSourceKind::Local,
+            backend_entrypoint: "bin/plugin".to_string(),
+            ui_contributions: vec![],
+            capabilities: vec![],
+            background_service: None,
+            providers: vec![],
+            tools: vec![],
+            installed_hash: Some(hash.to_string()),
+            installed_path: Some("/app/plugins/packages/sha256/hash".to_string()),
+            original_display_path: remote_origin
+                .is_none()
+                .then(|| "/Users/me/acme".to_string()),
+            remote_origin,
+            enabled,
+            state: if enabled {
+                PluginRuntimeState::Running
+            } else {
+                PluginRuntimeState::Disabled
+            },
+            last_error: None,
+            log_path: None,
+        }
+    }
+
+    #[test]
+    fn install_plan_table() {
+        let origin = RemoteOrigin {
+            repo: "acme/planeai-plugin-acme".to_string(),
+            release_tag: Some("v1.0.0".to_string()),
+            source_url:
+                "https://github.com/acme/planeai-plugin-acme/releases/download/v1.0.0/a.tar.gz"
+                    .to_string(),
+            archive_sha256: "archive".to_string(),
+        };
+        let folder = PackageProvenance::Folder {
+            original_display_path: "/Users/me/acme".to_string(),
+        };
+        let remote = PackageProvenance::Remote(origin.clone());
+        let bundled = PluginInventory {
+            id: "jira".to_string(),
+            source_kind: PluginSourceKind::Builtin,
+            ..installed(None, false, "hash")
+        };
+        type Case<'a> = (
+            &'a str,
+            Option<PluginInventory>,
+            &'a PackageProvenance,
+            Result<InstallPlan, String>,
+        );
+        let cases: Vec<Case> = vec![
+            (
+                "first folder install",
+                None,
+                &folder,
+                Ok(InstallPlan::Write {
+                    enable_after: false,
+                }),
+            ),
+            (
+                "first remote install enables",
+                None,
+                &remote,
+                Ok(InstallPlan::Write { enable_after: true }),
+            ),
+            (
+                "bundled id",
+                Some(bundled),
+                &remote,
+                Err("plugin id is reserved by a bundled plugin: jira".to_string()),
+            ),
+            (
+                "identical folder bytes over a folder row",
+                Some(installed(None, true, "hash")),
+                &folder,
+                Ok(InstallPlan::Keep(Box::new(installed(None, true, "hash")))),
+            ),
+            (
+                "identical bytes from the repository rewrite provenance",
+                Some(installed(None, true, "hash")),
+                &remote,
+                Ok(InstallPlan::Write { enable_after: true }),
+            ),
+            (
+                "identical folder bytes over a repository row clear provenance",
+                Some(installed(Some(origin.clone()), false, "hash")),
+                &folder,
+                Ok(InstallPlan::Write {
+                    enable_after: false,
+                }),
+            ),
+            (
+                "remote install enables a disabled plugin",
+                Some(installed(Some(origin.clone()), false, "older")),
+                &remote,
+                Ok(InstallPlan::Write { enable_after: true }),
+            ),
+            (
+                "folder update keeps an enabled plugin enabled",
+                Some(installed(None, true, "older")),
+                &folder,
+                Ok(InstallPlan::Write { enable_after: true }),
+            ),
+        ];
+        for (name, existing, provenance, expected) in cases {
+            assert_eq!(
+                plan_install(existing.as_ref(), provenance, "hash"),
+                expected,
+                "{name}"
+            );
+        }
     }
 
     #[test]
