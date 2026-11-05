@@ -88,7 +88,9 @@ fn parse_candidates(output: &[u8]) -> Result<Vec<PluginDiscoveryCandidate>, Stri
 }
 
 /// Discovery resolves every card at once; this caps the concurrent `gh` processes.
-const RESOLVE_CONCURRENCY: usize = 8;
+const GH_PROCESS_LIMIT: usize = 8;
+/// One resolution runs the manifest and the latest-release request side by side.
+const GH_PROCESSES_PER_RESOLUTION: u32 = 2;
 
 /// Staging and the shared download client for Discovery installs (ADR-0018).
 pub struct PluginRemoteState {
@@ -105,7 +107,7 @@ impl PluginRemoteState {
         }
         Ok(Self {
             staging,
-            resolve_permits: Semaphore::new(RESOLVE_CONCURRENCY),
+            resolve_permits: Semaphore::new(GH_PROCESS_LIMIT),
             downloader: Downloader::new()?,
         })
     }
@@ -118,9 +120,9 @@ pub async fn resolve_plugin_candidate(
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<DiscoveryCardState, String> {
     let repo = RepoFullName::parse(&repo)?;
-    let _permit = remote
+    let _permits = remote
         .resolve_permits
-        .acquire()
+        .acquire_many(GH_PROCESSES_PER_RESOLUTION)
         .await
         .map_err(|error| error.to_string())?;
     let remote_repo = fetch_remote_repo(repo).await?;

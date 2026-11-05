@@ -36,7 +36,8 @@ What changes is who performs the mechanical steps, not who decides to trust the 
 - **Provenance.** The inventory records the repository, the release tag when the archive was a release asset, the source URL and the archive SHA-256 as `remote_origin`.
   A local package has exactly one provenance, a folder or a remote origin, and installing the same id again replaces it whole, so a later folder install clears the remote origin.
   Bundled plugins have none.
-- **Card state.** Right after discovery returns, the frontend asks the backend for every card's state at once; the backend bounds the `gh` fan-out with a semaphore of 8.
+- **Card state.** Right after discovery returns, the frontend asks the backend for every card's state at once.
+  Each resolution runs two `gh` processes side by side (the HEAD manifest and the latest release) and holds two permits of an 8-permit semaphore, so at most 8 `gh` processes run at once.
   A card matches an installed plugin by provenance repository first, then by the HEAD manifest `id`.
   Latest is the release tag without a leading `v`, parsed as semver; an update is offered when it is greater than the installed manifest version, also semver.
   A repository-installed plugin whose versions do not both parse, or whose repository has no release, is offered "Reinstall latest".
@@ -53,7 +54,7 @@ What changes is who performs the mechanical steps, not who decides to trust the 
 - A user installs or updates a community plugin from its card after reading one review, and the inventory shows where it came from.
 - The host gains an HTTP client and archive readers as pinned dependencies; the download path is covered by tests against a local server, and `cargo test -- --ignored remote_install_real_catalog` stages a real repository end to end.
 - Authors publish `<name>-<platform>.tar.gz` or `.zip` release assets with a single top-level directory, or point `downloads` at their own `https` host and accept that those installs show as unverified.
-- Resolution runs one `gh` process per card up to the semaphore, so a large catalog takes several seconds to settle while cards show "Checking".
+- Resolution runs two `gh` processes per card and four cards at a time, so a large catalog takes several seconds to settle while cards show "Checking".
 
 ## Rejected alternatives
 
