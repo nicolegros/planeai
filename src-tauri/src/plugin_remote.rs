@@ -458,7 +458,8 @@ pub(crate) enum GhError {
     Timeout,
     Spawn(std::io::Error),
     Failed {
-        status: std::process::ExitStatus,
+        /// The exit status as `ExitStatus` displays it, such as "exit status: 1".
+        status: String,
         diagnostic: String,
     },
 }
@@ -480,8 +481,22 @@ impl GhError {
     }
 }
 
-/// Runs `gh` with `args` off the main thread and returns its stdout.
-pub(crate) async fn run_gh(args: &[&str]) -> Result<Vec<u8>, GhError> {
+/// The `gh` process boundary, so everything that builds requests or reads replies is testable.
+pub(crate) trait Gh: Sync {
+    /// Runs `gh` with `args` and returns its stdout.
+    fn run(&self, args: &[&str]) -> impl Future<Output = Result<Vec<u8>, GhError>> + Send;
+}
+
+/// The installed GitHub CLI.
+pub(crate) struct GhCli;
+
+impl Gh for GhCli {
+    fn run(&self, args: &[&str]) -> impl Future<Output = Result<Vec<u8>, GhError>> + Send {
+        run_gh(args)
+    }
+}
+
+async fn run_gh(args: &[&str]) -> Result<Vec<u8>, GhError> {
     let mut command = tokio::process::Command::new(crate::command::resolve("gh"));
     no_window_tokio(&mut command);
     command.env("PATH", augmented_path(&[]));
@@ -494,23 +509,82 @@ pub(crate) async fn run_gh(args: &[&str]) -> Result<Vec<u8>, GhError> {
         return Ok(output.stdout);
     }
     Err(GhError::Failed {
-        status: output.status,
+        status: output.status.to_string(),
         diagnostic: String::from_utf8_lossy(&output.stderr).trim().to_string(),
     })
 }
 
+/// gh reports API errors only on stderr, as in "gh: Not Found (HTTP 404)".
+fn is_not_found(diagnostic: &str) -> bool {
+    diagnostic.contains("(HTTP 404)")
+}
+
 /// `gh api` with a 404 read as absence.
-async fn gh_api(args: &[&str]) -> Result<Option<Vec<u8>>, String> {
+async fn gh_api(gh: &impl Gh, args: &[&str]) -> Result<Option<Vec<u8>>, String> {
     let mut full = vec!["api"];
     full.extend_from_slice(args);
-    match run_gh(&full).await {
+    match gh.run(&full).await {
         Ok(stdout) => Ok(Some(stdout)),
-        Err(GhError::Failed { diagnostic, .. }) if diagnostic.contains("HTTP 404") => Ok(None),
+        Err(GhError::Failed { diagnostic, .. }) if is_not_found(&diagnostic) => Ok(None),
         Err(error) => Err(error.describe("GitHub request")),
     }
 }
 
-pub(crate) async fn fetch_remote_repo(repo: RepoFullName) -> Result<RemoteRepo, String> {
+#[cfg(test)]
+type GhReply = Result<Vec<u8>, GhError>;
+
+/// A `gh` that answers from a script and records every invocation.
+#[cfg(test)]
+pub(crate) struct ScriptedGh {
+    replies: Mutex<HashMap<Vec<String>, GhReply>>,
+    calls: Mutex<Vec<Vec<String>>>,
+}
+
+#[cfg(test)]
+impl ScriptedGh {
+    pub(crate) fn new(replies: Vec<(&[&str], GhReply)>) -> Self {
+        Self {
+            replies: Mutex::new(
+                replies
+                    .into_iter()
+                    .map(|(args, reply)| (args.iter().map(|arg| arg.to_string()).collect(), reply))
+                    .collect(),
+            ),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub(crate) fn calls(&self) -> Vec<Vec<String>> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    pub(crate) fn failed(diagnostic: &str) -> GhReply {
+        Err(GhError::Failed {
+            status: "exit status: 1".to_string(),
+            diagnostic: diagnostic.to_string(),
+        })
+    }
+}
+
+#[cfg(test)]
+impl Gh for ScriptedGh {
+    fn run(&self, args: &[&str]) -> impl Future<Output = Result<Vec<u8>, GhError>> + Send {
+        let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        self.calls.lock().unwrap().push(args.clone());
+        let reply = self
+            .replies
+            .lock()
+            .unwrap()
+            .remove(&args)
+            .unwrap_or_else(|| panic!("unscripted gh call: {args:?}"));
+        std::future::ready(reply)
+    }
+}
+
+pub(crate) async fn fetch_remote_repo(
+    gh: &impl Gh,
+    repo: RepoFullName,
+) -> Result<RemoteRepo, String> {
     let manifest_path = format!("repos/{}/contents/planeai-plugin.json", repo.as_str());
     let release_path = format!("repos/{}/releases/latest", repo.as_str());
     let manifest_args = [
@@ -519,7 +593,7 @@ pub(crate) async fn fetch_remote_repo(repo: RepoFullName) -> Result<RemoteRepo, 
         "Accept: application/vnd.github.raw",
     ];
     let release_args = [release_path.as_str()];
-    let (head, release) = tokio::join!(gh_api(&manifest_args), gh_api(&release_args));
+    let (head, release) = tokio::join!(gh_api(gh, &manifest_args), gh_api(gh, &release_args));
     let head = head?.and_then(|raw| match serde_json::from_slice::<HeadManifest>(&raw) {
         Ok(manifest) => Some(manifest),
         Err(error) => {
@@ -1164,10 +1238,8 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn gh_failures_read_as_one_sentence_per_cause() {
-        use std::os::unix::process::ExitStatusExt;
         assert_eq!(
             GhError::Timeout.describe("GitHub plugin discovery"),
             "GitHub plugin discovery timed out after 30 seconds. Please retry."
@@ -1179,7 +1251,7 @@ mod tests {
         );
         assert_eq!(
             GhError::Failed {
-                status: std::process::ExitStatus::from_raw(256),
+                status: "exit status: 1".to_string(),
                 diagnostic: String::new(),
             }
             .describe("GitHub request"),
@@ -1187,11 +1259,166 @@ mod tests {
         );
         assert_eq!(
             GhError::Failed {
-                status: std::process::ExitStatus::from_raw(256),
+                status: "exit status: 1".to_string(),
                 diagnostic: "HTTP 403: rate limited".to_string(),
             }
             .describe("GitHub plugin discovery"),
             "GitHub plugin discovery failed: HTTP 403: rate limited"
+        );
+    }
+
+    const MANIFEST_ARGS: &[&str] = &[
+        "api",
+        "repos/acme/planeai-plugin-acme/contents/planeai-plugin.json",
+        "-H",
+        "Accept: application/vnd.github.raw",
+    ];
+    const RELEASE_ARGS: &[&str] = &["api", "repos/acme/planeai-plugin-acme/releases/latest"];
+    const NOT_FOUND: &str = "gh: Not Found (HTTP 404)";
+
+    #[test]
+    fn only_a_gh_404_reads_as_not_found() {
+        let cases = [
+            ("gh: Not Found (HTTP 404)", true),
+            ("gh: Bad credentials (HTTP 401)", false),
+            ("gh: Server Error (HTTP 500)", false),
+            ("gh: Not Found (HTTP 4040)", false),
+            ("", false),
+        ];
+        for (diagnostic, expected) in cases {
+            assert_eq!(is_not_found(diagnostic), expected, "{diagnostic:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn fetches_the_raw_head_manifest_and_the_latest_release() {
+        let gh = ScriptedGh::new(vec![
+            (
+                MANIFEST_ARGS,
+                Ok(br#"{"id":"acme","version":"9.9.9","downloads":{"macos-arm64":"https://example.com/a.tar.gz"}}"#.to_vec()),
+            ),
+            (
+                RELEASE_ARGS,
+                Ok(br#"{"tag_name":"v1.2.0","assets":[{"name":"planeai-plugin-acme-macos-arm64.tar.gz","browser_download_url":"https://github.com/acme/planeai-plugin-acme/releases/download/v1.2.0/planeai-plugin-acme-macos-arm64.tar.gz","digest":"sha256:ABCDEF"}]}"#.to_vec()),
+            ),
+        ]);
+
+        let fetched = fetch_remote_repo(&gh, repo()).await.unwrap();
+
+        assert_eq!(
+            fetched,
+            RemoteRepo {
+                repo: repo(),
+                head: Some(head(&[("macos-arm64", "https://example.com/a.tar.gz")])),
+                latest_release: Some(Release {
+                    tag_name: "v1.2.0".to_string(),
+                    assets: vec![asset(
+                        "planeai-plugin-acme-macos-arm64.tar.gz",
+                        Some("sha256:ABCDEF")
+                    )],
+                }),
+            }
+        );
+        let mut calls = gh.calls();
+        calls.sort();
+        assert_eq!(calls, vec![MANIFEST_ARGS.to_vec(), RELEASE_ARGS.to_vec()]);
+    }
+
+    #[tokio::test]
+    async fn a_missing_manifest_or_release_reads_as_absent() {
+        let gh = ScriptedGh::new(vec![
+            (MANIFEST_ARGS, ScriptedGh::failed(NOT_FOUND)),
+            (RELEASE_ARGS, ScriptedGh::failed(NOT_FOUND)),
+        ]);
+
+        assert_eq!(
+            fetch_remote_repo(&gh, repo()).await,
+            Ok(RemoteRepo {
+                repo: repo(),
+                head: None,
+                latest_release: None,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_head_manifest_is_ignored_but_a_bad_release_fails() {
+        let gh = ScriptedGh::new(vec![
+            (MANIFEST_ARGS, Ok(b"not json".to_vec())),
+            (RELEASE_ARGS, Ok(br#"{"tag_name":"v1.2.0"}"#.to_vec())),
+        ]);
+        assert_eq!(
+            fetch_remote_repo(&gh, repo()).await,
+            Ok(RemoteRepo {
+                repo: repo(),
+                head: None,
+                latest_release: Some(Release {
+                    tag_name: "v1.2.0".to_string(),
+                    assets: vec![],
+                }),
+            })
+        );
+
+        let gh = ScriptedGh::new(vec![
+            (MANIFEST_ARGS, ScriptedGh::failed(NOT_FOUND)),
+            (RELEASE_ARGS, Ok(br#"{"assets":[]}"#.to_vec())),
+        ]);
+        assert_eq!(
+            fetch_remote_repo(&gh, repo()).await,
+            Err("GitHub release response was invalid JSON: missing field `tag_name` at line 1 column 13".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn gh_failures_other_than_404_fail_the_fetch() {
+        let gh = ScriptedGh::new(vec![
+            (
+                MANIFEST_ARGS,
+                ScriptedGh::failed("gh: Server Error (HTTP 500)"),
+            ),
+            (RELEASE_ARGS, Ok(br#"{"tag_name":"v1.2.0"}"#.to_vec())),
+        ]);
+        assert_eq!(
+            fetch_remote_repo(&gh, repo()).await,
+            Err("GitHub request failed: gh: Server Error (HTTP 500)".to_string())
+        );
+
+        let gh = ScriptedGh::new(vec![
+            (MANIFEST_ARGS, ScriptedGh::failed(NOT_FOUND)),
+            (RELEASE_ARGS, Err(GhError::Timeout)),
+        ]);
+        assert_eq!(
+            fetch_remote_repo(&gh, repo()).await,
+            Err("GitHub request timed out after 30 seconds. Please retry.".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fetched_repository_resolves_to_its_card_state() {
+        let gh = ScriptedGh::new(vec![
+            (MANIFEST_ARGS, Ok(br#"{"id":"acme"}"#.to_vec())),
+            (
+                RELEASE_ARGS,
+                Ok(br#"{"tag_name":"v1.2.0","assets":[{"name":"planeai-plugin-acme-macos-arm64.tar.gz","browser_download_url":"https://github.com/acme/planeai-plugin-acme/releases/download/v1.2.0/planeai-plugin-acme-macos-arm64.tar.gz"}]}"#.to_vec()),
+            ),
+        ]);
+        let installed = vec![inventory(
+            "acme",
+            "1.0.0",
+            Some(origin("acme/planeai-plugin-acme")),
+        )];
+
+        let card = fetch_remote_repo(&gh, repo())
+            .await
+            .unwrap()
+            .card_state(&installed, "macos-arm64");
+
+        assert_eq!(
+            card,
+            DiscoveryCardState::Update {
+                installed_version: "1.0.0".to_string(),
+                latest_version: "1.2.0".to_string(),
+            }
         );
     }
 
@@ -2514,7 +2741,7 @@ mod tests {
     #[ignore]
     async fn remote_install_real_catalog() {
         let repo = RepoFullName::parse("nicolegros/planeai-plugin-github").unwrap();
-        let remote = fetch_remote_repo(repo.clone()).await.unwrap();
+        let remote = fetch_remote_repo(&GhCli, repo.clone()).await.unwrap();
         let source = remote
             .select_source(crate::plugin_packages::current_platform_key())
             .unwrap();

@@ -5,7 +5,7 @@ use tauri::State;
 use tokio::sync::Semaphore;
 
 use crate::plugin_remote::{
-    fetch_remote_repo, run_gh, DiscoveryCardState, Downloader, RemoteRepo, RepoFullName,
+    fetch_remote_repo, DiscoveryCardState, Downloader, Gh, GhCli, RemoteRepo, RepoFullName,
     StagedPluginInstall, StagingStore,
 };
 use crate::plugins::{PluginInventory, PluginRuntimeHandle};
@@ -54,7 +54,12 @@ struct GithubRepository {
 
 #[tauri::command]
 pub async fn discover_plugins() -> Result<Vec<PluginDiscoveryCandidate>, String> {
-    let output = run_gh(DISCOVERY_ARGS)
+    discover(&GhCli).await
+}
+
+async fn discover(gh: &impl Gh) -> Result<Vec<PluginDiscoveryCandidate>, String> {
+    let output = gh
+        .run(DISCOVERY_ARGS)
         .await
         .map_err(|error| error.describe("GitHub plugin discovery"))?;
     parse_candidates(&output)
@@ -121,7 +126,7 @@ impl PluginRemoteState {
             .acquire_many(GH_PROCESSES_PER_RESOLUTION)
             .await
             .map_err(|error| error.to_string())?;
-        fetch_remote_repo(repo).await
+        fetch_remote_repo(&GhCli, repo).await
     }
 }
 
@@ -181,6 +186,7 @@ pub async fn discard_staged_plugin(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin_remote::ScriptedGh;
 
     #[test]
     fn requests_the_fixed_public_planeai_catalog() {
@@ -245,5 +251,34 @@ mod tests {
     #[test]
     fn rejects_invalid_cli_json() {
         assert!(parse_candidates(b"not json").is_err());
+    }
+
+    #[tokio::test]
+    async fn discovery_runs_the_catalog_search_and_names_its_failures() {
+        let gh = ScriptedGh::new(vec![(
+            DISCOVERY_ARGS,
+            Ok(br#"[{"fullName":"planeai/one","description":null,"url":"https://github.com/planeai/one","updatedAt":"2026-09-20T00:00:00Z","stargazersCount":1,"language":null,"isArchived":false,"isFork":false}]"#.to_vec()),
+        )]);
+        assert_eq!(
+            discover(&gh).await,
+            Ok(vec![PluginDiscoveryCandidate {
+                full_name: "planeai/one".to_string(),
+                description: None,
+                url: "https://github.com/planeai/one".to_string(),
+                updated_at: "2026-09-20T00:00:00Z".to_string(),
+                stargazers_count: 1,
+                language: None,
+            }])
+        );
+        assert_eq!(gh.calls(), vec![DISCOVERY_ARGS.to_vec()]);
+
+        let gh = ScriptedGh::new(vec![(
+            DISCOVERY_ARGS,
+            ScriptedGh::failed("gh: Bad credentials (HTTP 401)"),
+        )]);
+        assert_eq!(
+            discover(&gh).await,
+            Err("GitHub plugin discovery failed: gh: Bad credentials (HTTP 401)".to_string())
+        );
     }
 }
