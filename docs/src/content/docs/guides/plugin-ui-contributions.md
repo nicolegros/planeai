@@ -30,6 +30,7 @@ Every backend and UI path must be a package-relative file path: no absolute path
 An optional `background_service` object makes PlaneAI call one sidecar method on a timer: `{ "method": "my-plugin.refresh", "interval_setting": "my_refresh_interval_ms", "default_interval_ms": 120000 }`.
 PlaneAI calls `method` with no params, waits for it to answer, then waits the interval before the next call.
 A run may take 60 seconds, or the optional `timeout_ms`, from 1 to 3600000, before PlaneAI cancels it.
+PlaneAI sends a plugin one request at a time, so its other requests wait for a run in flight, each keeping its full timeout once sent.
 The interval is the positive integer stored under `interval_setting` in the plugin's settings, or `default_interval_ms` when that key is missing.
 After each successful call, PlaneAI tells the plugin's UI its data changed, unless the method's JSON-RPC result is an object with `"changed": false`.
 
@@ -182,10 +183,18 @@ Ignore params and features you do not know; newer hosts add them.
 
 Response IDs must exactly correlate with the request ID. Return either `result` or a JSON-RPC `error`, not both. PlaneAI sends the reserved `plugin.shutdown` during disable/reload/app shutdown; acknowledge it and exit promptly. Do not expose or invoke `plugin.handshake` or `plugin.shutdown` from plugin UI.
 
-A sidecar may make a host callback, typically while PlaneAI is waiting for its response. Send a normal JSON-RPC request on stdout, wait for the correlated host response on stdin, then finish the original request. PlaneAI answers callbacks as they arrive, in order, even once the request that prompted them timed out, so cancellation cleanup may still call the host.
+A sidecar may make a host callback, typically while PlaneAI is waiting for its response.
+Send a normal JSON-RPC request on stdout, wait for the correlated host response on stdin, then finish the original request.
+PlaneAI answers callbacks as they arrive, in order, even once the request that prompted them timed out, so cancellation cleanup may still call the host.
 A failed callback answers with a JSON-RPC error code: `-32601` for an unknown host method, `-32003` for a capability the plugin was not granted, `-32602` for invalid params, `-32004` for a valid request PlaneAI cannot serve yet and the plugin should retry later, and `-32603` for anything else. `fixture.persistSettings` demonstrates `host.settings.get` followed by `host.settings.replace`. Keep callback IDs distinct from the active request ID and continue reading until the matching response arrives.
 
-Handshake and ordinary RPC calls have a five-second deadline; provider methods have [their own](#providers). On deadline expiry, PlaneAI sends the JSON-RPC `$/cancelRequest` notification with `{ "id": <original request ID> }`. Keep reading stdin while work is active; cancel cooperatively and return the original request's JSON-RPC error `{ "code": -32800, "message": "request cancelled" }` within three seconds. PlaneAI treats any other response or no cancellation response as a failed runtime and stops it, then starts it again, at most once every ten minutes. `plugin.shutdown` also has a three-second grace period before the process is killed. PlaneAI attempts it on every app quit and restart within that same budget, so a plugin must tolerate being killed without it. Do not define a competing cancellation wire format in v1.
+Handshake and ordinary RPC calls have a five-second deadline; provider methods have [their own](#providers).
+On deadline expiry, PlaneAI sends the JSON-RPC `$/cancelRequest` notification with `{ "id": <original request ID> }`.
+Keep reading stdin while work is active; cancel cooperatively and return the original request's JSON-RPC error `{ "code": -32800, "message": "request cancelled" }` within three seconds.
+PlaneAI treats any other response or no cancellation response as a failed runtime and stops it, then starts it again, at most once every ten minutes.
+`plugin.shutdown` also has a three-second grace period before the process is killed.
+PlaneAI attempts it on every app quit and restart within that same budget, so a plugin must tolerate being killed without it.
+Do not define a competing cancellation wire format in v1.
 
 The host supplies `PLANEAI_PLUGIN_DATA_DIR` and `PLANEAI_PLUGIN_SECRETS_DIR`. Store public, replaceable plugin state in the former. Keep secrets backend-only in the latter: the UI settings bridge and sidecar settings callback never return secret files. The fixture's `fixture.status` reports both paths only to demonstrate their presence; real plugins should not surface secret paths or contents to UI.
 

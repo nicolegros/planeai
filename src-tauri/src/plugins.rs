@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::process::{ChildStderr, Command};
-use tokio::sync::{mpsc, Mutex as AsyncMutex, Notify};
+use tokio::sync::{Mutex as AsyncMutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use crate::commands;
 use crate::exit_gate::{ExitGate, ExitRequest, FailedUpdate, FinishedUpdate};
 use crate::plugin_children::{wait_for_exit, PluginChildren, SharedChild};
-use crate::plugin_connection::PluginConnection;
+use crate::plugin_connection::{CallbackServer, PluginConnection};
 use crate::plugin_rpc::*;
 use crate::task_lifecycle::TaskLifecycleBatch;
 use crate::task_start::{PendingTaskStart, RequestedStart, SessionStart, StartOptions};
@@ -388,16 +388,10 @@ fn validate_background_service(service: Option<&PluginBackgroundService>) -> Res
     if service.default_interval_ms == 0 {
         return Err("background service default_interval_ms must be positive".to_string());
     }
-    let max_timeout_ms = planeai_plugin_contract::MAX_BACKGROUND_SERVICE_TIMEOUT_MS;
-    if service
-        .timeout_ms
-        .is_some_and(|timeout_ms| !(1..=max_timeout_ms).contains(&timeout_ms))
-    {
-        return Err(format!(
-            "background service timeout_ms must be an integer from 1 to {max_timeout_ms}"
-        ));
-    }
-    Ok(())
+    service.timeout_ms.map_or(
+        Ok(()),
+        planeai_plugin_contract::check_background_service_timeout_ms,
+    )
 }
 
 fn validate_capabilities(
@@ -1362,6 +1356,13 @@ pub struct PluginRuntimeSupervisor {
     broken_runtime_restarts: BrokenRuntimeRestarts,
 }
 
+/// Whether a runtime retired for a broken request is still enabled and stopped, so nothing
+/// else, such as a disable or the user enabling it again, has taken it over.
+fn awaits_restart(inventory: Option<&PluginInventory>) -> bool {
+    inventory
+        .is_some_and(|inventory| inventory.enabled && inventory.state == PluginRuntimeState::Error)
+}
+
 /// When each plugin last restarted after a broken request.
 #[derive(Default)]
 struct BrokenRuntimeRestarts(Mutex<HashMap<String, Instant>>);
@@ -1576,6 +1577,20 @@ fn request_timeout(method: &str) -> Duration {
         "jira.syncNow" => JIRA_SYNC_RPC_TIMEOUT,
         "plugin.taskLifecycle" | "plugin.sessionLifecycle" => JIRA_LIFECYCLE_RPC_TIMEOUT,
         _ => planeai_plugin_contract::provider::request_timeout(method).unwrap_or(RPC_TIMEOUT),
+    }
+}
+
+impl CallbackServer for RuntimeProcess {
+    fn connection(&self) -> &PluginConnection {
+        &self.connection
+    }
+
+    fn serve(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> impl std::future::Future<Output = Result<Value, CallbackError>> + Send {
+        self.serve_callback(method, params)
     }
 }
 
@@ -3305,16 +3320,6 @@ impl PluginRuntimeSupervisor {
             tracing::warn!(plugin_id, %state_error, "failed to record broken plugin runtime");
             return;
         }
-        if !self
-            .broken_runtime_restarts
-            .try_begin(plugin_id, Instant::now())
-        {
-            tracing::warn!(
-                plugin_id,
-                "plugin runtime broke again soon after restarting; leaving it stopped"
-            );
-            return;
-        }
         if let Some(supervisor) = self.this.upgrade() {
             let plugin_id = plugin_id.to_string();
             // Spawned: starting replaces the plugin's background worker, which may be the caller.
@@ -3322,18 +3327,28 @@ impl PluginRuntimeSupervisor {
         }
     }
 
-    /// Starts a runtime retired for a broken request again, unless it was disabled or
-    /// restarted meanwhile. Boxed: the runtime it starts may retire itself through here.
+    /// Starts a runtime retired for a broken request again, unless it was disabled, restarted
+    /// or already restarted within the cooldown. Boxed: the runtime it starts may retire itself
+    /// through here.
     fn restart_broken_runtime(
         self: Arc<Self>,
         plugin_id: String,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async move {
             let _lifecycle = self.lifecycle.lock().await;
-            match self.inventory(&plugin_id).await {
-                Ok(Some(inventory))
-                    if inventory.enabled && inventory.state == PluginRuntimeState::Error => {}
-                _ => return,
+            let inventory = self.inventory(&plugin_id).await.ok().flatten();
+            if !awaits_restart(inventory.as_ref()) || !self.exit_gate.is_running() {
+                return;
+            }
+            if !self
+                .broken_runtime_restarts
+                .try_begin(&plugin_id, Instant::now())
+            {
+                tracing::warn!(
+                    %plugin_id,
+                    "plugin runtime broke again soon after restarting; leaving it stopped"
+                );
+                return;
             }
             tracing::info!(%plugin_id, "restarting plugin runtime after a broken request");
             if let Err(error) = self.enable_inner(&plugin_id).await {
@@ -4204,7 +4219,7 @@ impl PluginRuntimeSupervisor {
                             tracing::warn!(plugin_id = %plugin_id, generation, method = %service.method, %error, "plugin background service failed");
                             // A broken lane is retired by the request that broke it; disabling
                             // the plugin waits for this worker while holding the lifecycle lock.
-                            if process.connection.requests.is_broken() {
+                            if process.connection.is_broken() {
                                 if error.is_fatal() {
                                     if let Some(supervisor) = supervisor.upgrade() {
                                         tokio::select! {
@@ -4437,28 +4452,8 @@ async fn spawn_runtime(
         session_actions: AsyncMutex::new(Vec::new()),
         provider_sessions,
     });
-    answer_callbacks(Arc::downgrade(&process), callbacks);
+    crate::plugin_connection::answer_callbacks(Arc::downgrade(&process), callbacks);
     Ok(process)
-}
-
-/// Answers the sidecar's callbacks in order for as long as its runtime lives. Holds the runtime
-/// weakly: a strong reference would keep its stdin open, and with it the sidecar.
-fn answer_callbacks(
-    process: std::sync::Weak<RuntimeProcess>,
-    mut callbacks: mpsc::Receiver<JsonRpcCallbackRequest>,
-) {
-    tokio::spawn(async move {
-        while let Some(JsonRpcCallbackRequest { id, method, params }) = callbacks.recv().await {
-            let Some(process) = process.upgrade() else {
-                return;
-            };
-            let result = process.serve_callback(&method, params).await;
-            if let Err(error) = process.connection.answer_callback(id, result).await {
-                tracing::warn!(plugin_id = %process.plugin_id, %error, "failed to answer plugin callback");
-                return;
-            }
-        }
-    });
 }
 
 fn drain_stderr(mut stderr: ChildStderr, log_path: PathBuf) {
@@ -5610,6 +5605,22 @@ mod tests {
             jira.validate(),
             Err("bundled plugins cannot declare tools".into())
         );
+    }
+
+    #[test]
+    fn only_an_enabled_runtime_left_in_error_restarts() {
+        let mut inventory = installed(None, true, "hash");
+        inventory.state = PluginRuntimeState::Error;
+        assert!(awaits_restart(Some(&inventory)));
+
+        inventory.enabled = false;
+        assert!(!awaits_restart(Some(&inventory)), "disabled meanwhile");
+        inventory.enabled = true;
+        for state in [PluginRuntimeState::Running, PluginRuntimeState::Starting] {
+            inventory.state = state;
+            assert!(!awaits_restart(Some(&inventory)), "already restarted");
+        }
+        assert!(!awaits_restart(None), "removed meanwhile");
     }
 
     #[test]

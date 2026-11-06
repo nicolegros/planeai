@@ -1,15 +1,17 @@
 //! The JSON-RPC connection to one plugin sidecar. Host requests go one at a time over stdin
 //! and read their responses from stdout. The sidecar's callbacks come out on their own
-//! channel, to be answered as they arrive: a request that times out then never strands one.
+//! channel, answered by `answer_callbacks` as they arrive: a request that times out then never
+//! strands one.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Instant;
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
-use tokio::sync::{mpsc, Mutex as AsyncMutex};
+use tokio::sync::{mpsc, Mutex as AsyncMutex, MutexGuard};
 use tokio::time::{timeout, Duration};
 
 use crate::plugin_providers::NotificationSink;
@@ -18,19 +20,32 @@ use crate::plugin_rpc::*;
 const FRAME_QUEUE_CAPACITY: usize = 256;
 /// How long a sidecar has to acknowledge the cancellation of a timed-out request.
 const CANCELLATION_TIMEOUT: Duration = Duration::from_secs(3);
+const CALLBACKS_UNANSWERED_ERROR: &str = "plugin callbacks are no longer answered";
 
 pub(crate) struct PluginConnection {
+    plugin_id: String,
     stdin: AsyncMutex<ChildStdin>,
     /// Response frames from the stdout reader, in arrival order.
     responses: AsyncMutex<mpsc::Receiver<Result<String, String>>>,
-    pub(crate) requests: RequestLane,
+    requests: RequestLane,
     next_request_id: AtomicU64,
     /// Why the stdout reader stopped, once it has: nothing the sidecar sends is read anymore.
     stdout_failure: Arc<OnceLock<String>>,
 }
 
+/// Owns a connection and serves the callbacks its sidecar makes.
+pub(crate) trait CallbackServer: Send + Sync + 'static {
+    fn connection(&self) -> &PluginConnection;
+
+    fn serve(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> impl Future<Output = Result<Value, CallbackError>> + Send;
+}
+
 impl PluginConnection {
-    /// Starts reading stdout. The returned callbacks must be answered with `answer_callback`.
+    /// Starts reading stdout. The returned callbacks must go to `answer_callbacks`.
     pub(crate) fn open(
         stdin: ChildStdin,
         stdout: ChildStdout,
@@ -49,6 +64,7 @@ impl PluginConnection {
             stdout_failure.clone(),
         ));
         let connection = Self {
+            plugin_id: plugin_id.to_string(),
             stdin: AsyncMutex::new(stdin),
             responses: AsyncMutex::new(responses),
             requests: RequestLane::default(),
@@ -62,15 +78,22 @@ impl PluginConnection {
         self.stdout_failure.get()
     }
 
+    /// Whether a request left stdout untrustworthy, so the runtime must be retired.
+    pub(crate) fn is_broken(&self) -> bool {
+        self.requests.is_broken()
+    }
+
+    /// Waits up to `request_timeout` for its turn, then gives the sidecar `request_timeout`
+    /// from then: a request queued behind a long one keeps its whole budget.
     pub(crate) async fn request(
         &self,
         method: &str,
         params: Value,
         request_timeout: Duration,
     ) -> Result<Value, PluginRpcError> {
-        let deadline = Instant::now() + request_timeout;
         self.requests
             .run(method, request_timeout, || async {
+                let deadline = Instant::now() + request_timeout;
                 let request_id = self.next_request_id();
                 let frame = encode_request(request_id, method, params)?;
                 self.write_frame(&frame, deadline, "plugin RPC request")
@@ -130,7 +153,7 @@ impl PluginConnection {
     }
 
     /// Answers one sidecar callback in a single write, so no other frame can split it.
-    pub(crate) async fn answer_callback(
+    async fn answer_callback(
         &self,
         id: Value,
         result: Result<Value, CallbackError>,
@@ -183,6 +206,28 @@ impl PluginConnection {
     }
 }
 
+/// Answers the sidecar's callbacks in order for as long as their server lives. Holds it weakly:
+/// a strong reference would keep the sidecar's stdin open, and with it the sidecar. Stops at
+/// the first answer it cannot write, after which the stdout reader fails the connection.
+pub(crate) fn answer_callbacks<S: CallbackServer>(
+    server: Weak<S>,
+    mut callbacks: mpsc::Receiver<JsonRpcCallbackRequest>,
+) {
+    tokio::spawn(async move {
+        while let Some(JsonRpcCallbackRequest { id, method, params }) = callbacks.recv().await {
+            let Some(server) = server.upgrade() else {
+                return;
+            };
+            let result = server.serve(&method, params).await;
+            let connection = server.connection();
+            if let Err(error) = connection.answer_callback(id, result).await {
+                tracing::warn!(plugin_id = %connection.plugin_id, %error, "failed to answer plugin callback");
+                return;
+            }
+        }
+    });
+}
+
 /// Owns sidecar stdout for the process lifetime, so nothing waits on a host request being in
 /// flight: provider notifications are routed, any other `host.*` notification, as one from a
 /// newer host's contract, is dropped, and callbacks go to their own channel. Responses are
@@ -197,43 +242,40 @@ async fn read_stdout_frames(
     notifications: Option<NotificationSink>,
     failure: Arc<OnceLock<String>>,
 ) {
-    loop {
-        let frame = read_stdout_frame(&mut stdout).await;
-        let handles = |method: &str| {
-            notifications
-                .as_ref()
-                .is_some_and(|sink| sink.handles(method))
+    let handles = |method: &str| {
+        notifications
+            .as_ref()
+            .is_some_and(|sink| sink.handles(method))
+    };
+    let error = loop {
+        let frame = match read_stdout_frame(&mut stdout).await {
+            Ok(frame) => frame,
+            Err(error) => break error,
         };
-        let frame = match frame.as_deref().map_or(StdoutFrame::Response, |frame| {
-            classify_stdout_frame(frame, handles)
-        }) {
+        match classify_stdout_frame(&frame, handles) {
             StdoutFrame::Route(method, params) => {
                 if let Some(sink) = &notifications {
                     sink.route(&method, params);
                 }
-                continue;
             }
             StdoutFrame::Drop(method) => {
                 tracing::warn!(%plugin_id, %method, "ignored a host notification this host does not know");
-                continue;
             }
             StdoutFrame::Callback(Ok(callback)) => {
                 if callbacks.send(callback).await.is_err() {
+                    break CALLBACKS_UNANSWERED_ERROR.to_string();
+                }
+            }
+            StdoutFrame::Callback(Err(error)) => break error,
+            StdoutFrame::Response => {
+                if responses.send(Ok(frame)).await.is_err() {
                     return;
                 }
-                continue;
             }
-            StdoutFrame::Callback(Err(error)) => Err(error),
-            StdoutFrame::Response => frame,
-        };
-        if let Err(error) = &frame {
-            let _ = failure.set(error.clone());
         }
-        let failed = frame.is_err();
-        if responses.send(frame).await.is_err() || failed {
-            return;
-        }
-    }
+    };
+    let _ = failure.set(error.clone());
+    let _ = responses.send(Err(error)).await;
 }
 
 async fn read_stdout_frame(stdout: &mut BufReader<ChildStdout>) -> Result<String, String> {
@@ -251,19 +293,146 @@ async fn read_stdout_frame(stdout: &mut BufReader<ChildStdout>) -> Result<String
         .map_err(|e| format!("plugin JSON-RPC response was not valid UTF-8: {e}"))
 }
 
+/// Runs a sidecar's requests one at a time over its shared stdout. Once one leaves stdout
+/// untrustworthy, such as holding the late answer of a timed-out request, every request
+/// queued behind it fails without writing, so none reads that answer before the runtime is
+/// retired.
+#[derive(Default)]
+struct RequestLane {
+    turn: AsyncMutex<()>,
+    broken: AtomicBool,
+}
+
+impl RequestLane {
+    async fn run<F>(
+        &self,
+        method: &str,
+        wait: Duration,
+        request: impl FnOnce() -> F,
+    ) -> Result<Value, PluginRpcError>
+    where
+        F: Future<Output = Result<Value, PluginRpcError>>,
+    {
+        let _turn = timeout(wait, self.turn.lock())
+            .await
+            .map_err(|_| request_queue_timeout_error(method))?;
+        if self.is_broken() {
+            return Err(PluginRpcError::NotRunning(format!(
+                "plugin RPC {method} not sent: the plugin is being stopped after a broken request"
+            )));
+        }
+        let result = request().await;
+        if result.as_ref().is_err_and(PluginRpcError::is_fatal) {
+            self.broken.store(true, Ordering::SeqCst);
+        }
+        result
+    }
+
+    /// Waits for the turn even on a broken lane: a shutdown request is safe there, since its
+    /// answer is never trusted.
+    async fn shutdown_turn(&self, wait: Duration) -> Option<MutexGuard<'_, ()>> {
+        timeout(wait, self.turn.lock()).await.ok()
+    }
+
+    fn is_broken(&self) -> bool {
+        self.broken.load(Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+mod lane_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_broken_request_stops_the_requests_queued_behind_it() {
+        let lane = Arc::new(RequestLane::default());
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let first = tokio::spawn({
+            let lane = lane.clone();
+            async move {
+                lane.run("github.reconcile", Duration::from_secs(5), || async {
+                    released.await.unwrap();
+                    Err(timed_out_request_error("github.reconcile"))
+                })
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+        let sent = Arc::new(AtomicBool::new(false));
+        let queued = tokio::spawn({
+            let (lane, sent) = (lane.clone(), sent.clone());
+            async move {
+                lane.run("tool.call", Duration::from_secs(5), || async move {
+                    sent.store(true, Ordering::SeqCst);
+                    Ok(Value::Null)
+                })
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+        release.send(()).unwrap();
+
+        assert!(first.await.unwrap().unwrap_err().is_fatal());
+        assert!(matches!(
+            queued.await.unwrap(),
+            Err(PluginRpcError::NotRunning(_))
+        ));
+        assert!(!sent.load(Ordering::SeqCst), "nothing was written");
+        assert!(lane.is_broken());
+        assert!(
+            lane.shutdown_turn(Duration::from_secs(1)).await.is_some(),
+            "a broken runtime is still asked to shut down"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_answered_or_rejected_request_keeps_the_lane_open() {
+        let lane = RequestLane::default();
+        let wait = Duration::from_secs(1);
+        let rejected = lane
+            .run("github.link", wait, || async {
+                Err(PluginRpcError::Rpc {
+                    code: -32000,
+                    message: "no".into(),
+                })
+            })
+            .await;
+        assert!(rejected.is_err());
+        assert_eq!(
+            lane.run("github.status", wait, || async { Ok(Value::Bool(true)) })
+                .await,
+            Ok(Value::Bool(true))
+        );
+        assert!(!lane.is_broken());
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::process::Stdio;
     use tokio::process::{Child, Command};
 
-    fn sidecar(
-        script: &str,
-    ) -> (
-        Child,
-        PluginConnection,
-        mpsc::Receiver<JsonRpcCallbackRequest>,
-    ) {
+    struct Sidecar {
+        connection: PluginConnection,
+        answer_after: Duration,
+        answer: Value,
+        _child: Child,
+    }
+
+    impl CallbackServer for Sidecar {
+        fn connection(&self) -> &PluginConnection {
+            &self.connection
+        }
+
+        async fn serve(&self, _method: &str, _params: Value) -> Result<Value, CallbackError> {
+            tokio::time::sleep(self.answer_after).await;
+            Ok(self.answer.clone())
+        }
+    }
+
+    /// A sidecar running `script`, its callbacks answered with `answer` after `answer_after`.
+    fn sidecar(script: &str, answer_after: Duration, answer: Value) -> Arc<Sidecar> {
         let mut child = Command::new("/bin/sh")
             .args(["-c", script])
             .stdin(Stdio::piped())
@@ -275,7 +444,24 @@ mod tests {
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let (connection, callbacks) = PluginConnection::open(stdin, stdout, "fake", None);
-        (child, connection, callbacks)
+        let sidecar = Arc::new(Sidecar {
+            connection,
+            answer_after,
+            answer,
+            _child: child,
+        });
+        answer_callbacks(Arc::downgrade(&sidecar), callbacks);
+        sidecar
+    }
+
+    async fn stdout_failure(connection: &PluginConnection) -> String {
+        for _ in 0..500 {
+            if let Some(failure) = connection.stdout_failure() {
+                return failure.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the stdout reader never failed");
     }
 
     /// Models the GitHub plugin's reconcile: once cancelled, it can only acknowledge after
@@ -299,27 +485,20 @@ mod tests {
 
     #[tokio::test]
     async fn a_callback_outliving_its_request_is_answered_and_the_next_request_succeeds() {
-        let (_child, connection, mut callbacks) =
-            sidecar(ACKNOWLEDGES_ONCE_ITS_CALLBACK_IS_ANSWERED);
-        let connection = Arc::new(connection);
-        let server = connection.clone();
-        tokio::spawn(async move {
-            while let Some(callback) = callbacks.recv().await {
-                // Answers after the request below has timed out.
-                tokio::time::sleep(Duration::from_millis(300)).await;
-                server
-                    .answer_callback(callback.id, Ok(serde_json::json!({ "ok": true })))
-                    .await
-                    .unwrap();
-            }
-        });
+        // Answers after the first request has timed out.
+        let sidecar = sidecar(
+            ACKNOWLEDGES_ONCE_ITS_CALLBACK_IS_ANSWERED,
+            Duration::from_millis(300),
+            serde_json::json!({ "ok": true }),
+        );
+        let connection = &sidecar.connection;
 
         let timed_out = connection
             .request("github.reconcile", Value::Null, Duration::from_millis(100))
             .await
             .unwrap_err();
         assert_eq!(timed_out.code(), Some(-32800), "{timed_out}");
-        assert!(!connection.requests.is_broken());
+        assert!(!connection.is_broken());
 
         let next = connection
             .request("github.reconcile", Value::Null, Duration::from_secs(5))
@@ -328,22 +507,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_request_queued_behind_a_long_one_keeps_its_whole_timeout() {
+        let sidecar = sidecar(
+            r#"
+            read -r request
+            sleep 0.3
+            printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":"slow"}'
+            read -r request
+            sleep 0.3
+            printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":"queued"}'
+            read -r line
+        "#,
+            Duration::ZERO,
+            Value::Null,
+        );
+        let connection = &sidecar.connection;
+
+        let (slow, queued) = tokio::join!(
+            connection.request("github.reconcile", Value::Null, Duration::from_secs(5)),
+            async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                connection
+                    .request("github.status", Value::Null, Duration::from_millis(500))
+                    .await
+            }
+        );
+        assert_eq!(slow, Ok(Value::from("slow")));
+        assert_eq!(
+            queued,
+            Ok(Value::from("queued")),
+            "300 ms queued + 300 ms answer"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unanswerable_callback_fails_the_connection() {
+        // An answer too large for a frame, to a callback id so long that even the bounded
+        // error that replaces it exceeds the frame limit.
+        let sidecar = sidecar(
+            r#"
+            id=$(head -c 65460 /dev/zero | tr '\0' x)
+            printf '{"jsonrpc":"2.0","id":"%s","method":"h"}\n' "$id"
+            sleep 0.2
+            printf '%s\n' '{"jsonrpc":"2.0","id":"c2","method":"host.state.get"}'
+            read -r line
+        "#,
+            Duration::ZERO,
+            Value::String("x".repeat(MAX_RPC_FRAME_BYTES as usize)),
+        );
+
+        assert_eq!(
+            stdout_failure(&sidecar.connection).await,
+            CALLBACKS_UNANSWERED_ERROR
+        );
+    }
+
+    #[tokio::test]
     async fn a_malformed_callback_fails_the_waiting_request_and_ends_the_stream() {
-        let (_child, connection, _callbacks) = sidecar(
+        let sidecar = sidecar(
             r#"
             read -r request
             printf '%s\n' '{"jsonrpc":"2.0","method":"host.settings.get","id":[1]}'
             read -r line
         "#,
+            Duration::ZERO,
+            Value::Null,
         );
 
-        let error = connection
+        let error = sidecar
+            .connection
             .request("jira.status", Value::Null, Duration::from_secs(5))
             .await
             .unwrap_err();
         assert!(error.is_fatal(), "{error}");
-        assert!(connection
-            .stdout_failure()
-            .is_some_and(|failure| failure.contains("id must be")));
+        assert!(stdout_failure(&sidecar.connection)
+            .await
+            .contains("id must be"));
     }
 }

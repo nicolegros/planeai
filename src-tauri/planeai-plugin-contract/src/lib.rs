@@ -251,6 +251,16 @@ const BACKGROUND_SERVICE_FIELDS: &[&str] = &[
 ];
 /// The longest a background service run may take, in milliseconds.
 pub const MAX_BACKGROUND_SERVICE_TIMEOUT_MS: u64 = 60 * 60 * 1000;
+
+pub fn check_background_service_timeout_ms(timeout_ms: u64) -> std::result::Result<(), String> {
+    if (1..=MAX_BACKGROUND_SERVICE_TIMEOUT_MS).contains(&timeout_ms) {
+        Ok(())
+    } else {
+        Err(format!(
+            "background service timeout_ms must be an integer from 1 to {MAX_BACKGROUND_SERVICE_TIMEOUT_MS}"
+        ))
+    }
+}
 const UI_PLACEMENTS: &[&str] = &[
     "sidebar.header",
     "sidebar.navigation",
@@ -490,16 +500,9 @@ fn validate_background_service(object: &Map<String, Value>) -> Result<()> {
     }
     match service.get("timeout_ms") {
         None => Ok(()),
-        Some(Value::Number(value))
-            if value
-                .as_u64()
-                .is_some_and(|value| (1..=MAX_BACKGROUND_SERVICE_TIMEOUT_MS).contains(&value)) =>
-        {
-            Ok(())
-        }
-        _ => bail!(
-            "background service timeout_ms must be an integer from 1 to {MAX_BACKGROUND_SERVICE_TIMEOUT_MS}"
-        ),
+        // 0 fails the range check, and so gives the same message as a non-integer.
+        Some(value) => check_background_service_timeout_ms(value.as_u64().unwrap_or(0))
+            .map_err(|error| anyhow!(error)),
     }
 }
 
