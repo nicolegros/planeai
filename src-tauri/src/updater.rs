@@ -109,7 +109,7 @@ pub async fn install_update(
             .await;
         return Err(error);
     }
-    // Unlike `restart`, which parks this runtime worker forever.
+    // `restart` never returns and would park this worker; `request_restart` lets RunEvent::Exit stop the plugins.
     app.request_restart();
     Ok(())
 }

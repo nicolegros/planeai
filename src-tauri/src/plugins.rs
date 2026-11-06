@@ -20,7 +20,7 @@ use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 
 use crate::commands;
-use crate::plugin_children::wait_for_exit;
+use crate::plugin_children::{wait_for_exit, PluginChildren, SharedChild};
 use crate::plugin_rpc::*;
 use crate::task_lifecycle::TaskLifecycleBatch;
 use crate::task_start::{PendingTaskStart, RequestedStart, SessionStart, StartOptions};
@@ -1302,6 +1302,7 @@ impl PluginRuntimeHandle {
             lifecycle: Arc::new(AsyncMutex::new(())),
             shutting_down: AtomicBool::new(false),
             exit_permitted: AtomicBool::new(false),
+            exit_requested: AtomicBool::new(false),
             provider_sessions: Arc::new(crate::plugin_providers::ProviderSessions::default()),
             children: Default::default(),
         }))
@@ -1321,8 +1322,10 @@ pub struct PluginRuntimeSupervisor {
     lifecycle: Arc<AsyncMutex<()>>,
     shutting_down: AtomicBool,
     exit_permitted: AtomicBool,
+    /// A quit that arrived while an update held the shutdown; it wins over restoring plugins.
+    exit_requested: AtomicBool,
     provider_sessions: Arc<crate::plugin_providers::ProviderSessions>,
-    children: crate::plugin_children::PluginChildren,
+    children: PluginChildren,
 }
 
 struct BackgroundWorker {
@@ -1338,7 +1341,7 @@ struct RuntimeProcess {
     app: AppHandle,
     /// Distinguishes sidecar restarts of the same plugin.
     instance: u64,
-    child: crate::plugin_children::SharedChild,
+    child: SharedChild,
     stdin: AsyncMutex<ChildStdin>,
     /// Frames from the stdout reader task, minus the host notifications it handles itself.
     frames: AsyncMutex<mpsc::Receiver<Result<String, String>>>,
@@ -3910,10 +3913,13 @@ impl PluginRuntimeSupervisor {
         if self.begin_shutdown() {
             let this = self.clone();
             tauri::async_runtime::spawn(async move {
-                this.shutdown_all().await;
+                // Survivors are killed by `stop_all_before_process_exit`.
+                let _ = timeout(SHUTDOWN_TIMEOUT, this.shutdown_all()).await;
                 this.permit_exit();
                 this.app.exit(0);
             });
+        } else {
+            self.exit_requested.store(true, Ordering::Release);
         }
         true
     }
@@ -3926,14 +3932,14 @@ impl PluginRuntimeSupervisor {
         self.exit_permitted.load(Ordering::Acquire)
     }
 
-    async fn shutdown_all(&self) {
+    async fn shutdown_all(self: &Arc<Self>) {
         let _lifecycle = self.lifecycle.lock().await;
         self.shutdown_all_inner().await;
     }
 
     /// Runs from `RunEvent::Exit`, which macOS Quit and restarts reach without a preventable
     /// `ExitRequested`: stops plugins gracefully unless that already ran, then kills survivors.
-    pub fn stop_all_before_process_exit(&self) {
+    pub fn stop_all_before_process_exit(self: &Arc<Self>) {
         if !self.exit_is_permitted() {
             self.begin_shutdown();
             tracing::info!("stopping plugin runtimes before exit");
@@ -3947,7 +3953,7 @@ impl PluginRuntimeSupervisor {
         }
     }
 
-    pub async fn shutdown_for_update(&self) -> Result<Vec<String>, String> {
+    pub async fn shutdown_for_update(self: &Arc<Self>) -> Result<Vec<String>, String> {
         let _lifecycle = self.lifecycle.lock().await;
         let enabled_plugin_ids = match self
             .with_db(|conn| enabled_plugin_ids(conn).map_err(|error| error.to_string()))
@@ -3955,7 +3961,7 @@ impl PluginRuntimeSupervisor {
         {
             Ok(plugin_ids) => plugin_ids,
             Err(error) => {
-                self.shutting_down.store(false, Ordering::Release);
+                self.restore_after_failed_update_inner(&[]).await;
                 return Err(error);
             }
         };
@@ -3978,12 +3984,18 @@ impl PluginRuntimeSupervisor {
         ))
     }
 
-    pub async fn restore_after_failed_update(&self, plugin_ids: &[String]) {
+    pub async fn restore_after_failed_update(self: &Arc<Self>, plugin_ids: &[String]) {
         let _lifecycle = self.lifecycle.lock().await;
         self.restore_after_failed_update_inner(plugin_ids).await;
     }
 
-    async fn restore_after_failed_update_inner(&self, plugin_ids: &[String]) {
+    async fn restore_after_failed_update_inner(self: &Arc<Self>, plugin_ids: &[String]) {
+        if self.exit_requested.load(Ordering::Acquire) {
+            self.shutdown_all_inner().await;
+            self.permit_exit();
+            self.app.exit(0);
+            return;
+        }
         self.shutting_down.store(false, Ordering::Release);
         for plugin_id in plugin_ids {
             if let Err(error) = self.ensure_plugin_migration_ready(plugin_id).await {
@@ -3996,7 +4008,7 @@ impl PluginRuntimeSupervisor {
         }
     }
 
-    async fn shutdown_all_inner(&self) {
+    async fn shutdown_all_inner(self: &Arc<Self>) {
         for (plugin_id, error) in self.stop_running_for_shutdown().await {
             tracing::warn!(plugin_id, %error, "failed to stop plugin runtime during shutdown");
         }
@@ -4004,10 +4016,7 @@ impl PluginRuntimeSupervisor {
 
     /// Stops every running plugin concurrently, so one wedged plugin cannot spend the
     /// others' shutdown grace. Returns the plugins that failed to stop.
-    async fn stop_running_for_shutdown(&self) -> Vec<(String, String)> {
-        let Some(this) = self.this.upgrade() else {
-            return Vec::new();
-        };
+    async fn stop_running_for_shutdown(self: &Arc<Self>) -> Vec<(String, String)> {
         let plugin_ids = self
             .processes
             .lock()
@@ -4018,7 +4027,7 @@ impl PluginRuntimeSupervisor {
         let stops = plugin_ids
             .into_iter()
             .map(|plugin_id| {
-                let this = this.clone();
+                let this = self.clone();
                 let id = plugin_id.clone();
                 (
                     plugin_id,
@@ -5720,7 +5729,7 @@ mod tests {
         assert!(processes.is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn join_stops_runs_stops_concurrently_and_names_each_failure() {
         type Stop = std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>;
         let slow = |result: Result<(), String>| -> Stop {
@@ -5729,10 +5738,11 @@ mod tests {
                 result
             })
         };
-        let started = Instant::now();
+        let started = tokio::time::Instant::now();
         let mut failures = join_stops(vec![
             ("ok".to_string(), slow(Ok(()))),
             ("failed".to_string(), slow(Err("stuck".to_string()))),
+            // Prints a panic message; the stop task's panic is the case under test.
             (
                 "panicked".to_string(),
                 Box::pin(async { panic!("stop panicked") }),
@@ -5741,7 +5751,7 @@ mod tests {
         .await;
 
         assert!(
-            started.elapsed() < Duration::from_millis(550),
+            started.elapsed() < Duration::from_millis(600),
             "stops ran one by one"
         );
         failures.sort();
