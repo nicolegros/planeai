@@ -1,3 +1,4 @@
+import { deepActiveElement } from "./dom-focus";
 import type { PluginModalControls, PluginModalOptions } from "./plugin-sdk";
 import { mount, unmount } from "svelte";
 import ProjectForm from "../components/ProjectForm.svelte";
@@ -48,10 +49,7 @@ function focusables(dialog: HTMLElement): HTMLElement[] {
 }
 
 function deepestActiveElement(): HTMLElement | null {
-  let active = document.activeElement;
-  while (active instanceof HTMLElement && active.shadowRoot?.activeElement) {
-    active = active.shadowRoot.activeElement;
-  }
+  const active = deepActiveElement();
   return active instanceof HTMLElement ? active : null;
 }
 

@@ -1,3 +1,4 @@
+import { deepActiveElement, releaseFrameFocus } from "./dom-focus";
 import type { FocusZone } from "./focus.svelte";
 
 /**
@@ -50,13 +51,6 @@ export function isTerminalPaneFocused(input: TerminalPaneFocusInput): boolean {
   );
 }
 
-/** The focused element, looking into the shadow roots plugin frames live in. */
-function deepActiveElement(root: Document): Element | null {
-  let active = root.activeElement;
-  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
-  return active;
-}
-
 /**
  * Give up xterm's, or a provider session frame's, DOM focus when it may not own the keyboard.
  * Independent of any pane's `focused` prop, which may never transition.
@@ -83,9 +77,8 @@ export function releaseTerminalDomFocus(
   // model, such as the BranchCompare form or Preferences; a hand-maintained list
   // of flags drifts as dialogs are added.
   if (terminalMayOwnKeyboard(ownership) && !hasOpenDialog(root)) return;
-  active.blur();
-  // WebKit keeps sending keys to a blurred frame until the app's own window takes focus.
-  if (active.hasAttribute(PROVIDER_FRAME_ATTRIBUTE)) root.defaultView?.focus();
+  if (active instanceof HTMLIFrameElement) releaseFrameFocus(active, root);
+  else active.blur();
 }
 
 /**

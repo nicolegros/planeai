@@ -41,6 +41,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(),
 }));
 
+import { registerPluginSidebarContribution } from "../../lib/plugin-sidebar-navigation.svelte";
 import UnifiedSidebarJiraHarness from "./UnifiedSidebarJiraHarness.svelte";
 import { focusSidebar, focusTerminal, getActiveZone } from "../../lib/focus.svelte";
 import { loadProjects } from "../../lib/project-store.svelte";
@@ -340,6 +341,85 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
     await vi.waitFor(() =>
       expect(jiraHost.shadowRoot?.querySelectorAll(".selected")).toHaveLength(0),
     );
+  });
+
+  /** A project with one session, the plugin rows below it, and a frame in their section holding focus. */
+  async function mountWithFocusedFrame(): Promise<{
+    blur: ReturnType<typeof vi.spyOn>;
+    focusWindow: ReturnType<typeof vi.spyOn>;
+  }> {
+    projectList.mockResolvedValue([{ id: "p1", name: "Project", path: "/project", hidden: false }]);
+    sessionList.mockResolvedValue([
+      {
+        id: "s1",
+        project_id: "p1",
+        name: "Active session",
+        tmux_name: null,
+        branch: "main",
+        status: "active",
+        created_at: "2026-08-18T00:00:00Z",
+        worktree_path: null,
+        provider: "kiro",
+        backend: "tmux",
+        base_branch: null,
+        task_key: null,
+      },
+    ]);
+    await loadProjects();
+    await loadSessions();
+    component = mount(UnifiedSidebarJiraHarness, { target });
+    await vi.waitFor(() => {
+      expect(getSelectedIndex()).toBe(1);
+      expect(
+        target
+          .querySelector("[data-plugin-ui-contribution='jira:section']")
+          ?.shadowRoot?.querySelectorAll(".issue"),
+      ).toHaveLength(2);
+    });
+    const frame = document.createElement("iframe");
+    target.querySelector("[data-plugin-sidebar-slot='section']")!.append(frame);
+    setSelectedIndex(2);
+    frame.focus();
+    await vi.waitFor(() => expect(document.activeElement).toBe(frame));
+    // jsdom cannot move focus out of a frame, so the hand-back is observed through its two steps.
+    return {
+      blur: vi.spyOn(frame, "blur"),
+      focusWindow: vi.spyOn(window, "focus").mockImplementation(() => {}),
+    };
+  }
+
+  it("takes the keyboard back from a plugin frame when the selection leaves its rows", async () => {
+    const { blur, focusWindow } = await mountWithFocusedFrame();
+
+    setSelectedIndex(1);
+
+    await vi.waitFor(() => expect(blur).toHaveBeenCalled());
+    expect(focusWindow).toHaveBeenCalled();
+  });
+
+  it("takes the keyboard back from a plugin frame when the sidebar loses the keyboard", async () => {
+    const { blur } = await mountWithFocusedFrame();
+
+    focusTerminal();
+
+    await vi.waitFor(() => expect(blur).toHaveBeenCalled());
+  });
+
+  it("leaves a plugin frame the keyboard while the selection moves between plugin rows", async () => {
+    const { blur, focusWindow } = await mountWithFocusedFrame();
+
+    const unregister = registerPluginSidebarContribution("sidebar-fixture:preceding-row", [
+      { id: "before" },
+      { id: "after" },
+    ]);
+
+    setSelectedIndex(3);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(document.activeElement?.tagName).toBe("IFRAME");
+    expect(blur).not.toHaveBeenCalled();
+    expect(focusWindow).not.toHaveBeenCalled();
+    unregister();
   });
 
   it("does not reset to the active session when Jira focus rerenders its rows", async () => {
