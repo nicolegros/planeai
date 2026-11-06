@@ -59,7 +59,8 @@ const preferencesStyles = `
   .page .error, .page .warning { margin:0; font-size:12px; }
 `;
 type DepartedItem = { key: string; summary: string };
-const styles = `:host { color: var(--color-t1); font-family: var(--font-sans); display:block; } .page { max-width:700px; padding:12px 0; } .card { border:1px solid var(--color-border); border-radius:10px; padding:16px; margin-bottom:12px; background:var(--color-panel); } h2 { font-size:13px; margin:0 0 10px; } label { display:block; color:var(--color-t2); font-size:12px; margin:8px 0 4px; } input,select { width:100%; box-sizing:border-box; border:1px solid var(--color-border); border-radius:6px; background:var(--color-main); color:var(--color-t1); padding:7px; } button { border:0; border-radius:6px; padding:7px 10px; background:var(--color-panel-hi); color:var(--color-t1); cursor:pointer; font:inherit; } button.primary { background:var(--color-accent); color:var(--color-on-accent); } button.danger { color:var(--color-status-exited); } button:disabled { opacity:.55; cursor:default; } .row { display:flex; gap:8px; align-items:center; } .row>* { flex:1; } .row button { flex:0 0 auto; } .muted { color:var(--color-t3); font-size:12px; } .error { color:var(--color-status-exited); font-size:12px; } .warning { color:var(--color-status-review); font-size:12px; } .source { border-top:1px solid var(--color-border); margin-top:12px; padding-top:12px; } .sidebar-section { margin-top:8px; } .section-header,.issue { width:100%; display:flex; align-items:center; gap:7px; text-align:left; background:transparent; } .section-header { padding:5px 8px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; } .issue { padding:6px 8px; font-size:12px; } .issue:hover,.section-header:hover { background:var(--color-panel-hi); } .section-header:focus,.issue:focus { outline:none; } .section-header.selected,.issue.selected,.section-header:focus-visible,.issue:focus-visible { outline:2px solid var(--color-accent); outline-offset:-2px; } .dot { width:7px; height:7px; border-radius:99px; background:var(--color-t3); flex:0 0 auto; } .dot.active,.dot.done { background:var(--color-status-running); } .key { color:var(--color-t3); font-family:var(--font-mono); font-size:10px; flex:0 0 auto; } .title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .count { margin-left:auto; color:var(--color-t3); font-size:10px; }`;
+const styles = `:host { color: var(--color-t1); font-family: var(--font-sans); display:block; } .page { max-width:700px; padding:12px 0; } .card { border:1px solid var(--color-border); border-radius:10px; padding:16px; margin-bottom:12px; background:var(--color-panel); } h2 { font-size:13px; margin:0 0 10px; } label { display:block; color:var(--color-t2); font-size:12px; margin:8px 0 4px; } input,select { width:100%; box-sizing:border-box; border:1px solid var(--color-border); border-radius:6px; background:var(--color-main); color:var(--color-t1); padding:7px; } button { border:0; border-radius:6px; padding:7px 10px; background:var(--color-panel-hi); color:var(--color-t1); cursor:pointer; font:inherit; } button.primary { background:var(--color-accent); color:var(--color-on-accent); } button.danger { color:var(--color-status-exited); } button:disabled { opacity:.55; cursor:default; } .row { display:flex; gap:8px; align-items:center; } .row>* { flex:1; } .row button { flex:0 0 auto; } .muted { color:var(--color-t3); font-size:12px; } .error { color:var(--color-status-exited); font-size:12px; } .warning { color:var(--color-status-review); font-size:12px; } .source { border-top:1px solid var(--color-border); margin-top:12px; padding-top:12px; } .sidebar-section { margin-top:8px; } .section-header,.issue { width:100%; display:flex; align-items:center; gap:6px; border-radius:8px; text-align:left; background:transparent; } .section-header { margin-bottom:2px; padding:4px 8px; font-size:11px; line-height:16px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--color-t2); } .issue { padding:6px 8px 6px 16px; font-size:13px; line-height:18px; } .issue:hover,.section-header:hover { background:var(--color-panel-hi); } .section-header:focus,.issue:focus { outline:none; } .section-header.selected,.issue.selected,.section-header:focus-visible,.issue:focus-visible { box-shadow:inset 0 0 0 2px var(--color-accent); outline:2px solid transparent; outline-offset:-2px; }
+  .chevron { width:12px; height:12px; flex:0 0 auto; color:var(--color-t3); } .dot { width:6px; height:6px; border-radius:99px; background:var(--color-t3); flex:0 0 auto; } .dot.active,.dot.done { background:var(--color-status-running); } .key { color:var(--color-t3); font-family:var(--font-mono); font-size:10px; flex:0 0 auto; } .title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; } .count { margin-left:auto; font-weight:400; color:var(--color-t3); }`;
 function call<T>(context: PluginUiContext, method: string, params: unknown = null): Promise<T> {
   return context.host.call<T>(method, params);
 }
@@ -778,6 +779,15 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
   },
 };
 
+function sectionChevron(collapsed: boolean): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "chevron");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML = `<path d="${collapsed ? "m9 18 6-6-6-6" : "m6 9 6 6 6-6"}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+  return svg;
+}
+
 export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
   mount(root, context) {
     const style = document.createElement("style");
@@ -797,11 +807,11 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
       header.className = `section-header ${selected === "header" ? "selected" : ""}`;
       header.setAttribute("aria-expanded", String(!collapsed));
       header.setAttribute("aria-controls", "jira-sidebar-issues");
-      header.textContent = `${collapsed ? "›" : "⌄"} Jira`;
+      header.textContent = "Jira ";
       const count = document.createElement("span");
       count.className = "count";
       count.textContent = String(items.length);
-      header.append(count);
+      header.append(count, sectionChevron(collapsed));
       header.onclick = () => {
         context.host.sidebar.select("header");
         selected = "header";

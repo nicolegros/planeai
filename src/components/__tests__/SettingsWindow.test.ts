@@ -251,11 +251,41 @@ describe("navigation", () => {
     ]);
     await click("Jira");
     expect(document.querySelector("h1")?.textContent).toBe("Jira");
-    const page = document.querySelector('[data-plugin-preference-contribution="jira:preferences"]');
-    expect(page?.classList.contains("flex-1")).toBe(true);
-    expect(page?.parentElement?.className).toBe("flex h-full flex-col px-8 pb-8 pt-8");
-    await click("General");
-    expect(document.querySelector("main > div")?.className).toContain("max-w-[620px]");
+    expect(
+      document.querySelector('[data-plugin-preference-contribution="jira:preferences"]'),
+    ).not.toBeNull();
+  });
+
+  it("gives a local plugin's page the whole window and keeps bundled pages in the column", async () => {
+    mocks.pluginsList.mockResolvedValue([
+      {
+        id: "jira",
+        name: "Jira",
+        state: "running",
+        source_kind: "builtin",
+        capabilities: [],
+        ui_contributions: [
+          { id: "preferences", label: "Jira", placement: "preferences", entrypoint: "ui.js" },
+        ],
+      },
+      {
+        id: "linear",
+        name: "Linear",
+        state: "running",
+        source_kind: "local",
+        capabilities: [],
+        ui_contributions: [
+          { id: "preferences", label: "Linear", placement: "preferences", entrypoint: "ui.js" },
+        ],
+      },
+    ]);
+    await render();
+    const column = () => document.querySelector("main > div")!.classList;
+    await click("Linear");
+    expect(column().contains("max-w-[620px]")).toBe(false);
+    expect(column().contains("h-full")).toBe(true);
+    await click("Jira");
+    expect(column().contains("max-w-[620px]")).toBe(true);
   });
 });
 

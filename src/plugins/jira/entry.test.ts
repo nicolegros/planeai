@@ -521,7 +521,7 @@ describe("jiraSidebarSectionEntrypoint", () => {
 
     const stylesheet = sidebar.root.querySelector("style")?.textContent;
     expect(stylesheet).toContain(
-      ".section-header.selected,.issue.selected,.section-header:focus-visible,.issue:focus-visible { outline:2px solid var(--color-accent);",
+      ".section-header.selected,.issue.selected,.section-header:focus-visible,.issue:focus-visible { box-shadow:inset 0 0 0 2px var(--color-accent); outline:2px solid transparent;",
     );
     expect(stylesheet).toContain(".section-header:focus,.issue:focus { outline:none; }");
   });

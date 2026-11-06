@@ -83,6 +83,8 @@
   const taskDataChangeListeners = new Set<() => void>();
   let refreshLocalPluginTheme: (() => void) | null = null;
   let refreshLocalPluginData: (() => void) | null = null;
+  // A remounted content-sized frame starts at its last height, so a refresh doesn't collapse it and shift what follows.
+  let lastContentHeight = "0px";
   /**
    * Whether a newly mounted UI takes focus. Read untracked: mounting runs inside the
    * mount effect, and tracking it would rebuild the frame, and lose its state, on every focus change.
@@ -164,6 +166,17 @@
   /** Placements whose frame takes the whole area the host gives it. */
   function fillsContainer(placement: PluginUiContribution["placement"]): boolean {
     return placement === "main-pane" || placement === "session.main" || placement === "titlebar" || placement === "preferences";
+  }
+
+  /** Scrolls the nearest scrolling ancestor so the frame's `top`..`bottom` range is visible. */
+  function revealInScroller(frame: HTMLIFrameElement, top: number, bottom: number): void {
+    let scroller = container?.parentElement;
+    while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+    if (!scroller) return;
+    const frameTop = frame.getBoundingClientRect().top;
+    const view = scroller.getBoundingClientRect();
+    if (frameTop + top < view.top) scroller.scrollTop -= view.top - (frameTop + top);
+    else if (frameTop + bottom > view.bottom) scroller.scrollTop += frameTop + bottom - view.bottom;
   }
 
   function disposeCurrent(): void {
@@ -274,7 +287,7 @@
       frame.style.outline = "none";
     }
     if (contribution.placement.startsWith("sidebar.")) {
-      frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : isContentSized ? "0px" : "160px";
+      frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : isContentSized ? lastContentHeight : "160px";
       frame.addEventListener("focus", focusSidebar);
       frame.addEventListener("pointerdown", focusSidebar);
     }
@@ -316,11 +329,20 @@
         };
         addEventListener("pointerdown", reportInteraction, true);
         addEventListener("keydown", reportInteraction, true);
+        // A content-sized sidebar frame never scrolls itself, so the host scrolls the sidebar to the focused row.
+        addEventListener("focusin", (event) => {
+          const bounds = event.target?.getBoundingClientRect?.();
+          if (bounds) send({ type: "reveal", top: bounds.top, bottom: bounds.bottom });
+        });
         const observeContentHeight = (contribution) => {
           if (!${JSON.stringify(contentSizedPlacements)}.includes(contribution?.placement) || !document.body) return;
           contentHeightObserver?.disconnect();
-          contentHeightObserver = new MutationObserver(reportContentHeight);
-          contentHeightObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+          const mutations = new MutationObserver(reportContentHeight);
+          mutations.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true });
+          // Text rewraps when the sidebar or the theme font changes without any mutation.
+          const resizes = new ResizeObserver(reportContentHeight);
+          resizes.observe(document.body);
+          contentHeightObserver = { disconnect: () => (mutations.disconnect(), resizes.disconnect()) };
           reportContentHeight();
         };
         const request = (type, payload = {}) => new Promise((resolve, reject) => {
@@ -668,7 +690,9 @@
           .then((value) => respond(message.requestId, true, value))
           .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "content-height" && contentSizedPlacements.includes(contribution.placement) && typeof message.height === "number" && Number.isFinite(message.height)) {
-        frame.style.height = `${Math.min(Math.max(Math.ceil(message.height), 1), 10_000)}px`;
+        frame.style.height = lastContentHeight = `${Math.min(Math.max(Math.ceil(message.height), 1), 10_000)}px`;
+      } else if (message.type === "reveal" && contribution.placement === "sidebar.section" && Number.isFinite(message.top) && Number.isFinite(message.bottom)) {
+        revealInScroller(frame, message.top, message.bottom);
       } else if (message.type === "content-width" && inSessionRow(contribution.placement) && typeof message.width === "number" && Number.isFinite(message.width)) {
         container?.setAttribute("data-plugin-indicator-visible", message.width > 0 ? "true" : "false");
         if (isSessionMeta) {
@@ -754,7 +778,8 @@
       : () => {};
     if (
       refreshedInPlacePlacements.includes(contribution.placement) ||
-      (contribution.placement === "session.panel" && refreshesSessionPanelInPlace(plugin))
+      (contribution.placement === "session.panel" && refreshesSessionPanelInPlace(plugin)) ||
+      (contribution.placement === "sidebar.section" && includesHostApi(plugin, SYNC_HOST_API))
     ) {
       refreshLocalPluginData = refreshData;
     }

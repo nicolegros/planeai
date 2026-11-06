@@ -72,8 +72,8 @@
   const results = $derived(searchSettings(settingsWindow.query, pluginPages, getSettings()));
   const location = $derived(settingsWindow.location);
   const activePlugin = $derived(location.kind === "plugin" ? pluginContributions.find((entry) => entry.key === location.key) : undefined);
-  // A plugin page fills the window, since its frame cannot grow with its content.
-  const fillsWindow = $derived(loaded && !settingsWindow.query && !!activePlugin);
+  // A local plugin's page fills the window, since its frame cannot grow with its content.
+  const fillsWindow = $derived(loaded && !settingsWindow.query && activePlugin?.plugin.source_kind === "local");
   const activeCategory = $derived(location.kind === "category" ? categoryById(location.id) : undefined);
 
   function isActive(target: SettingsLocation): boolean {

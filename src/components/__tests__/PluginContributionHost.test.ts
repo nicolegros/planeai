@@ -257,6 +257,7 @@ describe("PluginContributionHost", () => {
     ["titlebar", "planeai.plugin-host.v1"],
     ["interaction", "planeai.plugin-host.v1"],
     ["session.panel", "planeai.plugin-host.v5"],
+    ["sidebar.section", "planeai.plugin-host.v7"],
   ] as const)(
     "tells a local %s frame on %s its plugin's data changed without remounting it",
     async (placement, hostApiVersion) => {
@@ -314,6 +315,74 @@ describe("PluginContributionHost", () => {
     changed({ payload: "local-fixture" });
 
     await vi.waitFor(() => expect(frameOf()).not.toBe(frame));
+  });
+
+  it("remounts an older local sidebar section at its last content height", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+    const frameOf = () =>
+      target
+        .querySelector("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+    const frame = await vi.waitFor(() => {
+      expect(frameOf()).toBeTruthy();
+      return frameOf()!;
+    });
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "content-height", height: 48 },
+      }),
+    );
+    const changed = await vi.waitFor(() => {
+      const listener = eventListeners.get("plugin-data-changed");
+      expect(listener).toBeTruthy();
+      return listener!;
+    });
+
+    changed({ payload: "local-fixture" });
+
+    const remounted = await vi.waitFor(() => {
+      expect(frameOf()).not.toBe(frame);
+      return frameOf()!;
+    });
+    expect(remounted.style.height).toBe("48px");
+  });
+
+  it("scrolls the sidebar to the row a local section focuses", async () => {
+    target = document.createElement("div");
+    target.style.overflowY = "auto";
+    document.body.append(target);
+    let scrollTop = 0;
+    Object.defineProperty(target, "scrollTop", {
+      get: () => scrollTop,
+      set: (value: number) => (scrollTop = value),
+    });
+    target.getBoundingClientRect = () => ({ top: 0, bottom: 100 }) as DOMRect;
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    frame.getBoundingClientRect = () => ({ top: 50 }) as DOMRect;
+    const reveal = (top: number, bottom: number) =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          data: { type: "reveal", top, bottom },
+        }),
+      );
+
+    reveal(80, 110);
+    expect(scrollTop).toBe(60);
+    reveal(-70, -40);
+    expect(scrollTop).toBe(40);
+    reveal(0, 30);
+    expect(scrollTop).toBe(40);
   });
 
   it.each(["sidebar.header", "sidebar.section"] as const)(
