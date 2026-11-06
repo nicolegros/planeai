@@ -151,11 +151,13 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
   `host.task.create` takes `{ "key", "title", "description"?, "status"?, "priority"?, "tags"? }` and creates a project-less task with exactly that key.
   `key` is required and must look like `PREFIX-N`: an uppercase letter, then uppercase letters or digits, a dash, and a number without leading zeros, as in `ENG-123`.
   `status` is `todo`, `in_progress`, `in_review`, or `done` (default `todo`), and `priority` an integer (default `0`).
-  PlaneAI records the calling plugin as the task's owner in the same write, and a key that any task already holds answers `-32602`.
+  The task lives in a namespace of the calling plugin's own, which makes the plugin its owner.
+  A key one of the plugin's own tasks already holds updates that task with the fields given, so a reinstalled plugin resumes the tasks it created; a key any other task holds answers `-32602`.
   `host.task.update` takes `{ "key", "title"?, "description"?, "status"?, "priority"?, "tags"? }`, changes only the fields given, and succeeds only on a task the calling plugin owns; any other key, including one no task holds, answers not granted (`-32003`).
   Both return the task.
   Children go under a synced task with `host.tasks.createChild`, from any project, since the task belongs to none.
-  Removing the plugin releases its tasks: they stay, but nothing can update them through this capability, and a reinstalled plugin cannot take their keys back.
+  A project's own task numbers skip keys synced tasks hold, so a tracker key like `PLA-12` never collides with a project's `PLA` tasks.
+  Removing the plugin leaves its tasks as they are.
 - `tasks.transition` permits `host.sessions.transitionLinkedTask` with `{ "session_id", "status" }`. PlaneAI resolves the task strictly from that session's linked task key, changes its lifecycle status, and emits the normal task lifecycle batch (including automatic parent completion).
 - `task-events` permits event delivery only when the handshake also subscribes to `task.lifecycle`.
 - `providers` permits declaring `providers` (host API v3 only) and the provider session contract described in [Providers](#providers). It is required exactly when `providers` is declared.
