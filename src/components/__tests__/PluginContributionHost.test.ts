@@ -350,10 +350,16 @@ describe("PluginContributionHost", () => {
     expect(remounted.style.height).toBe("48px");
   });
 
-  it("closes up a local sidebar section whose content is empty", async () => {
+  it.each([
+    ["sidebar.section", "0px"],
+    ["dialog", "1px"],
+  ] as const)("shrinks a local %s with empty content to %s", async (placement, height) => {
     target = document.createElement("div");
     document.body.append(target);
-    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement },
+    }) as typeof component;
     const frame = await vi.waitFor(() => {
       const next = target
         .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
@@ -372,8 +378,7 @@ describe("PluginContributionHost", () => {
     report(48);
     report(0);
 
-    expect(frame.style.height).toBe("0px");
-    expect(frame.srcdoc).toContain("if (height > 0 || true)");
+    expect(frame.style.height).toBe(height);
   });
 
   it("scrolls the sidebar to the row a local section focuses", async () => {

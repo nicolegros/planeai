@@ -309,8 +309,10 @@
         const toastCallbacks = new Map();
         const sessionEventListeners = new Set();
         const send = (message) => parent.postMessage(message, "*");
+        const isSection = ${JSON.stringify(contribution.placement === "sidebar.section")};
         let contentHeightObserver = null;
         let contentHeightPending = false;
+        let hadContent = false;
         const reportContentHeight = () => {
           if (contentHeightPending || !document.body) return;
           contentHeightPending = true;
@@ -320,8 +322,9 @@
               document.body.scrollHeight,
               ...Array.from(document.body.children).map((child) => child.scrollHeight),
             );
-            // An empty section closes up, while a dialog keeps its size until its content arrives.
-            if (height > 0 || ${JSON.stringify(contribution.placement === "sidebar.section")}) send({ type: "content-height", height });
+            // A section that empties closes up; before its first content, a frame keeps the size it remounted at.
+            if (height > 0 || (isSection && hadContent)) send({ type: "content-height", height });
+            hadContent ||= height > 0;
           });
         };
         // Events inside the frame never reach the host page, so a dialog that holds its position once the user acts needs this.
@@ -332,8 +335,8 @@
         };
         addEventListener("pointerdown", reportInteraction, true);
         addEventListener("keydown", reportInteraction, true);
-        // A content-sized sidebar frame never scrolls itself, so the host scrolls the sidebar to the focused row.
-        if (${JSON.stringify(contribution.placement === "sidebar.section")}) addEventListener("focusin", (event) => {
+        // A section frame never scrolls itself, so the host scrolls the sidebar to the focused row.
+        if (isSection) addEventListener("focusin", (event) => {
           const bounds = event.target?.getBoundingClientRect?.();
           if (bounds) send({ type: "reveal", top: bounds.top, bottom: bounds.bottom });
         });
