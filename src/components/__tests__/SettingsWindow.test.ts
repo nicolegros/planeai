@@ -251,9 +251,11 @@ describe("navigation", () => {
     ]);
     await click("Jira");
     expect(document.querySelector("h1")?.textContent).toBe("Jira");
-    expect(
-      document.querySelector('[data-plugin-preference-contribution="jira:preferences"]'),
-    ).not.toBeNull();
+    const page = document.querySelector('[data-plugin-preference-contribution="jira:preferences"]');
+    expect(page?.classList.contains("flex-1")).toBe(true);
+    expect(page?.parentElement?.className).toBe("flex h-full flex-col px-8 pb-8 pt-8");
+    await click("General");
+    expect(document.querySelector("main > div")?.className).toContain("max-w-[620px]");
   });
 });
 

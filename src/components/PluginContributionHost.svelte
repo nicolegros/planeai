@@ -144,7 +144,7 @@
   };
 
   /** Placements whose frame is as tall as the plugin's content, reported from inside the frame. */
-  const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "dialog", "sidebar.header"];
+  const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "dialog", "sidebar.header", "sidebar.section"];
 
   /** Local placements told about their plugin's data changes in place, since remounting them would flash and drop their state. */
   const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "session.meta", "sidebar.header", "main-pane", "dialog", "titlebar", "interaction"];
@@ -163,7 +163,7 @@
 
   /** Placements whose frame takes the whole area the host gives it. */
   function fillsContainer(placement: PluginUiContribution["placement"]): boolean {
-    return placement === "main-pane" || placement === "session.main" || placement === "titlebar";
+    return placement === "main-pane" || placement === "session.main" || placement === "titlebar" || placement === "preferences";
   }
 
   function disposeCurrent(): void {
@@ -274,7 +274,7 @@
       frame.style.outline = "none";
     }
     if (contribution.placement.startsWith("sidebar.")) {
-      frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : contribution.placement === "sidebar.header" ? "0px" : "160px";
+      frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : isContentSized ? "0px" : "160px";
       frame.addEventListener("focus", focusSidebar);
       frame.addEventListener("pointerdown", focusSidebar);
     }

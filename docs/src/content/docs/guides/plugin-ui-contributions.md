@@ -470,6 +470,7 @@ Each `ui_contributions` item requires a unique safe `id`, `label`, `placement`, 
 Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, `main-pane`, `dialog`, `session.panel`, `session.indicator`, `session.meta`, `titlebar`, and `interaction`.
 An `interaction` frame requires host API `planeai.plugin-host.v7`, is mounted for as long as its plugin runs, draws nothing, and takes no pointer input or focus: it drives host-drawn toasts and forms through the [interaction bridge](#interaction-bridge-host-api-v7).
 Sidebar contributions may set integer `order`.
+A local `sidebar.header` or `sidebar.section` frame is transparent over the sidebar and as tall as its content, and a `preferences` frame fills the Preferences window below its title.
 `session.indicator` and `session.meta` are slots drawn on every sidebar row that has a session, with that row's session context; they take no shortcut and no order, and their frames get no pointer events and no focus.
 A `session.indicator` is a 16px square beside the row's status.
 A `session.meta` is a 16px-tall inline slot after the branch on the third line of a Cards row, for example a `#656` pull-request pill; the Classic layout does not show it.
