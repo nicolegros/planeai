@@ -450,6 +450,29 @@ fn create_with_duplicate_key_is_idempotent() {
 }
 
 #[test]
+fn a_generated_key_skips_one_an_explicit_key_already_holds() {
+    let r = repo();
+    r.create(CreateParams {
+        key: Some("TEST-2".into()),
+        title: "Synced from a tracker".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let keys: Vec<String> = (0..2)
+        .map(|_| {
+            r.create(CreateParams {
+                title: "auto".into(),
+                ..Default::default()
+            })
+            .unwrap()
+            .key
+        })
+        .collect();
+    assert_eq!(keys, ["TEST-1", "TEST-3"]);
+    assert_eq!(r.get("TEST-2").unwrap().title, "Synced from a tracker");
+}
+
+#[test]
 fn create_without_key_still_auto_generates() {
     let r = repo();
     let t1 = r

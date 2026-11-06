@@ -33,16 +33,7 @@ pub fn insert_task(
     .map_err(storage)?;
     let key = match params.key.clone() {
         Some(key) => key,
-        None => {
-            let seq: i64 = tx
-                .query_row(
-                    "UPDATE task_projects SET next_seq = next_seq + 1 WHERE prefix = ?1 RETURNING next_seq - 1",
-                    params![prefix],
-                    |row| row.get(0),
-                )
-                .map_err(storage)?;
-            format!("{prefix}-{seq}")
-        }
+        None => next_free_key(tx, prefix)?,
     };
     let first_child = match &params.parent_key {
         Some(parent_key) => Some(
@@ -82,6 +73,31 @@ pub fn insert_task(
         inserted,
         first_child,
     })
+}
+
+/// The next `PREFIX-N` key of a project, skipping any a task created under an explicit key holds.
+fn next_free_key(conn: &Connection, prefix: &str) -> Result<String, Error> {
+    let storage = |e: rusqlite::Error| Error::Storage(e.to_string());
+    loop {
+        let seq: i64 = conn
+            .query_row(
+                "UPDATE task_projects SET next_seq = next_seq + 1 WHERE prefix = ?1 RETURNING next_seq - 1",
+                params![prefix],
+                |row| row.get(0),
+            )
+            .map_err(storage)?;
+        let key = format!("{prefix}-{seq}");
+        let taken: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM tasks WHERE key = ?1)",
+                params![key],
+                |row| row.get(0),
+            )
+            .map_err(storage)?;
+        if !taken {
+            return Ok(key);
+        }
+    }
 }
 
 /// Refuse a `parent` that is missing, is `key` itself, or is one of `key`'s subtasks.
@@ -636,17 +652,6 @@ impl SqliteRepository {
         Ok((task, parent_key.map(|_| is_first)))
     }
 
-    fn next_key(&self, conn: &Connection) -> Result<String, Error> {
-        let seq: i32 = conn
-            .query_row(
-                "UPDATE task_projects SET next_seq = next_seq + 1 WHERE prefix = ?1 RETURNING next_seq - 1",
-                params![self.prefix],
-                |r| r.get(0),
-            )
-            .map_err(|e| Error::Storage(e.to_string()))?;
-        Ok(format!("{}-{}", self.prefix, seq))
-    }
-
     fn load_blockers(&self, conn: &Connection, key: &str) -> Result<Vec<String>, Error> {
         let mut stmt = conn
             .prepare("SELECT blocked_by_key FROM task_blockers WHERE task_key = ?1")
@@ -786,7 +791,7 @@ impl TaskProvider for SqliteRepository {
             .map_err(|e| Error::Storage(e.to_string()))?;
         let key = match params.key {
             Some(ref k) => k.clone(),
-            None => self.next_key(&conn)?,
+            None => next_free_key(&conn, &self.prefix)?,
         };
         let now = Utc::now().to_rfc3339();
         let status = params.status.unwrap_or(Status::Todo);
