@@ -389,7 +389,9 @@ describe("PluginContributionHost", () => {
     let scrollTop = 0;
     Object.defineProperty(target, "scrollTop", {
       get: () => scrollTop,
-      set: (value: number) => (scrollTop = value),
+      set: (value: number) => {
+        scrollTop = value;
+      },
     });
     target.getBoundingClientRect = () => ({ top: 0, bottom: 100 }) as DOMRect;
     component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
