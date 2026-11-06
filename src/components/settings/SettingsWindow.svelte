@@ -72,6 +72,8 @@
   const results = $derived(searchSettings(settingsWindow.query, pluginPages, getSettings()));
   const location = $derived(settingsWindow.location);
   const activePlugin = $derived(location.kind === "plugin" ? pluginContributions.find((entry) => entry.key === location.key) : undefined);
+  // A local plugin's page fills the window, since its frame cannot grow with its content.
+  const fillsWindow = $derived(loaded && !settingsWindow.query && activePlugin?.plugin.source_kind === "local");
   const activeCategory = $derived(location.kind === "category" ? categoryById(location.id) : undefined);
 
   function isActive(target: SettingsLocation): boolean {
@@ -199,7 +201,7 @@
   </aside>
 
   <main class="min-w-0 flex-1 overflow-y-auto bg-main">
-    <div class="mx-auto max-w-[620px] px-8 pb-16 pt-8">
+    <div class={fillsWindow ? "flex h-full flex-col px-8 pb-8 pt-8" : "mx-auto max-w-[620px] px-8 pb-16 pt-8"}>
       {#if narrow}<div class="mb-6">{@render searchField()}</div>{/if}
       {#if !loaded}
         <p class="text-[13px] text-t3">Loading settings…</p>
@@ -240,7 +242,7 @@
           </div>
         </header>
         {#key activePlugin.key}
-          <div data-plugin-preference-contribution={activePlugin.key}>
+          <div class="min-h-0 flex-1" data-plugin-preference-contribution={activePlugin.key}>
             <PluginContributionHost plugin={activePlugin.plugin} contribution={activePlugin.contribution as PluginUiContribution} onNavigate={() => {}} onClose={() => {}} />
           </div>
         {/key}

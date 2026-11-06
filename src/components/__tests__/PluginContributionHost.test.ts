@@ -257,6 +257,7 @@ describe("PluginContributionHost", () => {
     ["titlebar", "planeai.plugin-host.v1"],
     ["interaction", "planeai.plugin-host.v1"],
     ["session.panel", "planeai.plugin-host.v5"],
+    ["sidebar.section", "planeai.plugin-host.v7"],
   ] as const)(
     "tells a local %s frame on %s its plugin's data changed without remounting it",
     async (placement, hostApiVersion) => {
@@ -316,14 +317,49 @@ describe("PluginContributionHost", () => {
     await vi.waitFor(() => expect(frameOf()).not.toBe(frame));
   });
 
-  it("sizes a local sidebar-header iframe to its content instead of a fixed block", async () => {
+  it("remounts an older local sidebar section at its last content height", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+    const frameOf = () =>
+      target
+        .querySelector("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+    const frame = await vi.waitFor(() => {
+      expect(frameOf()).toBeTruthy();
+      return frameOf()!;
+    });
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "content-height", height: 48 },
+      }),
+    );
+    const changed = await vi.waitFor(() => {
+      const listener = eventListeners.get("plugin-data-changed");
+      expect(listener).toBeTruthy();
+      return listener!;
+    });
+
+    changed({ payload: "local-fixture" });
+
+    const remounted = await vi.waitFor(() => {
+      expect(frameOf()).not.toBe(frame);
+      return frameOf()!;
+    });
+    expect(remounted.style.height).toBe("48px");
+  });
+
+  it.each([
+    ["sidebar.section", "0px"],
+    ["dialog", "1px"],
+  ] as const)("shrinks a local %s with empty content to %s", async (placement, height) => {
     target = document.createElement("div");
     document.body.append(target);
     component = mount(PluginContributionHostLocalHarness, {
       target,
-      props: { placement: "sidebar.header" },
+      props: { placement },
     }) as typeof component;
-
     const frame = await vi.waitFor(() => {
       const next = target
         .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
@@ -331,16 +367,87 @@ describe("PluginContributionHost", () => {
       expect(next).toBeTruthy();
       return next!;
     });
-    expect(frame.style.height).toBe("0px");
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        data: { type: "content-height", height: 32 },
-      }),
-    );
-    expect(frame.style.height).toBe("32px");
-    expect(frame.srcdoc).toContain('"sidebar.header"');
+    const report = (height: number) =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          data: { type: "content-height", height },
+        }),
+      );
+
+    report(48);
+    expect(frame.style.height).toBe("48px");
+    report(0);
+
+    expect(frame.style.height).toBe(height);
   });
+
+  it("scrolls the sidebar to the row a local section focuses", async () => {
+    target = document.createElement("div");
+    target.style.overflowY = "auto";
+    document.body.append(target);
+    let scrollTop = 0;
+    Object.defineProperty(target, "scrollTop", {
+      get: () => scrollTop,
+      set: (value: number) => (scrollTop = value),
+    });
+    target.getBoundingClientRect = () => ({ top: 0, bottom: 100 }) as DOMRect;
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    frame.getBoundingClientRect = () => ({ top: 50 }) as DOMRect;
+    const reveal = (top: number, bottom: number) =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          data: { type: "reveal", top, bottom },
+        }),
+      );
+
+    reveal(80, 110);
+    expect(scrollTop).toBe(0);
+    frame.focus();
+    reveal(80, 110);
+    expect(scrollTop).toBe(60);
+    reveal(-70, -40);
+    expect(scrollTop).toBe(40);
+    reveal(0, 30);
+    expect(scrollTop).toBe(40);
+  });
+
+  it.each(["sidebar.header", "sidebar.section"] as const)(
+    "sizes a local %s iframe to its content instead of a fixed block",
+    async (placement) => {
+      target = document.createElement("div");
+      document.body.append(target);
+      component = mount(PluginContributionHostLocalHarness, {
+        target,
+        props: { placement },
+      }) as typeof component;
+
+      const frame = await vi.waitFor(() => {
+        const next = target
+          .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+          ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+        expect(next).toBeTruthy();
+        return next!;
+      });
+      expect(frame.style.height).toBe("0px");
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          data: { type: "content-height", height: 32 },
+        }),
+      );
+      expect(frame.style.height).toBe("32px");
+      expect(frame.srcdoc).toContain(`"${placement}"`);
+    },
+  );
 
   it("reports local content heights from the host iframe bridge", async () => {
     target = document.createElement("div");
@@ -382,7 +489,7 @@ describe("PluginContributionHost", () => {
     expect(frame.srcdoc).toContain('send({ type: "navigation", action: "close" })');
   });
 
-  it("uses a compact iframe for local sidebar footers while retaining section space", async () => {
+  it("uses a compact iframe for local sidebar footers", async () => {
     target = document.createElement("div");
     document.body.append(target);
     component = mount(PluginContributionHostLocalHarness, {
@@ -400,43 +507,33 @@ describe("PluginContributionHost", () => {
 
     expect(footerFrame.className).not.toContain("h-full");
     expect(footerFrame.style.height).toBe("34px");
-
-    unmount(component!);
-    target.replaceChildren();
-
-    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
-    const sectionFrame = await vi.waitFor(() => {
-      const next = target
-        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
-        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
-      expect(next).toBeTruthy();
-      return next!;
-    });
-    expect(sectionFrame.style.height).toBe("160px");
   });
 
-  it("fills the main-pane host with a local plugin iframe", async () => {
-    target = document.createElement("div");
-    document.body.append(target);
-    component = mount(PluginContributionHostLocalHarness, {
-      target,
-      props: { placement: "main-pane" },
-    }) as typeof component;
+  it.each(["main-pane", "preferences"] as const)(
+    "fills the %s host with a local plugin iframe",
+    async (placement) => {
+      target = document.createElement("div");
+      document.body.append(target);
+      component = mount(PluginContributionHostLocalHarness, {
+        target,
+        props: { placement },
+      }) as typeof component;
 
-    const frame = await vi.waitFor(() => {
-      const next = target
-        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
-        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
-      expect(next).toBeTruthy();
-      return next!;
-    });
-    expect(frame.className).toContain("h-full");
-    expect(frame.style.display).toBe("block");
-    expect(frame.style.width).toBe("100%");
-    expect(frame.style.height).toBe("100%");
-    expect(frame.style.border).toBe("0px");
-    expect(frame.srcdoc).toContain("html,body{margin:0;height:100%;min-height:100%");
-  });
+      const frame = await vi.waitFor(() => {
+        const next = target
+          .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+          ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+        expect(next).toBeTruthy();
+        return next!;
+      });
+      expect(frame.className).toContain("h-full");
+      expect(frame.style.display).toBe("block");
+      expect(frame.style.width).toBe("100%");
+      expect(frame.style.height).toBe("100%");
+      expect(frame.style.border).toBe("0px");
+      expect(frame.srcdoc).toContain("html,body{margin:0;height:100%;min-height:100%");
+    },
+  );
 
   it("uses transparent iframe chrome for local titlebar controls", async () => {
     target = document.createElement("div");
@@ -463,6 +560,7 @@ describe("PluginContributionHost", () => {
     ["dialog", true],
     ["session.panel", true],
     ["sidebar.header", true],
+    ["sidebar.section", true],
     ["main-pane", false],
   ] as const)(
     "lets a local %s frame show the host surface and shrink to its content: %s",
@@ -853,7 +951,11 @@ describe("PluginContributionHost", () => {
     localUiSource.mockReturnValue(source.promise);
     target = document.createElement("div");
     document.body.append(target);
-    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+    // The stub document has no real body to observe, so the frame must not be content-sized.
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "main-pane" },
+    }) as typeof component;
     const frame = await vi.waitFor(() => {
       const next = target
         .querySelector<HTMLElement>("[data-plugin-ui-contribution]")

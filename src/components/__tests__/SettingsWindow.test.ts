@@ -255,6 +255,38 @@ describe("navigation", () => {
       document.querySelector('[data-plugin-preference-contribution="jira:preferences"]'),
     ).not.toBeNull();
   });
+
+  it("gives a local plugin's page the whole window and keeps bundled pages in the column", async () => {
+    mocks.pluginsList.mockResolvedValue([
+      {
+        id: "jira",
+        name: "Jira",
+        state: "running",
+        source_kind: "builtin",
+        capabilities: [],
+        ui_contributions: [
+          { id: "preferences", label: "Jira", placement: "preferences", entrypoint: "ui.js" },
+        ],
+      },
+      {
+        id: "linear",
+        name: "Linear",
+        state: "running",
+        source_kind: "local",
+        capabilities: [],
+        ui_contributions: [
+          { id: "preferences", label: "Linear", placement: "preferences", entrypoint: "ui.js" },
+        ],
+      },
+    ]);
+    await render();
+    const column = () => document.querySelector("main > div")!.classList;
+    await click("Linear");
+    expect(column().contains("max-w-[620px]")).toBe(false);
+    expect(column().contains("h-full")).toBe(true);
+    await click("Jira");
+    expect(column().contains("max-w-[620px]")).toBe(true);
+  });
 });
 
 describe("search", () => {

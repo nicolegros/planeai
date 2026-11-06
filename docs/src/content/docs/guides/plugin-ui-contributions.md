@@ -472,8 +472,8 @@ For example, local UI CSS can adopt or intentionally customize the host theme:
 
 - `call(method, params?)` — RPC scoped to the owning sidecar. Lifecycle methods are reserved.
 - `settings.get<T extends Record<string, unknown>>()` and `settings.replace<T>(settings)` — typed public JSON-object settings. These are the UI counterpart to the capability-gated sidecar settings callbacks; they never expose secrets.
-- `data.changed()` - tells PlaneAI the plugin's data changed, as do each run of the [background service](#background-service) and each call of a [tool](#tools) that is not read-only. A running `sidebar.section` remounts after this event.
-- `data.onChanged(listener)` returns an unsubscribe function and calls `listener` when the plugin's data changed. A local `session.indicator`, `session.meta`, `sidebar.header`, `main-pane`, `dialog`, `titlebar`, or `interaction` frame receives it in place and keeps its state, so subscribe to refresh what it shows; so does a local `session.panel` on host API `planeai.plugin-host.v5` or later, while an older one remounts instead. Other local frames never call it.
+- `data.changed()` - tells PlaneAI the plugin's data changed, as do each run of the [background service](#background-service) and each call of a [tool](#tools) that is not read-only. A running `sidebar.section` remounts after this event, unless its plugin declares host API `planeai.plugin-host.v7`.
+- `data.onChanged(listener)` returns an unsubscribe function and calls `listener` when the plugin's data changed. A local `session.indicator`, `session.meta`, `sidebar.header`, `main-pane`, `dialog`, `titlebar`, or `interaction` frame receives it in place and keeps its state, so subscribe to refresh what it shows; so does a local `session.panel` on host API `planeai.plugin-host.v5` or later and a local `sidebar.section` on `planeai.plugin-host.v7` or later, while older ones remount instead. Other local frames never call it.
 - `navigation.open(pluginId, contributionId)`, `navigation.close()`, and `navigation.openPreferences()`.
 - `sidebar.register(rows)`, `sidebar.select(rowId)`, and `sidebar.handleKeydown(event)` for sidebar navigation contributions. Always call the returned unregister function from your mount disposer.
 - `interaction` on host API `planeai.plugin-host.v7` or later, and `data.onTaskDataChanged(listener)` for a `tasks.sync` plugin, described in [Interaction bridge](#interaction-bridge-host-api-v7).
@@ -484,6 +484,8 @@ Each `ui_contributions` item requires a unique safe `id`, `label`, `placement`, 
 Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, `main-pane`, `dialog`, `session.panel`, `session.indicator`, `session.meta`, `titlebar`, and `interaction`.
 An `interaction` frame requires host API `planeai.plugin-host.v7`, is mounted for as long as its plugin runs, draws nothing, and takes no pointer input or focus: it drives host-drawn toasts and forms through the [interaction bridge](#interaction-bridge-host-api-v7).
 Sidebar contributions may set integer `order`.
+A local `sidebar.header` or `sidebar.section` frame is transparent over the sidebar and as tall as its content, and a `preferences` frame fills the Preferences window below its title.
+A `sidebar.section` frame never scrolls, so PlaneAI scrolls the sidebar to keep the element focused inside it visible.
 `session.indicator` and `session.meta` are slots drawn on every sidebar row that has a session, with that row's session context; they take no shortcut and no order, and their frames get no pointer events and no focus.
 A `session.indicator` is a 16px square beside the row's status.
 A `session.meta` is a 16px-tall inline slot after the branch on the third line of a Cards row, for example a `#656` pull-request pill; the Classic layout does not show it.
