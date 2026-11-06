@@ -29,6 +29,8 @@ pub(crate) struct PluginConnection {
     responses: AsyncMutex<mpsc::Receiver<Result<String, String>>>,
     requests: RequestLane,
     next_request_id: AtomicU64,
+    /// Set when a timed-out request got no answer to its cancellation: the sidecar is hung.
+    cancellation_ignored: AtomicBool,
     /// Why the stdout reader stopped, once it has: nothing the sidecar sends is read anymore.
     stdout_failure: Arc<OnceLock<String>>,
 }
@@ -69,6 +71,7 @@ impl PluginConnection {
             responses: AsyncMutex::new(responses),
             requests: RequestLane::default(),
             next_request_id: AtomicU64::new(0),
+            cancellation_ignored: AtomicBool::new(false),
             stdout_failure,
         };
         (connection, callbacks)
@@ -76,6 +79,10 @@ impl PluginConnection {
 
     pub(crate) fn stdout_failure(&self) -> Option<&String> {
         self.stdout_failure.get()
+    }
+
+    pub(crate) fn ignored_a_cancellation(&self) -> bool {
+        self.cancellation_ignored.load(Ordering::SeqCst)
     }
 
     /// Whether a request left stdout untrustworthy, so the runtime must be retired.
@@ -129,7 +136,11 @@ impl PluginConnection {
             Ok(Ok(frame)) => cancellation_acknowledgement_error(method, request_id, Some(&frame)),
             // The original timeout remains the externally meaningful error when
             // the plugin cannot acknowledge cancellation correctly or in time.
-            Ok(Err(_)) | Err(_) => cancellation_acknowledgement_error(method, request_id, None),
+            Ok(Err(_)) => cancellation_acknowledgement_error(method, request_id, None),
+            Err(_) => {
+                self.cancellation_ignored.store(true, Ordering::SeqCst);
+                cancellation_acknowledgement_error(method, request_id, None)
+            }
         }
     }
 
@@ -502,11 +513,37 @@ mod tests {
             .unwrap_err();
         assert_eq!(timed_out.code(), Some(-32800), "{timed_out}");
         assert!(!connection.is_broken());
+        assert!(!connection.ignored_a_cancellation());
 
         let next = connection
             .request("github.reconcile", Value::Null, Duration::from_secs(5))
             .await;
         assert_eq!(next, Ok(serde_json::json!({ "checked": 1 })));
+    }
+
+    #[tokio::test]
+    async fn a_sidecar_that_never_answers_a_cancellation_is_hung_and_one_that_exits_is_not() {
+        let hung = sidecar(
+            "read -r request; read -r cancel; sleep 10",
+            Duration::ZERO,
+            Value::Null,
+        );
+        let error = hung
+            .connection
+            .request("github.reconcile", Value::Null, Duration::from_millis(100))
+            .await
+            .unwrap_err();
+        assert!(error.is_fatal(), "{error}");
+        assert!(hung.connection.ignored_a_cancellation());
+
+        let crashed = sidecar("read -r request; exit 1", Duration::ZERO, Value::Null);
+        let error = crashed
+            .connection
+            .request("github.reconcile", Value::Null, Duration::from_millis(100))
+            .await
+            .unwrap_err();
+        assert!(error.is_fatal(), "{error}");
+        assert!(!crashed.connection.ignored_a_cancellation());
     }
 
     #[tokio::test]

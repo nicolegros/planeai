@@ -3281,8 +3281,8 @@ impl PluginRuntimeSupervisor {
     }
 
     /// Stops a runtime whose stdout can no longer be trusted, such as one holding the
-    /// answer to a timed-out request, before another request reads that answer; then
-    /// restarts it, at most once per `BROKEN_RUNTIME_RESTART_COOLDOWN`.
+    /// answer to a timed-out request, before another request reads that answer. One that
+    /// ignored a cancellation restarts, at most once per `BROKEN_RUNTIME_RESTART_COOLDOWN`.
     async fn retire_broken_process(
         &self,
         plugin_id: &str,
@@ -3297,9 +3297,10 @@ impl PluginRuntimeSupervisor {
         if !owns_process {
             return;
         }
-        // Only a sidecar that is alive and readable restarts: a crash or a stdout protocol
-        // failure stays stopped, as the process monitor leaves it when it notices first.
-        let crashed = !matches!(process.exited().await, Ok(None));
+        // Only a hung sidecar restarts: a crash or a stdout protocol failure stays stopped, as
+        // the process monitor leaves it when it notices first.
+        let hung = process.connection.ignored_a_cancellation()
+            && matches!(process.exited().await, Ok(None));
         // A sidecar that may still be running must not get a second instance beside it.
         let stopped = match stop_process(process).await {
             Ok(()) => true,
@@ -3320,7 +3321,7 @@ impl PluginRuntimeSupervisor {
             tracing::warn!(plugin_id, %state_error, "failed to record broken plugin runtime");
             return;
         }
-        if crashed || !stopped {
+        if !hung || !stopped {
             return;
         }
         if let Some(supervisor) = self.this.upgrade() {

@@ -27,7 +27,7 @@ PlaneAI runs bundled and user-selected local plugins as separately compiled subp
   Background service runs default to 60 seconds, or the manifest's `timeout_ms`.
   The host may send `$/cancelRequest`; a cancellable call must complete with `-32800` within three seconds.
   The host answers sidecar callbacks as they arrive, not only while a request waits, so a timed-out request never strands one.
-  A runtime stopped for a broken request restarts at most once every ten minutes when its process was still alive and its stdout readable; a crashed runtime stays stopped.
+  A runtime stopped for ignoring a cancellation restarts at most once every ten minutes, unless its process exited or its stdout failed; any other broken runtime stays stopped.
   Shutdown gives the sidecar three seconds before kill fallback.
   On every normal app exit, including macOS Quit and restarts, the host runs that shutdown within the same three seconds and then kills any sidecar still alive.
   A quit during an update install takes effect when the install ends, instead of the restart or the plugin restore.
