@@ -376,6 +376,7 @@ describe("PluginContributionHost", () => {
       );
 
     report(48);
+    expect(frame.style.height).toBe("48px");
     report(0);
 
     expect(frame.style.height).toBe(height);

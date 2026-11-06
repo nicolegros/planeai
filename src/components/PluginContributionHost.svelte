@@ -322,7 +322,7 @@
               document.body.scrollHeight,
               ...Array.from(document.body.children).map((child) => child.scrollHeight),
             );
-            // A section that empties closes up; before its first content, a frame keeps the size it remounted at.
+            // A section that empties closes up, but a remounted frame keeps its previous height until its first content, even if it stays empty.
             if (height > 0 || (isSection && hadContent)) send({ type: "content-height", height });
             hadContent ||= height > 0;
           });
