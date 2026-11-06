@@ -93,7 +93,7 @@ pub async fn install_update(
         .download(|_, _| {}, || {})
         .await
         .map_err(|e| e.to_string())?;
-    if !runtime.0.begin_shutdown() {
+    if !runtime.0.begin_update() {
         return Err("plugin runtime is already shutting down".to_string());
     }
     let enabled_plugin_ids = match runtime.0.shutdown_for_update().await {
@@ -108,6 +108,9 @@ pub async fn install_update(
             .restore_after_failed_update(&enabled_plugin_ids)
             .await;
         return Err(error);
+    }
+    if runtime.0.finish_update() {
+        return Ok(());
     }
     // `restart` never returns and would park this worker; `request_restart` lets RunEvent::Exit stop the plugins.
     app.request_restart();

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 use std::time::Instant;
@@ -20,6 +20,7 @@ use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 
 use crate::commands;
+use crate::exit_gate::{ExitGate, ExitRequest, UpdateEnd};
 use crate::plugin_children::{wait_for_exit, PluginChildren, SharedChild};
 use crate::plugin_rpc::*;
 use crate::task_lifecycle::TaskLifecycleBatch;
@@ -1297,9 +1298,7 @@ impl PluginRuntimeHandle {
             background_workers: Arc::new(AsyncMutex::new(HashMap::new())),
             next_generation: AtomicU64::new(0),
             lifecycle: Arc::new(AsyncMutex::new(())),
-            shutting_down: AtomicBool::new(false),
-            exit_permitted: AtomicBool::new(false),
-            exit_requested: AtomicBool::new(false),
+            exit_gate: Default::default(),
             provider_sessions: Arc::new(crate::plugin_providers::ProviderSessions::default()),
             children: Default::default(),
         }))
@@ -1317,10 +1316,7 @@ pub struct PluginRuntimeSupervisor {
     background_workers: Arc<AsyncMutex<HashMap<String, BackgroundWorker>>>,
     next_generation: AtomicU64,
     lifecycle: Arc<AsyncMutex<()>>,
-    shutting_down: AtomicBool,
-    exit_permitted: AtomicBool,
-    /// A quit that arrived while an update held the shutdown; it wins over restoring plugins.
-    exit_requested: AtomicBool,
+    exit_gate: ExitGate,
     provider_sessions: Arc<crate::plugin_providers::ProviderSessions>,
     children: PluginChildren,
 }
@@ -1878,12 +1874,13 @@ impl RuntimeProcess {
             .await
             .start_kill()
             .map_err(|e| format!("plugin did not stop and could not be killed: {e}"))?;
-        match wait_for_exit(&self.child, Instant::now() + SHUTDOWN_TIMEOUT)
+        if wait_for_exit(&self.child, Instant::now() + SHUTDOWN_TIMEOUT)
             .await
             .map_err(|e| format!("failed waiting for killed plugin: {e}"))?
         {
-            true => Ok(()),
-            false => Err("plugin did not exit after being killed".to_string()),
+            Ok(())
+        } else {
+            Err("plugin did not exit after being killed".to_string())
         }
     }
 }
@@ -3146,10 +3143,18 @@ impl PluginRuntimeSupervisor {
         .map_err(|error| error.to_string())
     }
 
-    pub fn begin_shutdown(&self) -> bool {
-        self.shutting_down
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+    pub fn begin_update(&self) -> bool {
+        self.exit_gate.begin_update()
+    }
+
+    /// Ends a successful update install; returns true when a quit arrived meanwhile and the
+    /// app exits instead of restarting into the update.
+    pub fn finish_update(&self) -> bool {
+        if self.exit_gate.end_update(false) == UpdateEnd::Quit {
+            self.permit_and_exit();
+            return true;
+        }
+        false
     }
 
     pub async fn install_local(&self, source_path: String) -> Result<PluginInventory, String> {
@@ -3395,7 +3400,7 @@ impl PluginRuntimeSupervisor {
     /// Deliver a committed lifecycle batch in the background. Delivery failures
     /// are deliberately isolated from the local task transaction.
     pub fn dispatch_task_lifecycle(self: &Arc<Self>, batch: TaskLifecycleBatch) {
-        if self.shutting_down.load(Ordering::Acquire) {
+        if !self.exit_gate.is_running() {
             tracing::warn!(batch_id = %batch.batch_id, "skipped lifecycle delivery while plugin runtime is shutting down");
             return;
         }
@@ -3437,7 +3442,7 @@ impl PluginRuntimeSupervisor {
         self: &Arc<Self>,
         transition: crate::commands::sessions::lifecycle::SessionTransition,
     ) {
-        if self.shutting_down.load(Ordering::Acquire) {
+        if !self.exit_gate.is_running() {
             tracing::warn!(
                 "skipped session lifecycle delivery while plugin runtime is shutting down"
             );
@@ -3731,7 +3736,7 @@ impl PluginRuntimeSupervisor {
                 (true, true)
             });
         for plugin in enabled {
-            if self.shutting_down.load(Ordering::Acquire) {
+            if !self.exit_gate.is_running() {
                 return;
             }
             if plugin.id == JIRA_PLUGIN_ID && migration_blocks_jira {
@@ -3751,32 +3756,27 @@ impl PluginRuntimeSupervisor {
             }
         }
     }
-    /// Answers `ExitRequested`: true while plugins still need stopping, after starting that
-    /// stop, which exits the app once done.
+    /// Returns true when the caller must prevent this exit; the app exits itself once
+    /// plugins have stopped.
     pub fn defer_exit_for_shutdown(self: &Arc<Self>) -> bool {
-        if self.exit_is_permitted() {
-            return false;
+        match self.exit_gate.request_exit() {
+            ExitRequest::Allow => false,
+            ExitRequest::Prevent => true,
+            ExitRequest::StartShutdown => {
+                let this = self.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = timeout(SHUTDOWN_TIMEOUT, this.shutdown_all()).await;
+                    this.permit_and_exit();
+                });
+                true
+            }
         }
-        if self.begin_shutdown() {
-            let this = self.clone();
-            tauri::async_runtime::spawn(async move {
-                // Survivors are killed by `stop_all_before_process_exit`.
-                let _ = timeout(SHUTDOWN_TIMEOUT, this.shutdown_all()).await;
-                this.permit_exit();
-                this.app.exit(0);
-            });
-        } else {
-            self.exit_requested.store(true, Ordering::Release);
-        }
-        true
     }
 
-    fn permit_exit(&self) {
-        self.exit_permitted.store(true, Ordering::Release);
-    }
-
-    fn exit_is_permitted(&self) -> bool {
-        self.exit_permitted.load(Ordering::Acquire)
+    /// Survivors are killed by `stop_all_before_process_exit`.
+    fn permit_and_exit(&self) {
+        self.exit_gate.permit_exit();
+        self.app.exit(0);
     }
 
     async fn shutdown_all(self: &Arc<Self>) {
@@ -3787,8 +3787,7 @@ impl PluginRuntimeSupervisor {
     /// Runs from `RunEvent::Exit`, which macOS Quit and restarts reach without a preventable
     /// `ExitRequested`: stops plugins gracefully unless that already ran, then kills survivors.
     pub fn stop_all_before_process_exit(self: &Arc<Self>) {
-        if !self.exit_is_permitted() {
-            self.begin_shutdown();
+        if self.exit_gate.begin_final_exit() {
             tracing::info!("stopping plugin runtimes before exit");
             if block_on_within(SHUTDOWN_TIMEOUT, self.shutdown_all()).is_none() {
                 tracing::warn!("plugin runtimes did not stop within the shutdown grace period");
@@ -3837,13 +3836,13 @@ impl PluginRuntimeSupervisor {
     }
 
     async fn restore_after_failed_update_inner(self: &Arc<Self>, plugin_ids: &[String]) {
-        if self.exit_requested.load(Ordering::Acquire) {
-            self.shutdown_all_inner().await;
-            self.permit_exit();
-            self.app.exit(0);
+        if self.exit_gate.end_update(true) == UpdateEnd::Quit {
+            self.permit_and_exit();
             return;
         }
-        self.shutting_down.store(false, Ordering::Release);
+        if !self.exit_gate.is_running() {
+            return;
+        }
         for plugin_id in plugin_ids {
             if let Err(error) = self.ensure_plugin_migration_ready(plugin_id).await {
                 tracing::warn!(plugin_id, %error, "skipped protected plugin restore after update failure");
@@ -3861,8 +3860,7 @@ impl PluginRuntimeSupervisor {
         }
     }
 
-    /// Stops every running plugin concurrently, so one wedged plugin cannot spend the
-    /// others' shutdown grace. Returns the plugins that failed to stop.
+    /// Stops every running plugin; returns the ones that failed.
     async fn stop_running_for_shutdown(self: &Arc<Self>) -> Vec<(String, String)> {
         let plugin_ids = self
             .processes
@@ -3937,7 +3935,7 @@ impl PluginRuntimeSupervisor {
 
     pub async fn enable(&self, plugin_id: &str) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
-        if self.shutting_down.load(Ordering::Acquire) {
+        if !self.exit_gate.is_running() {
             return Err("plugin runtime is shutting down".to_string());
         }
         self.ensure_plugin_migration_ready(plugin_id).await?;
@@ -3948,7 +3946,7 @@ impl PluginRuntimeSupervisor {
     /// exposed through the generic Tauri plugin lifecycle API.
     pub async fn enable_jira_after_migration(&self) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
-        if self.shutting_down.load(Ordering::Acquire) {
+        if !self.exit_gate.is_running() {
             return Err("plugin runtime is shutting down".to_string());
         }
         self.enable_inner(JIRA_PLUGIN_ID).await
@@ -4141,7 +4139,7 @@ impl PluginRuntimeSupervisor {
 
     pub async fn disable(&self, plugin_id: &str) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
-        if self.shutting_down.load(Ordering::Acquire) {
+        if !self.exit_gate.is_running() {
             return Err("plugin runtime is shutting down".to_string());
         }
         self.disable_inner(plugin_id).await
@@ -4186,7 +4184,7 @@ impl PluginRuntimeSupervisor {
 
     pub async fn reload(&self, plugin_id: &str) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
-        if self.shutting_down.load(Ordering::Acquire) {
+        if !self.exit_gate.is_running() {
             return Err("plugin runtime is shutting down".to_string());
         }
         self.ensure_plugin_migration_ready(plugin_id).await?;

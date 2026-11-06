@@ -8,6 +8,7 @@ mod config;
 mod daemon;
 mod daemon_client;
 mod db;
+mod exit_gate;
 mod file_explorer;
 mod git;
 mod github_migration;
