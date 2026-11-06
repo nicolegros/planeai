@@ -4,6 +4,7 @@
   import type { PluginSessionContext } from "../lib/plugin-sdk";
   import { pluginSessionActionsForProvider } from "../lib/plugin-session-actions";
   import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
+  import { deepActiveElement } from "../lib/terminal-focus";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard, activatesItselfOnEnter, focusedSidebarControl } from "../lib/sidebar-nav.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
@@ -335,9 +336,20 @@
     navRef.querySelector(`[data-nav-index="${idx}"]`)?.scrollIntoView({ block: "nearest" });
   });
 
+  function releasePluginFrameFocus(): void {
+    const active = deepActiveElement(document);
+    if (!(active instanceof HTMLIFrameElement) || !navRef?.contains(document.activeElement)) return;
+    active.blur();
+    // WebKit keeps sending keys to a blurred frame until the app's own window takes focus.
+    window.focus();
+  }
+
   let focusedPluginRow = "";
   $effect(() => {
     const current = zone === "sidebar" ? flatNav[getSelectedIndex()] : undefined;
+    // Keys pressed inside a plugin frame never reach this window, so a frame the selection left
+    // must give the keyboard back, or Escape and the other sidebar keys stop working.
+    if (current?.type !== "plugin") releasePluginFrameFocus();
     const key = current?.type === "plugin" ? `${current.contributionKey}:${current.row.id}` : "";
     if (key === focusedPluginRow) return;
     for (const item of flatNav) {

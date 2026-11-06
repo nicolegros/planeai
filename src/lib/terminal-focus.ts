@@ -51,7 +51,7 @@ export function isTerminalPaneFocused(input: TerminalPaneFocusInput): boolean {
 }
 
 /** The focused element, looking into the shadow roots plugin frames live in. */
-function deepActiveElement(root: Document): Element | null {
+export function deepActiveElement(root: Document): Element | null {
   let active = root.activeElement;
   while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
   return active;
