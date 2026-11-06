@@ -103,6 +103,7 @@ semver = "=1.0.28"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 planeai-core = { path = "planeai-core", features = ["test-support"] }
 # ReaderStream serves chunked bodies to the plugin download tests.
 tokio-util = { workspace = true, features = ["io"] }
