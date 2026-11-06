@@ -4,7 +4,7 @@
   import type { PluginSessionContext } from "../lib/plugin-sdk";
   import { pluginSessionActionsForProvider } from "../lib/plugin-session-actions";
   import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
-  import { deepActiveElement } from "../lib/terminal-focus";
+  import { deepActiveElement, releaseFrameFocus } from "../lib/dom-focus";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard, activatesItselfOnEnter, focusedSidebarControl } from "../lib/sidebar-nav.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
@@ -338,10 +338,7 @@
 
   function releasePluginFrameFocus(): void {
     const active = deepActiveElement(document);
-    if (!(active instanceof HTMLIFrameElement) || !navRef?.contains(document.activeElement)) return;
-    active.blur();
-    // WebKit keeps sending keys to a blurred frame until the app's own window takes focus.
-    window.focus();
+    if (active instanceof HTMLIFrameElement && navRef?.contains(document.activeElement)) releaseFrameFocus(active);
   }
 
   let focusedPluginRow = "";
