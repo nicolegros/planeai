@@ -24,7 +24,7 @@ PlaneAI runs bundled and user-selected local plugins as separately compiled subp
   It speaks UTF-8, newline-framed JSON-RPC 2.0 on stdin/stdout.
   Startup requires a versioned `plugin.handshake`.
   Handshake and ordinary calls have a five-second deadline.
-  A background service method has 40 minutes, or the manifest's `timeout_ms`, whether its interval or a UI call runs it.
+  A background service method has 40 minutes, or the manifest's `timeout_ms` (host API v8), whether its interval or a UI call runs it.
   The host may send `$/cancelRequest`; a cancellable call must complete with `-32800` within three seconds.
   The host answers sidecar callbacks as they arrive, not only while a request waits, so a timed-out request never strands one.
   A runtime stopped for ignoring a cancellation restarts at most once every ten minutes, unless its process exited or its stdout failed; any other broken runtime stays stopped.

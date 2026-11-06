@@ -65,8 +65,11 @@ pub const TOOLS_HOST_API_VERSION: &str = "planeai.plugin-host.v6";
 /// `interaction` bridge (toasts, the project form, task data changes).
 pub const SYNC_HOST_API_VERSION: &str = "planeai.plugin-host.v7";
 
+/// A background service's own `timeout_ms`, which older hosts reject as an unknown field.
+pub const BACKGROUND_TIMEOUT_HOST_API_VERSION: &str = "planeai.plugin-host.v8";
+
 /// Every host API this host serves, oldest first; each includes the ones before it.
-const HOST_API_VERSIONS: [&str; 7] = [
+const HOST_API_VERSIONS: [&str; 8] = [
     HOST_API_VERSION,
     RECIPIENT_HOST_API_VERSION,
     PROVIDER_HOST_API_VERSION,
@@ -74,6 +77,7 @@ const HOST_API_VERSIONS: [&str; 7] = [
     SESSION_META_HOST_API_VERSION,
     TOOLS_HOST_API_VERSION,
     SYNC_HOST_API_VERSION,
+    BACKGROUND_TIMEOUT_HOST_API_VERSION,
 ];
 
 /// The host-to-plugin request that runs one of the plugin's tools.
@@ -511,8 +515,15 @@ fn validate_background_service(object: &Map<String, Value>) -> Result<()> {
     match service.get("timeout_ms") {
         None => Ok(()),
         // 0 fails the range check, and so gives the same message as a non-integer.
-        Some(value) => check_background_service_timeout_ms(value.as_u64().unwrap_or(0))
-            .map_err(|error| anyhow!(error)),
+        Some(value) => {
+            require_host_api(
+                object,
+                "background service timeout_ms",
+                BACKGROUND_TIMEOUT_HOST_API_VERSION,
+            )?;
+            check_background_service_timeout_ms(value.as_u64().unwrap_or(0))
+                .map_err(|error| anyhow!(error))
+        }
     }
 }
 
@@ -743,8 +754,9 @@ mod tests {
     }
 
     #[test]
-    fn a_background_service_may_declare_a_bounded_timeout() {
+    fn a_background_service_may_declare_a_bounded_timeout_from_host_api_v8() {
         let mut manifest = manifest();
+        manifest["host_api_version"] = json!(BACKGROUND_TIMEOUT_HOST_API_VERSION);
         manifest["background_service"] = json!({
             "method": "integration.refresh",
             "interval_setting": "refresh_interval_ms",
@@ -752,6 +764,15 @@ mod tests {
             "timeout_ms": 90000
         });
         assert!(validate_local_manifest(&manifest, "macos-arm64").is_ok());
+
+        manifest["host_api_version"] = json!(SYNC_HOST_API_VERSION);
+        assert_eq!(
+            validate_local_manifest(&manifest, "macos-arm64")
+                .unwrap_err()
+                .to_string(),
+            "background service timeout_ms requires host API planeai.plugin-host.v8"
+        );
+        manifest["host_api_version"] = json!(BACKGROUND_TIMEOUT_HOST_API_VERSION);
 
         for timeout_ms in [
             json!(0),
