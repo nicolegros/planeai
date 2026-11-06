@@ -21,6 +21,8 @@
   import { parseTooltipLines, PLUGIN_TONE_COLORS, type PluginTooltipLine } from "../lib/plugin-tooltip";
   import { FRAME_INTERACTION_EVENT } from "../lib/frame-interaction";
   import { refreshesSessionPanelInPlace } from "../lib/plugin-navigation";
+  import { includesHostApi, mirrorsTasks, SYNC_HOST_API, SYNC_HOST_API_VERSION } from "../lib/plugin-host-api";
+  import { createFrameToasts } from "../lib/plugin-frame-toasts";
 
   interface Props {
     plugin: PluginInventory;
@@ -68,6 +70,8 @@
     width?: number;
     text?: unknown;
     lines?: unknown;
+    toast?: unknown;
+    id?: unknown;
   };
 
   let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session, providerSession, onFocused, getFocusedAgentSession = () => undefined, onTooltip }: Props = $props();
@@ -143,7 +147,7 @@
   const contentSizedPlacements: readonly PluginUiContribution["placement"][] = ["session.panel", "dialog", "sidebar.header"];
 
   /** Local placements told about their plugin's data changes in place, since remounting them would flash and drop their state. */
-  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "session.meta", "sidebar.header", "main-pane", "dialog", "titlebar"];
+  const refreshedInPlacePlacements: readonly PluginUiContribution["placement"][] = ["session.indicator", "session.meta", "sidebar.header", "main-pane", "dialog", "titlebar", "interaction"];
 
   /** Visual-only placements drawn inside a sidebar row: pointer-inert, unfocusable and 16px tall. */
   function inSessionRow(placement: PluginUiContribution["placement"]): boolean {
@@ -159,7 +163,7 @@
 
   /** Placements whose frame takes the whole area the host gives it. */
   function fillsContainer(placement: PluginUiContribution["placement"]): boolean {
-    return placement === "interaction" || placement === "main-pane" || placement === "session.main" || placement === "titlebar";
+    return placement === "main-pane" || placement === "session.main" || placement === "titlebar";
   }
 
   function disposeCurrent(): void {
@@ -230,6 +234,8 @@
     const bridge = providerSession;
     const isSessionIndicator = contribution.placement === "session.indicator";
     const isSessionMeta = contribution.placement === "session.meta";
+    const isInteraction = contribution.placement === "interaction";
+    const syncApi = includesHostApi(plugin, SYNC_HOST_API);
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
@@ -239,7 +245,7 @@
           ? "block h-4 w-4 border-0"
           : "block w-full border-0";
     frame.style.display = "block";
-    frame.style.width = isTitlebar ? "88px" : isSessionIndicator ? "16px" : isSessionMeta ? "0px" : "100%";
+    frame.style.width = isTitlebar ? "88px" : isSessionIndicator ? "16px" : isSessionMeta || isInteraction ? "0px" : "100%";
     frame.style.border = "0";
     // A content-sized frame shows the host surface around it, and its auto-height document lets it shrink.
     const isContentSized = contentSizedPlacements.includes(contribution.placement);
@@ -255,6 +261,12 @@
       frame.style.height = "16px";
       frame.style.pointerEvents = "none";
       frame.tabIndex = -1;
+    } else if (isInteraction) {
+      // It only drives host-drawn toasts and dialogs, so it draws nothing and takes no input.
+      frame.style.height = "0px";
+      frame.style.pointerEvents = "none";
+      frame.tabIndex = -1;
+      frame.setAttribute("aria-hidden", "true");
     } else if (fillsContainer(contribution.placement)) {
       frame.style.height = "100%";
     } else if (inDialog(contribution.placement)) {
@@ -278,6 +290,8 @@
         const pending = new Map();
         const registrations = new Map();
         const dataChangeListeners = new Set();
+        const taskDataChangeListeners = new Set();
+        const toastCallbacks = new Map();
         const sessionEventListeners = new Set();
         const send = (message) => parent.postMessage(message, "*");
         let contentHeightObserver = null;
@@ -424,6 +438,40 @@
             notify: (message, kind = "error") => send({ type: "notify", message, kind }),
           },
         };
+        if (${syncApi && mirrorsTasks(plugin)}) {
+          host.data.onTaskDataChanged = (listener) => {
+            taskDataChangeListeners.add(listener);
+            return () => taskDataChangeListeners.delete(listener);
+          };
+        }
+        if (${syncApi}) {
+          // Toast callbacks stay here; the host names them back by toast id and action key.
+          host.interaction = {
+            showToast: (toast) => {
+              const actions = toast.actions ?? [];
+              const dismiss = toast.dismiss ?? "enabled";
+              toastCallbacks.set(toast.id, {
+                actions: new Map(actions.map(({ key, run }) => [key, run])),
+                dismiss: typeof dismiss === "function" ? dismiss : null,
+              });
+              return request("toast-show", {
+                toast: {
+                  id: toast.id,
+                  kind: toast.kind,
+                  message: toast.message,
+                  detail: toast.detail,
+                  actions: actions.map(({ key, label }) => ({ key, label })),
+                  dismiss: typeof dismiss === "function" ? "notify" : dismiss,
+                },
+              });
+            },
+            dismissToast: (id) => {
+              toastCallbacks.delete(id);
+              return request("toast-dismiss", { id }).then(() => {});
+            },
+            openProjectForm: () => request("project-form"),
+          };
+        }
         // Only a provider's session UI controls its session, and hands it off only when its provider can.
         const sessionControls = (controls) => ({
           send: (text) => request("session-send", { text }),
@@ -449,6 +497,22 @@
             for (const listener of dataChangeListeners) listener();
             return;
           }
+          if (message.type === "task-data-changed") {
+            for (const listener of taskDataChangeListeners) listener();
+            return;
+          }
+          if (message.type === "toast-event") {
+            const callbacks = toastCallbacks.get(message.id);
+            // The host removed the toast, and a callback may show a new one under the same id.
+            toastCallbacks.delete(message.id);
+            const callback = message.dismiss ? callbacks?.dismiss : callbacks?.actions.get(message.action);
+            if (typeof callback === "function") {
+              Promise.resolve()
+                .then(callback)
+                .catch((error) => send({ type: "notify", message: String(error), kind: "error" }));
+            }
+            return;
+          }
           if (message.type === "session-event") {
             for (const listener of sessionEventListeners) listener(message.event);
             return;
@@ -472,6 +536,7 @@
             if (typeof cleanup === "function") cleanup();
             cleanup = null;
             sessionEventListeners.clear();
+            toastCallbacks.clear();
             contentHeightObserver?.disconnect();
             contentHeightObserver = null;
             removeEventListener("keydown", forwardEscapeToHost);
@@ -527,6 +592,7 @@
         ),
       );
     };
+    const toasts = syncApi ? createFrameToasts(`${plugin.id}:${contribution.id}`, (event) => frame.contentWindow?.postMessage(event, "*")) : null;
     const respond = (requestId: number | undefined, ok: boolean, value?: unknown): void => {
       if (requestId === undefined) return;
       frame.contentWindow?.postMessage(
@@ -582,6 +648,20 @@
         void serveSessionRequest(bridge, message)
           .then(() => respond(message.requestId, true, null))
           .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "toast-show" || message.type === "toast-dismiss" || message.type === "project-form") {
+        if (!toasts) {
+          respond(message.requestId, false, `host.interaction requires host API ${SYNC_HOST_API_VERSION}`);
+        } else if (message.type === "project-form") {
+          void openProjectForm()
+            .then((project) => respond(message.requestId, true, project && { id: project.id, name: project.name, path: project.path }))
+            .catch((error) => respond(message.requestId, false, error));
+        } else {
+          try {
+            respond(message.requestId, true, message.type === "toast-show" ? toasts.show(message.toast) : toasts.dismiss(message.id));
+          } catch (error) {
+            respond(message.requestId, false, error);
+          }
+        }
       } else if (message.type === "data-changed") {
         void plugins
           .dataChanged(plugin.id)
@@ -669,6 +749,9 @@
     };
 
     const refreshData = (): void => frame.contentWindow?.postMessage({ type: "data-changed" }, "*");
+    const unsubscribeTaskData = mirrorsTasks(plugin)
+      ? subscribe(taskDataChangeListeners, () => frame.contentWindow?.postMessage({ type: "task-data-changed" }, "*"))
+      : () => {};
     if (
       refreshedInPlacePlacements.includes(contribution.placement) ||
       (contribution.placement === "session.panel" && refreshesSessionPanelInPlace(plugin))
@@ -697,6 +780,8 @@
       window.removeEventListener("message", onMessage);
       unregisterSidebarRows();
       registrations.clear();
+      unsubscribeTaskData();
+      toasts?.dispose();
       frame.contentWindow?.postMessage({ type: "dispose" }, "*");
       frame.remove();
     };
@@ -843,7 +928,7 @@
   });
 
   $effect(() => {
-    if (plugin.id !== "jira" || contribution.placement !== "sidebar.section") return;
+    if (!mirrorsTasks(plugin)) return;
     getAllTasks();
     notify(taskDataChangeListeners);
   });
@@ -891,9 +976,7 @@
 <div
   class={
     contribution.placement === "interaction"
-      ? plugin.source_kind === "builtin"
-        ? "pointer-events-none"
-        : "h-full w-full pointer-events-auto"
+      ? "pointer-events-none"
       : fillsContainer(contribution.placement) || inDialog(contribution.placement)
         ? "h-full w-full"
         : contribution.placement === "session.indicator"
@@ -903,7 +986,7 @@
             : "w-full"
   }
   tabindex="-1"
-  role={inSessionRow(contribution.placement) ? undefined : "region"}
+  role={inSessionRow(contribution.placement) || contribution.placement === "interaction" ? undefined : "region"}
   aria-label={`${plugin.name} · ${contribution.label}`}
   data-plugin-ui-contribution={`${plugin.id}:${contribution.id}`}
   data-plugin-sidebar-contribution={contribution.placement.startsWith("sidebar.") ? "" : undefined}

@@ -60,6 +60,14 @@ describe("toasts", () => {
     expect(getToasts()).toHaveLength(2);
   });
 
+  it("never merges a toast its caller names by id", () => {
+    showToast("Synced", "info");
+    const id = showToast({ id: "plugin:linear:sync", message: "Synced", kind: "info" });
+
+    expect(id).toBe("plugin:linear:sync");
+    expect(getToasts().map((toast) => toast.count)).toEqual([1, 1]);
+  });
+
   it("auto-dismisses success toasts after 3s and keeps errors", () => {
     showToast("Done", "success");
     showToast("Broken");

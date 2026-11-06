@@ -6,7 +6,7 @@ import type {
   TaskItem,
 } from "./types";
 import type { PluginSidebarNavRow } from "./plugin-sidebar-navigation.svelte";
-import type { ToastOptions } from "./toasts.svelte";
+import type { ToastKind, ToastOptions } from "./toasts.svelte";
 
 export interface PluginModalControls {
   close(): void;
@@ -101,6 +101,30 @@ export interface PluginUiHost {
     handoff?(): Promise<void>;
     handback?(): Promise<void>;
   };
+}
+
+/** A toast a local plugin frame shows with `context.host.interaction.showToast` (host API v7). */
+export interface PluginFrameToast {
+  /** Scoped to the plugin; showing an id again replaces that toast in place. */
+  id: string;
+  kind?: ToastKind;
+  message: string;
+  detail?: string;
+  /** `key` is a single lowercase letter or "Enter"; `run` runs in the frame when the user picks the action. */
+  actions?: Array<{ key: string; label: string; run(): void | Promise<void> }>;
+  /** "enabled" (the default) lets the user dismiss it, "disabled" refuses, and a function also runs in the frame once the user dismissed it. */
+  dismiss?: "enabled" | "disabled" | (() => void | Promise<void>);
+}
+
+export type PluginFrameProject = Pick<Project, "id" | "name" | "path">;
+
+/** `context.host.interaction` in a local plugin frame, present on host API v7 or later. */
+export interface PluginFrameInteraction {
+  /** Resolves with the toast's id once it shows. */
+  showToast(toast: PluginFrameToast): Promise<string>;
+  dismissToast(id: string): Promise<void>;
+  /** Opens PlaneAI's Add Project form; resolves with the new project, or null when cancelled. */
+  openProjectForm(): Promise<PluginFrameProject | null>;
 }
 
 /** Why a session request failed, as the host's `ProviderErrorCode` names it. */

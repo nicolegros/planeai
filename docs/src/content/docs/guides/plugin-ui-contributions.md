@@ -21,7 +21,7 @@ my-plugin/
     └── entry.js
 ```
 
-`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers), `planeai.plugin-host.v4` for plugins that use the `sessions.start` capability or the `dialog` placement, `planeai.plugin-host.v5` for a `session.meta` slot with a tooltip that opens the plugin's session panel, or `planeai.plugin-host.v6` for plugins that contribute [tools](#tools) to agents (each version includes the ones before it); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
+`planeai-plugin.json` is strict: unknown fields are rejected. `id` may contain only lowercase ASCII letters, digits, and hyphens. The schema must be `planeai.plugin.v1`. Use `planeai.plugin-host.v1` for legacy host APIs, `planeai.plugin-host.v2` for plugins that require the dynamically focused recipient API, the unstable `planeai.plugin-host.v3` for plugins that declare [providers](#providers), `planeai.plugin-host.v4` for plugins that use the `sessions.start` capability or the `dialog` placement, `planeai.plugin-host.v5` for a `session.meta` slot with a tooltip that opens the plugin's session panel, `planeai.plugin-host.v6` for plugins that contribute [tools](#tools) to agents, or `planeai.plugin-host.v7` for plugins that mirror an external tracker's issues as PlaneAI tasks with the `tasks.sync` capability and the [interaction bridge](#interaction-bridge-host-api-v7) (each version includes the ones before it); local packages must use `source_kind: "local"`, `backend_entrypoints`, and `ui_contributions` (the legacy `ui_entrypoint` is rejected).
 
 Every backend and UI path must be a package-relative file path: no absolute paths and no `..`. The active platform's backend must exist and be executable. On Unix, its executable mode is preserved in the imported copy.
 
@@ -112,7 +112,7 @@ Any other URL, and a release asset for which GitHub reports no digest, installs 
 
 ### Capabilities
 
-Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `sessions.start`, `tasks.read`, `tasks.create`, `tasks.transition`, `task-events`, `providers`, and `tools`; duplicates and all other local capabilities are rejected.
+Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `sessions.start`, `tasks.read`, `tasks.create`, `tasks.transition`, `tasks.sync`, `task-events`, `providers`, and `tools`; duplicates and all other local capabilities are rejected.
 
 - `settings` permits sidecar callbacks `host.settings.get` and `host.settings.replace`.
 - `projects.read` permits `host.projects.list`, returning non-hidden active projects.
@@ -132,7 +132,7 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
   A request PlaneAI refuses (bad params, an unknown or hidden project, a missing or foreign parent, a `start` naming a provider nothing configured or installed provides) answers `-32602`, which retrying cannot fix.
   A `start` naming the provider of an installed plugin that is not running, as right after PlaneAI launches, answers `-32004` and creates nothing, so retry it later.
   `-32603` is a host failure worth retrying.
-  `host.tasks.createChild` requires `project_path` (or `projectPath`), `parent_key` (or `parentKey`), `title`, `description`, and a plugin-scoped `operation_id` (or `operationId`); PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
+  `host.tasks.createChild` requires `project_path` (or `projectPath`), `parent_key` (or `parentKey`), `title`, `description`, and a plugin-scoped `operation_id` (or `operationId`); PlaneAI verifies the parent belongs to the project, or is a synced task the calling plugin owns (see `tasks.sync`), and returns the originally created child when the same operation is retried.
   Both return `{ "task": ... }`.
 - `sessions.start` lets `host.tasks.create` start the new task's session, as the task form's "Start session immediately" does.
   Add `start: { "provider"?: string | null, "use_worktree"?: boolean, "auto_approve"?: boolean }` to the request; omitted fields default to the configured default provider, a worktree, and auto-approve.
@@ -146,6 +146,18 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
   `sessions.start` also permits `host.sessions.providers`, returning `{ "default": "claude", "providers": [{ "key", "label", "auto_approve" }] }`: the configured providers, then those of running plugins, as the task form lists them.
   `auto_approve` is `false` for a plugin provider that does not support it.
   With the `local` session backend the agent spawns only when a terminal view attaches, so a session started this way waits until the user opens it.
+- `tasks.sync` (host API v7) is for a plugin that mirrors an external tracker's issues as PlaneAI tasks, as the bundled Jira plugin does.
+  It permits `host.task.create` and `host.task.update`, and the UI's `rpc.call("task.create")` and `rpc.call("task.update")`.
+  `host.task.create` takes `{ "key", "title", "description"?, "status"?, "priority"?, "tags"? }` and creates a project-less task with exactly that key.
+  `key` is required and must look like `PREFIX-N`: an uppercase letter, then uppercase letters or digits, a dash, and a number without leading zeros, as in `ENG-123`.
+  `status` is `todo`, `in_progress`, `in_review`, or `done` (default `todo`), and `priority` an integer (default `0`).
+  The task lives in a namespace of the calling plugin's own, which makes the plugin its owner.
+  A key one of the plugin's own tasks already holds rewrites that task as the create describes it, keeping its status unless `status` is given, so a reinstalled plugin resumes the tasks it created; a key any other task holds answers `-32005`, which no retry fixes, so report it once rather than on every sync.
+  `host.task.update` takes `{ "key", "title"?, "description"?, "status"?, "priority"?, "tags"? }`, changes only the fields given, and succeeds only on a task the calling plugin owns; a key another task holds answers `-32005`, and one no task holds answers not granted (`-32003`).
+  Both return the task.
+  Children go under a synced task with `host.tasks.createChild`, from any project, since the task belongs to none.
+  A project's own task numbers skip keys synced tasks hold, so a tracker key like `PLA-12` never collides with a project's `PLA` tasks.
+  Removing the plugin leaves its tasks as they are.
 - `tasks.transition` permits `host.sessions.transitionLinkedTask` with `{ "session_id", "status" }`. PlaneAI resolves the task strictly from that session's linked task key, changes its lifecycle status, and emits the normal task lifecycle batch (including automatic parent completion).
 - `task-events` permits event delivery only when the handshake also subscribes to `task.lifecycle`.
 - `providers` permits declaring `providers` (host API v3 only) and the provider session contract described in [Providers](#providers). It is required exactly when `providers` is declared.
@@ -182,9 +194,9 @@ Ignore params and features you do not know; newer hosts add them.
 Response IDs must exactly correlate with the request ID. Return either `result` or a JSON-RPC `error`, not both. PlaneAI sends the reserved `plugin.shutdown` during disable/reload/app shutdown; acknowledge it and exit promptly. Do not expose or invoke `plugin.handshake` or `plugin.shutdown` from plugin UI.
 
 A sidecar may make a host callback while PlaneAI is waiting for its response. Send a normal JSON-RPC request on stdout, wait for the correlated host response on stdin, then finish the original request.
-A failed callback answers with a JSON-RPC error code: `-32601` for an unknown host method, `-32003` for a capability the plugin was not granted, `-32602` for invalid params, `-32004` for a valid request PlaneAI cannot serve yet and the plugin should retry later, and `-32603` for anything else. `fixture.persistSettings` demonstrates `host.settings.get` followed by `host.settings.replace`. Keep callback IDs distinct from the active request ID and continue reading until the matching response arrives.
+A failed callback answers with a JSON-RPC error code: `-32601` for an unknown host method, `-32003` for a capability the plugin was not granted, `-32602` for invalid params, `-32004` for a valid request PlaneAI cannot serve yet and the plugin should retry later, `-32005` for a `tasks.sync` create or update under a key another task holds, and `-32603` for anything else. `fixture.persistSettings` demonstrates `host.settings.get` followed by `host.settings.replace`. Keep callback IDs distinct from the active request ID and continue reading until the matching response arrives.
 
-Handshake and ordinary RPC calls have a five-second deadline; provider methods have [their own](#providers). On deadline expiry, PlaneAI sends the JSON-RPC `$/cancelRequest` notification with `{ "id": <original request ID> }`. Keep reading stdin while work is active; cancel cooperatively and return the original request's JSON-RPC error `{ "code": -32800, "message": "request cancelled" }` within three seconds. PlaneAI treats any other response or no cancellation response as a failed runtime and stops it. `plugin.shutdown` also has a three-second grace period before the process is killed. Do not define a competing cancellation wire format in v1.
+Handshake and ordinary RPC calls have a five-second deadline; provider methods have [their own](#providers). The method a manifest declares as its `background_service` has 40 minutes, whether its interval or a UI call runs it. On deadline expiry, PlaneAI sends the JSON-RPC `$/cancelRequest` notification with `{ "id": <original request ID> }`. Keep reading stdin while work is active; cancel cooperatively and return the original request's JSON-RPC error `{ "code": -32800, "message": "request cancelled" }` within three seconds. PlaneAI treats any other response or no cancellation response as a failed runtime and stops it. `plugin.shutdown` also has a three-second grace period before the process is killed. Do not define a competing cancellation wire format in v1.
 
 The host supplies `PLANEAI_PLUGIN_DATA_DIR` and `PLANEAI_PLUGIN_SECRETS_DIR`. Store public, replaceable plugin state in the former. Keep secrets backend-only in the latter: the UI settings bridge and sidecar settings callback never return secret files. The fixture's `fixture.status` reports both paths only to demonstrate their presence; real plugins should not surface secret paths or contents to UI.
 
@@ -447,14 +459,16 @@ For example, local UI CSS can adopt or intentionally customize the host theme:
 - `call(method, params?)` — RPC scoped to the owning sidecar. Lifecycle methods are reserved.
 - `settings.get<T extends Record<string, unknown>>()` and `settings.replace<T>(settings)` — typed public JSON-object settings. These are the UI counterpart to the capability-gated sidecar settings callbacks; they never expose secrets.
 - `data.changed()` - tells PlaneAI the plugin's data changed, as do each run of the [background service](#background-service) and each call of a [tool](#tools) that is not read-only. A running `sidebar.section` remounts after this event.
-- `data.onChanged(listener)` returns an unsubscribe function and calls `listener` when the plugin's data changed. A local `session.indicator`, `session.meta`, `sidebar.header`, `main-pane`, `dialog`, or `titlebar` frame receives it in place and keeps its state, so subscribe to refresh what it shows; so does a local `session.panel` on host API `planeai.plugin-host.v5` or later, while an older one remounts instead. Other local frames never call it.
+- `data.onChanged(listener)` returns an unsubscribe function and calls `listener` when the plugin's data changed. A local `session.indicator`, `session.meta`, `sidebar.header`, `main-pane`, `dialog`, `titlebar`, or `interaction` frame receives it in place and keeps its state, so subscribe to refresh what it shows; so does a local `session.panel` on host API `planeai.plugin-host.v5` or later, while an older one remounts instead. Other local frames never call it.
 - `navigation.open(pluginId, contributionId)`, `navigation.close()`, and `navigation.openPreferences()`.
 - `sidebar.register(rows)`, `sidebar.select(rowId)`, and `sidebar.handleKeydown(event)` for sidebar navigation contributions. Always call the returned unregister function from your mount disposer.
+- `interaction` on host API `planeai.plugin-host.v7` or later, and `data.onTaskDataChanged(listener)` for a `tasks.sync` plugin, described in [Interaction bridge](#interaction-bridge-host-api-v7).
 
 The fixture UI calls `context.host.call("fixture.status")`, loads a saved greeting with `context.host.settings.get()`, replaces it when **Save greeting** is selected, calls `data.changed()`, and removes its click handler in its disposer.
 
 Each `ui_contributions` item requires a unique safe `id`, `label`, `placement`, and `entrypoint`.
-Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, `main-pane`, `dialog`, `session.panel`, `session.indicator`, `session.meta`, and `titlebar`.
+Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, `main-pane`, `dialog`, `session.panel`, `session.indicator`, `session.meta`, `titlebar`, and `interaction`.
+An `interaction` frame requires host API `planeai.plugin-host.v7`, is mounted for as long as its plugin runs, draws nothing, and takes no pointer input or focus: it drives host-drawn toasts and forms through the [interaction bridge](#interaction-bridge-host-api-v7).
 Sidebar contributions may set integer `order`.
 `session.indicator` and `session.meta` are slots drawn on every sidebar row that has a session, with that row's session context; they take no shortcut and no order, and their frames get no pointer events and no focus.
 A `session.indicator` is a 16px square beside the row's status.
@@ -484,6 +498,24 @@ Use the placement's available space conservatively; the host owns focus, navigat
 Inside a local plugin frame, PlaneAI forwards Cmd/Ctrl chords to its own shortcut router, so app shortcuts such as Mod+[ keep working while the frame has focus.
 Call `preventDefault()` on a chord to keep it for your UI; Ctrl+Tab and Mod+N always reach PlaneAI.
 A provider session's UI owns the keyboard like a terminal: PlaneAI takes focus out of its frame when the sidebar or a dialog takes over, and gives it back when its pane does.
+
+### Interaction bridge (host API v7)
+
+On host API `planeai.plugin-host.v7` or later, every local frame's `context.host` also has `interaction`, and a `tasks.sync` plugin's also has `data.onTaskDataChanged`; on older host APIs both are absent, and PlaneAI refuses the underlying messages.
+
+- `interaction.showToast({ id, kind?, message, detail?, actions?, dismiss? })` shows a toast PlaneAI draws and resolves with `id` once it shows.
+  `id` is scoped to the frame that shows it, so it never collides with another plugin's or another frame's, and showing the same `id` again replaces that toast in place.
+  `kind` is `info` (the default), `success`, `warning`, or `error`.
+  `actions` is a list of `{ key, label, run }`, where `key` is a single lowercase letter other than `d` or `c`, or `Enter`, and `run` is a function PlaneAI calls in your frame when the user picks the action.
+  `dismiss` is `"enabled"` (the default) to let the user dismiss the toast, `"disabled"` to refuse, or a function PlaneAI calls in your frame once the user dismissed it.
+  Picking an action or dismissing removes the toast before your callback runs, so the callback may show the next toast under the same `id`.
+  A callback that throws or rejects shows its error as a PlaneAI notification.
+- `interaction.dismissToast(id)` removes one of your toasts without running its callbacks.
+- `interaction.openProjectForm()` opens PlaneAI's Add Project form and resolves with the new project's `{ id, name, path }`, or `null` when the user cancels.
+- `data.onTaskDataChanged(listener)` returns an unsubscribe function and calls `listener` whenever PlaneAI's task data changes, for a plugin holding `tasks.sync`, for example to refresh child counts beside synced tasks.
+
+When your frame goes away, as when the plugin stops or reloads, PlaneAI removes the toasts it showed, since their callbacks went with it.
+The TypeScript shapes are `PluginFrameInteraction`, `PluginFrameToast`, and `PluginFrameProject` in `src/lib/plugin-sdk.ts`.
 
 ## Install, use, reload, and remove
 
@@ -559,7 +591,7 @@ Use the checked-in scenarios as executable examples. For a plugin that declares 
 ## v1 limitations and author checklist
 
 - Plugins are trusted and unsandboxed; network, process, filesystem, and credential safety are the author's responsibility.
-- Local plugin capabilities are limited to the explicit contracts above. `sessions.actions`, `sessions.advisories`, and `sessions.complete` are host-rendered requests, while `tasks.transition` is restricted to the linked task of an identified session; no direct session control/output, arbitrary task update, storage bridge, or arbitrary sidebar-navigation capability is available to local packages.
+- Local plugin capabilities are limited to the explicit contracts above. `sessions.actions`, `sessions.advisories`, and `sessions.complete` are host-rendered requests, while `tasks.transition` is restricted to the linked task of an identified session and `tasks.sync` to the tasks the plugin created; no direct session control/output, arbitrary task update, storage bridge, or arbitrary sidebar-navigation capability is available to local packages.
 - UI is a single self-contained ESM file loaded into a ShadowRoot. No relative imports, asset graph, global PlaneAI DOM access, or direct Tauri IPC.
 - UI settings are public JSON objects; secrets are backend-only. Never log secrets, including to stderr.
 - Stdout must remain newline-framed JSON-RPC. Correlate IDs, stay below 64 KiB, respond to shutdown, and treat host callbacks as nested RPC.

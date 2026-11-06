@@ -8,9 +8,10 @@
     closeOnEscape?: boolean;
     autofocus?: boolean;
     hostApiVersion?: string;
+    capabilities?: string[];
   }
 
-  let { placement = "sidebar.section", closeOnEscape = false, autofocus = false, hostApiVersion = "planeai.plugin-host.v1" }: Props = $props();
+  let { placement = "sidebar.section", closeOnEscape = false, autofocus = false, hostApiVersion = "planeai.plugin-host.v1", capabilities = ["settings", "tasks.read", "task-events"] }: Props = $props();
   let plugin = $state<PluginInventory>({
     id: "local-fixture",
     name: "Local Fixture",
@@ -18,7 +19,7 @@
     host_api_version: untrack(() => hostApiVersion),
     source_kind: "local",
     backend_entrypoint: "bin/planeai-plugin-fixture",
-    capabilities: ["settings", "tasks.read", "task-events"],
+    capabilities: untrack(() => capabilities),
     ui_contributions: [],
     providers: [],
     installed_hash: "fixture-hash",

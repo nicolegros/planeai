@@ -235,6 +235,7 @@ describe("navigation", () => {
         id: "jira",
         name: "Jira",
         state: "running",
+        capabilities: ["tasks.read", "tasks.create", "tasks.update"],
         ui_contributions: [
           { id: "preferences", label: "Jira", placement: "preferences", entrypoint: "ui.js" },
         ],

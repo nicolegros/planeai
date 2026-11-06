@@ -32,9 +32,9 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 // perform that transition, and add a comment. Each network request is bounded
 // by the Jira client at 20 seconds, so this must cover the full sequence.
 const JIRA_LIFECYCLE_RPC_TIMEOUT: Duration = Duration::from_secs(90);
-// Synchronization can legitimately fetch up to 100 Jira pages before its first
-// nested host task request. Keep a finite watchdog, but allow that bounded fetch.
-const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(40 * 60);
+// A background service such as a tracker sync can legitimately fetch many pages before its
+// first nested host request. Keep a finite watchdog, but allow that bounded fetch.
+const BACKGROUND_SERVICE_RPC_TIMEOUT: Duration = Duration::from_secs(40 * 60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_PLUGIN_SESSION_PROMPT_CHARS: usize = 100_000;
@@ -172,6 +172,8 @@ pub enum PluginHostCapability {
     TasksTransition,
     #[serde(rename = "tasks.update")]
     TasksUpdate,
+    #[serde(rename = "tasks.sync")]
+    TasksSync,
     #[serde(rename = "storage")]
     Storage,
     #[serde(rename = "sidebar.navigation")]
@@ -396,6 +398,7 @@ fn validate_capabilities(
                     | PluginHostCapability::TasksRead
                     | PluginHostCapability::TasksCreate
                     | PluginHostCapability::TasksTransition
+                    | PluginHostCapability::TasksSync
                     | PluginHostCapability::TaskEvents
                     | PluginHostCapability::Providers
                     | PluginHostCapability::Tools
@@ -1512,9 +1515,13 @@ fn validate_plugin_session_completion(
     Ok(completion)
 }
 
-fn request_timeout(method: &str) -> Duration {
+/// The deadline for `method`; `background_method` is the plugin's declared background
+/// service, which keeps its long deadline when the UI runs it on demand.
+fn request_timeout(method: &str, background_method: Option<&str>) -> Duration {
+    if background_method == Some(method) {
+        return BACKGROUND_SERVICE_RPC_TIMEOUT;
+    }
     match method {
-        "jira.syncNow" => JIRA_SYNC_RPC_TIMEOUT,
         "plugin.taskLifecycle" | "plugin.sessionLifecycle" => JIRA_LIFECYCLE_RPC_TIMEOUT,
         _ => planeai_plugin_contract::provider::request_timeout(method).unwrap_or(RPC_TIMEOUT),
     }
@@ -1522,7 +1529,7 @@ fn request_timeout(method: &str) -> Duration {
 
 impl RuntimeProcess {
     async fn request(&self, method: &str, params: Value) -> Result<Value, PluginRpcError> {
-        self.request_with_timeout(method, params, request_timeout(method))
+        self.request_with_timeout(method, params, request_timeout(method, None))
             .await
     }
 
@@ -2052,6 +2059,30 @@ async fn execute_host_task(
     method: &str,
     params: Value,
 ) -> Result<Value, CallbackError> {
+    let creates = method == "host.task.create";
+    if creates || method == "host.task.update" {
+        let writer = KeyedTaskWriter::granted(plugin_id, capabilities, creates)
+            .ok_or(CallbackError::NotGranted)?;
+        let write = TaskWrite::parse(creates, &params)?;
+        return match writer {
+            KeyedTaskWriter::BundledJira => {
+                let data_dir = data_dir.to_path_buf();
+                blocking_host_task(move || write_bundled_jira_task(&data_dir, write)).await
+            }
+            KeyedTaskWriter::Owner => {
+                let plugin_id = plugin_id.to_string();
+                commands::blocking(move || {
+                    Ok(write_owned_task(
+                        &planeai_paths::db_path(),
+                        &plugin_id,
+                        write,
+                    ))
+                })
+                .await
+                .map_err(CallbackError::Internal)?
+            }
+        };
+    }
     let required = match method {
         "host.settings.get" | "host.settings.replace" | "host.settings.patch" => {
             PluginHostCapability::Settings
@@ -2064,15 +2095,10 @@ async fn execute_host_task(
             PluginHostCapability::TasksRead
         }
         "host.tasks.create" | "host.tasks.createChild" => PluginHostCapability::TasksCreate,
-        "host.task.create" => PluginHostCapability::TasksCreate,
-        "host.task.update" => PluginHostCapability::TasksUpdate,
         _ => return Err(CallbackError::NotFound),
     };
     if !capabilities.contains(&required)
-        || (matches!(
-            method,
-            "host.task.create" | "host.task.update" | "host.jira.legacyIssue.matches"
-        ) && plugin_id != JIRA_PLUGIN_ID)
+        || (method == "host.jira.legacyIssue.matches" && plugin_id != JIRA_PLUGIN_ID)
     {
         return Err(CallbackError::NotGranted);
     }
@@ -2428,53 +2454,178 @@ async fn run_host_task(
         })
         .await;
     }
-    let write = match method {
-        "host.task.create" => TaskWrite::Create(task_create_params(&params)?),
-        "host.task.update" => {
-            let (key, update) = task_update_params(&params)?;
-            TaskWrite::Update(key, update)
+    Err(CallbackError::NotFound)
+}
+
+/// Who may write a task by its key through `host.task.create` and `host.task.update`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyedTaskWriter {
+    /// The bundled Jira plugin: its sidecar's link table guards its writes, and its tasks take
+    /// the prefix its `site` setting derives.
+    BundledJira,
+    /// A `tasks.sync` plugin: it creates tasks under keys nobody holds and updates only those.
+    Owner,
+}
+
+impl KeyedTaskWriter {
+    fn granted(
+        plugin_id: &str,
+        capabilities: &HashSet<PluginHostCapability>,
+        creates: bool,
+    ) -> Option<Self> {
+        if capabilities.contains(&PluginHostCapability::TasksSync) {
+            return Some(Self::Owner);
         }
-        _ => return Err(CallbackError::NotFound),
-    };
-    let data_dir = data_dir.to_path_buf();
-    blocking_host_task(move || {
-        let settings: Value = serde_json::from_reader(
-            std::fs::File::open(data_dir.join("settings.json")).map_err(|error| {
-                format!("failed to read plugin settings for task capability: {error}")
-            })?,
-        )
-        .map_err(|error| format!("failed to parse plugin settings for task capability: {error}"))?;
-        let site = settings
-            .get("site")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let prefix = site
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-            .split('.')
-            .next()
-            .filter(|value| !value.is_empty())
-            .map(planeai_tasks::sqlite::derive_prefix)
-            .unwrap_or_else(|| "JIRA".to_string());
-        let path = planeai_paths::db_path();
-        let repo = SqliteRepository::open(
-            path.to_str().ok_or("invalid PlaneAI task database path")?,
-            &prefix,
-        )
-        .map_err(|error| error.to_string())?;
-        let task = match write {
-            TaskWrite::Create(create) => repo.create(create),
-            TaskWrite::Update(key, update) => repo.update(&key, update),
-        }
-        .map_err(|error| error.to_string())?;
-        serde_json::to_value(task).map_err(|error| error.to_string())
-    })
-    .await
+        let bundled = plugin_id == JIRA_PLUGIN_ID
+            && capabilities.contains(&PluginHostCapability::TasksUpdate)
+            && (!creates || capabilities.contains(&PluginHostCapability::TasksCreate));
+        bundled.then_some(Self::BundledJira)
+    }
 }
 
 enum TaskWrite {
     Create(CreateParams),
     Update(String, UpdateParams),
+}
+
+impl TaskWrite {
+    fn parse(creates: bool, params: &Value) -> Result<Self, CallbackError> {
+        if creates {
+            return Ok(Self::Create(task_create_params(params)?));
+        }
+        let (key, update) = task_update_params(params)?;
+        Ok(Self::Update(key, update))
+    }
+}
+
+fn write_bundled_jira_task(data_dir: &Path, write: TaskWrite) -> Result<Value, String> {
+    let settings: Value =
+        serde_json::from_reader(std::fs::File::open(data_dir.join("settings.json")).map_err(
+            |error| format!("failed to read plugin settings for task capability: {error}"),
+        )?)
+        .map_err(|error| format!("failed to parse plugin settings for task capability: {error}"))?;
+    let site = settings
+        .get("site")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let prefix = site
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('.')
+        .next()
+        .filter(|value| !value.is_empty())
+        .map(planeai_tasks::sqlite::derive_prefix)
+        .unwrap_or_else(|| "JIRA".to_string());
+    let path = planeai_paths::db_path();
+    let repo = SqliteRepository::open(
+        path.to_str().ok_or("invalid PlaneAI task database path")?,
+        &prefix,
+    )
+    .map_err(|error| error.to_string())?;
+    let task = match write {
+        TaskWrite::Create(create) => repo.create(create),
+        TaskWrite::Update(key, update) => repo.update(&key, update),
+    }
+    .map_err(|error| error.to_string())?;
+    serde_json::to_value(task).map_err(|error| error.to_string())
+}
+
+/// The project-less namespace a `tasks.sync` plugin's tasks live in, which makes it their owner;
+/// no project prefix has a colon.
+fn synced_task_prefix(plugin_id: &str) -> String {
+    format!("plugin:{plugin_id}")
+}
+
+/// A `PREFIX-N` key, as the task store writes them: an uppercase letter, then uppercase letters or
+/// digits, a dash, and a number without leading zeros.
+fn is_synced_task_key(key: &str) -> bool {
+    let Some((prefix, number)) = key.split_once('-') else {
+        return false;
+    };
+    let mut prefix_chars = prefix.chars();
+    prefix_chars
+        .next()
+        .is_some_and(|first| first.is_ascii_uppercase())
+        && prefix_chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        && !number.starts_with('0')
+        && !number.is_empty()
+        && number.chars().all(|c| c.is_ascii_digit())
+}
+
+/// A `tasks.sync` write, which reaches only tasks in its plugin's namespace. A create under a key
+/// that namespace already holds rewrites that task's fields, keeping its status unless given, so a
+/// reinstalled plugin resumes its tasks.
+fn write_owned_task(
+    db_path: &Path,
+    plugin_id: &str,
+    write: TaskWrite,
+) -> Result<Value, CallbackError> {
+    let mut conn = Connection::open(db_path).map_err(internal)?;
+    let prefix = synced_task_prefix(plugin_id);
+    let holder = |conn: &Connection, key: &str| {
+        conn.query_row(
+            "SELECT project_prefix FROM tasks WHERE key = ?1",
+            params![key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(internal)
+    };
+    let task = match write {
+        TaskWrite::Create(create) => {
+            let key = create
+                .key
+                .clone()
+                .filter(|key| is_synced_task_key(key))
+                .ok_or_else(|| invalid_params("synced task create requires a PREFIX-N key"))?;
+            let transaction = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(internal)?;
+            let inserted = planeai_tasks::sqlite::insert_task(&transaction, &prefix, &create)
+                .map_err(internal)?
+                .inserted;
+            if !inserted && holder(&transaction, &key)?.as_deref() != Some(prefix.as_str()) {
+                return Err(CallbackError::KeyTaken(format!(
+                    "task {key} already exists"
+                )));
+            }
+            transaction.commit().map_err(internal)?;
+            let repo = SqliteRepository::on_migrated(conn, &prefix);
+            if inserted {
+                repo.get(&key)
+            } else {
+                repo.update(
+                    &key,
+                    UpdateParams {
+                        title: Some(create.title),
+                        description: Some(create.description),
+                        status: create.status,
+                        priority: Some(create.priority),
+                        tags: Some(create.tags),
+                        ..Default::default()
+                    },
+                )
+            }
+        }
+        TaskWrite::Update(key, update) => {
+            match holder(&conn, &key)? {
+                Some(held) if held == prefix => {}
+                Some(_) => {
+                    return Err(CallbackError::KeyTaken(format!(
+                        "task {key} belongs to another owner"
+                    )))
+                }
+                None => return Err(CallbackError::NotGranted),
+            }
+            SqliteRepository::on_migrated(conn, &prefix).update(&key, update)
+        }
+    };
+    match task {
+        Ok(task) => serde_json::to_value(task).map_err(internal),
+        // The user deleted the task since its plugin last saw it.
+        Err(planeai_tasks::provider::Error::NotFound) => Err(CallbackError::NotGranted),
+        Err(error) => Err(internal(error)),
+    }
 }
 
 fn task_status_param(params: &Value) -> Result<Option<Status>, CallbackError> {
@@ -2864,7 +3015,8 @@ fn insert_plugin_task(
             .optional()
             .map_err(internal)?
             .ok_or_else(|| invalid_params("parent task was not found"))?;
-        if parent_prefix != project.prefix {
+        // A synced task belongs to no project, so its plugin assigns children to it from any.
+        if parent_prefix != project.prefix && parent_prefix != synced_task_prefix(plugin_id) {
             return Err(invalid_params(
                 "parent task does not belong to the selected project",
             ));
@@ -3305,14 +3457,8 @@ impl PluginRuntimeSupervisor {
         params: Value,
         host_controlled: bool,
     ) -> Result<Value, PluginRpcError> {
-        self.call_internal_within(
-            plugin_id,
-            method,
-            params,
-            host_controlled,
-            request_timeout(method),
-        )
-        .await
+        self.call_internal_within(plugin_id, method, params, host_controlled, None)
+            .await
     }
 
     async fn call_internal_within(
@@ -3321,14 +3467,14 @@ impl PluginRuntimeSupervisor {
         method: &str,
         params: Value,
         host_controlled: bool,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> Result<Value, PluginRpcError> {
         if !host_controlled && is_host_controlled_plugin_method(method) {
             return Err("plugin lifecycle methods are reserved for PlaneAI"
                 .to_string()
                 .into());
         }
-        let process = {
+        let (process, timeout) = {
             let _lifecycle = self.lifecycle.lock().await;
             let inventory = self.inventory(plugin_id).await?.ok_or_else(|| {
                 PluginRpcError::NotRunning(format!("plugin inventory entry not found: {plugin_id}"))
@@ -3338,7 +3484,14 @@ impl PluginRuntimeSupervisor {
                     "plugin {plugin_id} is not running"
                 )));
             }
-            self.processes.lock().await.get(plugin_id).cloned()
+            let background_method = inventory
+                .background_service
+                .as_ref()
+                .map(|service| service.method.as_str());
+            (
+                self.processes.lock().await.get(plugin_id).cloned(),
+                timeout.unwrap_or_else(|| request_timeout(method, background_method)),
+            )
         };
         let process = process.ok_or_else(|| {
             PluginRpcError::NotRunning(format!("plugin runtime was not available: {plugin_id}"))
@@ -3625,7 +3778,7 @@ impl PluginRuntimeSupervisor {
                     planeai_plugin_contract::TOOL_CALL,
                     params,
                     true,
-                    timeout,
+                    Some(timeout),
                 )
                 .await
             }
@@ -4168,7 +4321,7 @@ impl PluginRuntimeSupervisor {
             loop {
                 tokio::select! {
                     _ = worker_cancel.cancelled() => return,
-                    outcome = process.request(&service.method, Value::Null) => match outcome {
+                    outcome = process.request_with_timeout(&service.method, Value::Null, BACKGROUND_SERVICE_RPC_TIMEOUT) => match outcome {
                         Ok(totals) => {
                             tracing::info!(plugin_id = %plugin_id, generation, method = %service.method, totals = ?totals, "plugin background service complete");
                             let changed_data = background_run_changed_data(&totals);
@@ -5569,15 +5722,26 @@ mod tests {
     }
 
     #[test]
-    fn jira_sync_and_lifecycle_use_extended_rpc_timeouts() {
-        assert_eq!(request_timeout("jira.syncNow"), JIRA_SYNC_RPC_TIMEOUT);
+    fn background_services_and_lifecycle_use_extended_rpc_timeouts() {
         assert_eq!(
-            request_timeout("plugin.taskLifecycle"),
+            request_timeout("jira.syncNow", Some("jira.syncNow")),
+            BACKGROUND_SERVICE_RPC_TIMEOUT
+        );
+        assert_eq!(
+            request_timeout("linear.syncNow", Some("linear.syncNow")),
+            BACKGROUND_SERVICE_RPC_TIMEOUT
+        );
+        assert_eq!(request_timeout("linear.syncNow", None), RPC_TIMEOUT);
+        assert_eq!(
+            request_timeout("plugin.taskLifecycle", None),
             JIRA_LIFECYCLE_RPC_TIMEOUT
         );
-        assert_eq!(request_timeout("jira.status"), RPC_TIMEOUT);
         assert_eq!(
-            request_timeout("provider.session.start"),
+            request_timeout("jira.status", Some("jira.syncNow")),
+            RPC_TIMEOUT
+        );
+        assert_eq!(
+            request_timeout("provider.session.start", None),
             Duration::from_secs(30)
         );
     }
@@ -5917,6 +6081,414 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error, CallbackError::NotGranted);
+    }
+
+    #[tokio::test]
+    async fn keyed_task_writes_need_tasks_sync_or_the_bundled_jira_grants() {
+        let data = tempfile::TempDir::new().unwrap();
+        let create_only = HashSet::from([
+            PluginHostCapability::TasksRead,
+            PluginHostCapability::TasksCreate,
+        ]);
+        let mut refusals = Vec::new();
+        for method in ["host.task.create", "host.task.update"] {
+            refusals.push(
+                execute_host_task(
+                    "linear",
+                    &create_only,
+                    data.path(),
+                    method,
+                    serde_json::json!({ "key": "ENG-1", "title": "t" }),
+                )
+                .await
+                .unwrap_err(),
+            );
+        }
+        assert_eq!(
+            refusals,
+            [CallbackError::NotGranted, CallbackError::NotGranted]
+        );
+        let jira_grants = HashSet::from([
+            PluginHostCapability::TasksCreate,
+            PluginHostCapability::TasksUpdate,
+        ]);
+        assert_eq!(
+            [
+                KeyedTaskWriter::granted(
+                    "linear",
+                    &HashSet::from([PluginHostCapability::TasksSync]),
+                    false
+                ),
+                KeyedTaskWriter::granted(JIRA_PLUGIN_ID, &jira_grants, true),
+                KeyedTaskWriter::granted("other", &jira_grants, true),
+            ],
+            [
+                Some(KeyedTaskWriter::Owner),
+                Some(KeyedTaskWriter::BundledJira),
+                None
+            ]
+        );
+    }
+
+    fn synced_task_database() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("planeai.db");
+        let conn = Connection::open(&path).unwrap();
+        crate::db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+        (dir, path)
+    }
+
+    fn sync(
+        db: &Path,
+        plugin_id: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, CallbackError> {
+        let write = TaskWrite::parse(method == "host.task.create", &params)?;
+        write_owned_task(db, plugin_id, write)
+    }
+
+    #[test]
+    fn a_tasks_sync_plugin_creates_a_keyed_task_and_updates_only_its_own() {
+        let (_dir, db) = synced_task_database();
+
+        let created = sync(
+            &db,
+            "linear",
+            "host.task.create",
+            serde_json::json!({
+                "key": "ENG-123",
+                "title": "Fix login",
+                "description": "Users cannot log in",
+                "status": "in_progress",
+                "priority": 3,
+                "tags": ["bug"],
+            }),
+        )
+        .unwrap();
+        let updated = sync(
+            &db,
+            "linear",
+            "host.task.update",
+            serde_json::json!({ "key": "ENG-123", "title": "Fix login on Safari", "status": "done" }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            (
+                &created["key"],
+                &created["title"],
+                &created["status"],
+                &created["priority"],
+                &created["tags"],
+                &created["parent_key"],
+            ),
+            (
+                &Value::from("ENG-123"),
+                &Value::from("Fix login"),
+                &Value::from("in_progress"),
+                &Value::from(3),
+                &serde_json::json!(["bug"]),
+                &Value::Null,
+            )
+        );
+        assert_eq!(
+            (
+                &updated["title"],
+                &updated["status"],
+                &updated["description"]
+            ),
+            (
+                &Value::from("Fix login on Safari"),
+                &Value::from("done"),
+                &Value::from("Users cannot log in"),
+            )
+        );
+    }
+
+    #[test]
+    fn a_tasks_sync_plugin_is_refused_tasks_it_does_not_own_and_keys_that_exist() {
+        let (_dir, db) = synced_task_database();
+        let conn = Connection::open(&db).unwrap();
+        let checkout = tempfile::TempDir::new().unwrap();
+        let project =
+            crate::db::create_project(&conn, "Demo", &checkout.path().to_string_lossy()).unwrap();
+        let local = insert_plugin_task(
+            &mut Connection::open(&db).unwrap(),
+            "routines",
+            top_level_request(&project.path, "op"),
+        )
+        .unwrap();
+        let local_key = local.task["task"]["key"].as_str().unwrap().to_string();
+        sync(
+            &db,
+            "linear",
+            "host.task.create",
+            serde_json::json!({ "key": "ENG-1", "title": "Linear issue" }),
+        )
+        .unwrap();
+
+        let refusals = [
+            sync(
+                &db,
+                "linear",
+                "host.task.update",
+                serde_json::json!({ "key": local_key, "title": "Taken over" }),
+            ),
+            sync(
+                &db,
+                "other",
+                "host.task.update",
+                serde_json::json!({ "key": "ENG-1", "title": "Taken over" }),
+            ),
+            sync(
+                &db,
+                "linear",
+                "host.task.update",
+                serde_json::json!({ "key": "ENG-404", "title": "Missing" }),
+            ),
+            sync(
+                &db,
+                "linear",
+                "host.task.create",
+                serde_json::json!({ "key": local_key, "title": "Collides" }),
+            ),
+            sync(
+                &db,
+                "other",
+                "host.task.create",
+                serde_json::json!({ "key": "ENG-1", "title": "Collides" }),
+            ),
+        ];
+
+        assert_eq!(
+            refusals,
+            [
+                Err(CallbackError::KeyTaken(format!(
+                    "task {local_key} belongs to another owner"
+                ))),
+                Err(CallbackError::KeyTaken(
+                    "task ENG-1 belongs to another owner".into()
+                )),
+                Err(CallbackError::NotGranted),
+                Err(CallbackError::KeyTaken(format!(
+                    "task {local_key} already exists"
+                ))),
+                Err(CallbackError::KeyTaken("task ENG-1 already exists".into())),
+            ]
+        );
+        let titles = conn
+            .prepare("SELECT key, title FROM tasks ORDER BY key")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            titles,
+            [
+                (local_key, "Weekly retro 2026-10-05".to_string()),
+                ("ENG-1".to_string(), "Linear issue".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_synced_task_create_requires_a_prefixed_numbered_key() {
+        let (_dir, db) = synced_task_database();
+        let refusal = |key: Value| {
+            sync(
+                &db,
+                "linear",
+                "host.task.create",
+                serde_json::json!({ "key": key, "title": "t" }),
+            )
+            .unwrap_err()
+        };
+        let expected =
+            CallbackError::InvalidParams("synced task create requires a PREFIX-N key".into());
+        for key in [
+            Value::Null,
+            "".into(),
+            "ENG".into(),
+            "eng-1".into(),
+            "ENG-0".into(),
+            "ENG-01".into(),
+            "1ENG-2".into(),
+            "ENG-1-2".into(),
+        ] {
+            assert_eq!(refusal(key.clone()), expected, "{key}");
+        }
+        assert_eq!(
+            sync(
+                &db,
+                "linear",
+                "host.task.create",
+                serde_json::json!({ "key": "T2-10", "title": "t" }),
+            )
+            .unwrap()["key"],
+            "T2-10"
+        );
+    }
+
+    #[test]
+    fn a_tasks_sync_plugin_can_assign_children_to_the_tasks_it_owns() {
+        let (_dir, db) = synced_task_database();
+        let mut conn = Connection::open(&db).unwrap();
+        let checkout = tempfile::TempDir::new().unwrap();
+        let project =
+            crate::db::create_project(&conn, "Demo", &checkout.path().to_string_lossy()).unwrap();
+        sync(
+            &db,
+            "linear",
+            "host.task.create",
+            serde_json::json!({ "key": "ENG-7", "title": "Parent" }),
+        )
+        .unwrap();
+        let child = |operation_id: &str| {
+            PluginTaskRequest::from_params(&serde_json::json!({
+                "project_path": project.path,
+                "operation_id": operation_id,
+                "title": "Child",
+                "parent_key": "ENG-7",
+            }))
+            .unwrap()
+        };
+
+        let owned = insert_plugin_task(&mut conn, "linear", child("a")).unwrap();
+        let foreign = insert_plugin_task(&mut conn, "other", child("b")).unwrap_err();
+
+        assert_eq!(owned.task["task"]["parent_key"], "ENG-7");
+        assert_eq!(
+            owned.lifecycle.unwrap().events,
+            vec![crate::task_lifecycle::TaskLifecycleEvent::ChildAssigned {
+                child_key: format!("{}-1", project.prefix),
+                parent_key: "ENG-7".into(),
+                is_first_child_assignment: true,
+            }]
+        );
+        assert_eq!(
+            foreign,
+            CallbackError::InvalidParams(
+                "parent task does not belong to the selected project".into()
+            )
+        );
+    }
+
+    #[test]
+    fn a_reinstalled_plugin_resumes_the_tasks_it_created() {
+        let (_dir, db) = synced_task_database();
+        let conn = Connection::open(&db).unwrap();
+        conn.execute(
+            "INSERT INTO plugin_inventory (id, name, version, host_api_version, source_kind, backend_entrypoint)
+             VALUES ('linear', 'Linear', '0.1.0', 'planeai.plugin-host.v7', 'local', 'bin/plugin')",
+            [],
+        )
+        .unwrap();
+        sync(
+            &db,
+            "linear",
+            "host.task.create",
+            serde_json::json!({
+                "key": "ENG-1",
+                "title": "Linear issue",
+                "description": "Old",
+                "status": "in_progress",
+                "priority": 1,
+                "tags": ["old"],
+            }),
+        )
+        .unwrap();
+
+        delete_local_inventory(&conn, "linear").unwrap();
+        let recreated = sync(
+            &db,
+            "linear",
+            "host.task.create",
+            serde_json::json!({ "key": "ENG-1", "title": "Renamed in Linear", "priority": 2 }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            (
+                &recreated["title"],
+                &recreated["description"],
+                &recreated["status"],
+                &recreated["priority"],
+                &recreated["tags"],
+            ),
+            (
+                &Value::from("Renamed in Linear"),
+                &Value::from(""),
+                &Value::from("in_progress"),
+                &Value::from(2),
+                &serde_json::json!([]),
+            )
+        );
+        assert_eq!(
+            sync(
+                &db,
+                "linear",
+                "host.task.update",
+                serde_json::json!({ "key": "ENG-1", "status": "done" }),
+            )
+            .unwrap()["status"],
+            "done"
+        );
+    }
+
+    #[test]
+    fn a_synced_key_the_user_deleted_and_a_project_reused_is_not_the_plugins() {
+        let (_dir, db) = synced_task_database();
+        let conn = Connection::open(&db).unwrap();
+        let checkout = tempfile::TempDir::new().unwrap();
+        let project =
+            crate::db::create_project(&conn, "Demo", &checkout.path().to_string_lossy()).unwrap();
+        let key = format!("{}-1", project.prefix);
+        sync(
+            &db,
+            "linear",
+            "host.task.create",
+            serde_json::json!({ "key": key, "title": "Linear issue" }),
+        )
+        .unwrap();
+        conn.execute("DELETE FROM tasks WHERE key = ?1", [&key])
+            .unwrap();
+        let deleted = sync(
+            &db,
+            "linear",
+            "host.task.update",
+            serde_json::json!({ "key": key, "title": "Changed" }),
+        );
+        conn.execute(
+            "UPDATE task_projects SET next_seq = 1 WHERE prefix = ?1",
+            [&project.prefix],
+        )
+        .unwrap();
+        let reused = insert_plugin_task(
+            &mut Connection::open(&db).unwrap(),
+            "routines",
+            top_level_request(&project.path, "op"),
+        )
+        .unwrap();
+
+        assert_eq!(deleted, Err(CallbackError::NotGranted));
+        assert_eq!(reused.task["task"]["key"], Value::from(key.clone()));
+        assert_eq!(
+            sync(
+                &db,
+                "linear",
+                "host.task.update",
+                serde_json::json!({ "key": key, "title": "Taken over" }),
+            ),
+            Err(CallbackError::KeyTaken(format!(
+                "task {key} belongs to another owner"
+            )))
+        );
     }
 
     fn task_database() -> (Connection, tempfile::TempDir, crate::db::Project) {
