@@ -264,8 +264,7 @@ jobs:
           VERSION="${TAG#v}"
           mkdir -p tap/Casks
           packaging/homebrew/render-cask.sh "$VERSION" \
-            "dmgs/planeai_${VERSION}_aarch64.dmg" \
-            "dmgs/planeai_${VERSION}_x64.dmg" > tap/Casks/planeai.rb
+            "dmgs/planeai_${VERSION}_aarch64.dmg" > tap/Casks/planeai.rb
           cat tap/Casks/planeai.rb
 
       - name: Push to nicolegros/homebrew-tap
