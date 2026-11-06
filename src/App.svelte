@@ -65,6 +65,9 @@
   import { providerHandoff, taskWorkspaceLayout as workspaceLayout, toPaneTabs, workspaceOf, type PaneTab, type WorkspaceAgent, type WorkspaceIdentity } from "./lib/task-workspace-layout.svelte";
   import { activeTabOf, findLeaf, tabsOf, type LeafNode, type NavDirection, type SplitDirection, type TabEntry } from "./lib/layout-tree";
   import { pressTab as pressTabForDrag, tabDrag, type TabDropTarget } from "./lib/tab-drag.svelte";
+  import { resolvePaneDrops, taskDrag, type TaskDragPayload } from "./lib/task-drag.svelte";
+  import { paneVerdict, taskReferenceText, type PaneFacts } from "./lib/task-drop";
+  import { ClipboardList } from "@lucide/svelte";
   import { dropPositionToViewport, droppedPathsText } from "./lib/dropped-paths";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { ptyKeySessionId } from "./lib/pty-key";
@@ -348,9 +351,12 @@
   }
 
   /** Type dropped file paths into the terminal in front of a pane, like a terminal app. */
+  function frontTab(paneId: string): TabEntry | null {
+    return activeTabOf(workspaceLayout.layout ? findLeaf(workspaceLayout.layout, paneId) : null);
+  }
+
   async function typeDroppedPaths(paneId: string, paths: string[]): Promise<void> {
-    const leaf = workspaceLayout.layout ? findLeaf(workspaceLayout.layout, paneId) : null;
-    const tab = activeTabOf(leaf);
+    const tab = frontTab(paneId);
     if (!tab || !isTerminalTab(tab)) return;
     const session = sessions.find((candidate) => candidate.id === ptyKeySessionId(tab.ptyKey));
     if (tab.type === "agent" && session && isPluginSession(session)) {
@@ -366,7 +372,11 @@
         "error",
       );
     }
-    if (!text) return;
+    if (text) await typeIntoTerminal(tab, text, "dropped path");
+  }
+
+  /** Bring a terminal tab to the front and type `text` into it, as keystrokes. */
+  async function typeIntoTerminal(tab: TabEntry, text: string, what: string): Promise<void> {
     workspaceLayout.focusTab(tab.ptyKey);
     selectTerminalTab(tab.ptyKey);
     try {
@@ -375,8 +385,41 @@
       }
       orchestrator.recordUserInput(ptyKeySessionId(tab.ptyKey));
     } catch (error) {
-      showToast(`Failed to type dropped path: ${errorMessage(error)}`, "error");
+      showToast(`Failed to type ${what}: ${errorMessage(error)}`, "error");
     }
+  }
+
+  /** What a dragged task finds in a pane: its front tab and that tab's session. */
+  function paneFacts(paneId: string): PaneFacts {
+    const tab = frontTab(paneId);
+    if (!tab) return { tab: null, session: null };
+    const session = sessions.find((candidate) => candidate.id === ptyKeySessionId(tab.ptyKey));
+    if (!session) return { tab: tab.type, session: null };
+    const provider = session.provider ? getSettings().providers[session.provider] : undefined;
+    return {
+      tab: tab.type,
+      session: {
+        plugin: isPluginSession(session),
+        provider: session.provider,
+        providerHasMcp: !!provider?.mcp_args,
+        taskProjectId: sessionTaskProjectId(session),
+        taskKey: session.task_key,
+      },
+    };
+  }
+  resolvePaneDrops((task, paneId) => paneVerdict(task, paneFacts(paneId)));
+
+  /** Types a reference to a task dropped on a pane into the agent in front of it, for its `task_show` tool. */
+  async function referenceTaskInPane(task: TaskDragPayload, paneId: string): Promise<void> {
+    const facts = paneFacts(paneId);
+    const verdict = paneVerdict(task, facts);
+    if (!verdict.accepts) {
+      showToast(verdict.reason, "error");
+      return;
+    }
+    const tab = frontTab(paneId);
+    if (!tab || !facts.session) return;
+    await typeIntoTerminal(tab, taskReferenceText(task, facts.session.taskProjectId), "task reference");
   }
 
   function paneTabs(leaf: LeafNode): PaneTab[] {
@@ -1168,6 +1211,7 @@
         onEditTask={(task, project) => { taskWorkspaceToEdit = { task, project }; showTaskForm = true; }}
         onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); if (proj) openSessionForTask(task, proj); }}
         onSelectTask={selectWorkspaceTask}
+        onReferenceTask={referenceTaskInPane}
         onAddProject={openAddProject}
         onOpenPreferences={openPreferences}
         onCreateTask={openNewTaskForm}
@@ -1319,6 +1363,8 @@
         <div class="split-leaf-content" data-pane-drop={leaf.id}>
           {#if tabDrag.target?.kind === "pane" && tabDrag.target.paneId === leaf.id}
             <div class="pane-drop-preview" data-zone={tabDrag.target.zone}></div>
+          {:else if taskDrag.current?.target?.kind === "pane" && taskDrag.current.target.paneId === leaf.id}
+            <div class="pane-drop-preview" class:pane-drop-refused={taskDrag.verdict?.accepts === false} data-zone="center"></div>
           {:else if fileDropPane === leaf.id && activeEntry && isTerminalTab(activeEntry)}
             <div class="pane-drop-preview" data-zone="center"></div>
           {/if}
@@ -1608,6 +1654,19 @@
 {/if}
 {#if snoozeMenu}
   <ContextMenu x={snoozeMenu.x} y={snoozeMenu.y} items={snoozeMenuItems(snoozeMenu.target, true)} onClose={closeSnoozeMenu} />
+{/if}
+<!-- A task dragged out of the sidebar travels as this pill; its row stays home. -->
+{#if taskDrag.current && taskDrag.outside}
+  {@const { payload, point } = taskDrag.current}
+  <div
+    aria-hidden="true"
+    class="pointer-events-none fixed top-0 left-0 z-[100] flex max-w-72 items-center gap-2 rounded-md border border-border bg-panel px-3 py-2 text-sm text-t1 shadow-lg"
+    style:transform="translate({point.x + 12}px, {point.y + 12}px)"
+    data-task-drag-ghost
+  >
+    <ClipboardList class="size-4 shrink-0 text-t2" />
+    <span class="truncate"><span class="font-mono text-[10px] text-t3">{payload.key}</span> {payload.title}</span>
+  </div>
 {/if}
 {#if customSnooze}
   <SnoozeCustomDialog

@@ -409,6 +409,12 @@ body.task-dragging [data-task-drag-list] li {
   pointer-events: none;
 }
 
+/* The pane in front refuses the dragged task (a shell, a chat, an agent without MCP). */
+.pane-drop-preview.pane-drop-refused {
+  background: color-mix(in oklab, var(--color-status-exited) 8%, transparent);
+  border-color: var(--color-status-exited);
+}
+
 .pane-drop-preview[data-zone="left"] {
   right: 50%;
 }
