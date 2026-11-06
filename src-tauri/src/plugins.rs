@@ -3159,7 +3159,7 @@ impl PluginRuntimeSupervisor {
         if self.exit_gate.is_running() {
             Ok(())
         } else {
-            Err("plugin runtime is shutting down".to_string())
+            Err("plugins are stopped while the app exits or updates".to_string())
         }
     }
 
@@ -3828,20 +3828,15 @@ impl PluginRuntimeSupervisor {
         }
     }
 
+    /// On a stop failure, restores the plugins and ends the hold itself.
     pub async fn shutdown_for_update(
         self: &Arc<Self>,
         _hold: &UpdateHold,
     ) -> Result<Vec<String>, String> {
         let _lifecycle = self.lifecycle.lock().await;
-        let enabled_plugin_ids = match self
+        let enabled_plugin_ids = self
             .with_db(|conn| enabled_plugin_ids(conn).map_err(|error| error.to_string()))
-            .await
-        {
-            Ok(plugin_ids) => plugin_ids,
-            Err(error) => {
-                return Err(error);
-            }
-        };
+            .await?;
         let failures = self.stop_running_for_shutdown().await;
         if failures.is_empty() {
             return Ok(enabled_plugin_ids);
@@ -4030,10 +4025,13 @@ impl PluginRuntimeSupervisor {
             let _ = stop_process(process).await;
             return self.fail_startup(&id, error).await;
         }
-        // A quit during the handshake must not publish a runtime the shutdown already swept.
+        // A quit or update during the handshake queues a stop behind this lock; do not publish
+        // a runtime it would stop. Still enabled, so a restore or the next launch starts it.
         if let Err(error) = self.ensure_running() {
             let _ = stop_process(process).await;
-            return self.fail_startup(&id, error).await;
+            self.update_state(&id, true, PluginRuntimeState::Disabled, None)
+                .await?;
+            return Err(error);
         }
         if let Err(error) = self.publish_tools(&inventory) {
             let _ = stop_process(process).await;
