@@ -41,8 +41,8 @@ const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(40 * 60);
 // interactive five seconds would cut them off.
 const BACKGROUND_SERVICE_RPC_TIMEOUT: Duration = Duration::from_secs(60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
-// A runtime retired for a broken request restarts at most once per this long, so one that
-// keeps breaking stays stopped with its error instead of restarting in a loop.
+// A runtime that ignored a cancellation restarts at most once per this long, so one that
+// keeps hanging stays stopped with its error instead of restarting in a loop.
 const BROKEN_RUNTIME_RESTART_COOLDOWN: Duration = Duration::from_secs(10 * 60);
 const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_PLUGIN_SESSION_PROMPT_CHARS: usize = 100_000;
@@ -1356,14 +1356,14 @@ pub struct PluginRuntimeSupervisor {
     broken_runtime_restarts: BrokenRuntimeRestarts,
 }
 
-/// Whether a runtime retired for a broken request is still enabled and stopped, so nothing
+/// Whether a hung runtime retired for restart is still enabled and stopped, so nothing
 /// else, such as a disable or the user enabling it again, has taken it over.
 fn awaits_restart(inventory: Option<&PluginInventory>) -> bool {
     inventory
         .is_some_and(|inventory| inventory.enabled && inventory.state == PluginRuntimeState::Error)
 }
 
-/// When each plugin last restarted after a broken request.
+/// When each plugin last restarted after hanging.
 #[derive(Default)]
 struct BrokenRuntimeRestarts(Mutex<HashMap<String, Instant>>);
 
@@ -3331,9 +3331,9 @@ impl PluginRuntimeSupervisor {
         }
     }
 
-    /// Starts a runtime retired for a broken request again, unless it was disabled or started
-    /// again meanwhile, or this already restarted it within the cooldown. Boxed: the runtime it
-    /// starts may retire itself through here.
+    /// Starts a hung runtime again, unless it was disabled or started again meanwhile, or this
+    /// already restarted it within the cooldown. Boxed: the runtime it starts may retire itself
+    /// through here.
     fn restart_broken_runtime(
         self: Arc<Self>,
         plugin_id: String,
