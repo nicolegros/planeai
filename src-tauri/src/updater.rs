@@ -96,21 +96,21 @@ pub async fn install_update(
     let hold = runtime
         .0
         .begin_update()
-        .ok_or_else(|| "plugin runtime is already shutting down".to_string())?;
-    let enabled_plugin_ids = runtime.0.shutdown_for_update().await?;
+        .ok_or_else(|| "an update or shutdown is already in progress".to_string())?;
+    let enabled_plugin_ids = runtime.0.shutdown_for_update(&hold).await?;
     let install_result =
         crate::commands::blocking(move || update.install(bytes).map_err(|e| e.to_string())).await;
     if let Err(error) = install_result {
         runtime
             .0
-            .restore_after_failed_update(&enabled_plugin_ids)
+            .restore_after_failed_update(hold, &enabled_plugin_ids)
             .await;
         return Err(error);
     }
     if !runtime.0.finish_update(hold) {
         return Ok(());
     }
-    // `restart` never returns and would park this worker; `request_restart` lets RunEvent::Exit stop the plugins.
+    // `restart` never returns; `request_restart` lets RunEvent::Exit stop the plugins.
     app.request_restart();
     Ok(())
 }

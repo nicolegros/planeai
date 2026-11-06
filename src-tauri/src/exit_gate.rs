@@ -11,7 +11,7 @@ enum State {
     UpdateHold {
         quit_requested: bool,
     },
-    /// The update installed; the requested restart is the exit.
+    /// Behaves as `ShuttingDown`; named apart because the requested restart owns the exit.
     Restarting,
     ShuttingDown,
     ExitPermitted,
@@ -185,6 +185,7 @@ mod tests {
         assert!(!gate.is_running());
         assert_eq!(gate.request_exit(), ExitRequest::Prevent);
         assert_eq!(gate.fail_update(), FailedUpdate::NotHeld);
+        assert!(!gate.begin_update());
         assert!(gate.begin_final_exit());
     }
 

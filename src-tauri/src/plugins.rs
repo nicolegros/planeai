@@ -1305,7 +1305,8 @@ impl PluginRuntimeHandle {
     }
 }
 
-/// Ends an abandoned update hold, such as after a panic, so a quit is never blocked forever.
+/// Proof of an update hold. Dropping it ends a hold no outcome ended, such as after an early
+/// error or a panic, leaving plugins as they are; a quit that arrived meanwhile still exits.
 pub struct UpdateHold(Arc<PluginRuntimeSupervisor>);
 
 impl Drop for UpdateHold {
@@ -3154,6 +3155,14 @@ impl PluginRuntimeSupervisor {
         .map_err(|error| error.to_string())
     }
 
+    fn ensure_running(&self) -> Result<(), String> {
+        if self.exit_gate.is_running() {
+            Ok(())
+        } else {
+            Err("plugin runtime is shutting down".to_string())
+        }
+    }
+
     /// Holds the plugins stopped for an update install until the hold ends or is dropped.
     pub fn begin_update(self: &Arc<Self>) -> Option<UpdateHold> {
         self.exit_gate
@@ -3194,6 +3203,7 @@ impl PluginRuntimeSupervisor {
         remote_origin: Option<RemoteOrigin>,
     ) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
+        self.ensure_running()?;
         let app = self.app.clone();
         let imported = commands::blocking(move || {
             use tauri::Manager as _;
@@ -3278,6 +3288,7 @@ impl PluginRuntimeSupervisor {
 
     pub async fn remove(&self, plugin_id: &str) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock().await;
+        self.ensure_running()?;
         let inventory = self
             .inventory(plugin_id)
             .await?
@@ -3817,7 +3828,10 @@ impl PluginRuntimeSupervisor {
         }
     }
 
-    pub async fn shutdown_for_update(self: &Arc<Self>) -> Result<Vec<String>, String> {
+    pub async fn shutdown_for_update(
+        self: &Arc<Self>,
+        _hold: &UpdateHold,
+    ) -> Result<Vec<String>, String> {
         let _lifecycle = self.lifecycle.lock().await;
         let enabled_plugin_ids = match self
             .with_db(|conn| enabled_plugin_ids(conn).map_err(|error| error.to_string()))
@@ -3825,8 +3839,6 @@ impl PluginRuntimeSupervisor {
         {
             Ok(plugin_ids) => plugin_ids,
             Err(error) => {
-                // Nothing was stopped yet; this only ends the hold.
-                self.restore_after_failed_update_inner(&[]).await;
                 return Err(error);
             }
         };
@@ -3849,7 +3861,11 @@ impl PluginRuntimeSupervisor {
         ))
     }
 
-    pub async fn restore_after_failed_update(self: &Arc<Self>, plugin_ids: &[String]) {
+    pub async fn restore_after_failed_update(
+        self: &Arc<Self>,
+        _hold: UpdateHold,
+        plugin_ids: &[String],
+    ) {
         let _lifecycle = self.lifecycle.lock().await;
         self.restore_after_failed_update_inner(plugin_ids).await;
     }
@@ -3952,9 +3968,6 @@ impl PluginRuntimeSupervisor {
 
     pub async fn enable(&self, plugin_id: &str) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
-        if !self.exit_gate.is_running() {
-            return Err("plugin runtime is shutting down".to_string());
-        }
         self.ensure_plugin_migration_ready(plugin_id).await?;
         self.enable_inner(plugin_id).await
     }
@@ -3963,16 +3976,11 @@ impl PluginRuntimeSupervisor {
     /// exposed through the generic Tauri plugin lifecycle API.
     pub async fn enable_jira_after_migration(&self) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
-        if !self.exit_gate.is_running() {
-            return Err("plugin runtime is shutting down".to_string());
-        }
         self.enable_inner(JIRA_PLUGIN_ID).await
     }
 
     async fn enable_inner(&self, plugin_id: &str) -> Result<PluginInventory, String> {
-        if !self.exit_gate.is_running() {
-            return Err("plugin runtime is shutting down".to_string());
-        }
+        self.ensure_running()?;
         let inventory = self
             .inventory(plugin_id)
             .await?
@@ -4019,6 +4027,11 @@ impl PluginRuntimeSupervisor {
             Err(error) => return self.fail_startup(&id, error).await,
         };
         if let Err(error) = self.initialize_runtime(&inventory, &process).await {
+            let _ = stop_process(process).await;
+            return self.fail_startup(&id, error).await;
+        }
+        // A quit during the handshake must not publish a runtime the shutdown already swept.
+        if let Err(error) = self.ensure_running() {
             let _ = stop_process(process).await;
             return self.fail_startup(&id, error).await;
         }
@@ -4159,9 +4172,7 @@ impl PluginRuntimeSupervisor {
 
     pub async fn disable(&self, plugin_id: &str) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
-        if !self.exit_gate.is_running() {
-            return Err("plugin runtime is shutting down".to_string());
-        }
+        self.ensure_running()?;
         self.disable_inner(plugin_id).await
     }
 
@@ -4204,9 +4215,7 @@ impl PluginRuntimeSupervisor {
 
     pub async fn reload(&self, plugin_id: &str) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
-        if !self.exit_gate.is_running() {
-            return Err("plugin runtime is shutting down".to_string());
-        }
+        self.ensure_running()?;
         self.ensure_plugin_migration_ready(plugin_id).await?;
         self.disable_inner(plugin_id).await?;
         self.enable_inner(plugin_id).await
