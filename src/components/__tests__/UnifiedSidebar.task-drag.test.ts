@@ -496,6 +496,51 @@ describe("dragging a task row to a lane", () => {
     expect(lifted()).toEqual([]);
   });
 
+  it("follows the pointer inside the list, stops at its edges, and glides home outside it", async () => {
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const root = mounted.target;
+    const rect = (top: number, height: number) =>
+      ({ left: 0, top, width: 200, height, right: 200, bottom: top + height }) as DOMRect;
+    root.querySelector("nav")!.getBoundingClientRect = () => rect(0, 600);
+    const row = rowButton(root, "Title A-2").closest<HTMLElement>(".group")!;
+    row.getBoundingClientRect = () => rect(300, 32);
+
+    // The press is at y 100, the drag's second move at y 140, where the row is measured.
+    dragRow(root, "Title A-2", () => null);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const moveTo = (x: number, y: number) => {
+      window.dispatchEvent(new MouseEvent("pointermove", { clientX: x, clientY: y }));
+      flushSync();
+    };
+
+    moveTo(50, 180);
+    expect([row.style.transform, row.style.transition]).toEqual(["translateY(40px)", "none"]);
+    moveTo(50, 900);
+    expect(row.style.transform).toBe("translateY(268px)");
+    moveTo(500, 180);
+    expect([row.style.transform, row.style.transition]).toEqual([
+      "translateY(0)",
+      "transform 150ms ease-out",
+    ]);
+    release();
+    expect([row.style.transform, row.className.includes("task-drag-lifted")]).toEqual(["", false]);
+  });
+
+  it("decides a drop from the task as the store has it, not the snapshot the press took", async () => {
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const root = mounted.target;
+
+    dragRow(root, "Title A-2", () => laneOf(root, "in_progress"));
+    tasksByPath[alpha.path] = tasksByPath[alpha.path].map((t) =>
+      t.key === "A-2" ? { ...t, status: "in_progress" } : t,
+    );
+    await loadTasks([alpha.path, beta.path]);
+    release();
+    await Promise.resolve();
+
+    expect(taskMove).not.toHaveBeenCalled();
+  });
+
   it("does not drag session rows", async () => {
     mounted = await mountSidebar({ sidebar_group_by: "status" });
     const root = mounted.target;

@@ -55,6 +55,10 @@ export const taskDrag = {
   get current(): PointerDrag<TaskDragPayload, TaskDropTarget> | null {
     return drag.current;
   },
+  /** The task being dragged, for readers that need not follow the pointer. */
+  get payload(): TaskDragPayload | null {
+    return drag.payload;
+  },
   /** The pointer left the sidebar sideways: the row goes home and a ghost follows the pointer. */
   get outside(): boolean {
     const current = drag.current;
@@ -125,7 +129,7 @@ export function liftOffset(pointerY: number, originY: number, row: Span, list: S
 }
 
 const isDragged = (id: { projectId: string; key: string }) => {
-  const payload = drag.current?.payload;
+  const payload = drag.payload;
   return payload?.projectId === id.projectId && payload.key === id.key;
 };
 
@@ -134,14 +138,14 @@ const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)"
 /**
  * Lifts a row while it is the one dragged: it follows the pointer inside the list and glides home
  * when the pointer leaves sideways. The row is measured once the drag starts, after the sidebar
- * has shown every lane it can land in.
+ * has shown every lane it can land in (which may have moved the row), with the pointer as of then.
  */
 export function liftWhileDragged(id: { projectId: string; key: string }): Attachment<HTMLElement> {
-  let home: { row: Span; list: Span } | null = null;
+  let home: { row: Span; list: Span; pointerY: number } | null = null;
   let measuring = false;
   return (node) => {
-    const current = drag.current;
-    if (!current || !isDragged(id)) {
+    // Rows not dragged depend on the payload alone, so only the lifted one follows every move.
+    if (!isDragged(id)) {
       home = null;
       measuring = false;
       node.classList.remove("task-drag-lifted");
@@ -149,16 +153,19 @@ export function liftWhileDragged(id: { projectId: string; key: string }): Attach
       node.style.transition = "";
       return;
     }
+    const current = drag.current;
+    if (!current) return;
     if (!home) {
       if (measuring) return;
       measuring = true;
       node.classList.add("task-drag-lifted");
       // The next pointer move applies what is measured here; the row has not moved yet.
       requestAnimationFrame(() => {
-        if (!measuring) return;
+        const measured = drag.current;
+        if (!measuring || !measured) return;
         measuring = false;
         const list = node.closest("[data-task-drag-list]")?.getBoundingClientRect();
-        if (list) home = { row: node.getBoundingClientRect(), list };
+        if (list) home = { row: node.getBoundingClientRect(), list, pointerY: measured.point.y };
       });
       return;
     }
@@ -167,7 +174,7 @@ export function liftWhileDragged(id: { projectId: string; key: string }): Attach
       node.style.transform = "translateY(0)";
       return;
     }
-    const dy = liftOffset(current.point.y, current.origin.y, home.row, home.list);
+    const dy = liftOffset(current.point.y, home.pointerY, home.row, home.list);
     node.style.transition = "none";
     node.style.transform = `translateY(${dy}px)`;
   };

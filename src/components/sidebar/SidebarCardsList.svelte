@@ -95,7 +95,7 @@
   const shelves = $derived(sections.filter((s): s is SidebarShelfSection => s.kind === "shelf"));
   // A dragged task can land in an empty lane, so every shelf shows while the drag lasts.
   const shelvesShown = $derived(
-    taskDrag.current
+    taskDrag.payload
       ? everyLane(shelves, Object.keys(SHELVES) as ShelfLane[], (lane): SidebarShelfSection => ({ kind: "shelf", key: `shelf:${lane}`, lane, rows: [], defaultCollapsed: true }))
       : shelves,
   );

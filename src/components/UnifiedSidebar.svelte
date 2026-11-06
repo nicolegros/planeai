@@ -11,7 +11,7 @@
   import { everyLane, LANES, navKey, PROJECT_GROUP_LANES, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, STATUS_SECTION_LANES, taskHeaderNavKeys, type SidebarLaneGroup, type SidebarNavItem, type SidebarProjectSection, type SidebarRow, type SidebarSection, type SidebarSessionRow, type SidebarTaskRow, type TaskLane } from "../lib/sidebar-model";
   import { flip } from "svelte/animate";
   import { cubicOut } from "svelte/easing";
-  import { fade } from "svelte/transition";
+  import { crossfade } from "svelte/transition";
   import { laneHover, liftWhileDragged, pressTaskRow, taskDrag, taskDragPayload, type TaskDragPayload, type TaskDropTarget } from "../lib/task-drag.svelte";
   import { laneVerdict } from "../lib/task-drop";
   import LaneDropBadge from "./sidebar/LaneDropBadge.svelte";
@@ -273,12 +273,12 @@
 
   function dropTask(dragged: TaskDragPayload, target: TaskDropTarget) {
     if (target.kind === "pane") { onReferenceTask?.(dragged, target.paneId); return; }
-    const verdict = laneVerdict(dragged, target);
-    if (!verdict.accepts) { showToast({ kind: "info", message: verdict.reason, autoDismissMs: 3000 }); return; }
-    // The task as the store has it now: the payload is a snapshot from the press.
+    // The task as the store has it now decides: the payload is a snapshot from the press.
     const task = taskStore.findTask(dragged.repoPath, dragged.key);
     const project = projects.find((candidate) => candidate.id === dragged.projectId);
     if (!task || !project) return;
+    const verdict = laneVerdict(taskDragPayload({ kind: "task", task, project, linkedSession: undefined }, now), target);
+    if (!verdict.accepts) { showToast({ kind: "info", message: verdict.reason, autoDismissMs: 3000 }); return; }
     const { outcome } = verdict;
     if (outcome.kind === "status") moveTask(task, project, outcome.status);
     else if (outcome.kind === "wake") void wakeTask(task, project);
@@ -294,16 +294,22 @@
 
   const laneClass = (verdict: ReturnType<typeof laneHover>) =>
     verdict === null ? "" : verdict.accepts ? "rounded-lg bg-accent-bg ring-1 ring-inset ring-accent/40" : "rounded-lg ring-1 ring-inset ring-status-exited/40";
-  // Rows settle into their new order after a move; a row that left its group fades out.
+  // Rows settle into their new order after a move; a moved row glides to its new group, and a row
+  // without a counterpart fades and slides in or out.
   const motionMs = () => (window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 150);
+  const [send, receive] = crossfade({
+    duration: motionMs,
+    easing: cubicOut,
+    fallback: () => ({ duration: motionMs(), easing: cubicOut, css: (t) => `opacity: ${t}; transform: translateY(${(t - 1) * 8}px)` }),
+  });
   const emptyGroup = (key: string, lane: TaskLane): SidebarLaneGroup => ({ key, lane, rows: [], defaultCollapsed: true });
   // While a task is dragged, its project shows every lane group, and the status layout every status section.
   function projectGroups(section: SidebarProjectSection): SidebarLaneGroup[] {
-    if (taskDrag.current?.payload.projectId !== section.project.id) return section.groups;
+    if (taskDrag.payload?.projectId !== section.project.id) return section.groups;
     return everyLane(section.groups, PROJECT_GROUP_LANES, (lane) => emptyGroup(`project-status:${section.project.id}:${lane}`, lane));
   }
   const classicSections = $derived.by((): SidebarSection[] => {
-    if (!taskDrag.current || groupBy !== "status") return sections;
+    if (!taskDrag.payload || groupBy !== "status") return sections;
     const status = sections.filter((section): section is Extract<SidebarSection, { kind: "status" }> => section.kind === "status");
     return [
       ...sections.filter((section) => section.kind === "sessions"),
@@ -677,7 +683,8 @@
       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
       {@const isPreviewing = (linked?.id === previewSessionId) || (previewTaskWorkspace?.projectId === project.id && previewTaskWorkspace.taskKey === task.key)}
       {@const hint = jumpHintFor(navKey.task(project.id, task.key))}
-      <li animate:flip={{ duration: motionMs, easing: cubicOut }} out:fade={{ duration: motionMs(), easing: cubicOut }} class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
+      {@const key = navKey.task(project.id, task.key)}
+      <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key }} out:send={{ key }} class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
         <div class="session-row relative flex items-center gap-1.5" {@attach liftWhileDragged({ projectId: project.id, key: task.key })}>
           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
           <button
