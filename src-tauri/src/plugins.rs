@@ -20,6 +20,7 @@ use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 
 use crate::commands;
+use crate::plugin_children::wait_for_exit;
 use crate::plugin_rpc::*;
 use crate::task_lifecycle::TaskLifecycleBatch;
 use crate::task_start::{PendingTaskStart, RequestedStart, SessionStart, StartOptions};
@@ -1870,8 +1871,7 @@ impl RuntimeProcess {
         self.release_provider_sessions();
         let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
         let _ = self.request_shutdown(deadline).await;
-        if self
-            .wait_for_exit(deadline)
+        if wait_for_exit(&self.child, deadline)
             .await
             .map_err(|e| format!("failed waiting for plugin shutdown: {e}"))?
         {
@@ -1882,18 +1882,13 @@ impl RuntimeProcess {
             .await
             .start_kill()
             .map_err(|e| format!("plugin did not stop and could not be killed: {e}"))?;
-        match self
-            .wait_for_exit(Instant::now() + SHUTDOWN_TIMEOUT)
+        match wait_for_exit(&self.child, Instant::now() + SHUTDOWN_TIMEOUT)
             .await
             .map_err(|e| format!("failed waiting for killed plugin: {e}"))?
         {
             true => Ok(()),
             false => Err("plugin did not exit after being killed".to_string()),
         }
-    }
-
-    async fn wait_for_exit(&self, deadline: Instant) -> std::io::Result<bool> {
-        crate::plugin_children::wait_for_exit(&self.child, deadline).await
     }
 }
 
@@ -3906,15 +3901,32 @@ impl PluginRuntimeSupervisor {
             }
         }
     }
-    pub fn permit_exit(&self) {
+    /// Answers `ExitRequested`: true while plugins still need stopping, after starting that
+    /// stop, which exits the app once done.
+    pub fn defer_exit_for_shutdown(self: &Arc<Self>) -> bool {
+        if self.exit_is_permitted() {
+            return false;
+        }
+        if self.begin_shutdown() {
+            let this = self.clone();
+            tauri::async_runtime::spawn(async move {
+                this.shutdown_all().await;
+                this.permit_exit();
+                this.app.exit(0);
+            });
+        }
+        true
+    }
+
+    fn permit_exit(&self) {
         self.exit_permitted.store(true, Ordering::Release);
     }
 
-    pub fn exit_is_permitted(&self) -> bool {
+    fn exit_is_permitted(&self) -> bool {
         self.exit_permitted.load(Ordering::Acquire)
     }
 
-    pub async fn shutdown_all(&self) {
+    async fn shutdown_all(&self) {
         let _lifecycle = self.lifecycle.lock().await;
         self.shutdown_all_inner().await;
     }
@@ -4003,24 +4015,18 @@ impl PluginRuntimeSupervisor {
             .keys()
             .cloned()
             .collect::<Vec<_>>();
-        let mut stops = tokio::task::JoinSet::new();
-        let mut stopping = HashMap::new();
-        for plugin_id in plugin_ids {
-            let this = this.clone();
-            let id = plugin_id.clone();
-            let task = stops.spawn(async move { this.stop_for_shutdown_inner(&id).await });
-            stopping.insert(task.id(), plugin_id);
-        }
-        let mut failures = Vec::new();
-        while let Some(joined) = stops.join_next_with_id().await {
-            let (task, error) = match joined {
-                Ok((_, Ok(()))) => continue,
-                Ok((task, Err(error))) => (task, error),
-                Err(error) => (error.id(), error.to_string()),
-            };
-            failures.push((stopping.remove(&task).unwrap_or_default(), error));
-        }
-        failures
+        let stops = plugin_ids
+            .into_iter()
+            .map(|plugin_id| {
+                let this = this.clone();
+                let id = plugin_id.clone();
+                (
+                    plugin_id,
+                    async move { this.stop_for_shutdown_inner(&id).await },
+                )
+            })
+            .collect();
+        join_stops(stops).await
     }
 
     async fn stop_for_shutdown_inner(&self, plugin_id: &str) -> Result<(), String> {
@@ -4631,7 +4637,7 @@ async fn spawn_runtime(
     Ok(RuntimeProcess {
         app,
         instance,
-        child: child.clone(),
+        child,
         stdin: AsyncMutex::new(stdin),
         frames: AsyncMutex::new(frames),
         requests: Default::default(),
@@ -4721,6 +4727,30 @@ fn drain_stderr(mut stderr: ChildStderr, log_path: PathBuf) {
             tracing::warn!(path = %log_path.display(), %error, "failed to drain plugin stderr");
         }
     });
+}
+
+/// Runs every stop concurrently, so a wedged one cannot spend the others' time, and returns
+/// the plugins that failed with why.
+async fn join_stops<F>(stops: Vec<(String, F)>) -> Vec<(String, String)>
+where
+    F: std::future::Future<Output = Result<(), String>> + Send + 'static,
+{
+    let mut tasks = tokio::task::JoinSet::new();
+    let mut stopping = HashMap::new();
+    for (plugin_id, stop) in stops {
+        stopping.insert(tasks.spawn(stop).id(), plugin_id);
+    }
+    let mut failures = Vec::new();
+    while let Some(joined) = tasks.join_next_with_id().await {
+        let (task, error) = match joined {
+            Ok((_, Ok(()))) => continue,
+            Ok((task, Err(error))) => (task, error),
+            Err(error) => (error.id(), error.to_string()),
+        };
+        let plugin_id = stopping.remove(&task).expect("every stop task is tracked");
+        failures.push((plugin_id, error));
+    }
+    failures
 }
 
 /// Blocks a thread outside the async runtime, such as the main thread at exit, on `future`
@@ -5688,6 +5718,36 @@ mod tests {
         assert!(Arc::ptr_eq(processes.get("jira").unwrap(), &replacement));
         assert!(remove_current_process(&mut processes, "jira", &replacement));
         assert!(processes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn join_stops_runs_stops_concurrently_and_names_each_failure() {
+        type Stop = std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>;
+        let slow = |result: Result<(), String>| -> Stop {
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                result
+            })
+        };
+        let started = Instant::now();
+        let mut failures = join_stops(vec![
+            ("ok".to_string(), slow(Ok(()))),
+            ("failed".to_string(), slow(Err("stuck".to_string()))),
+            (
+                "panicked".to_string(),
+                Box::pin(async { panic!("stop panicked") }),
+            ),
+        ])
+        .await;
+
+        assert!(
+            started.elapsed() < Duration::from_millis(550),
+            "stops ran one by one"
+        );
+        failures.sort();
+        assert_eq!(failures[0], ("failed".to_string(), "stuck".to_string()));
+        assert_eq!(failures[1].0, "panicked");
+        assert_eq!(failures.len(), 2);
     }
 
     /// The exit path runs on the main thread, where a panic aborts the app before any

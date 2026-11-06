@@ -109,5 +109,7 @@ pub async fn install_update(
             .await;
         return Err(error);
     }
-    app.restart();
+    // Unlike `restart`, which parks this runtime worker forever.
+    app.request_restart();
+    Ok(())
 }
