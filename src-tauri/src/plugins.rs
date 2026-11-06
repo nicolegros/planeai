@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::process::{ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, Mutex as AsyncMutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
@@ -36,6 +36,7 @@ const JIRA_LIFECYCLE_RPC_TIMEOUT: Duration = Duration::from_secs(90);
 // nested host task request. Keep a finite watchdog, but allow that bounded fetch.
 const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(40 * 60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_PLUGIN_SESSION_PROMPT_CHARS: usize = 100_000;
 const FRAME_QUEUE_CAPACITY: usize = 256;
@@ -1299,6 +1300,7 @@ impl PluginRuntimeHandle {
             shutting_down: AtomicBool::new(false),
             exit_permitted: AtomicBool::new(false),
             provider_sessions: Arc::new(crate::plugin_providers::ProviderSessions::default()),
+            children: Default::default(),
         }))
     }
 }
@@ -1317,6 +1319,7 @@ pub struct PluginRuntimeSupervisor {
     shutting_down: AtomicBool,
     exit_permitted: AtomicBool,
     provider_sessions: Arc<crate::plugin_providers::ProviderSessions>,
+    children: crate::plugin_children::PluginChildren,
 }
 
 struct BackgroundWorker {
@@ -1332,7 +1335,7 @@ struct RuntimeProcess {
     app: AppHandle,
     /// Distinguishes sidecar restarts of the same plugin.
     instance: u64,
-    child: AsyncMutex<Child>,
+    child: crate::plugin_children::SharedChild,
     stdin: AsyncMutex<ChildStdin>,
     /// Frames from the stdout reader task, minus the host notifications it handles itself.
     frames: AsyncMutex<mpsc::Receiver<Result<String, String>>>,
@@ -1861,21 +1864,39 @@ impl RuntimeProcess {
         self.release_provider_sessions();
         let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
         let _ = self.request_shutdown(deadline).await;
-        let mut child = self.child.lock().await;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match timeout(remaining, child.wait()).await {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(e)) => Err(format!("failed waiting for plugin shutdown: {e}")),
-            Err(_) => {
-                child
-                    .start_kill()
-                    .map_err(|e| format!("plugin did not stop and could not be killed: {e}"))?;
-                match timeout(SHUTDOWN_TIMEOUT, child.wait()).await {
-                    Ok(Ok(_)) => Ok(()),
-                    Ok(Err(e)) => Err(format!("failed waiting for killed plugin: {e}")),
-                    Err(_) => Err("plugin did not exit after being killed".to_string()),
-                }
+        if self
+            .wait_for_exit(deadline)
+            .await
+            .map_err(|e| format!("failed waiting for plugin shutdown: {e}"))?
+        {
+            return Ok(());
+        }
+        self.child
+            .lock()
+            .await
+            .start_kill()
+            .map_err(|e| format!("plugin did not stop and could not be killed: {e}"))?;
+        match self
+            .wait_for_exit(Instant::now() + SHUTDOWN_TIMEOUT)
+            .await
+            .map_err(|e| format!("failed waiting for killed plugin: {e}"))?
+        {
+            true => Ok(()),
+            false => Err("plugin did not exit after being killed".to_string()),
+        }
+    }
+
+    /// Polls rather than awaiting `wait()`, so the child's lock stays free for the
+    /// exit-time kill in `PluginChildren::kill_all`.
+    async fn wait_for_exit(&self, deadline: Instant) -> std::io::Result<bool> {
+        loop {
+            if self.child.lock().await.try_wait()?.is_some() {
+                return Ok(true);
             }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            tokio::time::sleep(EXIT_POLL_INTERVAL).await;
         }
     }
 }
@@ -3753,6 +3774,24 @@ impl PluginRuntimeSupervisor {
         self.shutdown_all_inner().await;
     }
 
+    /// The last step before the app process exits, which never drops the plugin children.
+    /// macOS Quit (menu, Cmd+Q, Dock, logout) and restarts exit without a preventable
+    /// `ExitRequested`, so the graceful shutdown runs here unless it already ran; whatever
+    /// is still alive after the grace period is killed.
+    pub fn stop_all_before_process_exit(&self) {
+        if !self.exit_is_permitted() {
+            self.begin_shutdown();
+            tracing::info!("stopping plugin runtimes before exit");
+            if block_on_within(SHUTDOWN_TIMEOUT, self.shutdown_all()).is_none() {
+                tracing::warn!("plugin runtimes did not stop within the shutdown grace period");
+            }
+        }
+        let killed = self.children.kill_all();
+        if killed > 0 {
+            tracing::warn!(killed, "killed plugin processes still running at exit");
+        }
+    }
+
     pub async fn shutdown_for_update(&self) -> Result<Vec<String>, String> {
         let _lifecycle = self.lifecycle.lock().await;
         let enabled_plugin_ids = match self
@@ -3765,22 +3804,14 @@ impl PluginRuntimeSupervisor {
                 return Err(error);
             }
         };
-        let plugin_ids = self
-            .processes
-            .lock()
-            .await
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        for plugin_id in plugin_ids {
-            if let Err(error) = self.stop_for_shutdown_inner(&plugin_id).await {
-                tracing::warn!(plugin_id, %error, "failed to stop plugin runtime before update");
-                self.restore_after_failed_update_inner(&enabled_plugin_ids)
-                    .await;
-                return Err(format!(
-                    "failed to stop plugin runtime before update: {error}"
-                ));
-            }
+        let failures = self.stop_running_for_shutdown().await;
+        if let Some((plugin_id, error)) = failures.into_iter().next() {
+            tracing::warn!(plugin_id, %error, "failed to stop plugin runtime before update");
+            self.restore_after_failed_update_inner(&enabled_plugin_ids)
+                .await;
+            return Err(format!(
+                "failed to stop plugin runtime before update: {error}"
+            ));
         }
         Ok(enabled_plugin_ids)
     }
@@ -3804,6 +3835,17 @@ impl PluginRuntimeSupervisor {
     }
 
     async fn shutdown_all_inner(&self) {
+        for (plugin_id, error) in self.stop_running_for_shutdown().await {
+            tracing::warn!(plugin_id, %error, "failed to stop plugin runtime during shutdown");
+        }
+    }
+
+    /// Stops every running plugin concurrently, so one wedged plugin cannot spend the
+    /// others' shutdown grace. Returns the plugins that failed to stop.
+    async fn stop_running_for_shutdown(&self) -> Vec<(String, String)> {
+        let Some(this) = self.this.upgrade() else {
+            return Vec::new();
+        };
         let plugin_ids = self
             .processes
             .lock()
@@ -3811,11 +3853,23 @@ impl PluginRuntimeSupervisor {
             .keys()
             .cloned()
             .collect::<Vec<_>>();
+        let mut stops = tokio::task::JoinSet::new();
         for plugin_id in plugin_ids {
-            if let Err(error) = self.stop_for_shutdown_inner(&plugin_id).await {
-                tracing::warn!(plugin_id, %error, "failed to stop plugin runtime during shutdown");
+            let this = this.clone();
+            stops.spawn(async move {
+                let stopped = this.stop_for_shutdown_inner(&plugin_id).await;
+                (plugin_id, stopped)
+            });
+        }
+        let mut failures = Vec::new();
+        while let Some(joined) = stops.join_next().await {
+            match joined {
+                Ok((_, Ok(()))) => {}
+                Ok((plugin_id, Err(error))) => failures.push((plugin_id, error)),
+                Err(error) => failures.push(("unknown".to_string(), error.to_string())),
             }
         }
+        failures
     }
 
     async fn stop_for_shutdown_inner(&self, plugin_id: &str) -> Result<(), String> {
@@ -3827,7 +3881,9 @@ impl PluginRuntimeSupervisor {
         self.update_state(plugin_id, enabled, PluginRuntimeState::Stopping, last_error)
             .await?;
         self.stop_background_worker(plugin_id).await;
-        if let Some(process) = self.processes.lock().await.remove(plugin_id) {
+        // Bound first: in the `if let` scrutinee the map's guard would outlive the stop.
+        let process = self.processes.lock().await.remove(plugin_id);
+        if let Some(process) = process {
             if let Err(error) = stop_process(process).await {
                 self.update_state(
                     plugin_id,
@@ -3918,16 +3974,15 @@ impl PluginRuntimeSupervisor {
         // Bundled plugins own durable state too; Jira settings and credentials
         // must survive restarts under the same plugin namespace as local plugins.
         let state_path = Some(plugin_state_root(&self.app, &id).await?);
-        let process = match spawn_runtime(
-            self.app.clone(),
-            &binary,
-            &log_path,
-            state_path.as_deref(),
-            &id,
-            capabilities.clone(),
-            self.provider_sessions.clone(),
-        )
-        .await
+        let process = match self
+            .spawn_runtime(
+                &binary,
+                &log_path,
+                state_path.as_deref(),
+                &id,
+                capabilities.clone(),
+            )
+            .await
         {
             Ok(process) => Arc::new(process),
             Err(error) => return self.fail_startup(&id, error).await,
@@ -4375,66 +4430,74 @@ fn build_runtime_command(binary: &Path, state_root: Option<&Path>, path_env: &st
     command
 }
 
-async fn spawn_runtime(
-    app: AppHandle,
-    binary: &Path,
-    log_path: &Path,
-    state_root: Option<&Path>,
-    plugin_id: &str,
-    capabilities: HashSet<PluginHostCapability>,
-    provider_sessions: Arc<crate::plugin_providers::ProviderSessions>,
-) -> Result<RuntimeProcess, String> {
-    let path_env = plugin_runtime_path(&configured_extra_path_dirs(&app));
-    let mut command = build_runtime_command(binary, state_root, &path_env);
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("failed to spawn plugin runtime {}: {e}", binary.display()))?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "plugin runtime did not provide stdin".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "plugin runtime did not provide stdout".to_string())?;
-    let (frame_sender, frames) = mpsc::channel(FRAME_QUEUE_CAPACITY);
-    let instance = NEXT_RUNTIME_INSTANCE.fetch_add(1, Ordering::Relaxed);
-    let provider_sessions = capabilities
-        .contains(&PluginHostCapability::Providers)
-        .then_some(provider_sessions);
-    let notification_sink = provider_sessions.clone().map(|sessions| {
-        crate::plugin_providers::NotificationSink::new(app.clone(), plugin_id, instance, sessions)
-    });
-    let stdout_failure = Arc::new(std::sync::OnceLock::new());
-    tokio::spawn(read_stdout_frames(
-        BufReader::new(stdout),
-        frame_sender,
-        plugin_id.to_string(),
-        notification_sink,
-        stdout_failure.clone(),
-    ));
-    if let Some(stderr) = child.stderr.take() {
-        drain_stderr(stderr, log_path.to_path_buf());
+impl PluginRuntimeSupervisor {
+    async fn spawn_runtime(
+        &self,
+        binary: &Path,
+        log_path: &Path,
+        state_root: Option<&Path>,
+        plugin_id: &str,
+        capabilities: HashSet<PluginHostCapability>,
+    ) -> Result<RuntimeProcess, String> {
+        let app = self.app.clone();
+        let provider_sessions = self.provider_sessions.clone();
+        let path_env = plugin_runtime_path(&configured_extra_path_dirs(&app));
+        let mut command = build_runtime_command(binary, state_root, &path_env);
+        let mut child = command
+            .spawn()
+            .map_err(|e| format!("failed to spawn plugin runtime {}: {e}", binary.display()))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "plugin runtime did not provide stdin".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "plugin runtime did not provide stdout".to_string())?;
+        let (frame_sender, frames) = mpsc::channel(FRAME_QUEUE_CAPACITY);
+        let instance = NEXT_RUNTIME_INSTANCE.fetch_add(1, Ordering::Relaxed);
+        let provider_sessions = capabilities
+            .contains(&PluginHostCapability::Providers)
+            .then_some(provider_sessions);
+        let notification_sink = provider_sessions.clone().map(|sessions| {
+            crate::plugin_providers::NotificationSink::new(
+                app.clone(),
+                plugin_id,
+                instance,
+                sessions,
+            )
+        });
+        let stdout_failure = Arc::new(std::sync::OnceLock::new());
+        tokio::spawn(read_stdout_frames(
+            BufReader::new(stdout),
+            frame_sender,
+            plugin_id.to_string(),
+            notification_sink,
+            stdout_failure.clone(),
+        ));
+        if let Some(stderr) = child.stderr.take() {
+            drain_stderr(stderr, log_path.to_path_buf());
+        }
+        let data_dir = state_root
+            .map(|root| root.join("data"))
+            .ok_or("plugin runtime state root was not provided")?;
+        Ok(RuntimeProcess {
+            app,
+            instance,
+            child: self.children.track(child),
+            stdin: AsyncMutex::new(stdin),
+            frames: AsyncMutex::new(frames),
+            requests: Default::default(),
+            next_request_id: AtomicU64::new(0),
+            plugin_id: plugin_id.to_string(),
+            data_dir,
+            capabilities,
+            lifecycle_event_subscriptions: AsyncMutex::new(HashSet::new()),
+            session_actions: AsyncMutex::new(Vec::new()),
+            provider_sessions,
+            stdout_failure,
+        })
     }
-    let data_dir = state_root
-        .map(|root| root.join("data"))
-        .ok_or("plugin runtime state root was not provided")?;
-    Ok(RuntimeProcess {
-        app,
-        instance,
-        child: AsyncMutex::new(child),
-        stdin: AsyncMutex::new(stdin),
-        frames: AsyncMutex::new(frames),
-        requests: Default::default(),
-        next_request_id: AtomicU64::new(0),
-        plugin_id: plugin_id.to_string(),
-        data_dir,
-        capabilities,
-        lifecycle_event_subscriptions: AsyncMutex::new(HashSet::new()),
-        session_actions: AsyncMutex::new(Vec::new()),
-        provider_sessions,
-        stdout_failure,
-    })
 }
 
 /// Owns sidecar stdout for the process lifetime so notifications are handled as they
@@ -4512,6 +4575,13 @@ fn drain_stderr(mut stderr: ChildStderr, log_path: PathBuf) {
             tracing::warn!(path = %log_path.display(), %error, "failed to drain plugin stderr");
         }
     });
+}
+
+/// Blocks a thread outside the async runtime, such as the main thread at exit, on `future`
+/// for at most `budget`.
+fn block_on_within<F: std::future::Future>(budget: Duration, future: F) -> Option<F::Output> {
+    // The timer must be created inside the runtime: outside it, tokio panics.
+    tauri::async_runtime::block_on(async { timeout(budget, future).await.ok() })
 }
 
 async fn stop_process(process: Arc<RuntimeProcess>) -> Result<(), String> {
@@ -5472,6 +5542,24 @@ mod tests {
         assert!(Arc::ptr_eq(processes.get("jira").unwrap(), &replacement));
         assert!(remove_current_process(&mut processes, "jira", &replacement));
         assert!(processes.is_empty());
+    }
+
+    /// The exit path runs on the main thread, where a panic aborts the app before any
+    /// plugin is stopped.
+    #[test]
+    fn block_on_within_runs_outside_the_async_runtime() {
+        let value = std::thread::spawn(|| block_on_within(Duration::from_secs(1), async { 7 }))
+            .join()
+            .expect("block_on_within must not panic outside the runtime");
+        assert_eq!(value, Some(7));
+        let late = std::thread::spawn(|| {
+            block_on_within(Duration::from_millis(20), async {
+                tokio::time::sleep(Duration::from_secs(5)).await
+            })
+        })
+        .join()
+        .unwrap();
+        assert_eq!(late, None);
     }
 
     #[test]
