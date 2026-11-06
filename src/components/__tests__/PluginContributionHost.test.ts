@@ -880,6 +880,41 @@ describe("PluginContributionHost", () => {
     host.removeEventListener("plugin-sidebar-keydown", handleSidebarKeydown);
   });
 
+  it.each([
+    ["an Escape the sidebar leaves reaches the app's router", "Escape", false, true, ["Escape"]],
+    ["a key the sidebar handles stays with the sidebar", "j", true, true, []],
+    ["a frame without the keyboard replays nothing", "Escape", false, false, []],
+  ] as const)("%s", async (_name, key, handled, focused, replayed) => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+    const host = await vi.waitFor(() => {
+      const next = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");
+      expect(next?.shadowRoot?.querySelector("iframe")).toBeTruthy();
+      return next!;
+    });
+    const frame = host.shadowRoot!.querySelector<HTMLIFrameElement>("iframe")!;
+    if (focused) frame.focus();
+    const handleSidebarKeydown = (event: Event) => {
+      if (handled) (event as CustomEvent<{ event: KeyboardEvent }>).detail.event.preventDefault();
+    };
+    host.addEventListener("plugin-sidebar-keydown", handleSidebarKeydown);
+    const keys: string[] = [];
+    const recordKey = (event: KeyboardEvent) => keys.push(event.key);
+    window.addEventListener("keydown", recordKey);
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "sidebar-keydown", key },
+      }),
+    );
+
+    expect(keys).toEqual(replayed);
+    window.removeEventListener("keydown", recordKey);
+    host.removeEventListener("plugin-sidebar-keydown", handleSidebarKeydown);
+  });
+
   it("ignores blank local plugin notifications", async () => {
     target = document.createElement("div");
     document.body.append(target);

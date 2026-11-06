@@ -749,6 +749,8 @@
         container?.dispatchEvent(
           new CustomEvent("plugin-sidebar-keydown", { bubbles: true, detail }),
         );
+        // A key the sidebar leaves, such as Escape, reaches the app's router as a native row's would.
+        if (!detail.event.defaultPrevented && root.activeElement === frame) window.dispatchEvent(detail.event);
       } else if (message.type === "sidebar-register" && message.registrationId && message.rows) {
         registrations.set(
           message.registrationId,
