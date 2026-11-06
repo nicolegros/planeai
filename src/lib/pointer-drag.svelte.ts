@@ -27,6 +27,8 @@ export interface PointerDrag<P, T> {
 export interface PointerDragKind<P, T> {
   /** The drag of this kind in progress, once its press moved past the threshold. */
   readonly current: PointerDrag<P, T> | null;
+  /** Its payload alone, for readers that need not follow the pointer. */
+  readonly payload: P | null;
   /** Track a press; `onDrop` runs if the drag is released over a target. */
   press(payload: P, down: PointerEvent, onDrop: (payload: P, target: T) => void): void;
 }
@@ -46,6 +48,16 @@ let point = $state.raw<Point>({ x: 0, y: 0 });
 /** Ends the press in progress; a new press must never inherit a stale one. */
 let endActivePress: (() => void) | null = null;
 
+/** Swallows the click a release fires, in the same task; a release that fires none leaves nothing armed. */
+function swallowNextClick(): void {
+  const swallow = (event: Event) => {
+    event.stopPropagation();
+    event.preventDefault();
+  };
+  window.addEventListener("click", swallow, { capture: true, once: true });
+  setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+}
+
 export function definePointerDrag<P, T>(options: {
   hitTest: (x: number, y: number) => T | null;
   /** Put on `<body>` while a drag of this kind lasts, for cursor and hover rules. */
@@ -60,6 +72,9 @@ export function definePointerDrag<P, T>(options: {
         point,
         origin: active.origin,
       };
+    },
+    get payload() {
+      return active?.kind === kind ? (active.payload as P) : null;
     },
     press(payload, down, onDrop) {
       if (down.button !== 0) return;
@@ -87,6 +102,8 @@ export function definePointerDrag<P, T>(options: {
         event.preventDefault();
         event.stopPropagation();
         finish();
+        // The pointer is still down: its release would click whatever is under it.
+        window.addEventListener("pointerup", swallowNextClick, { capture: true, once: true });
       };
       const finish = () => {
         endActivePress = null;

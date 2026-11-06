@@ -76,6 +76,31 @@ describe("definePointerDrag", () => {
     expect(drop).not.toHaveBeenCalled();
   });
 
+  it("exposes the payload alone, so readers of it do not follow every move", () => {
+    rows.press("r1", down(10, 5), vi.fn());
+    expect(rows.payload).toBeNull();
+    pointer("pointermove", 250, 40);
+    expect(rows.payload).toBe("r1");
+    pointer("pointerup", 250, 40);
+    expect(rows.payload).toBeNull();
+  });
+
+  it("swallows the click that follows a release after Escape, so nothing gets selected", () => {
+    const clicked = vi.fn();
+    const button = document.body.appendChild(document.createElement("button"));
+    button.addEventListener("click", clicked);
+    rows.press("r1", down(10, 5), vi.fn());
+    pointer("pointermove", 250, 40);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+    pointer("pointerup", 250, 40);
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(clicked).not.toHaveBeenCalled();
+
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(clicked).toHaveBeenCalledTimes(1);
+    button.remove();
+  });
+
   it("cancels when the pointer is cancelled or the window loses focus", () => {
     const drop = vi.fn();
     for (const end of [
