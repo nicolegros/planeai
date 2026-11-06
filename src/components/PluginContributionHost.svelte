@@ -68,6 +68,8 @@
     repeat?: unknown;
     height?: number;
     width?: number;
+    top?: number;
+    bottom?: number;
     text?: unknown;
     lines?: unknown;
     toast?: unknown;
@@ -691,7 +693,7 @@
           .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "content-height" && contentSizedPlacements.includes(contribution.placement) && typeof message.height === "number" && Number.isFinite(message.height)) {
         frame.style.height = lastContentHeight = `${Math.min(Math.max(Math.ceil(message.height), 1), 10_000)}px`;
-      } else if (message.type === "reveal" && contribution.placement === "sidebar.section" && Number.isFinite(message.top) && Number.isFinite(message.bottom)) {
+      } else if (message.type === "reveal" && contribution.placement === "sidebar.section" && typeof message.top === "number" && typeof message.bottom === "number" && Number.isFinite(message.top) && Number.isFinite(message.bottom)) {
         revealInScroller(frame, message.top, message.bottom);
       } else if (message.type === "content-width" && inSessionRow(contribution.placement) && typeof message.width === "number" && Number.isFinite(message.width)) {
         container?.setAttribute("data-plugin-indicator-visible", message.width > 0 ? "true" : "false");
