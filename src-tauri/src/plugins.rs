@@ -20,7 +20,7 @@ use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 
 use crate::commands;
-use crate::exit_gate::{ExitGate, ExitRequest, UpdateEnd};
+use crate::exit_gate::{ExitGate, ExitRequest, FailedUpdate, FinishedUpdate};
 use crate::plugin_children::{wait_for_exit, PluginChildren, SharedChild};
 use crate::plugin_rpc::*;
 use crate::task_lifecycle::TaskLifecycleBatch;
@@ -1305,6 +1305,17 @@ impl PluginRuntimeHandle {
             provider_sessions: Arc::new(crate::plugin_providers::ProviderSessions::default()),
             children: Default::default(),
         }))
+    }
+}
+
+/// Ends an abandoned update hold, such as after a panic, so a quit is never blocked forever.
+pub struct UpdateHold(Arc<PluginRuntimeSupervisor>);
+
+impl Drop for UpdateHold {
+    fn drop(&mut self) {
+        if self.0.exit_gate.fail_update() == FailedUpdate::Quit {
+            self.0.spawn_shutdown_and_exit();
+        }
     }
 }
 
@@ -3295,18 +3306,24 @@ impl PluginRuntimeSupervisor {
         .map_err(|error| error.to_string())
     }
 
-    pub fn begin_update(&self) -> bool {
-        self.exit_gate.begin_update()
+    /// Holds the plugins stopped for an update install until the hold ends or is dropped.
+    pub fn begin_update(self: &Arc<Self>) -> Option<UpdateHold> {
+        self.exit_gate
+            .begin_update()
+            .then(|| UpdateHold(self.clone()))
     }
 
-    /// Ends a successful update install; returns true when a quit arrived meanwhile and the
-    /// app exits instead of restarting into the update.
-    pub fn finish_update(&self) -> bool {
-        if self.exit_gate.end_update(false) == UpdateEnd::Quit {
-            self.permit_and_exit();
-            return true;
+    /// Ends a successful update install; returns whether to restart into the update, which is
+    /// not the case when a quit arrived meanwhile.
+    pub fn finish_update(self: &Arc<Self>, _hold: UpdateHold) -> bool {
+        match self.exit_gate.finish_update() {
+            FinishedUpdate::Restart => true,
+            FinishedUpdate::Quit => {
+                self.spawn_shutdown_and_exit();
+                false
+            }
+            FinishedUpdate::NotHeld => false,
         }
-        false
     }
 
     pub async fn install_local(&self, source_path: String) -> Result<PluginInventory, String> {
@@ -3916,20 +3933,21 @@ impl PluginRuntimeSupervisor {
             ExitRequest::Allow => false,
             ExitRequest::Prevent => true,
             ExitRequest::StartShutdown => {
-                let this = self.clone();
-                tauri::async_runtime::spawn(async move {
-                    let _ = timeout(SHUTDOWN_TIMEOUT, this.shutdown_all()).await;
-                    this.permit_and_exit();
-                });
+                self.spawn_shutdown_and_exit();
                 true
             }
         }
     }
 
-    /// Survivors are killed by `stop_all_before_process_exit`.
-    fn permit_and_exit(&self) {
-        self.exit_gate.permit_exit();
-        self.app.exit(0);
+    fn spawn_shutdown_and_exit(self: &Arc<Self>) {
+        let this = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = timeout(SHUTDOWN_TIMEOUT, this.shutdown_all()).await;
+            this.exit_gate.permit_exit();
+            // Before `exit`, which falls back to `process::exit` when the event loop is gone.
+            this.children.kill_all();
+            this.app.exit(0);
+        });
     }
 
     async fn shutdown_all(self: &Arc<Self>) {
@@ -3960,6 +3978,7 @@ impl PluginRuntimeSupervisor {
         {
             Ok(plugin_ids) => plugin_ids,
             Err(error) => {
+                // Nothing was stopped yet; this only ends the hold.
                 self.restore_after_failed_update_inner(&[]).await;
                 return Err(error);
             }
@@ -3989,12 +4008,10 @@ impl PluginRuntimeSupervisor {
     }
 
     async fn restore_after_failed_update_inner(self: &Arc<Self>, plugin_ids: &[String]) {
-        if self.exit_gate.end_update(true) == UpdateEnd::Quit {
-            self.permit_and_exit();
-            return;
-        }
-        if !self.exit_gate.is_running() {
-            return;
+        match self.exit_gate.fail_update() {
+            FailedUpdate::Restore => {}
+            FailedUpdate::Quit => return self.spawn_shutdown_and_exit(),
+            FailedUpdate::NotHeld => return,
         }
         for plugin_id in plugin_ids {
             if let Err(error) = self.ensure_plugin_migration_ready(plugin_id).await {
@@ -4106,6 +4123,9 @@ impl PluginRuntimeSupervisor {
     }
 
     async fn enable_inner(&self, plugin_id: &str) -> Result<PluginInventory, String> {
+        if !self.exit_gate.is_running() {
+            return Err("plugin runtime is shutting down".to_string());
+        }
         let inventory = self
             .inventory(plugin_id)
             .await?
