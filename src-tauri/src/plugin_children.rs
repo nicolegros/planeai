@@ -188,6 +188,7 @@ mod tests {
         drop(children.spawn(&mut wedged_sidecar()).unwrap());
         let _running = children.spawn(&mut wedged_sidecar()).unwrap();
 
+        // Guards the registry against growing with every plugin restart.
         assert_eq!(
             children.lock().children.len(),
             2,
