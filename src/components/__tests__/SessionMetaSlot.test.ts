@@ -49,6 +49,8 @@ function github(
     installed_hash: "hash",
     installed_path: "/plugins/github",
     original_display_path: null,
+    remote_origin: null,
+    tools: [],
     enabled: true,
     state: "running",
     last_error: null,

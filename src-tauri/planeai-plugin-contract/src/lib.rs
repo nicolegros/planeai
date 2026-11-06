@@ -193,6 +193,16 @@ const MANIFEST_FIELDS: &[&str] = &[
     "background_service",
     "providers",
     "tools",
+    "downloads",
+];
+/// The `downloads` keys a manifest may declare, one per platform PlaneAI ships for.
+pub const PLATFORM_KEYS: &[&str] = &[
+    "macos-arm64",
+    "macos-x64",
+    "linux-arm64",
+    "linux-x64",
+    "windows-arm64",
+    "windows-x64",
 ];
 const TOOL_FIELDS: &[&str] = &[
     "name",
@@ -293,7 +303,34 @@ pub fn validate_local_manifest(manifest: &Value, platform: &str) -> Result<Strin
     validate_ui_contributions(object, id)?;
     validate_providers(object, id)?;
     validate_tools(object, id)?;
+    validate_downloads(object)?;
     Ok(entrypoint.to_owned())
+}
+
+/// `downloads` maps a platform key to the https URL of that platform's package archive.
+fn validate_downloads(object: &Map<String, Value>) -> Result<()> {
+    let Some(value) = object.get("downloads") else {
+        return Ok(());
+    };
+    if value.is_null() {
+        return Ok(());
+    }
+    let downloads = value.as_object().ok_or_else(|| {
+        anyhow!("plugin manifest downloads must be an object of platform keys to https URLs")
+    })?;
+    for (platform, url) in downloads {
+        if !PLATFORM_KEYS.contains(&platform.as_str()) {
+            bail!("plugin manifest downloads declares an unknown platform: {platform}");
+        }
+        match url.as_str() {
+            Some(url) if url.starts_with("https://") && url.len() > "https://".len() => {}
+            Some(url) => {
+                bail!("plugin manifest download for {platform} must be an https URL: {url}")
+            }
+            None => bail!("plugin manifest download for {platform} must be an https URL"),
+        }
+    }
+    Ok(())
 }
 
 fn validate_id(id: &str, subject: &str) -> Result<()> {
@@ -698,6 +735,49 @@ mod tests {
                 "{placement}"
             );
         }
+    }
+
+    #[test]
+    fn accepts_https_downloads_for_known_platforms() {
+        let mut manifest = manifest();
+        manifest["downloads"] = json!({
+            "macos-arm64": "https://github.com/acme/planeai-plugin-acme/releases/latest/download/planeai-plugin-acme-macos-arm64.tar.gz",
+            "windows-x64": "https://cdn.example.com/acme-windows-x64.zip"
+        });
+        assert_eq!(
+            validate_local_manifest(&manifest, "macos-arm64").unwrap(),
+            "bin/plugin"
+        );
+    }
+
+    #[test]
+    fn rejects_downloads_for_unknown_platforms_or_non_https_urls() {
+        let mut unknown_platform = manifest();
+        unknown_platform["downloads"] = json!({ "macos-universal": "https://example.com/a.zip" });
+        assert_eq!(
+            validate_local_manifest(&unknown_platform, "macos-arm64")
+                .unwrap_err()
+                .to_string(),
+            "plugin manifest downloads declares an unknown platform: macos-universal"
+        );
+
+        let mut plain_http = manifest();
+        plain_http["downloads"] = json!({ "macos-arm64": "http://example.com/a.tar.gz" });
+        assert_eq!(
+            validate_local_manifest(&plain_http, "macos-arm64")
+                .unwrap_err()
+                .to_string(),
+            "plugin manifest download for macos-arm64 must be an https URL: http://example.com/a.tar.gz"
+        );
+
+        let mut not_an_object = manifest();
+        not_an_object["downloads"] = json!(["https://example.com/a.tar.gz"]);
+        assert_eq!(
+            validate_local_manifest(&not_an_object, "macos-arm64")
+                .unwrap_err()
+                .to_string(),
+            "plugin manifest downloads must be an object of platform keys to https URLs"
+        );
     }
 
     #[test]

@@ -66,6 +66,8 @@ const plugin: PluginInventory = {
   installed_hash: "hash",
   installed_path: "/planeai/plugins/packages/sha256/hash",
   original_display_path: "/source/local-fixture",
+  remote_origin: null,
+  tools: [],
   enabled: true,
   state: "running",
   last_error: null,

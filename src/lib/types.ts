@@ -187,6 +187,14 @@ export interface PluginDiscoveryCandidate {
   language: string | null;
 }
 
+/** Where a local plugin installed from Discovery came from (ADR-0018). */
+export interface PluginRemoteOrigin {
+  repo: string;
+  release_tag: string | null;
+  source_url: string;
+  archive_sha256: string;
+}
+
 export interface PluginInventory {
   id: string;
   name: string;
@@ -202,13 +210,68 @@ export interface PluginInventory {
   } | null;
   ui_contributions: PluginUiContribution[];
   providers: PluginProvider[];
+  tools: PluginTool[];
   installed_hash: string | null;
   installed_path: string | null;
   original_display_path: string | null;
+  remote_origin: PluginRemoteOrigin | null;
   enabled: boolean;
   state: PluginRuntimeState;
   last_error: string | null;
   log_path: string | null;
+}
+
+/** What a Discovery card can offer for this host, resolved from GitHub and the installed inventory. */
+export type DiscoveryCardState =
+  | { kind: "unavailable"; reason: string }
+  | { kind: "install"; latest_version: string | null }
+  | { kind: "up_to_date"; installed_version: string }
+  | { kind: "update"; installed_version: string; latest_version: string }
+  | { kind: "reinstall"; installed_version: string }
+  | { kind: "installed_locally"; installed_version: string; latest_version: string | null }
+  | {
+      kind: "installed_from_other_repo";
+      repo: string;
+      installed_version: string;
+      latest_version: string | null;
+    };
+
+export type PackageIntegrity =
+  | { kind: "verified"; sha256: string }
+  | { kind: "unverified"; sha256: string };
+
+export type StagedPluginReplacement =
+  | { kind: "none" }
+  | { kind: "repo"; installed_version: string }
+  | { kind: "other_repo"; repo: string; installed_version: string }
+  | { kind: "local"; installed_version: string; original_display_path: string | null };
+
+/** A manifest tool declaration as the backend serializes it (camelCase, ADR-0017). */
+export interface PluginTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  annotations: Record<string, unknown>;
+  timeoutMs?: number;
+}
+
+/** A downloaded, verified and extracted package awaiting "Install and enable" or discard. */
+export interface StagedPluginInstall {
+  staging_id: string;
+  repo: string;
+  source_url: string;
+  release_tag: string | null;
+  integrity: PackageIntegrity;
+  manifest: {
+    id: string;
+    name: string;
+    version: string;
+    capabilities: string[];
+    ui_contributions: PluginUiContribution[];
+    tools: PluginTool[];
+  };
+  replaces: StagedPluginReplacement;
+  version_mismatch: { release_tag: string; manifest_version: string } | null;
 }
 
 export type JiraMigrationState = "not_needed" | "available" | "importing" | "failed" | "completed";

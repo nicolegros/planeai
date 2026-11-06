@@ -12,11 +12,12 @@ pub const MANIFEST_FILE: &str = "planeai-plugin.json";
 
 #[derive(Debug, Clone)]
 pub struct ImportedLocalPackage {
+    /// The canonical directory the package was copied from.
+    pub source: PathBuf,
     pub manifest: PluginManifest,
     pub backend_entrypoint: String,
     pub content_hash: String,
     pub package_dir: PathBuf,
-    pub original_display_path: String,
     package_was_published: bool,
 }
 
@@ -49,10 +50,58 @@ pub fn current_platform_key() -> &'static str {
     }
 }
 
+/// A package directory whose manifest and current-platform files passed validation.
+#[derive(Debug, Clone)]
+pub struct InspectedPackage {
+    pub source: PathBuf,
+    pub manifest: PluginManifest,
+    pub backend_entrypoint: String,
+}
+
 pub fn import_local_package(
     app_data_dir: &Path,
     source: &Path,
 ) -> Result<ImportedLocalPackage, String> {
+    let InspectedPackage {
+        source,
+        manifest,
+        backend_entrypoint,
+    } = inspect_package(source)?;
+
+    let packages_dir = app_data_dir.join("plugins").join("packages").join("sha256");
+    let staging = packages_dir.join(format!(".staging-{}", Uuid::new_v4()));
+    fs::create_dir_all(&staging)
+        .map_err(|error| format!("failed to create package staging directory: {error}"))?;
+    let copy_result = copy_tree(&source, &staging, &mut HashSet::new());
+    if let Err(error) = copy_result {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    let content_hash = hash_tree(&staging)?;
+    let package_dir = packages_dir.join(&content_hash);
+    let package_was_published = if package_dir.exists() {
+        fs::remove_dir_all(&staging).map_err(|error| {
+            format!("failed to discard existing package staging directory: {error}")
+        })?;
+        false
+    } else {
+        fs::rename(&staging, &package_dir)
+            .map_err(|error| format!("failed to publish imported plugin package: {error}"))?;
+        true
+    };
+
+    Ok(ImportedLocalPackage {
+        source,
+        manifest,
+        backend_entrypoint,
+        content_hash,
+        package_dir,
+        package_was_published,
+    })
+}
+
+/// Validates a package directory without copying anything.
+pub fn inspect_package(source: &Path) -> Result<InspectedPackage, String> {
     let source = source
         .canonicalize()
         .map_err(|error| format!("failed to resolve selected plugin directory: {error}"))?;
@@ -103,35 +152,10 @@ pub fn import_local_package(
         }
     }
 
-    let packages_dir = app_data_dir.join("plugins").join("packages").join("sha256");
-    let staging = packages_dir.join(format!(".staging-{}", Uuid::new_v4()));
-    fs::create_dir_all(&staging)
-        .map_err(|error| format!("failed to create package staging directory: {error}"))?;
-    let copy_result = copy_tree(&source, &staging, &mut HashSet::new());
-    if let Err(error) = copy_result {
-        let _ = fs::remove_dir_all(&staging);
-        return Err(error);
-    }
-    let content_hash = hash_tree(&staging)?;
-    let package_dir = packages_dir.join(&content_hash);
-    let package_was_published = if package_dir.exists() {
-        fs::remove_dir_all(&staging).map_err(|error| {
-            format!("failed to discard existing package staging directory: {error}")
-        })?;
-        false
-    } else {
-        fs::rename(&staging, &package_dir)
-            .map_err(|error| format!("failed to publish imported plugin package: {error}"))?;
-        true
-    };
-
-    Ok(ImportedLocalPackage {
+    Ok(InspectedPackage {
+        source,
         manifest,
         backend_entrypoint,
-        content_hash,
-        package_dir,
-        original_display_path: source.display().to_string(),
-        package_was_published,
     })
 }
 
@@ -325,11 +349,11 @@ fn hash_tree(root: &Path) -> Result<String, String> {
             hasher.update(&buffer[..read]);
         }
     }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(hex(&hasher.finalize()))
+}
+
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn collect_files(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -403,6 +427,15 @@ fn is_executable(path: &Path) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_running_platform_is_a_valid_downloads_key() {
+        assert!(
+            planeai_plugin_contract::PLATFORM_KEYS.contains(&super::current_platform_key()),
+            "{} is missing from PLATFORM_KEYS",
+            super::current_platform_key()
+        );
+    }
+
     use super::*;
     use std::fs;
     #[cfg(unix)]
@@ -449,6 +482,23 @@ mod tests {
             fs::read(imported.package_dir.join("data.txt")).unwrap(),
             b"original"
         );
+        assert!(imported.package_dir.join("bin/plugin").is_file());
+    }
+
+    /// The inventory shows this path as the install's origin, so it names the real directory.
+    #[cfg(unix)]
+    #[test]
+    fn records_the_resolved_directory_behind_a_symlinked_package() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        write_package(&source, "fixture");
+        let link = temp.path().join("link");
+        std::os::unix::fs::symlink(&source, &link).unwrap();
+
+        let imported = import_local_package(&temp.path().join("app"), &link).unwrap();
+
+        assert_eq!(imported.source, source.canonicalize().unwrap());
+        assert_ne!(imported.source, link);
         assert!(imported.package_dir.join("bin/plugin").is_file());
     }
 

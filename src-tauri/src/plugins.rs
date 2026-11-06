@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -66,8 +66,20 @@ pub struct PluginManifest {
     pub providers: Vec<PluginProvider>,
     #[serde(default)]
     pub tools: Vec<PluginTool>,
+    /// Platform key to https archive URL; read by Discovery installs, ignored by the runtime.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub downloads: BTreeMap<String, String>,
     #[serde(default, rename = "ui_entrypoint")]
     legacy_ui_entrypoint: LegacyUiEntrypoint,
+}
+
+/// Hand-written manifests spell an absent collection as `null`; serde `default` only covers a missing key.
+pub(crate) fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// Keeps the legacy field's three wire states distinct: missing fields are
@@ -314,6 +326,7 @@ impl PluginManifest {
                     "background_service": self.background_service,
                     "providers": (!self.providers.is_empty()).then_some(&self.providers),
                     "tools": (!self.tools.is_empty()).then_some(&self.tools),
+                    "downloads": (!self.downloads.is_empty()).then_some(&self.downloads),
                 });
                 planeai_plugin_contract::validate_local_manifest(&manifest, platform)
                     .map_err(|error| error.to_string())?;
@@ -543,7 +556,58 @@ impl PluginRuntimeState {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// Where a package installed from Discovery came from (ADR-0018).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RemoteOrigin {
+    pub repo: String,
+    pub release_tag: Option<String>,
+    pub source_url: String,
+    pub archive_sha256: String,
+}
+
+/// How a local package reached PlaneAI; a later install of the same id replaces it whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackageProvenance {
+    Folder { original_display_path: String },
+    Remote(RemoteOrigin),
+}
+
+/// What installing a package does to the inventory row with the same id.
+#[derive(Debug, PartialEq, Eq)]
+enum InstallPlan {
+    /// The same folder bytes are already installed from a folder; nothing changes.
+    Keep(Box<PluginInventory>),
+    Write {
+        enable_after: bool,
+    },
+}
+
+fn plan_install(
+    existing: Option<&PluginInventory>,
+    provenance: &PackageProvenance,
+    content_hash: &str,
+) -> Result<InstallPlan, String> {
+    let remote = matches!(provenance, PackageProvenance::Remote(_));
+    let Some(existing) = existing else {
+        return Ok(InstallPlan::Write {
+            enable_after: remote,
+        });
+    };
+    existing.ensure_replaceable()?;
+    // Identical bytes still rewrite the row whenever provenance would change, so a repository
+    // reinstall records its origin and a folder install over it clears that origin.
+    let same_folder_bytes = !remote
+        && existing.remote_origin.is_none()
+        && existing.installed_hash.as_deref() == Some(content_hash);
+    if same_folder_bytes {
+        return Ok(InstallPlan::Keep(Box::new(existing.clone())));
+    }
+    Ok(InstallPlan::Write {
+        enable_after: existing.enabled || remote,
+    })
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PluginInventory {
     pub id: String,
     pub name: String,
@@ -559,10 +623,25 @@ pub struct PluginInventory {
     pub installed_hash: Option<String>,
     pub installed_path: Option<String>,
     pub original_display_path: Option<String>,
+    pub remote_origin: Option<RemoteOrigin>,
     pub enabled: bool,
     pub state: PluginRuntimeState,
     pub last_error: Option<String>,
     pub log_path: Option<String>,
+}
+
+impl PluginInventory {
+    /// Only local installs may be replaced or updated; a bundled id is never overwritten.
+    pub(crate) fn ensure_replaceable(&self) -> Result<(), String> {
+        if self.source_kind == PluginSourceKind::Local {
+            Ok(())
+        } else {
+            Err(format!(
+                "plugin id is reserved by a bundled plugin: {}",
+                self.id
+            ))
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -645,6 +724,10 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ("background_service", "TEXT"),
         ("providers", "TEXT NOT NULL DEFAULT '[]'"),
         ("tools", "TEXT NOT NULL DEFAULT '[]'"),
+        ("remote_repo", "TEXT"),
+        ("remote_release_tag", "TEXT"),
+        ("remote_source_url", "TEXT"),
+        ("remote_archive_sha256", "TEXT"),
     ] {
         let has_column = conn
             .prepare("PRAGMA table_info(plugin_inventory)")?
@@ -856,13 +939,45 @@ impl ManifestColumns {
     }
 }
 
+/// The provenance columns of `plugin_inventory`: a folder path, or the remote origin.
+struct ProvenanceColumns<'a> {
+    original_display_path: Option<&'a str>,
+    remote_repo: Option<&'a str>,
+    remote_release_tag: Option<&'a str>,
+    remote_source_url: Option<&'a str>,
+    remote_archive_sha256: Option<&'a str>,
+}
+
+impl<'a> ProvenanceColumns<'a> {
+    fn of(provenance: &'a PackageProvenance) -> Self {
+        match provenance {
+            PackageProvenance::Folder {
+                original_display_path,
+            } => Self {
+                original_display_path: Some(original_display_path),
+                remote_repo: None,
+                remote_release_tag: None,
+                remote_source_url: None,
+                remote_archive_sha256: None,
+            },
+            PackageProvenance::Remote(origin) => Self {
+                original_display_path: None,
+                remote_repo: Some(&origin.repo),
+                remote_release_tag: origin.release_tag.as_deref(),
+                remote_source_url: Some(&origin.source_url),
+                remote_archive_sha256: Some(&origin.archive_sha256),
+            },
+        }
+    }
+}
+
 pub fn insert_local_inventory(
     conn: &Connection,
     manifest: &PluginManifest,
     backend_entrypoint: &str,
     content_hash: &str,
     package_dir: &Path,
-    original_display_path: &str,
+    provenance: &PackageProvenance,
 ) -> Result<PluginInventory, String> {
     if get_inventory(conn, &manifest.id)
         .map_err(|error| error.to_string())?
@@ -879,11 +994,13 @@ pub fn insert_local_inventory(
         providers,
         tools,
     } = ManifestColumns::of(manifest)?;
+    let provenance = ProvenanceColumns::of(provenance);
     conn.execute(
         "INSERT INTO plugin_inventory (
             id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions, capabilities, background_service,
-            installed_hash, installed_path, original_display_path, enabled, runtime_state, providers, tools
-        ) VALUES (?1, ?2, ?3, ?4, 'local', ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 'disabled', ?12, ?13)",
+            installed_hash, installed_path, original_display_path, enabled, runtime_state, providers, tools,
+            remote_repo, remote_release_tag, remote_source_url, remote_archive_sha256
+        ) VALUES (?1, ?2, ?3, ?4, 'local', ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 'disabled', ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             manifest.id,
             manifest.name,
@@ -895,9 +1012,13 @@ pub fn insert_local_inventory(
             background_service,
             content_hash,
             package_dir.display().to_string(),
-            original_display_path,
+            provenance.original_display_path,
             providers,
             tools,
+            provenance.remote_repo,
+            provenance.remote_release_tag,
+            provenance.remote_source_url,
+            provenance.remote_archive_sha256,
         ],
     )
     .map_err(|error| format!("failed to persist imported local plugin: {error}"))?;
@@ -912,17 +1033,12 @@ pub fn replace_local_inventory(
     backend_entrypoint: &str,
     content_hash: &str,
     package_dir: &Path,
-    original_display_path: &str,
+    provenance: &PackageProvenance,
 ) -> Result<PluginInventory, String> {
     let existing = get_inventory(conn, &manifest.id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("plugin inventory entry not found: {}", manifest.id))?;
-    if existing.source_kind != PluginSourceKind::Local {
-        return Err(format!(
-            "plugin id is reserved by a bundled plugin: {}",
-            manifest.id
-        ));
-    }
+    existing.ensure_replaceable()?;
     manifest.validate()?;
     validate_shortcut_collisions(conn, manifest)?;
     let ManifestColumns {
@@ -932,13 +1048,15 @@ pub fn replace_local_inventory(
         providers,
         tools,
     } = ManifestColumns::of(manifest)?;
+    let provenance = ProvenanceColumns::of(provenance);
     conn.execute(
         "UPDATE plugin_inventory SET
             name = ?2, version = ?3, host_api_version = ?4, backend_entrypoint = ?5,
             ui_contributions = ?6, capabilities = ?7, background_service = ?8,
             installed_hash = ?9, installed_path = ?10, original_display_path = ?11,
             enabled = 0, runtime_state = 'disabled', last_error = NULL, log_path = NULL,
-            providers = ?12, tools = ?13, updated_at = CURRENT_TIMESTAMP
+            providers = ?12, tools = ?13, updated_at = CURRENT_TIMESTAMP,
+            remote_repo = ?14, remote_release_tag = ?15, remote_source_url = ?16, remote_archive_sha256 = ?17
          WHERE id = ?1 AND source_kind = 'local'",
         params![
             manifest.id,
@@ -951,9 +1069,13 @@ pub fn replace_local_inventory(
             background_service,
             content_hash,
             package_dir.display().to_string(),
-            original_display_path,
+            provenance.original_display_path,
             providers,
             tools,
+            provenance.remote_repo,
+            provenance.remote_release_tag,
+            provenance.remote_source_url,
+            provenance.remote_archive_sha256,
         ],
     )
     .map_err(|error| format!("failed to replace local plugin inventory: {error}"))?;
@@ -965,7 +1087,8 @@ pub fn replace_local_inventory(
 pub fn list_inventory(conn: &Connection) -> rusqlite::Result<Vec<PluginInventory>> {
     let mut statement = conn.prepare(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers, tools
+                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers, tools,
+                remote_repo, remote_release_tag, remote_source_url, remote_archive_sha256
          FROM plugin_inventory ORDER BY name COLLATE NOCASE",
     )?;
     let rows = statement.query_map([], row_to_inventory)?;
@@ -978,7 +1101,8 @@ pub fn get_inventory(
 ) -> rusqlite::Result<Option<PluginInventory>> {
     conn.query_row(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers, tools
+                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path, providers, tools,
+                remote_repo, remote_release_tag, remote_source_url, remote_archive_sha256
          FROM plugin_inventory WHERE id = ?1",
         [plugin_id],
         row_to_inventory,
@@ -1055,6 +1179,23 @@ fn row_to_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInventory
             )
         },
     )?;
+    let remote_origin = match (
+        row.get::<_, Option<String>>(18)?,
+        row.get::<_, Option<String>>(20)?,
+        row.get::<_, Option<String>>(21)?,
+    ) {
+        (Some(repo), Some(source_url), Some(archive_sha256)) => Some(RemoteOrigin {
+            repo,
+            release_tag: row.get(19)?,
+            source_url,
+            archive_sha256,
+        }),
+        (None, None, None) => None,
+        _ => {
+            tracing::warn!(plugin_id = %id, "ignoring an incomplete remote origin row");
+            None
+        }
+    };
     Ok(PluginInventory {
         id,
         name: row.get(1)?,
@@ -1077,6 +1218,7 @@ fn row_to_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInventory
         installed_hash: row.get(9)?,
         installed_path: row.get(10)?,
         original_display_path: row.get(11)?,
+        remote_origin,
         enabled: row.get(12)?,
         state: PluginRuntimeState::from_db(&state),
         last_error: row.get(14)?,
@@ -3003,6 +3145,24 @@ impl PluginRuntimeSupervisor {
     }
 
     pub async fn install_local(&self, source_path: String) -> Result<PluginInventory, String> {
+        self.install_package(PathBuf::from(source_path), None).await
+    }
+
+    /// Installs a staged Discovery package and enables it (ADR-0018).
+    pub async fn install_remote(
+        &self,
+        package_root: PathBuf,
+        origin: RemoteOrigin,
+    ) -> Result<PluginInventory, String> {
+        self.install_package(package_root, Some(origin)).await
+    }
+
+    /// Imports `source` under `remote_origin`, or as a folder install of its resolved path.
+    async fn install_package(
+        &self,
+        source: PathBuf,
+        remote_origin: Option<RemoteOrigin>,
+    ) -> Result<PluginInventory, String> {
         let _lifecycle = self.lifecycle.lock().await;
         let app = self.app.clone();
         let imported = commands::blocking(move || {
@@ -3011,18 +3171,24 @@ impl PluginRuntimeSupervisor {
                 .path()
                 .app_data_dir()
                 .map_err(|error| format!("failed to resolve PlaneAI plugin storage: {error}"))?;
-            crate::plugin_packages::import_local_package(&app_data, Path::new(&source_path))
+            crate::plugin_packages::import_local_package(&app_data, &source)
         })
         .await?;
+        let provenance = match remote_origin {
+            Some(origin) => PackageProvenance::Remote(origin),
+            None => PackageProvenance::Folder {
+                original_display_path: imported.source.display().to_string(),
+            },
+        };
         let manifest = imported.manifest.clone();
         let backend = imported.backend_entrypoint.clone();
         let hash = imported.content_hash.clone();
         let package_dir = imported.package_dir.clone();
-        let original_path = imported.original_display_path.clone();
         let existing = self.inventory(&manifest.id).await?;
-        let was_enabled = match existing.as_ref() {
-            Some(inventory) if inventory.source_kind != PluginSourceKind::Local => {
-                let error = format!("plugin id is reserved by a bundled plugin: {}", manifest.id);
+        let enable_after = match plan_install(existing.as_ref(), &provenance, &hash) {
+            Ok(InstallPlan::Keep(inventory)) => return Ok(*inventory),
+            Ok(InstallPlan::Write { enable_after }) => enable_after,
+            Err(error) => {
                 if let Err(cleanup_error) =
                     commands::blocking(move || imported.discard_if_newly_published()).await
                 {
@@ -3030,11 +3196,6 @@ impl PluginRuntimeSupervisor {
                 }
                 return Err(error);
             }
-            Some(inventory) if inventory.installed_hash.as_deref() == Some(&hash) => {
-                return Ok(inventory.clone());
-            }
-            Some(inventory) => inventory.enabled,
-            None => false,
         };
         if existing
             .as_ref()
@@ -3052,7 +3213,7 @@ impl PluginRuntimeSupervisor {
                         &backend,
                         &hash,
                         &package_dir,
-                        &original_path,
+                        &provenance,
                     )
                 } else {
                     insert_local_inventory(
@@ -3061,7 +3222,7 @@ impl PluginRuntimeSupervisor {
                         &backend,
                         &hash,
                         &package_dir,
-                        &original_path,
+                        &provenance,
                     )
                 }
             })
@@ -3077,7 +3238,7 @@ impl PluginRuntimeSupervisor {
                 return Err(error);
             }
         };
-        if was_enabled {
+        if enable_after {
             self.ensure_plugin_migration_ready(&inventory.id).await?;
             return self.enable_inner(&inventory.id).await;
         }
@@ -4661,6 +4822,43 @@ mod tests {
         .unwrap()
     }
 
+    #[test]
+    fn local_manifest_downloads_are_validated_and_otherwise_ignored() {
+        let mut manifest = session_panel_manifest();
+        manifest.downloads = BTreeMap::from([(
+            "macos-arm64".to_string(),
+            "https://github.com/acme/planeai-plugin-acme/releases/latest/download/planeai-plugin-acme-macos-arm64.tar.gz".to_string(),
+        )]);
+        manifest.validate().unwrap();
+
+        manifest.downloads =
+            BTreeMap::from([("linux-x64".to_string(), "ftp://acme.dev/x.zip".to_string())]);
+        assert_eq!(
+            manifest.validate().unwrap_err(),
+            "plugin manifest download for linux-x64 must be an https URL: ftp://acme.dev/x.zip"
+        );
+    }
+
+    #[test]
+    fn manifest_downloads_read_null_as_none_and_keep_listed_platforms() {
+        let base = r#""schema":"planeai.plugin.v1","id":"acme","name":"Acme","version":"1.0.0","host_api_version":"planeai.plugin-host.v1","source_kind":"local","backend_entrypoints":{}"#;
+        let null: PluginManifest =
+            serde_json::from_str(&format!(r#"{{{base},"downloads":null}}"#)).unwrap();
+        assert_eq!(null.downloads, BTreeMap::new());
+
+        let listed: PluginManifest = serde_json::from_str(&format!(
+            r#"{{{base},"downloads":{{"linux-x64":"https://acme.dev/acme-linux-x64.zip"}}}}"#
+        ))
+        .unwrap();
+        assert_eq!(
+            listed.downloads,
+            BTreeMap::from([(
+                "linux-x64".to_string(),
+                "https://acme.dev/acme-linux-x64.zip".to_string()
+            )])
+        );
+    }
+
     fn placements(conn: &Connection, plugin_id: &str) -> Vec<PluginUiPlacement> {
         get_inventory(conn, plugin_id)
             .unwrap()
@@ -4681,7 +4879,9 @@ mod tests {
             "bin/plugin",
             "hash",
             package.path(),
-            "/source",
+            &PackageProvenance::Folder {
+                original_display_path: "/source".to_string(),
+            },
         )
         .unwrap();
 
@@ -4708,7 +4908,9 @@ mod tests {
             "bin/plugin",
             "hash",
             package.path(),
-            "/source",
+            &PackageProvenance::Folder {
+                original_display_path: "/source".to_string(),
+            },
         )
         .unwrap();
         conn.execute(
@@ -4739,7 +4941,9 @@ mod tests {
             "bin/plugin",
             "hash",
             package.path(),
-            "/source",
+            &PackageProvenance::Folder {
+                original_display_path: "/source".to_string(),
+            },
         )
         .unwrap();
 
@@ -4818,6 +5022,7 @@ mod tests {
             background_service: None,
             providers: Vec::new(),
             tools: Vec::new(),
+            downloads: BTreeMap::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
@@ -4827,7 +5032,9 @@ mod tests {
             "bin/plugin",
             "hash",
             package.path(),
-            "/source",
+            &PackageProvenance::Folder {
+                original_display_path: "/source".to_string(),
+            },
         )
         .unwrap();
         let inventory = get_inventory(&conn, "sidebar-test").unwrap().unwrap();
@@ -4919,6 +5126,7 @@ mod tests {
             background_service: None,
             providers: Vec::new(),
             tools: Vec::new(),
+            downloads: BTreeMap::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         sync_inventory(&conn, &[local]).unwrap();
@@ -4955,6 +5163,7 @@ mod tests {
             background_service: None,
             providers: Vec::new(),
             tools: Vec::new(),
+            downloads: BTreeMap::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
@@ -4964,7 +5173,9 @@ mod tests {
             "bin/plugin",
             "content-hash",
             package.path(),
-            "/original/package",
+            &PackageProvenance::Folder {
+                original_display_path: "/original/package".to_string(),
+            },
         )
         .unwrap();
         let replacement = replace_local_inventory(
@@ -4973,7 +5184,9 @@ mod tests {
             "bin/plugin",
             "different-hash",
             package.path(),
-            "/different/package",
+            &PackageProvenance::Folder {
+                original_display_path: "/different/package".to_string(),
+            },
         )
         .unwrap();
         assert_eq!(
@@ -4992,6 +5205,205 @@ mod tests {
             .unwrap_err()
             .contains("local plugin"));
         assert!(get_inventory(&conn, "jira").unwrap().is_some());
+    }
+
+    fn installed(
+        remote_origin: Option<RemoteOrigin>,
+        enabled: bool,
+        hash: &str,
+    ) -> PluginInventory {
+        PluginInventory {
+            id: "acme".to_string(),
+            name: "Acme".to_string(),
+            version: "1.0.0".to_string(),
+            host_api_version: "planeai.plugin-host.v6".to_string(),
+            source_kind: PluginSourceKind::Local,
+            backend_entrypoint: "bin/plugin".to_string(),
+            ui_contributions: vec![],
+            capabilities: vec![],
+            background_service: None,
+            providers: vec![],
+            tools: vec![],
+            installed_hash: Some(hash.to_string()),
+            installed_path: Some("/app/plugins/packages/sha256/hash".to_string()),
+            original_display_path: remote_origin
+                .is_none()
+                .then(|| "/Users/me/acme".to_string()),
+            remote_origin,
+            enabled,
+            state: if enabled {
+                PluginRuntimeState::Running
+            } else {
+                PluginRuntimeState::Disabled
+            },
+            last_error: None,
+            log_path: None,
+        }
+    }
+
+    #[test]
+    fn install_plan_table() {
+        let origin = RemoteOrigin {
+            repo: "acme/planeai-plugin-acme".to_string(),
+            release_tag: Some("v1.0.0".to_string()),
+            source_url:
+                "https://github.com/acme/planeai-plugin-acme/releases/download/v1.0.0/a.tar.gz"
+                    .to_string(),
+            archive_sha256: "archive".to_string(),
+        };
+        let folder = PackageProvenance::Folder {
+            original_display_path: "/Users/me/acme".to_string(),
+        };
+        let remote = PackageProvenance::Remote(origin.clone());
+        let bundled = PluginInventory {
+            id: "jira".to_string(),
+            source_kind: PluginSourceKind::Builtin,
+            ..installed(None, false, "hash")
+        };
+        type Case<'a> = (
+            &'a str,
+            Option<PluginInventory>,
+            &'a PackageProvenance,
+            Result<InstallPlan, String>,
+        );
+        let cases: Vec<Case> = vec![
+            (
+                "first folder install",
+                None,
+                &folder,
+                Ok(InstallPlan::Write {
+                    enable_after: false,
+                }),
+            ),
+            (
+                "first remote install enables",
+                None,
+                &remote,
+                Ok(InstallPlan::Write { enable_after: true }),
+            ),
+            (
+                "bundled id",
+                Some(bundled),
+                &remote,
+                Err("plugin id is reserved by a bundled plugin: jira".to_string()),
+            ),
+            (
+                "identical folder bytes over a folder row",
+                Some(installed(None, true, "hash")),
+                &folder,
+                Ok(InstallPlan::Keep(Box::new(installed(None, true, "hash")))),
+            ),
+            (
+                "identical bytes from the repository rewrite provenance",
+                Some(installed(None, true, "hash")),
+                &remote,
+                Ok(InstallPlan::Write { enable_after: true }),
+            ),
+            (
+                "identical folder bytes over a repository row clear provenance",
+                Some(installed(Some(origin.clone()), false, "hash")),
+                &folder,
+                Ok(InstallPlan::Write {
+                    enable_after: false,
+                }),
+            ),
+            (
+                "remote install enables a disabled plugin",
+                Some(installed(Some(origin.clone()), false, "older")),
+                &remote,
+                Ok(InstallPlan::Write { enable_after: true }),
+            ),
+            (
+                "folder update keeps an enabled plugin enabled",
+                Some(installed(None, true, "older")),
+                &folder,
+                Ok(InstallPlan::Write { enable_after: true }),
+            ),
+        ];
+        for (name, existing, provenance, expected) in cases {
+            assert_eq!(
+                plan_install(existing.as_ref(), provenance, "hash"),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_provenance_round_trips_and_a_folder_install_clears_it() {
+        let conn = database();
+        let manifest = session_panel_manifest();
+        let package = tempfile::TempDir::new().unwrap();
+        let origin = RemoteOrigin {
+            repo: "acme/planeai-plugin-acme".to_string(),
+            release_tag: Some("v1.0.0".to_string()),
+            source_url: "https://github.com/acme/planeai-plugin-acme/releases/download/v1.0.0/planeai-plugin-acme-macos-arm64.tar.gz".to_string(),
+            archive_sha256: "0123abcd".to_string(),
+        };
+        let installed = insert_local_inventory(
+            &conn,
+            &manifest,
+            "bin/plugin",
+            "hash",
+            package.path(),
+            &PackageProvenance::Remote(origin.clone()),
+        )
+        .unwrap();
+        assert_eq!(installed.remote_origin, Some(origin.clone()));
+        assert_eq!(installed.original_display_path, None);
+        assert_eq!(
+            get_inventory(&conn, "panel-test")
+                .unwrap()
+                .unwrap()
+                .remote_origin,
+            Some(origin)
+        );
+
+        let replaced = replace_local_inventory(
+            &conn,
+            &manifest,
+            "bin/plugin",
+            "other-hash",
+            package.path(),
+            &PackageProvenance::Folder {
+                original_display_path: "/Users/me/panel".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(replaced.remote_origin, None);
+        assert_eq!(
+            replaced.original_display_path.as_deref(),
+            Some("/Users/me/panel")
+        );
+    }
+
+    #[test]
+    fn a_partial_remote_origin_row_reads_back_as_no_origin() {
+        let conn = database();
+        let manifest = session_panel_manifest();
+        let package = tempfile::TempDir::new().unwrap();
+        insert_local_inventory(
+            &conn,
+            &manifest,
+            "bin/plugin",
+            "hash",
+            package.path(),
+            &PackageProvenance::Remote(RemoteOrigin {
+                repo: "acme/planeai-plugin-acme".to_string(),
+                release_tag: None,
+                source_url: "https://cdn.acme.dev/acme.zip".to_string(),
+                archive_sha256: "0123abcd".to_string(),
+            }),
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE plugin_inventory SET remote_source_url = NULL WHERE id = 'panel-test'",
+            [],
+        )
+        .unwrap();
+        let plugin = get_inventory(&conn, "panel-test").unwrap().unwrap();
+        assert_eq!(plugin.remote_origin, None);
+        assert_eq!(plugin.installed_hash.as_deref(), Some("hash"));
     }
 
     #[test]
@@ -5112,7 +5524,9 @@ mod tests {
             "bin/plugin",
             "hash",
             package.path(),
-            "/source",
+            &PackageProvenance::Folder {
+                original_display_path: "/source".to_string(),
+            },
         )
         .unwrap();
 
@@ -5190,6 +5604,7 @@ mod tests {
             background_service: None,
             providers: Vec::new(),
             tools: Vec::new(),
+            downloads: BTreeMap::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         assert!(manifest
@@ -5256,6 +5671,7 @@ mod tests {
             background_service: None,
             providers: Vec::new(),
             tools: Vec::new(),
+            downloads: BTreeMap::new(),
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
@@ -5265,7 +5681,9 @@ mod tests {
             "bin/plugin",
             "hash",
             package.path(),
-            "/source",
+            &PackageProvenance::Folder {
+                original_display_path: "/source".to_string(),
+            },
         )
         .unwrap();
         assert_eq!(

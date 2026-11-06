@@ -95,10 +95,17 @@ rmcp = { version = "=3.8.0", default-features = false, features = [
 ] }
 schemars = "=1.2.1"
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }
+tar = "=0.4.46"
+flate2 = "=1.1.9"
+zip = { version = "=9.2.2", default-features = false, features = ["deflate-flate2"] }
+semver = "=1.0.28"
 
 [dev-dependencies]
 tempfile = { workspace = true }
 planeai-core = { path = "planeai-core", features = ["test-support"] }
+# ReaderStream serves chunked bodies to the plugin download tests.
+tokio-util = { workspace = true, features = ["io"] }
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }

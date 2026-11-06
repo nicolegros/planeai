@@ -3334,6 +3334,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "flate2",
  "font-kit",
  "include_dir",
  "jsonc-parser",
@@ -3350,13 +3351,16 @@ dependencies = [
  "planeai-tasks",
  "planeai-toon",
  "regex",
+ "reqwest",
  "rmcp",
  "rmux-sdk",
  "rusqlite",
  "schemars 1.2.1",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -3373,6 +3377,7 @@ dependencies = [
  "tracing-subscriber",
  "trash",
  "uuid",
+ "zip",
 ]
 
 [[package]]
@@ -7005,6 +7010,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e408c6cc4699dd017d53dc080cd51c2cea2b5354af57a1479bd265ed42911487"
 dependencies = [
  "crc32fast",
+ "flate2",
  "getrandom 0.4.3",
  "indexmap 2.14.0",
  "libc",

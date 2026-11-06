@@ -1,10 +1,15 @@
-use std::time::Duration;
+use std::path::Path;
 
-use planeai_core::command::{augmented_path, no_window_tokio};
 use serde::{Deserialize, Serialize};
-use tokio::time::timeout;
+use tauri::State;
+use tokio::sync::Semaphore;
 
-const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
+use crate::plugin_remote::{
+    fetch_remote_repo, DiscoveryCardState, Downloader, Gh, GhCli, RemoteRepo, RepoFullName,
+    StagedPluginInstall, StagingStore,
+};
+use crate::plugins::{PluginInventory, PluginRuntimeHandle};
+
 const DISCOVERY_ARGS: &[&str] = &[
     "search",
     "repos",
@@ -49,31 +54,15 @@ struct GithubRepository {
 
 #[tauri::command]
 pub async fn discover_plugins() -> Result<Vec<PluginDiscoveryCandidate>, String> {
-    let mut command = tokio::process::Command::new(crate::command::resolve("gh"));
-    no_window_tokio(&mut command);
-    command.env("PATH", augmented_path(&[]));
-    command.args(DISCOVERY_ARGS);
+    discover(&GhCli).await
+}
 
-    let output = timeout(DISCOVERY_TIMEOUT, command.output())
+async fn discover(gh: &impl Gh) -> Result<Vec<PluginDiscoveryCandidate>, String> {
+    let output = gh
+        .run(DISCOVERY_ARGS)
         .await
-        .map_err(|_| {
-            "GitHub plugin discovery timed out after 30 seconds. Please retry.".to_string()
-        })?
-        .map_err(|error| format!("failed to start GitHub CLI for plugin discovery: {error}"))?;
-
-    if !output.status.success() {
-        let diagnostic = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if diagnostic.is_empty() {
-            format!(
-                "GitHub plugin discovery failed with status {}.",
-                output.status
-            )
-        } else {
-            format!("GitHub plugin discovery failed: {diagnostic}")
-        });
-    }
-
-    parse_candidates(&output.stdout)
+        .map_err(|error| error.describe("GitHub plugin discovery"))?;
+    parse_candidates(&output)
 }
 
 fn parse_candidates(output: &[u8]) -> Result<Vec<PluginDiscoveryCandidate>, String> {
@@ -103,9 +92,101 @@ fn parse_candidates(output: &[u8]) -> Result<Vec<PluginDiscoveryCandidate>, Stri
     Ok(candidates)
 }
 
+/// Discovery resolves every card at once; this caps the concurrent `gh` processes.
+const GH_PROCESS_LIMIT: usize = 8;
+/// One resolution runs the manifest and the latest-release request side by side.
+const GH_PROCESSES_PER_RESOLUTION: u32 = 2;
+
+/// Staging and the shared download client for Discovery installs (ADR-0018).
+pub struct PluginRemoteState {
+    staging: StagingStore,
+    resolve_permits: Semaphore,
+    /// A client that failed to build only blocks installs, so its error waits for the first one.
+    downloader: Result<Downloader, String>,
+}
+
+impl PluginRemoteState {
+    pub fn new(app_data_dir: &Path) -> Self {
+        let staging = StagingStore::new(app_data_dir);
+        if let Err(error) = staging.reset() {
+            tracing::warn!(%error, "failed to clear stale plugin staging");
+        }
+        Self {
+            staging,
+            resolve_permits: Semaphore::new(GH_PROCESS_LIMIT),
+            downloader: Downloader::new(),
+        }
+    }
+
+    /// Card resolution and staging share the `gh` bound; the permits are released before any
+    /// download starts.
+    async fn fetch(&self, repo: RepoFullName) -> Result<RemoteRepo, String> {
+        let _permits = self
+            .resolve_permits
+            .acquire_many(GH_PROCESSES_PER_RESOLUTION)
+            .await
+            .map_err(|error| error.to_string())?;
+        fetch_remote_repo(&GhCli, repo).await
+    }
+}
+
+#[tauri::command]
+pub async fn resolve_plugin_candidate(
+    repo: String,
+    remote: State<'_, PluginRemoteState>,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<DiscoveryCardState, String> {
+    let repo = RepoFullName::parse(&repo)?;
+    let remote_repo = remote.fetch(repo).await?;
+    let inventory = runtime.0.list().await?;
+    Ok(remote_repo.card_state(&inventory, crate::plugin_packages::current_platform_key()))
+}
+
+#[tauri::command]
+pub async fn stage_remote_plugin(
+    repo: String,
+    remote: State<'_, PluginRemoteState>,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<StagedPluginInstall, String> {
+    let repo = RepoFullName::parse(&repo)?;
+    let downloader = remote.downloader.as_ref().map_err(Clone::clone)?;
+    let source = remote
+        .fetch(repo.clone())
+        .await?
+        .select_source(crate::plugin_packages::current_platform_key())?;
+    let inventory = runtime.0.list().await?;
+    remote
+        .staging
+        .stage(downloader, &repo, &source, &inventory)
+        .await
+}
+
+#[tauri::command]
+pub async fn commit_staged_plugin(
+    staging_id: String,
+    remote: State<'_, PluginRemoteState>,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<PluginInventory, String> {
+    remote
+        .staging
+        .commit(&staging_id, |package_root, origin| {
+            runtime.0.install_remote(package_root, origin)
+        })
+        .await
+}
+
+#[tauri::command]
+pub async fn discard_staged_plugin(
+    staging_id: String,
+    remote: State<'_, PluginRemoteState>,
+) -> Result<(), String> {
+    remote.staging.discard(&staging_id).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin_remote::ScriptedGh;
 
     #[test]
     fn requests_the_fixed_public_planeai_catalog() {
@@ -170,5 +251,34 @@ mod tests {
     #[test]
     fn rejects_invalid_cli_json() {
         assert!(parse_candidates(b"not json").is_err());
+    }
+
+    #[tokio::test]
+    async fn discovery_runs_the_catalog_search_and_names_its_failures() {
+        let gh = ScriptedGh::new(vec![(
+            DISCOVERY_ARGS,
+            Ok(br#"[{"fullName":"planeai/one","description":null,"url":"https://github.com/planeai/one","updatedAt":"2026-09-20T00:00:00Z","stargazersCount":1,"language":null,"isArchived":false,"isFork":false}]"#.to_vec()),
+        )]);
+        assert_eq!(
+            discover(&gh).await,
+            Ok(vec![PluginDiscoveryCandidate {
+                full_name: "planeai/one".to_string(),
+                description: None,
+                url: "https://github.com/planeai/one".to_string(),
+                updated_at: "2026-09-20T00:00:00Z".to_string(),
+                stargazers_count: 1,
+                language: None,
+            }])
+        );
+        assert_eq!(gh.calls(), vec![DISCOVERY_ARGS.to_vec()]);
+
+        let gh = ScriptedGh::new(vec![(
+            DISCOVERY_ARGS,
+            ScriptedGh::failed("gh: Bad credentials (HTTP 401)"),
+        )]);
+        assert_eq!(
+            discover(&gh).await,
+            Err("GitHub plugin discovery failed: gh: Bad credentials (HTTP 401)".to_string())
+        );
     }
 }

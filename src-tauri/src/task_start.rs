@@ -1135,6 +1135,7 @@ mod tests {
             installed_hash: None,
             installed_path: None,
             original_display_path: None,
+            remote_origin: None,
             enabled: true,
             state,
             last_error: None,

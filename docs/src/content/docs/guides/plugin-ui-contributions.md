@@ -93,6 +93,23 @@ After each successful call, PlaneAI tells the plugin's UI its data changed, unle
 
 The platform key is the current OS and architecture: `macos-arm64`, `macos-x64`, `linux-arm64`, `linux-x64`, `windows-arm64`, or `windows-x64`. Ship each declared binary at its declared path; a package may declare only the platforms it actually supports, but it cannot install on a platform without a matching binary. Windows backend filenames conventionally end in `.exe`.
 
+### Downloads
+
+PlaneAI can install a plugin straight from a Discovery card (see [Install from Discovery](#install-from-discovery)).
+It looks for the package archive in two places, in this order.
+
+1. The optional `downloads` object in the `planeai-plugin.json` on your repository's default branch, keyed by platform: `"downloads": { "macos-arm64": "https://github.com/acme/planeai-plugin-acme/releases/latest/download/planeai-plugin-acme-macos-arm64.tar.gz" }`.
+   Every URL must be `https`, and every key must be one of the platform keys above.
+   The installed copy of the manifest is validated the same way and the field is otherwise ignored.
+2. The latest non-draft, non-prerelease GitHub release, when the default-branch manifest is missing, unparseable, or has no entry for the host platform.
+   The asset must be named `<repository name>-<platform>.tar.gz` or `<repository name>-<platform>.zip`, for example `planeai-plugin-acme-macos-arm64.tar.gz` in `acme/planeai-plugin-acme`.
+
+An archive must contain exactly one top-level directory, and that directory must hold `planeai-plugin.json` and the package laid out as above.
+Absolute entries, `..` components, symbolic links and hard links are rejected.
+Tag releases `vX.Y.Z` (the `v` is optional) and keep the manifest `version` equal to the tag of the release that serves the archive, so Discovery can offer updates and the install review does not warn about a mismatch.
+When the archive is an asset of the latest release, PlaneAI verifies its SHA-256 against the digest GitHub reports for that asset.
+Any other URL, and a release asset for which GitHub reports no digest, installs as unverified and the review shows the computed hash.
+
 ### Capabilities
 
 Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `sessions.prompt`, `session-events`, `sessions.actions`, `sessions.advisories`, `sessions.complete`, `sessions.start`, `tasks.read`, `tasks.create`, `tasks.transition`, `task-events`, `providers`, and `tools`; duplicates and all other local capabilities are rejected.
@@ -476,12 +493,31 @@ A provider session's UI owns the keyboard like a terminal: PlaneAI takes focus o
    make local-plugin-fixture
    ```
 
-2. To find community candidates, open **Preferences → Plugins** and choose **Discover plugins**. PlaneAI asks your existing `gh` CLI to search public, non-archived, non-fork GitHub repositories tagged with the fixed `planeai` topic, returning up to 100 results ordered by stars. Results exist only for the current app session and are refreshed only when you choose discovery again. These results are unverified repository links—not packages, compatibility claims, downloads, or install actions. Review and obtain source from an author you trust before importing it.
-3. Choose **Install local package** and select the reviewed package directory, not an individual binary or manifest.
+2. To find community candidates, open **Preferences → Plugins** and choose **Discover plugins**. PlaneAI asks your existing `gh` CLI to search public, non-archived, non-fork GitHub repositories tagged with the fixed `planeai` topic, returning up to 100 results ordered by stars. Results exist only for the current app session and are refreshed only when you choose discovery again. Candidates are unverified community repositories, not compatibility claims. Review the repository and trust its author before installing anything from it.
+3. Either install from the card (see [Install from Discovery](#install-from-discovery)), or choose **Install local package** and select a reviewed package directory, not an individual binary or manifest.
 4. Enable the imported plugin. Open its `main-pane` from Cmd+K or interact with its declared sidebar/preferences placement. The fixture appears as **Local Fixture**.
 5. Use **Reload** after a runtime error or to restart an already imported package. Reload restarts the imported immutable copy; it does not reread your source directory.
 6. To publish a changed manifest, binary, or UI, rebuild and choose **Install local package** again. Selecting a package with the same installed local-plugin ID replaces its immutable package copy, preserves host-owned settings, secrets, logs, and data, and restarts the plugin if it was enabled. Imported content is copied under a SHA-256 directory, so edits to the original directory never affect an installed version.
 7. Disable a plugin to stop its sidecar. **Remove plugin** is available only for local packages and deletes PlaneAI's imported package and host-owned plugin state. It does not delete your original source directory.
+
+### Install from Discovery
+
+Right after discovery returns, every card checks what the repository offers for this platform (see [Downloads](#downloads)) and what is already installed, and shows one of:
+
+- **Install vX** for a repository you have not installed, or plain **Install** when there is no semver release tag.
+- **Update to vY** beside **Installed vX** when the latest release vY is newer than the installed manifest version vX, or **Up to date (vX)** when it is not.
+- **Reinstall latest** beside the installed version for a repository-installed plugin whose versions cannot be compared.
+- **Installed locally (vY)** with **Replace with vX** when a plugin with the same `id` was installed from a folder.
+- **Installed from github.com/<other repository> (vY)** with **Replace with vX** when a plugin with the same `id` was installed from a different repository, so another author's package is never offered as an update.
+- A sentence explaining why nothing can be installed, for example no archive for your platform or an `id` reserved by a bundled plugin.
+
+Choosing the action downloads the archive into a staging directory, verifies it against the release asset digest when it is a release asset, extracts and validates it, and opens a review.
+The review lists the manifest `id`, name and version, the repository, the source URL, the release tag, the archive SHA-256 marked **Verified** or **Unverified**, the capabilities, UI placements and MCP tools it declares, what it replaces, and a warning when the release tag and the manifest version disagree.
+The installed list shows a different hash, the SHA-256 of the imported package tree.
+Nothing is installed until you choose **Install and enable**; cancelling or closing the review discards the download.
+Installing keeps the plugin's host-owned settings, secrets, logs and data, exactly like **Install local package** with the same `id`, and enables the plugin.
+The installed list then shows `Source: github.com/<repository> @ <tag>` instead of a folder path, and a later **Install local package** of the same `id` replaces that origin.
+PlaneAI does not poll for updates: a newer release is only noticed when you open Discovery again.
 
 ## Headless contract test
 

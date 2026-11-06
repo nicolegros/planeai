@@ -27,6 +27,8 @@ function plugin(
     installed_hash: null,
     installed_path: null,
     original_display_path: null,
+    remote_origin: null,
+    tools: [],
     enabled: true,
     state,
     last_error: null,

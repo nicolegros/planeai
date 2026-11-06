@@ -15,6 +15,8 @@ import type {
   CommitEntry,
   PluginInventory,
   PluginDiscoveryCandidate,
+  DiscoveryCardState,
+  StagedPluginInstall,
   GithubMigrationStatus,
   JiraMigrationStatus,
   TabSpec,
@@ -304,6 +306,12 @@ export const plugins = {
   installLocal: (sourcePath: string) =>
     invoke<PluginInventory>("install_local_plugin", { sourcePath }),
   removeLocal: (pluginId: string) => invoke("remove_local_plugin", { pluginId }),
+  resolveCandidate: (repo: string) =>
+    invoke<DiscoveryCardState>("resolve_plugin_candidate", { repo }),
+  stageRemote: (repo: string) => invoke<StagedPluginInstall>("stage_remote_plugin", { repo }),
+  commitStaged: (stagingId: string) =>
+    invoke<PluginInventory>("commit_staged_plugin", { stagingId }),
+  discardStaged: (stagingId: string) => invoke<void>("discard_staged_plugin", { stagingId }),
   enable: (pluginId: string) => invoke<PluginInventory>("enable_plugin", { pluginId }),
   disable: (pluginId: string) => invoke<PluginInventory>("disable_plugin", { pluginId }),
   reload: (pluginId: string) => invoke<PluginInventory>("reload_plugin", { pluginId }),

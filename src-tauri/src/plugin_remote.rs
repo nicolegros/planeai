@@ -1,0 +1,2767 @@
+//! Remote plugin packages: resolving a Discovery repository to one archive for this platform,
+//! downloading and verifying it, extracting it into staging, and committing or discarding
+//! the staged package (ADR-0018).
+
+use std::collections::{BTreeMap, HashMap};
+use std::fs;
+use std::future::Future;
+use std::io::{self, Read, Write};
+use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
+use std::time::Duration;
+
+use planeai_core::command::{augmented_path, no_window_tokio};
+
+use crate::plugin_packages::hex;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tokio::time::timeout;
+use uuid::Uuid;
+
+use crate::plugins::{
+    null_as_default, PluginHostCapability, PluginInventory, PluginManifest, PluginTool,
+    PluginUiContribution, RemoteOrigin,
+};
+
+const GH_TIMEOUT: Duration = Duration::from_secs(30);
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
+const DOWNLOAD_LIMIT_BYTES: u64 = 100 * 1024 * 1024;
+const EXTRACT_LIMIT_BYTES: u64 = 500 * 1024 * 1024;
+const MAX_REDIRECTS: usize = 5;
+const EXPIRED_STAGING: &str = "This install review expired. Start again.";
+
+/// A GitHub `owner/name`, validated at the command boundary so commands never take URLs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RepoFullName(String);
+
+impl RepoFullName {
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        let invalid = || format!("invalid GitHub repository name: {value}");
+        let (owner, name) = value.split_once('/').ok_or_else(invalid)?;
+        let owner_ok =
+            !owner.is_empty() && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        let name_ok = !name.is_empty()
+            && name != "."
+            && name != ".."
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        if !owner_ok || !name_ok {
+            return Err(invalid());
+        }
+        Ok(Self(value.to_string()))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn name(&self) -> &str {
+        self.0.split_once('/').map(|(_, name)| name).unwrap_or("")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum DiscoveryCardState {
+    Unavailable {
+        reason: String,
+    },
+    Install {
+        latest_version: Option<String>,
+    },
+    UpToDate {
+        installed_version: String,
+    },
+    Update {
+        installed_version: String,
+        latest_version: String,
+    },
+    Reinstall {
+        installed_version: String,
+    },
+    InstalledLocally {
+        installed_version: String,
+        latest_version: Option<String>,
+    },
+    /// The same id came from another repository, so this card replaces another author's code.
+    InstalledFromOtherRepo {
+        repo: String,
+        installed_version: String,
+        latest_version: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum PackageIntegrity {
+    Verified { sha256: String },
+    Unverified { sha256: String },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum StagedReplacement {
+    None,
+    Repo {
+        installed_version: String,
+    },
+    OtherRepo {
+        repo: String,
+        installed_version: String,
+    },
+    Local {
+        installed_version: String,
+        original_display_path: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct VersionMismatch {
+    release_tag: String,
+    manifest_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct StagedManifest {
+    id: String,
+    name: String,
+    version: String,
+    capabilities: Vec<PluginHostCapability>,
+    ui_contributions: Vec<PluginUiContribution>,
+    tools: Vec<PluginTool>,
+}
+
+impl From<&PluginManifest> for StagedManifest {
+    fn from(manifest: &PluginManifest) -> Self {
+        Self {
+            id: manifest.id.clone(),
+            name: manifest.name.clone(),
+            version: manifest.version.clone(),
+            capabilities: manifest.capabilities.clone(),
+            ui_contributions: manifest.effective_ui_contributions(),
+            tools: manifest.tools.clone(),
+        }
+    }
+}
+
+/// What the user reviews before a staged package is committed.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct StagedPluginInstall {
+    staging_id: String,
+    repo: String,
+    source_url: String,
+    release_tag: Option<String>,
+    integrity: PackageIntegrity,
+    manifest: StagedManifest,
+    replaces: StagedReplacement,
+    version_mismatch: Option<VersionMismatch>,
+}
+
+/// The default-branch manifest, read leniently because HEAD may target a newer host.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+struct HeadManifest {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    downloads: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct Release {
+    tag_name: String,
+    #[serde(default)]
+    assets: Vec<ReleaseAsset>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct ReleaseAsset {
+    name: String,
+    browser_download_url: String,
+    /// `sha256:<hex>` as the GitHub API reports it.
+    #[serde(default)]
+    digest: Option<String>,
+}
+
+impl ReleaseAsset {
+    fn sha256(&self) -> Option<String> {
+        self.digest
+            .as_deref()
+            .and_then(|digest| digest.strip_prefix("sha256:"))
+            .map(str::to_ascii_lowercase)
+    }
+}
+
+/// Everything resolution learned about one Discovery repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RemoteRepo {
+    repo: RepoFullName,
+    head: Option<HeadManifest>,
+    latest_release: Option<Release>,
+}
+
+/// The one archive to download for this platform.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PackageSource {
+    url: String,
+    /// Set when the archive is an asset of the latest release.
+    release_tag: Option<String>,
+    expected_sha256: Option<String>,
+    format: ArchiveFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchiveFormat {
+    TarGz,
+    Zip,
+}
+
+impl ArchiveFormat {
+    fn from_url(url: &str) -> Option<Self> {
+        let path = url.split(['?', '#']).next().unwrap_or(url);
+        if path.ends_with(".tar.gz") {
+            Some(Self::TarGz)
+        } else if path.ends_with(".zip") {
+            Some(Self::Zip)
+        } else {
+            None
+        }
+    }
+
+    fn file_name(self) -> &'static str {
+        match self {
+            Self::TarGz => "package.tar.gz",
+            Self::Zip => "package.zip",
+        }
+    }
+}
+
+fn tag_version(tag: &str) -> &str {
+    tag.strip_prefix('v').unwrap_or(tag)
+}
+
+/// The release tag without a leading `v`, when it is semver.
+fn release_version(tag: &str) -> Option<semver::Version> {
+    semver::Version::parse(tag_version(tag)).ok()
+}
+
+impl RemoteRepo {
+    fn latest_version(&self) -> Option<semver::Version> {
+        self.latest_release
+            .as_ref()
+            .and_then(|release| release_version(&release.tag_name))
+    }
+
+    fn release_asset_for_url(&self, url: &str) -> Option<&ReleaseAsset> {
+        let release = self.latest_release.as_ref()?;
+        let prefix = format!("https://github.com/{}/releases/", self.repo.as_str());
+        let rest = url.strip_prefix(&prefix)?;
+        let asset_name = rest
+            .strip_prefix("latest/download/")
+            .or_else(|| rest.strip_prefix(&format!("download/{}/", release.tag_name)))?;
+        release.assets.iter().find(|asset| asset.name == asset_name)
+    }
+
+    /// The conventional release asset name for `platform`, before its archive extension.
+    fn asset_stem(&self, platform: &str) -> String {
+        format!("{}-{platform}", self.repo.name())
+    }
+
+    fn fallback_asset(&self, platform: &str) -> Option<(&ReleaseAsset, ArchiveFormat)> {
+        let release = self.latest_release.as_ref()?;
+        let stem = self.asset_stem(platform);
+        release.assets.iter().find_map(|asset| {
+            let format = if asset.name == format!("{stem}.tar.gz") {
+                ArchiveFormat::TarGz
+            } else if asset.name == format!("{stem}.zip") {
+                ArchiveFormat::Zip
+            } else {
+                return None;
+            };
+            Some((asset, format))
+        })
+    }
+
+    pub(crate) fn select_source(&self, platform: &str) -> Result<PackageSource, String> {
+        if let Some(url) = self
+            .head
+            .as_ref()
+            .and_then(|head| head.downloads.get(platform))
+        {
+            if !url.starts_with("https://") {
+                return Err(format!(
+                    "Not available for {platform}: the repository manifest download is not an https URL."
+                ));
+            }
+            let Some(format) = ArchiveFormat::from_url(url) else {
+                return Err(format!(
+                    "Not available for {platform}: the repository manifest download is not a .tar.gz or .zip archive."
+                ));
+            };
+            return Ok(match self.release_asset_for_url(url) {
+                Some(asset) => PackageSource {
+                    url: url.clone(),
+                    release_tag: self
+                        .latest_release
+                        .as_ref()
+                        .map(|release| release.tag_name.clone()),
+                    expected_sha256: asset.sha256(),
+                    format,
+                },
+                None => PackageSource {
+                    url: url.clone(),
+                    release_tag: None,
+                    expected_sha256: None,
+                    format,
+                },
+            });
+        }
+        let stem = self.asset_stem(platform);
+        match (&self.latest_release, self.fallback_asset(platform)) {
+            (Some(release), Some((asset, format))) => Ok(PackageSource {
+                url: asset.browser_download_url.clone(),
+                release_tag: Some(release.tag_name.clone()),
+                expected_sha256: asset.sha256(),
+                format,
+            }),
+            (Some(release), None) => Err(format!(
+                "Not available for {platform}: the repository manifest lists no download and release {} has no {stem}.tar.gz or {stem}.zip asset.",
+                release.tag_name
+            )),
+            (None, _) => Err(format!(
+                "Not available for {platform}: the repository manifest lists no download and the repository has no release."
+            )),
+        }
+    }
+
+    /// The installed plugin this repository stands for: by provenance first, then by HEAD id.
+    /// A renamed id leaves the old row beside the new one, and the HEAD id names the current one.
+    fn installed<'a>(&self, inventory: &'a [PluginInventory]) -> Option<&'a PluginInventory> {
+        let head_id = self.head.as_ref().and_then(|head| head.id.as_deref());
+        let from_repo = |plugin: &&PluginInventory| {
+            plugin
+                .remote_origin
+                .as_ref()
+                .is_some_and(|origin| origin.repo == self.repo.as_str())
+        };
+        let has_head_id = |plugin: &&PluginInventory| head_id == Some(plugin.id.as_str());
+        inventory
+            .iter()
+            .find(|plugin| from_repo(plugin) && has_head_id(plugin))
+            .or_else(|| inventory.iter().find(from_repo))
+            .or_else(|| inventory.iter().find(has_head_id))
+    }
+
+    pub(crate) fn card_state(
+        &self,
+        inventory: &[PluginInventory],
+        platform: &str,
+    ) -> DiscoveryCardState {
+        let latest_version = self.latest_version();
+        let latest_label = latest_version.as_ref().map(ToString::to_string);
+        let Some(installed) = self.installed(inventory) else {
+            return match self.select_source(platform) {
+                Ok(_) => DiscoveryCardState::Install {
+                    latest_version: latest_label,
+                },
+                Err(reason) => DiscoveryCardState::Unavailable { reason },
+            };
+        };
+        if let Err(reason) = installed
+            .ensure_replaceable()
+            .and_then(|()| self.select_source(platform).map(drop))
+        {
+            return DiscoveryCardState::Unavailable { reason };
+        }
+        let installed_version = installed.version.clone();
+        match &installed.remote_origin {
+            None => {
+                return DiscoveryCardState::InstalledLocally {
+                    installed_version,
+                    latest_version: latest_label,
+                }
+            }
+            Some(origin) if origin.repo != self.repo.as_str() => {
+                return DiscoveryCardState::InstalledFromOtherRepo {
+                    repo: origin.repo.clone(),
+                    installed_version,
+                    latest_version: latest_label,
+                }
+            }
+            Some(_) => {}
+        }
+        match (
+            semver::Version::parse(&installed_version).ok(),
+            latest_version,
+        ) {
+            (Some(current), Some(latest)) if latest > current => DiscoveryCardState::Update {
+                installed_version,
+                latest_version: latest.to_string(),
+            },
+            (Some(_), Some(_)) => DiscoveryCardState::UpToDate { installed_version },
+            _ => DiscoveryCardState::Reinstall { installed_version },
+        }
+    }
+}
+
+/// What a staged package from `staging_repo` replaces, from the installed plugin with the
+/// staged manifest's id.
+fn replacement(
+    inventory: &[PluginInventory],
+    manifest_id: &str,
+    staging_repo: &RepoFullName,
+) -> Result<StagedReplacement, String> {
+    // Removal deletes plugin data, so a renamed id is the user's call, never an automatic swap.
+    if let Some(previous) = inventory.iter().find(|plugin| {
+        plugin.id != manifest_id
+            && plugin
+                .remote_origin
+                .as_ref()
+                .is_some_and(|origin| origin.repo == staging_repo.as_str())
+    }) {
+        return Err(format!(
+            "This repository's plugin id changed from {old} to {manifest_id}. Remove {old} before installing the new id.",
+            old = previous.id
+        ));
+    }
+    let Some(installed) = inventory.iter().find(|plugin| plugin.id == manifest_id) else {
+        return Ok(StagedReplacement::None);
+    };
+    installed.ensure_replaceable()?;
+    let installed_version = installed.version.clone();
+    Ok(match &installed.remote_origin {
+        Some(origin) if origin.repo == staging_repo.as_str() => {
+            StagedReplacement::Repo { installed_version }
+        }
+        Some(origin) => StagedReplacement::OtherRepo {
+            repo: origin.repo.clone(),
+            installed_version,
+        },
+        None => StagedReplacement::Local {
+            installed_version,
+            original_display_path: installed.original_display_path.clone(),
+        },
+    })
+}
+
+fn version_mismatch(release_tag: Option<&str>, manifest_version: &str) -> Option<VersionMismatch> {
+    let tag = release_tag?;
+    (tag_version(tag) != manifest_version).then(|| VersionMismatch {
+        release_tag: tag.to_string(),
+        manifest_version: manifest_version.to_string(),
+    })
+}
+
+// ─── GitHub metadata through gh ──────────────────────────────────────────────
+
+pub(crate) enum GhError {
+    Timeout,
+    Spawn(std::io::Error),
+    Failed {
+        /// The exit status as `ExitStatus` displays it, such as "exit status: 1".
+        status: String,
+        diagnostic: String,
+    },
+}
+
+impl GhError {
+    /// The user-facing message; `what` names the request, such as "GitHub plugin discovery".
+    pub(crate) fn describe(&self, what: &str) -> String {
+        match self {
+            Self::Timeout => format!(
+                "{what} timed out after {} seconds. Please retry.",
+                GH_TIMEOUT.as_secs()
+            ),
+            Self::Spawn(error) => format!("failed to start GitHub CLI: {error}"),
+            Self::Failed { status, diagnostic } if diagnostic.is_empty() => {
+                format!("{what} failed with status {status}.")
+            }
+            Self::Failed { diagnostic, .. } => format!("{what} failed: {diagnostic}"),
+        }
+    }
+}
+
+/// The `gh` process boundary, so everything that builds requests or reads replies is testable.
+pub(crate) trait Gh: Sync {
+    /// Runs `gh` with `args` and returns its stdout.
+    fn run(&self, args: &[&str]) -> impl Future<Output = Result<Vec<u8>, GhError>> + Send;
+}
+
+/// The installed GitHub CLI.
+pub(crate) struct GhCli;
+
+impl Gh for GhCli {
+    fn run(&self, args: &[&str]) -> impl Future<Output = Result<Vec<u8>, GhError>> + Send {
+        run_gh(args)
+    }
+}
+
+async fn run_gh(args: &[&str]) -> Result<Vec<u8>, GhError> {
+    let mut command = tokio::process::Command::new(crate::command::resolve("gh"));
+    no_window_tokio(&mut command);
+    command.env("PATH", augmented_path(&[]));
+    command.args(args);
+    let output = timeout(GH_TIMEOUT, command.output())
+        .await
+        .map_err(|_| GhError::Timeout)?
+        .map_err(GhError::Spawn)?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+    Err(GhError::Failed {
+        status: output.status.to_string(),
+        diagnostic: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    })
+}
+
+/// gh reports API errors only on stderr, as in "gh: Not Found (HTTP 404)".
+fn is_not_found(diagnostic: &str) -> bool {
+    diagnostic.contains("(HTTP 404)")
+}
+
+/// `gh api` with a 404 read as absence.
+async fn gh_api(gh: &impl Gh, args: &[&str]) -> Result<Option<Vec<u8>>, String> {
+    let mut full = vec!["api"];
+    full.extend_from_slice(args);
+    match gh.run(&full).await {
+        Ok(stdout) => Ok(Some(stdout)),
+        Err(GhError::Failed { diagnostic, .. }) if is_not_found(&diagnostic) => Ok(None),
+        Err(error) => Err(error.describe("GitHub request")),
+    }
+}
+
+#[cfg(test)]
+type GhReply = Result<Vec<u8>, GhError>;
+
+/// A `gh` that answers from a script and records every invocation.
+#[cfg(test)]
+pub(crate) struct ScriptedGh {
+    replies: Mutex<HashMap<Vec<String>, GhReply>>,
+    calls: Mutex<Vec<Vec<String>>>,
+}
+
+#[cfg(test)]
+impl ScriptedGh {
+    pub(crate) fn new(replies: Vec<(&[&str], GhReply)>) -> Self {
+        Self {
+            replies: Mutex::new(
+                replies
+                    .into_iter()
+                    .map(|(args, reply)| (args.iter().map(|arg| arg.to_string()).collect(), reply))
+                    .collect(),
+            ),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub(crate) fn calls(&self) -> Vec<Vec<String>> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    pub(crate) fn failed(diagnostic: &str) -> GhReply {
+        Err(GhError::Failed {
+            status: "exit status: 1".to_string(),
+            diagnostic: diagnostic.to_string(),
+        })
+    }
+}
+
+#[cfg(test)]
+impl Gh for ScriptedGh {
+    fn run(&self, args: &[&str]) -> impl Future<Output = Result<Vec<u8>, GhError>> + Send {
+        let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        self.calls.lock().unwrap().push(args.clone());
+        let reply = self
+            .replies
+            .lock()
+            .unwrap()
+            .remove(&args)
+            .unwrap_or_else(|| panic!("unscripted gh call: {args:?}"));
+        std::future::ready(reply)
+    }
+}
+
+pub(crate) async fn fetch_remote_repo(
+    gh: &impl Gh,
+    repo: RepoFullName,
+) -> Result<RemoteRepo, String> {
+    let manifest_path = format!("repos/{}/contents/planeai-plugin.json", repo.as_str());
+    let release_path = format!("repos/{}/releases/latest", repo.as_str());
+    let manifest_args = [
+        manifest_path.as_str(),
+        "-H",
+        "Accept: application/vnd.github.raw",
+    ];
+    let release_args = [release_path.as_str()];
+    let (head, release) = tokio::join!(gh_api(gh, &manifest_args), gh_api(gh, &release_args));
+    let head = head?.and_then(|raw| match serde_json::from_slice::<HeadManifest>(&raw) {
+        Ok(manifest) => Some(manifest),
+        Err(error) => {
+            tracing::warn!(repo = repo.as_str(), %error, "ignoring unparseable HEAD plugin manifest");
+            None
+        }
+    });
+    let latest_release = match release? {
+        Some(raw) => Some(
+            serde_json::from_slice::<Release>(&raw)
+                .map_err(|error| format!("GitHub release response was invalid JSON: {error}"))?,
+        ),
+        None => None,
+    };
+    Ok(RemoteRepo {
+        repo,
+        head,
+        latest_release,
+    })
+}
+
+// ─── Download ─────────────────────────────────────────────────────────────────
+
+pub(crate) struct Downloader {
+    client: reqwest::Client,
+}
+
+/// Why a redirect must not be followed, when it must not. `hops` counts the initial URL, as
+/// reqwest's `previous()` does, so it equals the number of this redirect in the chain.
+fn redirect_rejection(hops: usize, next: &reqwest::Url) -> Option<&'static str> {
+    if hops > MAX_REDIRECTS {
+        Some("too many redirects")
+    } else if next.scheme() != "https" {
+        Some("redirected to a non-https URL")
+    } else {
+        None
+    }
+}
+
+fn client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .timeout(DOWNLOAD_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::custom(
+            |attempt| match redirect_rejection(attempt.previous().len(), attempt.url()) {
+                Some(reason) => attempt.error(reason),
+                None => attempt.follow(),
+            },
+        ))
+}
+
+/// reqwest's Display stops at the error kind, so the redirect or connection cause is appended.
+fn download_failed(error: reqwest::Error) -> String {
+    let mut message = format!("plugin download failed: {error}");
+    let mut cause = std::error::Error::source(&error);
+    while let Some(current) = cause {
+        message.push_str(&format!(": {current}"));
+        cause = current.source();
+    }
+    message
+}
+
+impl Downloader {
+    pub(crate) fn new() -> Result<Self, String> {
+        let client = client_builder()
+            .https_only(true)
+            .build()
+            .map_err(|error| format!("failed to build plugin download client: {error}"))?;
+        Ok(Self { client })
+    }
+
+    /// Plain-http client for a local test server; production stays https-only.
+    #[cfg(test)]
+    fn insecure_for_tests() -> Self {
+        Self {
+            client: client_builder().build().unwrap(),
+        }
+    }
+
+    /// Streams `url` into `destination`, returning the archive's SHA-256.
+    async fn download(&self, url: &str, destination: &Path) -> Result<String, String> {
+        self.download_within(url, destination, DOWNLOAD_LIMIT_BYTES)
+            .await
+    }
+
+    async fn download_within(
+        &self,
+        url: &str,
+        destination: &Path,
+        limit: u64,
+    ) -> Result<String, String> {
+        let response = self.client.get(url).send().await.map_err(|error| {
+            // The production client's https_only rejection surfaces as a builder error.
+            if error.is_builder() && !url.starts_with("https://") {
+                format!("plugin downloads must use https: {url}")
+            } else {
+                download_failed(error)
+            }
+        })?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "plugin download failed with HTTP {}: {url}",
+                response.status().as_u16()
+            ));
+        }
+        let over_limit = || {
+            format!(
+                "plugin download exceeds the {} MB limit",
+                limit / (1024 * 1024)
+            )
+        };
+        if response
+            .content_length()
+            .is_some_and(|length| length > limit)
+        {
+            return Err(over_limit());
+        }
+        let mut file = tokio::fs::File::create(destination)
+            .await
+            .map_err(|error| format!("failed to create plugin download file: {error}"))?;
+        let mut hasher = Sha256::new();
+        let mut received: u64 = 0;
+        let mut response = response;
+        while let Some(chunk) = response.chunk().await.map_err(download_failed)? {
+            received += chunk.len() as u64;
+            if received > limit {
+                return Err(over_limit());
+            }
+            hasher.update(&chunk);
+            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+                .await
+                .map_err(|error| format!("failed to write plugin download: {error}"))?;
+        }
+        tokio::io::AsyncWriteExt::flush(&mut file)
+            .await
+            .map_err(|error| format!("failed to write plugin download: {error}"))?;
+        Ok(hex(&hasher.finalize()))
+    }
+}
+
+/// Fails closed when the downloaded bytes differ from the release asset digest.
+fn check_integrity(sha256: String, expected: Option<&str>) -> Result<PackageIntegrity, String> {
+    match expected {
+        Some(expected) if expected.eq_ignore_ascii_case(&sha256) => {
+            Ok(PackageIntegrity::Verified { sha256 })
+        }
+        Some(expected) => Err(format!(
+            "plugin archive SHA-256 {sha256} does not match the release asset digest {expected}"
+        )),
+        None => Ok(PackageIntegrity::Unverified { sha256 }),
+    }
+}
+
+// ─── Extraction ───────────────────────────────────────────────────────────────
+
+fn escapes(raw: &str) -> String {
+    format!("plugin archive entry escapes the package: {raw}")
+}
+
+/// The entry's relative path, or `None` when it names the archive root itself (`.` or `./`).
+fn safe_entry_path(raw: &str) -> Result<Option<PathBuf>, String> {
+    let mut safe = PathBuf::new();
+    for component in Path::new(raw).components() {
+        match component {
+            Component::Normal(part) => safe.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(escapes(raw))
+            }
+        }
+    }
+    if raw.starts_with('/') || raw.starts_with('\\') {
+        return Err(escapes(raw));
+    }
+    Ok((!safe.as_os_str().is_empty()).then_some(safe))
+}
+
+/// Where an entry lands under `destination`; `None` for the root directory entry, which needs nothing.
+fn entry_target(destination: &Path, raw: &str, is_dir: bool) -> Result<Option<PathBuf>, String> {
+    match safe_entry_path(raw)? {
+        Some(relative) => Ok(Some(destination.join(relative))),
+        None if is_dir => Ok(None),
+        None => Err(escapes(raw)),
+    }
+}
+
+/// Extracts the archive under `destination` and returns its single top-level package directory.
+fn extract_archive(
+    archive: &Path,
+    format: ArchiveFormat,
+    destination: &Path,
+) -> Result<PathBuf, String> {
+    extract_archive_within(archive, format, destination, EXTRACT_LIMIT_BYTES)
+}
+
+fn extract_archive_within(
+    archive: &Path,
+    format: ArchiveFormat,
+    destination: &Path,
+    limit: u64,
+) -> Result<PathBuf, String> {
+    fs::create_dir_all(destination)
+        .map_err(|error| format!("failed to create plugin extraction directory: {error}"))?;
+    let budget = ExtractionBudget {
+        limit,
+        remaining: limit,
+    };
+    match format {
+        ArchiveFormat::TarGz => extract_tar_gz(archive, destination, budget)?,
+        ArchiveFormat::Zip => extract_zip(archive, destination, budget)?,
+    }
+    package_root(destination)
+}
+
+/// Total decompressed bytes allowed, so a small archive cannot fill the disk or memory.
+struct ExtractionBudget {
+    limit: u64,
+    remaining: u64,
+}
+
+impl ExtractionBudget {
+    fn charge(&mut self, bytes: u64) -> Result<(), String> {
+        self.remaining = self.remaining.checked_sub(bytes).ok_or_else(|| {
+            format!(
+                "plugin archive expands beyond the {} MB limit",
+                self.limit / (1024 * 1024)
+            )
+        })?;
+        Ok(())
+    }
+}
+
+/// Charges every decompressed byte, headers included. The tar reader buffers GNU long-name and
+/// PAX headers in memory before it yields an entry, so a per-entry charge comes too late.
+struct BudgetedReader<R> {
+    inner: R,
+    budget: ExtractionBudget,
+}
+
+impl<R: Read> Read for BudgetedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        self.budget
+            .charge(read as u64)
+            .map_err(|message| io::Error::other(BudgetExceeded(message)))?;
+        Ok(read)
+    }
+}
+
+#[derive(Debug)]
+struct BudgetExceeded(String);
+
+impl std::fmt::Display for BudgetExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for BudgetExceeded {}
+
+/// The budget message behind a tar error, which may wrap the reader's error in its own context.
+fn exceeded_budget(error: &io::Error) -> Option<String> {
+    let mut current: &(dyn std::error::Error + 'static) = error;
+    loop {
+        // An io::Error keeps its payload behind get_ref; source() skips to the payload's cause.
+        let inner = match current.downcast_ref::<io::Error>() {
+            Some(io) => io
+                .get_ref()
+                .map(|payload| payload as &(dyn std::error::Error + 'static)),
+            None => current.source(),
+        }?;
+        if let Some(exceeded) = inner.downcast_ref::<BudgetExceeded>() {
+            return Some(exceeded.0.clone());
+        }
+        current = inner;
+    }
+}
+
+fn extract_tar_gz(
+    archive: &Path,
+    destination: &Path,
+    budget: ExtractionBudget,
+) -> Result<(), String> {
+    let file = fs::File::open(archive)
+        .map_err(|error| format!("failed to open plugin archive: {error}"))?;
+    let mut tar = tar::Archive::new(BudgetedReader {
+        inner: flate2::read::GzDecoder::new(file),
+        budget,
+    });
+    let archive_error = |error: io::Error| {
+        exceeded_budget(&error).unwrap_or_else(|| format!("failed to read plugin archive: {error}"))
+    };
+    let entries = tar.entries().map_err(archive_error)?;
+    for entry in entries {
+        let mut entry = entry.map_err(archive_error)?;
+        let kind = entry.header().entry_type();
+        let raw = entry
+            .path()
+            .map_err(|error| format!("plugin archive entry has an invalid path: {error}"))?
+            .to_string_lossy()
+            .into_owned();
+        if kind.is_symlink() || kind.is_hard_link() {
+            return Err(format!("plugin archive contains a link: {raw}"));
+        }
+        if kind.is_pax_global_extensions() {
+            continue;
+        }
+        if !kind.is_dir() && !kind.is_file() {
+            return Err(format!(
+                "plugin archive contains an unsupported entry: {raw}"
+            ));
+        }
+        let Some(target) = entry_target(destination, &raw, kind.is_dir())? else {
+            continue;
+        };
+        let entry_error = |error: io::Error| {
+            exceeded_budget(&error)
+                .unwrap_or_else(|| format!("failed to extract plugin archive entry {raw}: {error}"))
+        };
+        // Unpack does not create parents, and a tar may omit directory entries entirely.
+        if kind.is_dir() {
+            fs::create_dir_all(&target).map_err(entry_error)?;
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(entry_error)?;
+        }
+        entry.unpack(&target).map_err(entry_error)?;
+    }
+    Ok(())
+}
+
+fn extract_zip(
+    archive: &Path,
+    destination: &Path,
+    mut budget: ExtractionBudget,
+) -> Result<(), String> {
+    let file = fs::File::open(archive)
+        .map_err(|error| format!("failed to open plugin archive: {error}"))?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|error| format!("invalid plugin zip: {error}"))?;
+    for index in 0..zip.len() {
+        let mut entry = zip
+            .by_index(index)
+            .map_err(|error| format!("failed to read plugin zip entry: {error}"))?;
+        let raw = entry
+            .name()
+            .map_err(|error| format!("plugin archive entry has an invalid name: {error}"))?
+            .into_owned();
+        if entry.is_symlink() {
+            return Err(format!("plugin archive contains a link: {raw}"));
+        }
+        let Some(target) = entry_target(destination, &raw, entry.is_dir())? else {
+            continue;
+        };
+        let entry_error = |error: std::io::Error| {
+            format!("failed to extract plugin archive entry {raw}: {error}")
+        };
+        if entry.is_dir() {
+            fs::create_dir_all(&target).map_err(entry_error)?;
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(entry_error)?;
+        }
+        let mut output = fs::File::create(&target).map_err(entry_error)?;
+        // Zip headers can understate the size, so count what actually inflates.
+        let written = std::io::copy(
+            &mut (&mut entry).take(budget.remaining.saturating_add(1)),
+            &mut output,
+        )
+        .map_err(entry_error)?;
+        budget.charge(written)?;
+        output.flush().map_err(entry_error)?;
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&target, fs::Permissions::from_mode(mode & 0o777)).map_err(
+                |error| format!("failed to set mode on plugin archive entry {raw}: {error}"),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn package_root(destination: &Path) -> Result<PathBuf, String> {
+    let entries = fs::read_dir(destination)
+        .map_err(|error| format!("failed to read extracted plugin archive: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to read extracted plugin archive: {error}"))?;
+    let [entry] = entries.as_slice() else {
+        return Err(format!(
+            "plugin archive must contain exactly one top-level directory, found {} entries",
+            entries.len()
+        ));
+    };
+    let root = entry.path();
+    if !root.is_dir() || !root.join(crate::plugin_packages::MANIFEST_FILE).is_file() {
+        return Err(
+            "plugin archive must contain one top-level directory holding planeai-plugin.json"
+                .to_string(),
+        );
+    }
+    Ok(root)
+}
+
+// ─── Staging ──────────────────────────────────────────────────────────────────
+
+/// A downloaded, verified and extracted package waiting for the user's decision.
+#[derive(Debug)]
+struct StagedPackage {
+    dir: PathBuf,
+    package_root: PathBuf,
+    origin: RemoteOrigin,
+}
+
+/// The staging lifecycle: stage a package for review, then commit or discard it by id.
+#[derive(Debug)]
+pub(crate) struct StagingStore {
+    root: PathBuf,
+    entries: Mutex<HashMap<String, StagedPackage>>,
+}
+
+impl StagingStore {
+    pub(crate) fn new(app_data_dir: &Path) -> Self {
+        Self {
+            root: app_data_dir.join("plugins").join("staging"),
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Wipes every staged package; a crash mid-stage leaves nothing behind.
+    pub(crate) fn reset(&self) -> Result<(), String> {
+        remove_dir(&self.root)
+    }
+
+    /// Stages `source` in a fresh directory and keeps the package until commit or discard.
+    /// A failed stage leaves no directory behind.
+    pub(crate) async fn stage(
+        &self,
+        downloader: &Downloader,
+        repo: &RepoFullName,
+        source: &PackageSource,
+        inventory: &[PluginInventory],
+    ) -> Result<StagedPluginInstall, String> {
+        let root = self.root.clone();
+        let (id, dir) = crate::commands::blocking(move || create_staging_dir(&root)).await?;
+        let staged = stage_package(downloader, repo, source, inventory, id.clone(), &dir)
+            .await
+            .and_then(|(package, preview)| {
+                self.insert(id, package)?;
+                Ok(preview)
+            });
+        if staged.is_err() {
+            remove_staging_dir(dir).await;
+        }
+        staged
+    }
+
+    /// Hands the staged package root and origin to `install`, then removes the staging directory
+    /// whether or not the install succeeded: the import copies the package.
+    pub(crate) async fn commit<T, Fut>(
+        &self,
+        id: &str,
+        install: impl FnOnce(PathBuf, RemoteOrigin) -> Fut,
+    ) -> Result<T, String>
+    where
+        Fut: Future<Output = Result<T, String>>,
+    {
+        let staged = self.take(id)?.ok_or_else(|| EXPIRED_STAGING.to_string())?;
+        let result = install(staged.package_root, staged.origin).await;
+        remove_staging_dir(staged.dir).await;
+        result
+    }
+
+    /// Removes a staged package; an unknown or already handled id is a no-op.
+    pub(crate) async fn discard(&self, id: &str) -> Result<(), String> {
+        if let Some(staged) = self.take(id)? {
+            remove_staging_dir(staged.dir).await;
+        }
+        Ok(())
+    }
+
+    fn insert(&self, id: String, staged: StagedPackage) -> Result<(), String> {
+        self.entries
+            .lock()
+            .map_err(|e| e.to_string())?
+            .insert(id, staged);
+        Ok(())
+    }
+
+    fn take(&self, id: &str) -> Result<Option<StagedPackage>, String> {
+        Ok(self.entries.lock().map_err(|e| e.to_string())?.remove(id))
+    }
+}
+
+fn create_staging_dir(root: &Path) -> Result<(String, PathBuf), String> {
+    let id = Uuid::new_v4().to_string();
+    let dir = root.join(&id);
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("failed to create plugin staging directory: {error}"))?;
+    Ok((id, dir))
+}
+
+fn remove_dir(dir: &Path) -> Result<(), String> {
+    if dir.exists() {
+        fs::remove_dir_all(dir)
+            .map_err(|error| format!("failed to remove plugin staging directory: {error}"))?;
+    }
+    Ok(())
+}
+
+/// Removes a staging directory off the main thread. A leftover is only logged: the next startup
+/// wipes the staging root, and the caller's own outcome matters more than the cleanup.
+async fn remove_staging_dir(dir: PathBuf) {
+    let path = dir.display().to_string();
+    if let Err(error) = crate::commands::blocking(move || remove_dir(&dir)).await {
+        tracing::warn!(%error, path, "failed to remove plugin staging directory");
+    }
+}
+
+/// Downloads, verifies, extracts and inspects `source` under `dir`: the package to keep in the
+/// staging store and the preview the user reviews before committing it.
+async fn stage_package(
+    downloader: &Downloader,
+    repo: &RepoFullName,
+    source: &PackageSource,
+    inventory: &[PluginInventory],
+    staging_id: String,
+    dir: &Path,
+) -> Result<(StagedPackage, StagedPluginInstall), String> {
+    let format = source.format;
+    let archive = dir.join(format.file_name());
+    let sha256 = downloader.download(&source.url, &archive).await?;
+    let integrity = check_integrity(sha256.clone(), source.expected_sha256.as_deref())?;
+    let extracted = dir.join("extracted");
+    let inspected = crate::commands::blocking(move || {
+        let root = extract_archive(&archive, format, &extracted)?;
+        crate::plugin_packages::inspect_package(&root)
+    })
+    .await?;
+    let preview = StagedPluginInstall {
+        staging_id,
+        repo: repo.as_str().to_string(),
+        source_url: source.url.clone(),
+        release_tag: source.release_tag.clone(),
+        integrity,
+        manifest: StagedManifest::from(&inspected.manifest),
+        replaces: replacement(inventory, &inspected.manifest.id, repo)?,
+        version_mismatch: version_mismatch(
+            source.release_tag.as_deref(),
+            &inspected.manifest.version,
+        ),
+    };
+    let package = StagedPackage {
+        dir: dir.to_path_buf(),
+        package_root: inspected.source,
+        origin: RemoteOrigin {
+            repo: repo.as_str().to_string(),
+            release_tag: source.release_tag.clone(),
+            source_url: source.url.clone(),
+            archive_sha256: sha256,
+        },
+    };
+    Ok((package, preview))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugins::{PluginRuntimeState, PluginSourceKind, RemoteOrigin};
+    use tempfile::TempDir;
+
+    fn repo() -> RepoFullName {
+        RepoFullName::parse("acme/planeai-plugin-acme").unwrap()
+    }
+
+    fn asset(name: &str, digest: Option<&str>) -> ReleaseAsset {
+        ReleaseAsset {
+            name: name.to_string(),
+            browser_download_url: format!(
+                "https://github.com/acme/planeai-plugin-acme/releases/download/v1.2.0/{name}"
+            ),
+            digest: digest.map(str::to_string),
+        }
+    }
+
+    fn release() -> Release {
+        Release {
+            tag_name: "v1.2.0".to_string(),
+            assets: vec![
+                asset(
+                    "planeai-plugin-acme-macos-arm64.tar.gz",
+                    Some("sha256:ABCDEF"),
+                ),
+                asset("planeai-plugin-acme-linux-x64.zip", None),
+            ],
+        }
+    }
+
+    fn head(downloads: &[(&str, &str)]) -> HeadManifest {
+        HeadManifest {
+            id: Some("acme".to_string()),
+            downloads: downloads
+                .iter()
+                .map(|(platform, url)| (platform.to_string(), url.to_string()))
+                .collect(),
+        }
+    }
+
+    fn inventory(id: &str, version: &str, remote_origin: Option<RemoteOrigin>) -> PluginInventory {
+        PluginInventory {
+            id: id.to_string(),
+            name: id.to_string(),
+            version: version.to_string(),
+            host_api_version: "planeai.plugin-host.v6".to_string(),
+            source_kind: PluginSourceKind::Local,
+            backend_entrypoint: "bin/plugin".to_string(),
+            ui_contributions: vec![],
+            capabilities: vec![],
+            background_service: None,
+            providers: vec![],
+            tools: vec![],
+            installed_hash: Some("hash".to_string()),
+            installed_path: Some("/app/plugins/packages/sha256/hash".to_string()),
+            original_display_path: remote_origin
+                .is_none()
+                .then(|| "/Users/me/acme".to_string()),
+            remote_origin,
+            enabled: false,
+            state: PluginRuntimeState::Disabled,
+            last_error: None,
+            log_path: None,
+        }
+    }
+
+    fn origin(repo: &str) -> RemoteOrigin {
+        RemoteOrigin {
+            repo: repo.to_string(),
+            release_tag: Some("v1.0.0".to_string()),
+            source_url: format!("https://github.com/{repo}/releases/download/v1.0.0/x.tar.gz"),
+            archive_sha256: "abc".to_string(),
+        }
+    }
+
+    #[test]
+    fn gh_failures_read_as_one_sentence_per_cause() {
+        assert_eq!(
+            GhError::Timeout.describe("GitHub plugin discovery"),
+            "GitHub plugin discovery timed out after 30 seconds. Please retry."
+        );
+        assert_eq!(
+            GhError::Spawn(std::io::Error::new(std::io::ErrorKind::NotFound, "no gh"))
+                .describe("GitHub request"),
+            "failed to start GitHub CLI: no gh"
+        );
+        assert_eq!(
+            GhError::Failed {
+                status: "exit status: 1".to_string(),
+                diagnostic: String::new(),
+            }
+            .describe("GitHub request"),
+            "GitHub request failed with status exit status: 1."
+        );
+        assert_eq!(
+            GhError::Failed {
+                status: "exit status: 1".to_string(),
+                diagnostic: "HTTP 403: rate limited".to_string(),
+            }
+            .describe("GitHub plugin discovery"),
+            "GitHub plugin discovery failed: HTTP 403: rate limited"
+        );
+    }
+
+    const MANIFEST_ARGS: &[&str] = &[
+        "api",
+        "repos/acme/planeai-plugin-acme/contents/planeai-plugin.json",
+        "-H",
+        "Accept: application/vnd.github.raw",
+    ];
+    const RELEASE_ARGS: &[&str] = &["api", "repos/acme/planeai-plugin-acme/releases/latest"];
+    const NOT_FOUND: &str = "gh: Not Found (HTTP 404)";
+
+    #[test]
+    fn only_a_gh_404_reads_as_not_found() {
+        let cases = [
+            ("gh: Not Found (HTTP 404)", true),
+            ("gh: Bad credentials (HTTP 401)", false),
+            ("gh: Server Error (HTTP 500)", false),
+            ("gh: Not Found (HTTP 4040)", false),
+            ("", false),
+        ];
+        for (diagnostic, expected) in cases {
+            assert_eq!(is_not_found(diagnostic), expected, "{diagnostic:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn fetches_the_raw_head_manifest_and_the_latest_release() {
+        let gh = ScriptedGh::new(vec![
+            (
+                MANIFEST_ARGS,
+                Ok(br#"{"id":"acme","version":"9.9.9","downloads":{"macos-arm64":"https://example.com/a.tar.gz"}}"#.to_vec()),
+            ),
+            (
+                RELEASE_ARGS,
+                Ok(br#"{"tag_name":"v1.2.0","assets":[{"name":"planeai-plugin-acme-macos-arm64.tar.gz","browser_download_url":"https://github.com/acme/planeai-plugin-acme/releases/download/v1.2.0/planeai-plugin-acme-macos-arm64.tar.gz","digest":"sha256:ABCDEF"}]}"#.to_vec()),
+            ),
+        ]);
+
+        let fetched = fetch_remote_repo(&gh, repo()).await.unwrap();
+
+        assert_eq!(
+            fetched,
+            RemoteRepo {
+                repo: repo(),
+                head: Some(head(&[("macos-arm64", "https://example.com/a.tar.gz")])),
+                latest_release: Some(Release {
+                    tag_name: "v1.2.0".to_string(),
+                    assets: vec![asset(
+                        "planeai-plugin-acme-macos-arm64.tar.gz",
+                        Some("sha256:ABCDEF")
+                    )],
+                }),
+            }
+        );
+        let mut calls = gh.calls();
+        calls.sort();
+        assert_eq!(calls, vec![MANIFEST_ARGS.to_vec(), RELEASE_ARGS.to_vec()]);
+    }
+
+    #[tokio::test]
+    async fn a_missing_manifest_or_release_reads_as_absent() {
+        let gh = ScriptedGh::new(vec![
+            (MANIFEST_ARGS, ScriptedGh::failed(NOT_FOUND)),
+            (RELEASE_ARGS, ScriptedGh::failed(NOT_FOUND)),
+        ]);
+
+        assert_eq!(
+            fetch_remote_repo(&gh, repo()).await,
+            Ok(RemoteRepo {
+                repo: repo(),
+                head: None,
+                latest_release: None,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_head_manifest_is_ignored_but_a_bad_release_fails() {
+        let gh = ScriptedGh::new(vec![
+            (MANIFEST_ARGS, Ok(b"not json".to_vec())),
+            (RELEASE_ARGS, Ok(br#"{"tag_name":"v1.2.0"}"#.to_vec())),
+        ]);
+        assert_eq!(
+            fetch_remote_repo(&gh, repo()).await,
+            Ok(RemoteRepo {
+                repo: repo(),
+                head: None,
+                latest_release: Some(Release {
+                    tag_name: "v1.2.0".to_string(),
+                    assets: vec![],
+                }),
+            })
+        );
+
+        let gh = ScriptedGh::new(vec![
+            (MANIFEST_ARGS, ScriptedGh::failed(NOT_FOUND)),
+            (RELEASE_ARGS, Ok(br#"{"assets":[]}"#.to_vec())),
+        ]);
+        assert_eq!(
+            fetch_remote_repo(&gh, repo()).await,
+            Err("GitHub release response was invalid JSON: missing field `tag_name` at line 1 column 13".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn gh_failures_other_than_404_fail_the_fetch() {
+        let gh = ScriptedGh::new(vec![
+            (
+                MANIFEST_ARGS,
+                ScriptedGh::failed("gh: Server Error (HTTP 500)"),
+            ),
+            (RELEASE_ARGS, Ok(br#"{"tag_name":"v1.2.0"}"#.to_vec())),
+        ]);
+        assert_eq!(
+            fetch_remote_repo(&gh, repo()).await,
+            Err("GitHub request failed: gh: Server Error (HTTP 500)".to_string())
+        );
+
+        let gh = ScriptedGh::new(vec![
+            (MANIFEST_ARGS, ScriptedGh::failed(NOT_FOUND)),
+            (RELEASE_ARGS, Err(GhError::Timeout)),
+        ]);
+        assert_eq!(
+            fetch_remote_repo(&gh, repo()).await,
+            Err("GitHub request timed out after 30 seconds. Please retry.".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fetched_repository_resolves_to_its_card_state() {
+        let gh = ScriptedGh::new(vec![
+            (MANIFEST_ARGS, Ok(br#"{"id":"acme"}"#.to_vec())),
+            (
+                RELEASE_ARGS,
+                Ok(br#"{"tag_name":"v1.2.0","assets":[{"name":"planeai-plugin-acme-macos-arm64.tar.gz","browser_download_url":"https://github.com/acme/planeai-plugin-acme/releases/download/v1.2.0/planeai-plugin-acme-macos-arm64.tar.gz"}]}"#.to_vec()),
+            ),
+        ]);
+        let installed = vec![inventory(
+            "acme",
+            "1.0.0",
+            Some(origin("acme/planeai-plugin-acme")),
+        )];
+
+        let card = fetch_remote_repo(&gh, repo())
+            .await
+            .unwrap()
+            .card_state(&installed, "macos-arm64");
+
+        assert_eq!(
+            card,
+            DiscoveryCardState::Update {
+                installed_version: "1.0.0".to_string(),
+                latest_version: "1.2.0".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn head_manifests_read_leniently_and_take_null_downloads_as_none() {
+        assert_eq!(
+            serde_json::from_str::<HeadManifest>(
+                r#"{"id":"acme","downloads":null,"version":"0.0.0","future_field":[1]}"#
+            )
+            .unwrap(),
+            HeadManifest {
+                id: Some("acme".to_string()),
+                downloads: BTreeMap::new(),
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<HeadManifest>(
+                r#"{"downloads":{"macos-arm64":"https://acme.dev/a.tar.gz"}}"#
+            )
+            .unwrap(),
+            HeadManifest {
+                id: None,
+                downloads: BTreeMap::from([(
+                    "macos-arm64".to_string(),
+                    "https://acme.dev/a.tar.gz".to_string()
+                )]),
+            }
+        );
+    }
+
+    #[test]
+    fn repo_names_are_owner_slash_name_in_the_github_charset() {
+        assert_eq!(repo().name(), "planeai-plugin-acme");
+        for invalid in [
+            "acme",
+            "acme/",
+            "/x",
+            "acme/x/y",
+            "acme/..",
+            "acme/x y",
+            "a$b/x",
+            "https://github.com/acme/x",
+        ] {
+            assert_eq!(
+                RepoFullName::parse(invalid).unwrap_err(),
+                format!("invalid GitHub repository name: {invalid}"),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_download_wins_and_is_verified_when_it_is_the_latest_release_asset() {
+        let remote = RemoteRepo {
+            repo: repo(),
+            head: Some(head(&[(
+                "macos-arm64",
+                "https://github.com/acme/planeai-plugin-acme/releases/latest/download/planeai-plugin-acme-macos-arm64.tar.gz",
+            )])),
+            latest_release: Some(release()),
+        };
+        assert_eq!(
+            remote.select_source("macos-arm64").unwrap(),
+            PackageSource {
+                url: "https://github.com/acme/planeai-plugin-acme/releases/latest/download/planeai-plugin-acme-macos-arm64.tar.gz".to_string(),
+                release_tag: Some("v1.2.0".to_string()),
+                expected_sha256: Some("abcdef".to_string()),
+                format: ArchiveFormat::TarGz,
+            }
+        );
+
+        let tagged = RemoteRepo {
+            head: Some(head(&[(
+                "macos-arm64",
+                "https://github.com/acme/planeai-plugin-acme/releases/download/v1.2.0/planeai-plugin-acme-macos-arm64.tar.gz",
+            )])),
+            ..remote.clone()
+        };
+        assert_eq!(
+            tagged.select_source("macos-arm64").unwrap().expected_sha256,
+            Some("abcdef".to_string())
+        );
+
+        let elsewhere = RemoteRepo {
+            head: Some(head(&[("macos-arm64", "https://cdn.acme.dev/acme.zip")])),
+            ..remote.clone()
+        };
+        assert_eq!(
+            elsewhere.select_source("macos-arm64").unwrap(),
+            PackageSource {
+                url: "https://cdn.acme.dev/acme.zip".to_string(),
+                release_tag: None,
+                expected_sha256: None,
+                format: ArchiveFormat::Zip,
+            }
+        );
+
+        let older_tag = RemoteRepo {
+            head: Some(head(&[(
+                "macos-arm64",
+                "https://github.com/acme/planeai-plugin-acme/releases/download/v1.1.0/planeai-plugin-acme-macos-arm64.tar.gz",
+            )])),
+            ..remote
+        };
+        assert_eq!(
+            older_tag
+                .select_source("macos-arm64")
+                .unwrap()
+                .expected_sha256,
+            None
+        );
+    }
+
+    #[test]
+    fn falls_back_to_the_conventional_release_asset_and_explains_when_nothing_fits() {
+        let remote = RemoteRepo {
+            repo: repo(),
+            head: Some(head(&[(
+                "windows-x64",
+                "https://cdn.acme.dev/acme-win.zip",
+            )])),
+            latest_release: Some(release()),
+        };
+        assert_eq!(
+            remote.select_source("linux-x64").unwrap(),
+            PackageSource {
+                url: "https://github.com/acme/planeai-plugin-acme/releases/download/v1.2.0/planeai-plugin-acme-linux-x64.zip".to_string(),
+                release_tag: Some("v1.2.0".to_string()),
+                expected_sha256: None,
+                format: ArchiveFormat::Zip,
+            }
+        );
+        assert_eq!(
+            remote.select_source("linux-arm64").unwrap_err(),
+            "Not available for linux-arm64: the repository manifest lists no download and release v1.2.0 has no planeai-plugin-acme-linux-arm64.tar.gz or planeai-plugin-acme-linux-arm64.zip asset."
+        );
+        let no_release = RemoteRepo {
+            head: None,
+            latest_release: None,
+            ..remote.clone()
+        };
+        assert_eq!(
+            no_release.select_source("macos-arm64").unwrap_err(),
+            "Not available for macos-arm64: the repository manifest lists no download and the repository has no release."
+        );
+        let plain_http = RemoteRepo {
+            head: Some(head(&[("macos-arm64", "http://cdn.acme.dev/acme.zip")])),
+            ..remote.clone()
+        };
+        assert_eq!(
+            plain_http.select_source("macos-arm64").unwrap_err(),
+            "Not available for macos-arm64: the repository manifest download is not an https URL."
+        );
+        let disk_image = RemoteRepo {
+            head: Some(head(&[("macos-arm64", "https://cdn.acme.dev/acme.dmg")])),
+            ..remote
+        };
+        assert_eq!(
+            disk_image.select_source("macos-arm64").unwrap_err(),
+            "Not available for macos-arm64: the repository manifest download is not a .tar.gz or .zip archive."
+        );
+    }
+
+    #[test]
+    fn card_state_table() {
+        let remote = RemoteRepo {
+            repo: repo(),
+            head: Some(head(&[])),
+            latest_release: Some(release()),
+        };
+        let cases: Vec<(&str, RemoteRepo, Vec<PluginInventory>, DiscoveryCardState)> = vec![
+            (
+                "fresh install",
+                remote.clone(),
+                vec![],
+                DiscoveryCardState::Install {
+                    latest_version: Some("1.2.0".to_string()),
+                },
+            ),
+            (
+                "fresh install without a semver tag",
+                RemoteRepo {
+                    latest_release: Some(Release {
+                        tag_name: "nightly".to_string(),
+                        ..release()
+                    }),
+                    ..remote.clone()
+                },
+                vec![],
+                DiscoveryCardState::Install {
+                    latest_version: None,
+                },
+            ),
+            (
+                "unavailable platform",
+                RemoteRepo {
+                    latest_release: None,
+                    ..remote.clone()
+                },
+                vec![],
+                DiscoveryCardState::Unavailable {
+                    reason: "Not available for macos-arm64: the repository manifest lists no download and the repository has no release.".to_string(),
+                },
+            ),
+            (
+                "manifest download that is not an archive",
+                RemoteRepo {
+                    head: Some(head(&[("macos-arm64", "https://cdn.acme.dev/acme.dmg")])),
+                    ..remote.clone()
+                },
+                vec![],
+                DiscoveryCardState::Unavailable {
+                    reason: "Not available for macos-arm64: the repository manifest download is not a .tar.gz or .zip archive.".to_string(),
+                },
+            ),
+            (
+                "repo install behind latest, matched by provenance",
+                remote.clone(),
+                vec![inventory("other-id", "1.0.0", Some(origin("acme/planeai-plugin-acme")))],
+                DiscoveryCardState::Update {
+                    installed_version: "1.0.0".to_string(),
+                    latest_version: "1.2.0".to_string(),
+                },
+            ),
+            (
+                "repo install at latest",
+                remote.clone(),
+                vec![inventory("acme", "1.2.0", Some(origin("acme/planeai-plugin-acme")))],
+                DiscoveryCardState::UpToDate {
+                    installed_version: "1.2.0".to_string(),
+                },
+            ),
+            (
+                "repo install ahead of latest",
+                remote.clone(),
+                vec![inventory("acme", "2.0.0", Some(origin("acme/planeai-plugin-acme")))],
+                DiscoveryCardState::UpToDate {
+                    installed_version: "2.0.0".to_string(),
+                },
+            ),
+            (
+                "repo install with a non-semver installed version",
+                remote.clone(),
+                vec![inventory("acme", "build-7", Some(origin("acme/planeai-plugin-acme")))],
+                DiscoveryCardState::Reinstall {
+                    installed_version: "build-7".to_string(),
+                },
+            ),
+            (
+                "repo install with a non-semver release tag",
+                RemoteRepo {
+                    latest_release: Some(Release {
+                        tag_name: "nightly".to_string(),
+                        ..release()
+                    }),
+                    ..remote.clone()
+                },
+                vec![inventory("acme", "1.0.0", Some(origin("acme/planeai-plugin-acme")))],
+                DiscoveryCardState::Reinstall {
+                    installed_version: "1.0.0".to_string(),
+                },
+            ),
+            (
+                "folder install matched by HEAD id",
+                remote.clone(),
+                vec![inventory("acme", "0.9.0", None)],
+                DiscoveryCardState::InstalledLocally {
+                    installed_version: "0.9.0".to_string(),
+                    latest_version: Some("1.2.0".to_string()),
+                },
+            ),
+            (
+                "provenance from another repo is not this card",
+                remote.clone(),
+                vec![inventory("someone-else", "1.0.0", Some(origin("other/planeai-plugin-other")))],
+                DiscoveryCardState::Install {
+                    latest_version: Some("1.2.0".to_string()),
+                },
+            ),
+            (
+                "same id installed from another repo is a replacement, not an update",
+                remote.clone(),
+                vec![inventory("acme", "1.0.0", Some(origin("other/planeai-plugin-other")))],
+                DiscoveryCardState::InstalledFromOtherRepo {
+                    repo: "other/planeai-plugin-other".to_string(),
+                    installed_version: "1.0.0".to_string(),
+                    latest_version: Some("1.2.0".to_string()),
+                },
+            ),
+            (
+                "two rows from this repo: the one with the HEAD id is the card's",
+                remote.clone(),
+                vec![
+                    inventory("old-acme", "1.0.0", Some(origin("acme/planeai-plugin-acme"))),
+                    inventory("acme", "1.2.0", Some(origin("acme/planeai-plugin-acme"))),
+                ],
+                DiscoveryCardState::UpToDate {
+                    installed_version: "1.2.0".to_string(),
+                },
+            ),
+            (
+                "installed but the platform is no longer served",
+                RemoteRepo {
+                    latest_release: None,
+                    ..remote.clone()
+                },
+                vec![inventory("acme", "1.0.0", Some(origin("acme/planeai-plugin-acme")))],
+                DiscoveryCardState::Unavailable {
+                    reason: "Not available for macos-arm64: the repository manifest lists no download and the repository has no release.".to_string(),
+                },
+            ),
+            (
+                "bundled id",
+                RemoteRepo {
+                    head: Some(HeadManifest {
+                        id: Some("jira".to_string()),
+                        downloads: BTreeMap::new(),
+                    }),
+                    ..remote.clone()
+                },
+                vec![PluginInventory {
+                    source_kind: PluginSourceKind::Builtin,
+                    ..inventory("jira", "0.1.0", None)
+                }],
+                DiscoveryCardState::Unavailable {
+                    reason: "plugin id is reserved by a bundled plugin: jira".to_string(),
+                },
+            ),
+        ];
+        for (name, remote, inventory, expected) in cases {
+            assert_eq!(
+                remote.card_state(&inventory, "macos-arm64"),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn replacement_is_derived_from_the_staged_manifest_id_and_the_staging_repo() {
+        let local = inventory("local-one", "0.5.0", None);
+        let from_this_repo = inventory("acme", "1.0.0", Some(origin("acme/planeai-plugin-acme")));
+        let from_other_repo =
+            inventory("acme", "1.1.0", Some(origin("other/planeai-plugin-other")));
+        let bundled = PluginInventory {
+            source_kind: PluginSourceKind::Builtin,
+            ..inventory("jira", "0.1.0", None)
+        };
+        let cases = vec![
+            ("new", vec![local.clone()], "acme", Ok(StagedReplacement::None)),
+            (
+                "local build",
+                vec![local.clone()],
+                "local-one",
+                Ok(StagedReplacement::Local {
+                    installed_version: "0.5.0".to_string(),
+                    original_display_path: Some("/Users/me/acme".to_string()),
+                }),
+            ),
+            (
+                "same repo",
+                vec![local.clone(), from_this_repo.clone()],
+                "acme",
+                Ok(StagedReplacement::Repo {
+                    installed_version: "1.0.0".to_string(),
+                }),
+            ),
+            (
+                "other repo",
+                vec![from_other_repo],
+                "acme",
+                Ok(StagedReplacement::OtherRepo {
+                    repo: "other/planeai-plugin-other".to_string(),
+                    installed_version: "1.1.0".to_string(),
+                }),
+            ),
+            (
+                "bundled id",
+                vec![bundled],
+                "jira",
+                Err("plugin id is reserved by a bundled plugin: jira".to_string()),
+            ),
+            (
+                "this repo renamed its id",
+                vec![local, from_this_repo],
+                "acme-next",
+                Err("This repository's plugin id changed from acme to acme-next. Remove acme before installing the new id.".to_string()),
+            ),
+        ];
+        for (name, plugins, manifest_id, expected) in cases {
+            assert_eq!(
+                replacement(&plugins, manifest_id, &repo()),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn version_mismatch_compares_the_tag_without_its_v() {
+        assert_eq!(version_mismatch(Some("v1.2.0"), "1.2.0"), None);
+        assert_eq!(version_mismatch(Some("1.2.0"), "1.2.0"), None);
+        assert_eq!(version_mismatch(None, "0.0.0"), None);
+        assert_eq!(
+            version_mismatch(Some("v1.2.0"), "0.0.0"),
+            Some(VersionMismatch {
+                release_tag: "v1.2.0".to_string(),
+                manifest_version: "0.0.0".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn integrity_fails_closed_on_a_digest_mismatch() {
+        assert_eq!(
+            check_integrity("abc".to_string(), Some("ABC")).unwrap(),
+            PackageIntegrity::Verified {
+                sha256: "abc".to_string()
+            }
+        );
+        assert_eq!(
+            check_integrity("abc".to_string(), None).unwrap(),
+            PackageIntegrity::Unverified {
+                sha256: "abc".to_string()
+            }
+        );
+        assert_eq!(
+            check_integrity("abc".to_string(), Some("def")).unwrap_err(),
+            "plugin archive SHA-256 abc does not match the release asset digest def"
+        );
+    }
+
+    #[test]
+    fn archive_format_comes_from_the_url_path() {
+        assert_eq!(
+            ArchiveFormat::from_url("https://x/a-macos-arm64.tar.gz?token=1"),
+            Some(ArchiveFormat::TarGz)
+        );
+        assert_eq!(
+            ArchiveFormat::from_url("https://x/a.zip"),
+            Some(ArchiveFormat::Zip)
+        );
+        for unsupported in ["https://x/a.dmg", "https://x/a.tgz", "https://x/a.tar"] {
+            assert_eq!(ArchiveFormat::from_url(unsupported), None, "{unsupported}");
+        }
+    }
+
+    #[test]
+    fn entry_paths_must_stay_inside_the_package() {
+        assert_eq!(
+            safe_entry_path("acme/bin/plugin").unwrap(),
+            Some(PathBuf::from("acme/bin/plugin"))
+        );
+        assert_eq!(
+            safe_entry_path("./acme/planeai-plugin.json").unwrap(),
+            Some(PathBuf::from("acme/planeai-plugin.json"))
+        );
+        for root in [".", "./", ""] {
+            assert_eq!(safe_entry_path(root).unwrap(), None, "{root:?}");
+        }
+        for raw in ["../x", "acme/../../x", "/etc/passwd"] {
+            assert_eq!(
+                safe_entry_path(raw).unwrap_err(),
+                format!("plugin archive entry escapes the package: {raw}"),
+                "{raw}"
+            );
+        }
+    }
+
+    fn manifest_json(id: &str) -> String {
+        format!(
+            r#"{{"schema":"planeai.plugin.v1","id":"{id}","name":"Acme","version":"1.2.0","host_api_version":"planeai.plugin-host.v1","source_kind":"local","backend_entrypoints":{{"{}":"bin/plugin"}}}}"#,
+            crate::plugin_packages::current_platform_key()
+        )
+    }
+
+    fn tar_gz(entries: &[(&str, TarEntry)]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
+        for (path, entry) in entries {
+            // The builder refuses `..` and absolute names, which the attack cases need.
+            let mut header = tar::Header::new_gnu();
+            header.as_old_mut().name[..path.len()].copy_from_slice(path.as_bytes());
+            let (kind, mode, bytes): (tar::EntryType, u32, &[u8]) = match entry {
+                TarEntry::Dir => (tar::EntryType::Directory, 0o755, &[]),
+                TarEntry::File(bytes, mode) => (tar::EntryType::Regular, *mode, bytes),
+                TarEntry::Symlink(target) => {
+                    header.set_link_name(target).unwrap();
+                    (tar::EntryType::Symlink, 0o777, &[])
+                }
+                TarEntry::Hardlink(target) => {
+                    header.set_link_name(target).unwrap();
+                    (tar::EntryType::Link, 0o644, &[])
+                }
+                TarEntry::LongName(bytes) => (tar::EntryType::GNULongName, 0o644, bytes),
+            };
+            header.set_entry_type(kind);
+            header.set_mode(mode);
+            header.set_size(bytes.len() as u64);
+            header.set_cksum();
+            builder.append(&header, bytes).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    enum TarEntry {
+        Dir,
+        File(Vec<u8>, u32),
+        Symlink(&'static str),
+        Hardlink(&'static str),
+        /// A GNU `L` header, whose body names the next entry.
+        LongName(Vec<u8>),
+    }
+
+    fn good_tar() -> Vec<u8> {
+        tar_gz(&[
+            ("acme/", TarEntry::Dir),
+            (
+                "acme/planeai-plugin.json",
+                TarEntry::File(manifest_json("acme").into_bytes(), 0o644),
+            ),
+            ("acme/bin/", TarEntry::Dir),
+            (
+                "acme/bin/plugin",
+                TarEntry::File(b"#!/bin/sh\n".to_vec(), 0o755),
+            ),
+        ])
+    }
+
+    fn zip_bytes(entries: &[(&str, Option<&[u8]>, u32)]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (path, bytes, mode) in entries {
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated)
+                .unix_permissions(*mode);
+            match bytes {
+                Some(bytes) => {
+                    writer.start_file(*path, options).unwrap();
+                    writer.write_all(bytes).unwrap();
+                }
+                None => writer.add_directory(*path, options).unwrap(),
+            }
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn write_archive(temp: &TempDir, name: &str, bytes: &[u8]) -> PathBuf {
+        let path = temp.path().join(name);
+        fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn extracts_a_valid_tar_gz_and_zip_into_one_package_root() {
+        let temp = TempDir::new().unwrap();
+        let archive = write_archive(&temp, "a.tar.gz", &good_tar());
+        let root =
+            extract_archive(&archive, ArchiveFormat::TarGz, &temp.path().join("tar")).unwrap();
+        assert_eq!(root, temp.path().join("tar").join("acme"));
+        assert_eq!(
+            fs::read_to_string(root.join("planeai-plugin.json")).unwrap(),
+            manifest_json("acme")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(root.join("bin/plugin"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o755
+            );
+        }
+
+        let archive = write_archive(
+            &temp,
+            "a.zip",
+            &zip_bytes(&[
+                ("acme/", None, 0o755),
+                (
+                    "acme/planeai-plugin.json",
+                    Some(manifest_json("acme").as_bytes()),
+                    0o644,
+                ),
+                ("acme/bin/plugin", Some(b"#!/bin/sh\n"), 0o755),
+            ]),
+        );
+        let root = extract_archive(&archive, ArchiveFormat::Zip, &temp.path().join("zip")).unwrap();
+        assert_eq!(root, temp.path().join("zip").join("acme"));
+        assert_eq!(fs::read(root.join("bin/plugin")).unwrap(), b"#!/bin/sh\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(root.join("bin/plugin"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o755
+            );
+        }
+    }
+
+    /// `tar -czf x.tar.gz -C dist .` and `zip -r x.zip .` prefix every entry with `./` and list the root itself.
+    #[test]
+    fn extracts_archives_whose_entries_start_with_dot_slash() {
+        let temp = TempDir::new().unwrap();
+        let manifest = manifest_json("acme").into_bytes();
+        let archive = write_archive(
+            &temp,
+            "dot.tar.gz",
+            &tar_gz(&[
+                ("./", TarEntry::Dir),
+                ("./acme/", TarEntry::Dir),
+                (
+                    "./acme/planeai-plugin.json",
+                    TarEntry::File(manifest.clone(), 0o644),
+                ),
+                (
+                    "./acme/bin/plugin",
+                    TarEntry::File(b"#!/bin/sh\n".to_vec(), 0o755),
+                ),
+            ]),
+        );
+        let root =
+            extract_archive(&archive, ArchiveFormat::TarGz, &temp.path().join("tar")).unwrap();
+        assert_eq!(root, temp.path().join("tar").join("acme"));
+        assert_eq!(fs::read(root.join("bin/plugin")).unwrap(), b"#!/bin/sh\n");
+
+        let archive = write_archive(
+            &temp,
+            "dot.zip",
+            &zip_bytes(&[
+                ("./", None, 0o755),
+                ("./acme/", None, 0o755),
+                ("./acme/planeai-plugin.json", Some(&manifest), 0o644),
+                ("./acme/bin/plugin", Some(b"#!/bin/sh\n"), 0o755),
+            ]),
+        );
+        let root = extract_archive(&archive, ArchiveFormat::Zip, &temp.path().join("zip")).unwrap();
+        assert_eq!(root, temp.path().join("zip").join("acme"));
+        assert_eq!(fs::read(root.join("bin/plugin")).unwrap(), b"#!/bin/sh\n");
+
+        let nameless = write_archive(
+            &temp,
+            "nameless.tar.gz",
+            &tar_gz(&[("./", TarEntry::File(b"x".to_vec(), 0o644))]),
+        );
+        assert_eq!(
+            extract_archive(
+                &nameless,
+                ArchiveFormat::TarGz,
+                &temp.path().join("nameless")
+            )
+            .unwrap_err(),
+            "plugin archive entry escapes the package: ./"
+        );
+    }
+
+    #[test]
+    fn extracts_a_tar_gz_that_carries_no_directory_entries() {
+        let temp = TempDir::new().unwrap();
+        let archive = write_archive(
+            &temp,
+            "flat.tar.gz",
+            &tar_gz(&[
+                (
+                    "acme/planeai-plugin.json",
+                    TarEntry::File(manifest_json("acme").into_bytes(), 0o644),
+                ),
+                (
+                    "acme/bin/plugin",
+                    TarEntry::File(b"#!/bin/sh\n".to_vec(), 0o755),
+                ),
+            ]),
+        );
+        let root =
+            extract_archive(&archive, ArchiveFormat::TarGz, &temp.path().join("flat")).unwrap();
+        assert_eq!(root, temp.path().join("flat").join("acme"));
+        assert_eq!(fs::read(root.join("bin/plugin")).unwrap(), b"#!/bin/sh\n");
+    }
+
+    #[test]
+    fn stops_extracting_once_the_archive_expands_past_the_budget() {
+        let temp = TempDir::new().unwrap();
+        let manifest = manifest_json("acme").into_bytes();
+        let zeros = vec![0u8; 2 * 1024 * 1024];
+        let one_mb = 1024 * 1024;
+
+        let tar = write_archive(
+            &temp,
+            "bomb.tar.gz",
+            &tar_gz(&[
+                ("acme/", TarEntry::Dir),
+                (
+                    "acme/planeai-plugin.json",
+                    TarEntry::File(manifest.clone(), 0o644),
+                ),
+                ("acme/blob", TarEntry::File(zeros.clone(), 0o644)),
+            ]),
+        );
+        assert_eq!(
+            extract_archive_within(&tar, ArchiveFormat::TarGz, &temp.path().join("tar"), one_mb)
+                .unwrap_err(),
+            "plugin archive expands beyond the 1 MB limit"
+        );
+        assert!(
+            fs::metadata(temp.path().join("tar/acme/blob"))
+                .unwrap()
+                .len()
+                <= one_mb,
+            "extraction stops at the budget instead of draining the entry"
+        );
+
+        let zip = write_archive(
+            &temp,
+            "bomb.zip",
+            &zip_bytes(&[
+                ("acme/planeai-plugin.json", Some(&manifest), 0o644),
+                ("acme/blob", Some(&zeros), 0o644),
+            ]),
+        );
+        assert!(
+            fs::metadata(&zip).unwrap().len() < one_mb / 10,
+            "the fixture compresses"
+        );
+        assert_eq!(
+            extract_archive_within(&zip, ArchiveFormat::Zip, &temp.path().join("zip"), one_mb)
+                .unwrap_err(),
+            "plugin archive expands beyond the 1 MB limit"
+        );
+        assert!(
+            fs::metadata(temp.path().join("zip/acme/blob"))
+                .unwrap()
+                .len()
+                <= one_mb + 1,
+            "extraction stops at the budget instead of draining the entry"
+        );
+    }
+
+    /// The tar reader buffers GNU long-name and PAX headers in memory before yielding an entry,
+    /// so the budget has to bind the decompressed stream rather than the entries.
+    #[test]
+    fn long_name_headers_count_against_the_extraction_budget() {
+        let temp = TempDir::new().unwrap();
+        let one_mb = 1024 * 1024;
+        let bomb = write_archive(
+            &temp,
+            "longname.tar.gz",
+            &tar_gz(&[
+                ("acme/", TarEntry::Dir),
+                (
+                    "././@LongLink",
+                    TarEntry::LongName(vec![b'x'; 2 * one_mb as usize]),
+                ),
+                ("acme/x", TarEntry::File(b"x".to_vec(), 0o644)),
+            ]),
+        );
+        assert!(
+            fs::metadata(&bomb).unwrap().len() < one_mb / 10,
+            "the fixture compresses"
+        );
+        assert_eq!(
+            extract_archive_within(
+                &bomb,
+                ArchiveFormat::TarGz,
+                &temp.path().join("bomb"),
+                one_mb
+            )
+            .unwrap_err(),
+            "plugin archive expands beyond the 1 MB limit"
+        );
+
+        let long = format!("acme/{}/plugin", "n".repeat(150));
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(0o644);
+        header.set_size(1);
+        builder.append_data(&mut header, &long, &b"x"[..]).unwrap();
+        let manifest = manifest_json("acme").into_bytes();
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(0o644);
+        header.set_size(manifest.len() as u64);
+        builder
+            .append_data(&mut header, "acme/planeai-plugin.json", manifest.as_slice())
+            .unwrap();
+        let archive = write_archive(
+            &temp,
+            "long.tar.gz",
+            &builder.into_inner().unwrap().finish().unwrap(),
+        );
+        let root = extract_archive_within(
+            &archive,
+            ArchiveFormat::TarGz,
+            &temp.path().join("long"),
+            one_mb,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(temp.path().join("long").join(&long)).unwrap(),
+            b"x"
+        );
+        assert_eq!(root, temp.path().join("long").join("acme"));
+    }
+
+    #[test]
+    fn rejects_unsafe_and_malformed_archives() {
+        let temp = TempDir::new().unwrap();
+        let manifest = manifest_json("acme").into_bytes();
+        let cases: Vec<(&str, Vec<u8>, &str)> =
+            vec![
+            (
+                "zip slip",
+                tar_gz(&[
+                    ("acme/", TarEntry::Dir),
+                    ("acme/planeai-plugin.json", TarEntry::File(manifest.clone(), 0o644)),
+                    ("acme/../evil", TarEntry::File(b"x".to_vec(), 0o644)),
+                ]),
+                "plugin archive entry escapes the package: acme/../evil",
+            ),
+            (
+                "absolute path",
+                tar_gz(&[("/tmp/evil", TarEntry::File(b"x".to_vec(), 0o644))]),
+                "plugin archive entry escapes the package: /tmp/evil",
+            ),
+            (
+                "symlink",
+                tar_gz(&[
+                    ("acme/", TarEntry::Dir),
+                    ("acme/planeai-plugin.json", TarEntry::File(manifest.clone(), 0o644)),
+                    ("acme/link", TarEntry::Symlink("/etc/passwd")),
+                ]),
+                "plugin archive contains a link: acme/link",
+            ),
+            (
+                "hardlink",
+                tar_gz(&[
+                    ("acme/", TarEntry::Dir),
+                    ("acme/planeai-plugin.json", TarEntry::File(manifest.clone(), 0o644)),
+                    ("acme/hard", TarEntry::Hardlink("acme/planeai-plugin.json")),
+                ]),
+                "plugin archive contains a link: acme/hard",
+            ),
+            (
+                "two top-level directories",
+                tar_gz(&[
+                    ("acme/", TarEntry::Dir),
+                    ("acme/planeai-plugin.json", TarEntry::File(manifest.clone(), 0o644)),
+                    ("other/", TarEntry::Dir),
+                    ("other/readme", TarEntry::File(b"x".to_vec(), 0o644)),
+                ]),
+                "plugin archive must contain exactly one top-level directory, found 2 entries",
+            ),
+            (
+                "manifest at the archive root",
+                tar_gz(&[("planeai-plugin.json", TarEntry::File(manifest.clone(), 0o644))]),
+                "plugin archive must contain one top-level directory holding planeai-plugin.json",
+            ),
+            (
+                "top-level directory without a manifest",
+                tar_gz(&[
+                    ("acme/", TarEntry::Dir),
+                    ("acme/readme", TarEntry::File(b"x".to_vec(), 0o644)),
+                ]),
+                "plugin archive must contain one top-level directory holding planeai-plugin.json",
+            ),
+        ];
+        for (name, bytes, expected) in cases {
+            let archive = write_archive(&temp, &format!("{name}.tar.gz"), &bytes);
+            let destination = temp.path().join(name);
+            assert_eq!(
+                extract_archive(&archive, ArchiveFormat::TarGz, &destination).unwrap_err(),
+                expected,
+                "{name}"
+            );
+            assert!(
+                !destination.join("..").join("evil").exists() && !temp.path().join("evil").exists(),
+                "{name} wrote outside the destination"
+            );
+        }
+
+        let zip_slip = write_archive(
+            &temp,
+            "slip.zip",
+            &zip_bytes(&[("acme/../evil", Some(b"x"), 0o644)]),
+        );
+        assert_eq!(
+            extract_archive(&zip_slip, ArchiveFormat::Zip, &temp.path().join("slip")).unwrap_err(),
+            "plugin archive entry escapes the package: acme/../evil"
+        );
+        assert!(!temp.path().join("evil").exists());
+    }
+
+    const ONE_MB: u64 = 1024 * 1024;
+
+    /// Serves `body` at `/acme-macos-arm64.tar.gz`, a redirect to it, and a body one byte over
+    /// 1 MB both with a Content-Length and as a chunked stream.
+    async fn serve(body: Vec<u8>) -> String {
+        use axum::routing::get;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let big = vec![0u8; ONE_MB as usize + 1];
+        let chunked = big.clone();
+        let router = axum::Router::new()
+            .route(
+                "/acme-macos-arm64.tar.gz",
+                get(move || async move { body.clone() }),
+            )
+            .route(
+                "/moved.tar.gz",
+                get(|| async { axum::response::Redirect::permanent("/acme-macos-arm64.tar.gz") }),
+            )
+            .route("/big.tar.gz", get(move || async move { big.clone() }))
+            .route(
+                "/chunked.tar.gz",
+                get(move || async move {
+                    axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(
+                        std::io::Cursor::new(chunked.clone()),
+                    ))
+                }),
+            );
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn downloads_stream_to_disk_and_report_the_archive_hash() {
+        let bytes = good_tar();
+        let expected = hex(&Sha256::digest(&bytes));
+        let base = serve(bytes.clone()).await;
+        let temp = TempDir::new().unwrap();
+        let destination = temp.path().join("package.tar.gz");
+
+        let sha256 = Downloader::insecure_for_tests()
+            .download(&format!("{base}/acme-macos-arm64.tar.gz"), &destination)
+            .await
+            .unwrap();
+        assert_eq!(sha256, expected);
+        assert_eq!(fs::read(&destination).unwrap(), bytes);
+
+        assert_eq!(
+            Downloader::insecure_for_tests()
+                .download(&format!("{base}/missing.tar.gz"), &destination)
+                .await
+                .unwrap_err(),
+            format!("plugin download failed with HTTP 404: {base}/missing.tar.gz")
+        );
+    }
+
+    #[tokio::test]
+    async fn production_downloads_refuse_plain_http_before_any_request() {
+        let temp = TempDir::new().unwrap();
+        let destination = temp.path().join("package.tar.gz");
+        assert_eq!(
+            Downloader::new()
+                .unwrap()
+                .download("http://127.0.0.1:9/acme-macos-arm64.tar.gz", &destination)
+                .await
+                .unwrap_err(),
+            "plugin downloads must use https: http://127.0.0.1:9/acme-macos-arm64.tar.gz"
+        );
+        assert!(!destination.exists());
+    }
+
+    /// The test client shares the production redirect policy, so a redirect to plain http is
+    /// refused even where the first request was allowed over http.
+    #[tokio::test]
+    async fn redirects_stay_on_https_and_stop_at_the_hop_limit() {
+        let base = serve(good_tar()).await;
+        let temp = TempDir::new().unwrap();
+        assert_eq!(
+            Downloader::insecure_for_tests()
+                .download(&format!("{base}/moved.tar.gz"), &temp.path().join("moved"))
+                .await
+                .unwrap_err(),
+            format!(
+                "plugin download failed: error following redirect for url ({base}/moved.tar.gz): redirected to a non-https URL"
+            )
+        );
+
+        // reqwest counts the initial URL among the previous ones, so hop 5 is the fifth redirect.
+        let https = reqwest::Url::parse("https://cdn.acme.dev/acme.tar.gz").unwrap();
+        let http = reqwest::Url::parse("http://cdn.acme.dev/acme.tar.gz").unwrap();
+        assert_eq!(redirect_rejection(5, &https), None);
+        assert_eq!(redirect_rejection(6, &https), Some("too many redirects"));
+        assert_eq!(
+            redirect_rejection(1, &http),
+            Some("redirected to a non-https URL")
+        );
+    }
+
+    #[tokio::test]
+    async fn downloads_stop_at_the_size_limit_with_and_without_a_content_length() {
+        let base = serve(good_tar()).await;
+        let temp = TempDir::new().unwrap();
+        let downloader = Downloader::insecure_for_tests();
+
+        let sized = temp.path().join("big.tar.gz");
+        assert_eq!(
+            downloader
+                .download_within(&format!("{base}/big.tar.gz"), &sized, ONE_MB)
+                .await
+                .unwrap_err(),
+            "plugin download exceeds the 1 MB limit"
+        );
+        assert!(!sized.exists(), "a declared oversize body is never opened");
+
+        let chunked = temp.path().join("chunked.tar.gz");
+        assert_eq!(
+            downloader
+                .download_within(&format!("{base}/chunked.tar.gz"), &chunked, ONE_MB)
+                .await
+                .unwrap_err(),
+            "plugin download exceeds the 1 MB limit"
+        );
+        assert!(
+            fs::metadata(&chunked).unwrap().len() <= ONE_MB,
+            "a chunked body stops at the limit instead of draining the stream"
+        );
+
+        let exact = temp.path().join("exact.tar.gz");
+        downloader
+            .download_within(&format!("{base}/big.tar.gz"), &exact, ONE_MB + 1)
+            .await
+            .unwrap();
+        assert_eq!(fs::metadata(&exact).unwrap().len(), ONE_MB + 1);
+    }
+
+    #[tokio::test]
+    async fn stages_a_served_archive_into_a_reviewable_package() {
+        let bytes = good_tar();
+        let sha256 = hex(&Sha256::digest(&bytes));
+        let base = serve(bytes).await;
+        let temp = TempDir::new().unwrap();
+        let staging_root = temp.path().join("staging");
+        let url = format!("{base}/acme-macos-arm64.tar.gz");
+        let source = PackageSource {
+            url: url.clone(),
+            release_tag: Some("v1.2.0".to_string()),
+            expected_sha256: Some(sha256.to_ascii_uppercase()),
+            format: ArchiveFormat::TarGz,
+        };
+
+        let (id, dir) = create_staging_dir(&staging_root).unwrap();
+        let (package, preview) = stage_package(
+            &Downloader::insecure_for_tests(),
+            &repo(),
+            &source,
+            &[],
+            id.clone(),
+            &dir,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            preview,
+            StagedPluginInstall {
+                staging_id: id,
+                repo: "acme/planeai-plugin-acme".to_string(),
+                source_url: url.clone(),
+                release_tag: Some("v1.2.0".to_string()),
+                integrity: PackageIntegrity::Verified {
+                    sha256: sha256.clone()
+                },
+                manifest: StagedManifest {
+                    id: "acme".to_string(),
+                    name: "Acme".to_string(),
+                    version: "1.2.0".to_string(),
+                    capabilities: vec![],
+                    ui_contributions: vec![],
+                    tools: vec![],
+                },
+                replaces: StagedReplacement::None,
+                version_mismatch: None,
+            }
+        );
+        assert_eq!(package.dir, dir);
+        assert_eq!(
+            package.package_root,
+            dir.join("extracted").join("acme").canonicalize().unwrap()
+        );
+        assert_eq!(
+            package.origin,
+            RemoteOrigin {
+                repo: "acme/planeai-plugin-acme".to_string(),
+                release_tag: Some("v1.2.0".to_string()),
+                source_url: url.clone(),
+                archive_sha256: sha256.clone(),
+            }
+        );
+        assert_eq!(
+            fs::read_to_string(package.package_root.join("planeai-plugin.json")).unwrap(),
+            manifest_json("acme")
+        );
+
+        // The warning compares against the tag the archive came from, not the latest release.
+        let (id, dir) = create_staging_dir(&staging_root).unwrap();
+        let older = PackageSource {
+            release_tag: Some("v1.1.0".to_string()),
+            expected_sha256: None,
+            ..source.clone()
+        };
+        let (_, preview) = stage_package(
+            &Downloader::insecure_for_tests(),
+            &repo(),
+            &older,
+            &[inventory("acme", "0.9.0", None)],
+            id,
+            &dir,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            preview.integrity,
+            PackageIntegrity::Unverified {
+                sha256: sha256.clone()
+            }
+        );
+        assert_eq!(
+            preview.replaces,
+            StagedReplacement::Local {
+                installed_version: "0.9.0".to_string(),
+                original_display_path: Some("/Users/me/acme".to_string()),
+            }
+        );
+        assert_eq!(
+            preview.version_mismatch,
+            Some(VersionMismatch {
+                release_tag: "v1.1.0".to_string(),
+                manifest_version: "1.2.0".to_string(),
+            })
+        );
+
+        let (id, dir) = create_staging_dir(&staging_root).unwrap();
+        let tampered = PackageSource {
+            expected_sha256: Some("0000".to_string()),
+            ..source
+        };
+        let error = stage_package(
+            &Downloader::insecure_for_tests(),
+            &repo(),
+            &tampered,
+            &[],
+            id,
+            &dir,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error,
+            format!("plugin archive SHA-256 {sha256} does not match the release asset digest 0000")
+        );
+        assert!(
+            !dir.join("extracted").exists(),
+            "nothing is extracted after a digest mismatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_staging_store_stages_commits_discards_and_expires() {
+        let bytes = good_tar();
+        let sha256 = hex(&Sha256::digest(&bytes));
+        let base = serve(bytes).await;
+        let temp = TempDir::new().unwrap();
+        let store = StagingStore::new(temp.path());
+        let staging_root = temp.path().join("plugins").join("staging");
+        let url = format!("{base}/acme-macos-arm64.tar.gz");
+        let source = PackageSource {
+            url: url.clone(),
+            release_tag: Some("v1.2.0".to_string()),
+            expected_sha256: None,
+            format: ArchiveFormat::TarGz,
+        };
+        let downloader = Downloader::insecure_for_tests();
+        let repo = repo();
+        let stage = || store.stage(&downloader, &repo, &source, &[]);
+
+        let preview = stage().await.unwrap();
+        let dir = staging_root.join(&preview.staging_id);
+        let package_root = dir.join("extracted").join("acme");
+        assert!(package_root.join("planeai-plugin.json").is_file());
+        let expected_root = package_root.canonicalize().unwrap();
+
+        let installed = store
+            .commit(&preview.staging_id, |root, origin| async move {
+                Ok::<_, String>((root, origin))
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            installed,
+            (
+                expected_root,
+                RemoteOrigin {
+                    repo: "acme/planeai-plugin-acme".to_string(),
+                    release_tag: Some("v1.2.0".to_string()),
+                    source_url: url.clone(),
+                    archive_sha256: sha256.clone(),
+                }
+            )
+        );
+        assert!(!dir.exists(), "commit removes the staging directory");
+
+        let expired = store
+            .commit(&preview.staging_id, |_, _| async { Ok(()) })
+            .await
+            .unwrap_err();
+        assert_eq!(expired, "This install review expired. Start again.");
+        let unknown = store
+            .commit("never-staged", |_, _| async { Ok(()) })
+            .await
+            .unwrap_err();
+        assert_eq!(unknown, "This install review expired. Start again.");
+
+        let preview = stage().await.unwrap();
+        let dir = staging_root.join(&preview.staging_id);
+        let failed = store
+            .commit(&preview.staging_id, |_, _| async {
+                Err::<(), _>("enable failed".to_string())
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(failed, "enable failed");
+        assert!(
+            !dir.exists(),
+            "the import copied the package, so a failed install still removes the staging"
+        );
+
+        let preview = stage().await.unwrap();
+        let dir = staging_root.join(&preview.staging_id);
+        store.discard(&preview.staging_id).await.unwrap();
+        assert!(!dir.exists(), "discard removes the staging directory");
+        store.discard(&preview.staging_id).await.unwrap();
+        store.discard("never-staged").await.unwrap();
+
+        let tampered = PackageSource {
+            expected_sha256: Some("0000".to_string()),
+            ..source.clone()
+        };
+        let error = store
+            .stage(&downloader, &repo, &tampered, &[])
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            format!("plugin archive SHA-256 {sha256} does not match the release asset digest 0000")
+        );
+        assert_eq!(
+            fs::read_dir(&staging_root).unwrap().count(),
+            0,
+            "a failed stage leaves no directory behind"
+        );
+
+        stage().await.unwrap();
+        store.reset().unwrap();
+        assert!(!staging_root.exists(), "startup wipes every staged package");
+    }
+
+    /// GitHub reports no digest for some assets, so a release asset can still install unverified.
+    #[tokio::test]
+    async fn a_release_asset_without_a_digest_installs_unverified() {
+        let bytes = good_tar();
+        let sha256 = hex(&Sha256::digest(&bytes));
+        let base = serve(bytes).await;
+        let url = format!("{base}/acme-macos-arm64.tar.gz");
+        let remote = RemoteRepo {
+            repo: repo(),
+            head: None,
+            latest_release: Some(Release {
+                tag_name: "v1.2.0".to_string(),
+                assets: vec![ReleaseAsset {
+                    name: "planeai-plugin-acme-macos-arm64.tar.gz".to_string(),
+                    browser_download_url: url.clone(),
+                    digest: None,
+                }],
+            }),
+        };
+        let source = remote.select_source("macos-arm64").unwrap();
+        assert_eq!(
+            source,
+            PackageSource {
+                url: url.clone(),
+                release_tag: Some("v1.2.0".to_string()),
+                expected_sha256: None,
+                format: ArchiveFormat::TarGz,
+            }
+        );
+
+        let temp = TempDir::new().unwrap();
+        let (id, dir) = create_staging_dir(&temp.path().join("staging")).unwrap();
+        let (_, preview) = stage_package(
+            &Downloader::insecure_for_tests(),
+            &repo(),
+            &source,
+            &[],
+            id,
+            &dir,
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview.integrity, PackageIntegrity::Unverified { sha256 });
+        assert_eq!(preview.release_tag, Some("v1.2.0".to_string()));
+        assert_eq!(preview.source_url, url);
+    }
+
+    /// `cargo test -- --ignored remote_install_real_catalog` stages the real GitHub plugin.
+    #[tokio::test]
+    #[ignore]
+    async fn remote_install_real_catalog() {
+        let repo = RepoFullName::parse("nicolegros/planeai-plugin-github").unwrap();
+        let remote = fetch_remote_repo(&GhCli, repo.clone()).await.unwrap();
+        let source = remote
+            .select_source(crate::plugin_packages::current_platform_key())
+            .unwrap();
+        let temp = TempDir::new().unwrap();
+        let store = StagingStore::new(temp.path());
+        let preview = store
+            .stage(&Downloader::new().unwrap(), &repo, &source, &[])
+            .await
+            .unwrap();
+        let package = store.take(&preview.staging_id).unwrap().unwrap();
+        assert_eq!(preview.manifest.id, "github");
+        let imported = crate::plugin_packages::import_local_package(
+            &temp.path().join("app"),
+            &package.package_root,
+        )
+        .unwrap();
+        assert_eq!(imported.manifest.id, "github");
+        eprintln!(
+            "staged {} from {} ({:?})",
+            preview.manifest.version, preview.source_url, preview.integrity
+        );
+    }
+}

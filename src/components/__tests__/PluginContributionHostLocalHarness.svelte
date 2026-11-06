@@ -24,6 +24,8 @@
     installed_hash: "fixture-hash",
     installed_path: "/planeai/plugins/packages/sha256/fixture-hash",
     original_display_path: "/source/local-fixture",
+    remote_origin: null,
+    tools: [],
     enabled: true,
     state: "running",
     last_error: null,
