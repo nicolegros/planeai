@@ -12,9 +12,9 @@ import {
   refocusTerminal,
   type FocusZone,
 } from "./focus.svelte";
-import { DONE_CANNOT_SNOOZE, snoozeTask, wakeTask } from "./task-moves";
+import { snoozeTask, wakeTask } from "./task-moves";
 import { getLaneNow } from "./snooze-clock.svelte";
-import { isTaskSnoozed, snoozeOptions } from "./task-snooze";
+import { DONE_CANNOT_SNOOZE, isTaskSnoozed, snoozeOptions } from "./task-snooze";
 import * as taskStore from "./task-store.svelte";
 import { showToast } from "./toasts.svelte";
 import type { Project, TaskItem } from "./types";

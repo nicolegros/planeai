@@ -11,11 +11,7 @@ const { snoozeTask, wakeTask } = vi.hoisted(() => ({
   snoozeTask: vi.fn().mockResolvedValue(true),
   wakeTask: vi.fn().mockResolvedValue(true),
 }));
-vi.mock("../task-moves", () => ({
-  snoozeTask,
-  wakeTask,
-  DONE_CANNOT_SNOOZE: "Done tasks cannot be snoozed.",
-}));
+vi.mock("../task-moves", () => ({ snoozeTask, wakeTask }));
 vi.mock("../toasts.svelte", () => ({ showToast: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 

@@ -13,10 +13,12 @@
   import { getSelectedIndex } from "../../lib/sidebar-nav.svelte";
   import { locateProjectFolder } from "../../lib/locate-project";
   import * as orchestrator from "../../lib/session-orchestrator.svelte";
-  import { LANES, SHELVES, navKey, shelfPage, sidebarRowNavKey, sidebarRowTargetId, type IsCollapsed, type ShelfLane, type ShownPages, type SidebarFolderSection, type SidebarRow, type SidebarSection, type SidebarShelfSection } from "../../lib/sidebar-model";
+  import { everyLane, LANES, SHELVES, navKey, shelfPage, sidebarRowNavKey, sidebarRowTargetId, type IsCollapsed, type ShelfLane, type ShownPages, type SidebarFolderSection, type SidebarRow, type SidebarSection, type SidebarShelfSection } from "../../lib/sidebar-model";
   import { folderUrgency, isQuiet, rowActions, rowActivity, rowSession, splitBranch, WOKE_TITLE, type FolderUrgency, type RowAction, type RowActivity } from "../../lib/sidebar-cards";
   import { snoozeAnchor } from "../../lib/snooze-picker.svelte";
   import { getLaneNow } from "../../lib/snooze-clock.svelte";
+  import { laneHover, taskDrag } from "../../lib/task-drag.svelte";
+  import LaneDropBadge from "./LaneDropBadge.svelte";
   import SnoozeCountdown from "./SnoozeCountdown.svelte";
   import type { PluginSessionContext } from "../../lib/plugin-sdk";
   import type { PluginSlot, Project, Session } from "../../lib/types";
@@ -43,6 +45,8 @@
     };
     projectAutoMode: Record<string, boolean>;
     onSelectRow: (row: SidebarRow) => void;
+    /** A press on a row, which may become a drag. */
+    onRowPress: (e: PointerEvent, row: SidebarRow) => void;
     onRowAction: (action: RowAction, row: SidebarRow) => void;
     onRowContextMenu: (e: MouseEvent, row: SidebarRow) => void;
     onProjectContextMenu: (e: MouseEvent, project: Project) => void;
@@ -60,7 +64,7 @@
 
   let {
     sections, showTaskKeys, showProjects, navIndex, isCollapsed, onToggle, shownPages, onShowMore,
-    isActive, isPreviewing, isFading, rename, projectAutoMode, onSelectRow, onRowAction, onRowContextMenu, onProjectContextMenu, plugins,
+    isActive, isPreviewing, isFading, rename, projectAutoMode, onSelectRow, onRowPress, onRowAction, onRowContextMenu, onProjectContextMenu, plugins,
   }: Props = $props();
 
   const ACTIVITY_SLOTS: Record<Exclude<RowActivity, "snoozed">, { icon: LucideIcon; label: string; class: string }> = {
@@ -89,6 +93,15 @@
 
   const top = $derived(sections.filter((s) => s.kind === "attention" || s.kind === "folder"));
   const shelves = $derived(sections.filter((s): s is SidebarShelfSection => s.kind === "shelf"));
+  // A dragged task can land in an empty lane, so every shelf shows while the drag lasts.
+  const shelvesShown = $derived(
+    taskDrag.current
+      ? everyLane(shelves, Object.keys(SHELVES) as ShelfLane[], (lane): SidebarShelfSection => ({ kind: "shelf", key: `shelf:${lane}`, lane, rows: [], defaultCollapsed: true }))
+      : shelves,
+  );
+  const topDrop = $derived(laneHover("in_review", null));
+  const laneClass = (verdict: ReturnType<typeof laneHover>) =>
+    verdict === null ? "" : verdict.accepts ? "rounded-md bg-accent-bg ring-1 ring-inset ring-accent/40" : "rounded-md ring-1 ring-inset ring-status-exited/40";
   const agentStates = $derived(orchestrator.getAgentStates());
   const unreadSessions = $derived(orchestrator.getUnreadSessions());
 
@@ -192,7 +205,7 @@
     {@const labelId = `sidebar-card-${sidebarRowNavKey(row)}`}
     <!-- The row button lies behind its content so a meta slot can be a button of its own; content clicks bubble here, the slot's do not. -->
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="group relative" onclick={() => onSelectRow(row)} oncontextmenu={(e) => onRowContextMenu(e, row)}>
+    <div class="group relative" onclick={() => onSelectRow(row)} onpointerdown={(e) => onRowPress(e, row)} oncontextmenu={(e) => onRowContextMenu(e, row)}>
       <button
         data-nav-index={navIdx}
         data-snooze-anchor={row.kind === "task" ? snoozeAnchor(row.project.id, row.task.key) : undefined}
@@ -250,6 +263,7 @@
       class="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left transition-colors {rowStateClass(active, selected, selected || isPreviewing(row))}"
       title={rowTitle(row, activity)}
       onclick={() => onSelectRow(row)}
+      onpointerdown={(e) => onRowPress(e, row)}
       oncontextmenu={(e) => onRowContextMenu(e, row)}
     >
       <span class="flex min-w-0 flex-1 items-center gap-2 transition-opacity {receded ? 'opacity-75 group-hover:opacity-100 group-has-focus-visible:opacity-100' : ''}">
@@ -268,7 +282,8 @@
   {@const navIdx = navIndex(navKey.project(section.key))}
   {@const collapsed = isCollapsed(section.key, section.defaultCollapsed)}
   {@const urgency = collapsed ? folderUrgency(section.rows, activityOf) : null}
-  <div class="mt-2 first:mt-0">
+  {@const drop = laneHover("in_review", project.id)}
+  <div class="mt-2 first:mt-0 {laneClass(drop)}" data-task-lane="in_review" data-task-lane-project={project.id}>
     <div class="relative">
       <button
         data-nav-index={navIdx}
@@ -280,6 +295,7 @@
       >
         {#if project.path_missing}<span class="size-4 shrink-0"></span>{/if}
         <span class="min-w-0 truncate text-[13px] font-medium text-t1">{project.name}</span>
+        {#if drop}<LaneDropBadge verdict={drop} />{/if}
         {#if urgency}<span class="size-1.5 shrink-0 rounded-full {URGENCY_DOTS[urgency].class}" role="img" aria-label={URGENCY_DOTS[urgency].label} title={URGENCY_DOTS[urgency].label} data-folder-urgency={urgency}></span>{/if}
         {#if projectAutoMode[project.id]}<Zap class="size-2.5 shrink-0 text-status-running" />{/if}
         <span class="ml-auto text-xs tabular-nums text-t3">{section.rows.length}</span>
@@ -312,7 +328,8 @@
   {@const collapsed = isCollapsed(section.key, section.defaultCollapsed)}
   {@const page = shelfPage(section, shownPages(section.key), collapsed, isActive)}
   {@const moreIdx = navIndex(navKey.more(section.key))}
-  <section>
+  {@const drop = laneHover(section.lane, null)}
+  <section class={laneClass(drop)} data-task-lane={section.lane}>
     <button
       data-nav-index={navIdx}
       class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs font-medium text-t2 {isSelected(navIdx) ? 'ring-2 ring-inset ring-accent' : ''}"
@@ -320,6 +337,7 @@
       onclick={() => onToggle(section.key, section.defaultCollapsed)}
     >
       <span class="shrink-0">{LANES[section.lane].label}</span>
+      {#if drop}<LaneDropBadge verdict={drop} />{/if}
       <span class="h-px flex-1 bg-border"></span>
       <span class="font-normal tabular-nums text-t3">{section.rows.length}</span>
       {@render chevron(collapsed)}
@@ -349,22 +367,26 @@
 <!-- One provider for every meta pill, so moving between pills skips the tooltip delay. -->
 <Tooltip.Provider delayDuration={300}>
 <div class="flex flex-1 flex-col">
-  {#each top as section (section.key)}
-    {#if section.kind === "folder"}
-      {@render folder(section)}
-    {:else if section.kind === "attention"}
-      <ul class="flex flex-col gap-0.5">
-        {#each section.rows as row (sidebarRowNavKey(row))}
-          {@const key = sidebarRowNavKey(row)}
-          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key }} out:send={{ key }} class={rowItemClass(row)}>{@render card(row, false)}</li>
-        {/each}
-      </ul>
-    {/if}
-  {/each}
-  {#if shelves.length > 0}
+  <!-- The top rows and the space under them take a dragged task for review; a folder takes its own project's. -->
+  <div class="relative flex flex-1 flex-col {laneClass(topDrop)}" data-task-lane="in_review">
+    {#if topDrop}<div class="pointer-events-none absolute top-1 right-1 z-10 flex"><LaneDropBadge verdict={topDrop} /></div>{/if}
+    {#each top as section (section.key)}
+      {#if section.kind === "folder"}
+        {@render folder(section)}
+      {:else if section.kind === "attention"}
+        <ul class="flex flex-col gap-0.5">
+          {#each section.rows as row (sidebarRowNavKey(row))}
+            {@const key = sidebarRowNavKey(row)}
+            <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key }} out:send={{ key }} class={rowItemClass(row)}>{@render card(row, false)}</li>
+          {/each}
+        </ul>
+      {/if}
+    {/each}
+  </div>
+  {#if shelvesShown.length > 0}
     <!-- Shelves sit at the bottom of the list, below everything that needs attention. -->
     <div class="mt-auto flex flex-col gap-1 pt-3">
-      {#each shelves as section (section.key)}{@render shelfSection(section)}{/each}
+      {#each shelvesShown as section (section.key)}{@render shelfSection(section)}{/each}
     </div>
   {/if}
   {#if sections.length === 0}

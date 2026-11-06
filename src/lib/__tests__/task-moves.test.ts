@@ -461,5 +461,91 @@ describe("task moves", () => {
 
       expect(moves.canUndoTaskChange()).toBe(false);
     });
+
+    describe("wake and move", () => {
+      it("wakes and moves as one change, which Mod+Z reverts whole", async () => {
+        await moves.snoozeTask(current("PLA-1"), project, tomorrow);
+        const snoozed = snoozeOf("PLA-1");
+
+        expect(
+          await moves.wakeAndChangeTaskStatus(current("PLA-1"), project, "in_review", onMoved),
+        ).toBe(true);
+        expect(snoozeOf("PLA-1")).toEqual(AWAKE);
+        expect(statusOf("PLA-1")).toBe("in_review");
+        expect(backendMoves()).toEqual(["PLA-1:in_review"]);
+        expect(onMoved).toHaveBeenCalledTimes(1);
+        expect(toasts.getToasts().at(-1)).toMatchObject({
+          kind: "success",
+          message: "PLA-1 woke and moved to Needs review",
+          detail: "Title of PLA-1",
+          actions: [{ key: "z", label: "Undo" }],
+        });
+
+        await moves.undoLastTaskChange(onMoved);
+
+        expect(snoozeOf("PLA-1")).toEqual(snoozed);
+        expect(statusOf("PLA-1")).toBe("in_progress");
+        expect(backendMoves()).toEqual(["PLA-1:in_review", "PLA-1:in_progress"]);
+        expect(messages()).toContain("PLA-1 snoozed again, back in Running");
+        expect(moves.canUndoTaskChange()).toBe(false);
+      });
+
+      it("holds a wake-and-Done in the undo window and cancels both together", async () => {
+        await moves.snoozeTask(current("PLA-1"), project, tomorrow);
+        const snoozed = snoozeOf("PLA-1");
+
+        await moves.wakeAndChangeTaskStatus(current("PLA-1"), project, "done", onMoved);
+        expect(snoozeOf("PLA-1")).toEqual(AWAKE);
+        expect(statusOf("PLA-1")).toBe("done");
+        expect(backendMoves()).toEqual([]);
+        expect(messages()).toContain("PLA-1 moved to Done");
+
+        await moves.undoLastTaskChange(onMoved);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(snoozeOf("PLA-1")).toEqual(snoozed);
+        expect(statusOf("PLA-1")).toBe("in_progress");
+        expect(messages()).toContain("PLA-1 snoozed again, back in Running");
+        await waitOutUndoWindow();
+        expect(backendMoves()).toEqual([]);
+      });
+
+      it("applies a wake-and-Done once its window passes", async () => {
+        await moves.snoozeTask(current("PLA-1"), project, tomorrow);
+        await moves.wakeAndChangeTaskStatus(current("PLA-1"), project, "done", onMoved);
+        await waitOutUndoWindow();
+
+        expect(backendMoves()).toEqual(["PLA-1:done"]);
+        expect(snoozeOf("PLA-1")).toEqual(AWAKE);
+        expect(onMoved).toHaveBeenCalledTimes(1);
+      });
+
+      it("keeps the wake undoable when the move fails", async () => {
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        await moves.snoozeTask(current("PLA-1"), project, tomorrow);
+        const snoozed = snoozeOf("PLA-1");
+        move.mockRejectedValueOnce(new Error("database unavailable"));
+
+        expect(
+          await moves.wakeAndChangeTaskStatus(current("PLA-1"), project, "in_review", onMoved),
+        ).toBe(false);
+        expect(snoozeOf("PLA-1")).toEqual(AWAKE);
+        expect(statusOf("PLA-1")).toBe("in_progress");
+
+        await moves.undoLastTaskChange(onMoved);
+        expect(snoozeOf("PLA-1")).toEqual(snoozed);
+      });
+
+      it("does not revert a wake-and-move once the task moved on", async () => {
+        await moves.snoozeTask(current("PLA-1"), project, tomorrow);
+        await moves.wakeAndChangeTaskStatus(current("PLA-1"), project, "in_review", onMoved);
+        statuses["PLA-1"] = "todo";
+        await taskStore.refresh(["/repo"]);
+
+        expect(moves.canUndoTaskChange()).toBe(false);
+        await moves.undoLastTaskChange(onMoved);
+        expect(snoozeOf("PLA-1")).toEqual(AWAKE);
+        expect(backendMoves()).toEqual(["PLA-1:in_review"]);
+      });
+    });
   });
 });

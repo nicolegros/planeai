@@ -389,11 +389,24 @@
   transition: inset 80ms ease-out;
 }
 
-/* While a tab is dragged, nothing under the pointer reacts or gets selected. */
+/* While a tab or a task is dragged, nothing under the pointer reacts or gets selected. */
 body.tab-dragging,
-body.tab-dragging * {
+body.tab-dragging *,
+body.task-dragging,
+body.task-dragging * {
   cursor: grabbing !important;
   user-select: none;
+}
+
+/* A dragged task over a lane or pane that refuses it. */
+body.task-drop-refused,
+body.task-drop-refused * {
+  cursor: not-allowed !important;
+}
+
+/* Rows neither hover nor catch the pointer while a task is dragged: the lane under it is the target. */
+body.task-dragging [data-task-drag-list] li {
+  pointer-events: none;
 }
 
 .pane-drop-preview[data-zone="left"] {

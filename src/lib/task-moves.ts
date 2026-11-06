@@ -1,6 +1,12 @@
 import { tasks as tasksApi } from "./api";
 import { TASK_STATUS_LABELS, type TaskStatus } from "./sidebar-model";
-import { isSnoozeActive, isTaskSnoozed, snoozeOf, wakeTimeLabel } from "./task-snooze";
+import {
+  DONE_CANNOT_SNOOZE,
+  isSnoozeActive,
+  isTaskSnoozed,
+  snoozeOf,
+  wakeTimeLabel,
+} from "./task-snooze";
 import { getLaneNow } from "./snooze-clock.svelte";
 import * as taskStore from "./task-store.svelte";
 import { dismissToast, showToast } from "./toasts.svelte";
@@ -8,7 +14,6 @@ import type { Project, StoredSnooze, TaskItem, TaskSnooze } from "./types";
 
 /** Done archives the task's sessions and stops their agents, so it waits this long for an undo. */
 export const DONE_UNDO_SECONDS = 5;
-export const DONE_CANNOT_SNOOZE = "Done tasks cannot be snoozed.";
 /** Pending Done moves, so a quit that skips the close handlers (macOS Cmd+Q) or a crash still applies them. */
 const PENDING_DONE_STORAGE_KEY = "planeai.pending-done";
 
@@ -31,11 +36,19 @@ interface SnoozeChange {
   after: StoredSnooze;
 }
 
+/** A snoozed task woken and moved in one go, as dragging it to a status lane does. */
+interface WakeAndMove extends Omit<SnoozeChange, "kind">, Omit<TaskMove, "kind"> {
+  kind: "wake_status";
+}
+
+/** A move to a status, which a move to Done holds in its undo window. */
+type StatusChange = TaskMove | WakeAndMove;
+
 /** A task change made in the UI that Mod+Z can revert. */
-type TaskChange = TaskMove | SnoozeChange;
+type TaskChange = StatusChange | SnoozeChange;
 
 interface PendingDone {
-  move: TaskMove;
+  move: StatusChange;
   onMoved: () => void;
   hold: number;
 }
@@ -73,15 +86,15 @@ async function apply(key: string, status: string, repoPath: string): Promise<boo
   }
 }
 
-function showMovedBack(move: TaskMove): void {
-  showToast({
-    kind: "info",
-    message: `${move.key} moved back to ${statusLabel(move.from)}`,
-    autoDismissMs: 3000,
-  });
+function showMovedBack(move: StatusChange): void {
+  const message =
+    move.kind === "status"
+      ? `${move.key} moved back to ${statusLabel(move.from)}`
+      : `${move.key} snoozed again, back in ${statusLabel(move.from)}`;
+  showToast({ kind: "info", message, autoDismissMs: 3000 });
 }
 
-function startPendingDone(move: TaskMove, onMoved: () => void): void {
+function startPendingDone(move: StatusChange, onMoved: () => void): void {
   const id = taskStore.taskRef(move.repoPath, move.key);
   const hold = taskStore.holdStatus(move.key, move.repoPath, "done");
   pendingDone.set(id, { move, onMoved, hold });
@@ -127,7 +140,10 @@ async function commitDone(id: string, keepIfFailed = false): Promise<void> {
   else void taskStore.refresh([move.repoPath]);
 }
 
-/** Drops a pending Done. The hold hid backend changes meanwhile, so the task is re-read. */
+/**
+ * Drops a pending Done. The hold hid backend changes meanwhile, so the task is re-read. A Done
+ * that woke the task first puts its snooze back only when undone; a replacing move keeps it awake.
+ */
 function cancelDone(id: string, announce = true): boolean {
   const pending = takePendingDone(id);
   if (!pending) return false;
@@ -135,9 +151,21 @@ function cancelDone(id: string, announce = true): boolean {
   savePendingDone();
   const { move, hold } = pending;
   taskStore.releaseStatus(move.key, move.repoPath, hold, move.from);
-  void taskStore.refresh([move.repoPath]);
+  if (announce && move.kind === "wake_status") {
+    void restoreSnooze(move).then(() => taskStore.refresh([move.repoPath]));
+  } else void taskStore.refresh([move.repoPath]);
   if (announce) showMovedBack(move);
   return true;
+}
+
+async function restoreSnooze(change: SnoozeChange | WakeAndMove): Promise<boolean> {
+  try {
+    await taskStore.restoreTaskSnooze(change.projectId, change.key, change.before);
+    return true;
+  } catch (error) {
+    showToast(`Failed to undo: ${error}`, "error");
+    return false;
+  }
 }
 
 /**
@@ -162,6 +190,59 @@ export async function changeTaskStatus(
   if (!(await apply(key, status, repoPath))) return false;
   if (from !== undefined) lastChange = { kind: "status", key, repoPath, from, to: status };
   onMoved();
+  return true;
+}
+
+/**
+ * Wakes a snoozed task and changes its status as one change, which Mod+Z reverts whole. A move to
+ * Done waits out its undo window, with the wake. If only the move fails, the wake stays undoable.
+ */
+export async function wakeAndChangeTaskStatus(
+  task: TaskItem,
+  project: Project,
+  status: string,
+  onMoved: () => void,
+): Promise<boolean> {
+  const { key } = task;
+  const repoPath = project.path;
+  const id = taskStore.taskRef(repoPath, key);
+  cancelDone(id, false);
+  if (savedDone.delete(id)) savePendingDone();
+  const before = snoozeOf(task);
+  let after: StoredSnooze;
+  try {
+    after = await taskStore.wakeTask(project.id, key);
+  } catch (error) {
+    showToast(`Failed to update ${key}: ${error}`, "error");
+    return false;
+  }
+  const change: WakeAndMove = {
+    kind: "wake_status",
+    key,
+    repoPath,
+    projectId: project.id,
+    before,
+    after,
+    from: task.status,
+    to: status,
+  };
+  if (status === "done") {
+    startPendingDone(change, onMoved);
+    return true;
+  }
+  if (!(await apply(key, status, repoPath))) {
+    lastChange = { ...change, kind: "snooze" };
+    return false;
+  }
+  lastChange = change;
+  onMoved();
+  showToast({
+    kind: "success",
+    message: `${key} woke and moved to ${statusLabel(status)}`,
+    detail: task.title,
+    actions: [{ key: "z", label: "Undo", run: () => revert(change, onMoved) }],
+    autoDismissMs: SNOOZE_TOAST_MS,
+  });
   return true;
 }
 
@@ -200,6 +281,11 @@ function stands(change: TaskChange): boolean {
       );
     case "snooze":
       return task?.snooze_rev === change.after.snooze_rev;
+    case "wake_status":
+      return (
+        pendingDone.has(taskStore.taskRef(change.repoPath, change.key)) ||
+        (task?.status === change.to && task.snooze_rev === change.after.snooze_rev)
+      );
   }
 }
 
@@ -217,13 +303,18 @@ async function applyRevert(change: TaskChange, onMoved: () => void): Promise<boo
       showMovedBack(change);
       return true;
     }
+    case "wake_status": {
+      const id = taskStore.taskRef(change.repoPath, change.key);
+      if (pendingDone.get(id)?.move === change) return cancelDone(id);
+      // A snoozed task is never Done, so `from` is a status the task can take back at once.
+      if (!(await restoreSnooze(change))) return false;
+      if (!(await apply(change.key, change.from, change.repoPath))) return false;
+      onMoved();
+      showMovedBack(change);
+      return true;
+    }
     case "snooze": {
-      try {
-        await taskStore.restoreTaskSnooze(change.projectId, change.key, change.before);
-      } catch (error) {
-        showToast(`Failed to undo: ${error}`, "error");
-        return false;
-      }
+      if (!(await restoreSnooze(change))) return false;
       const { snoozed_until } = change.before;
       const message = isSnoozeActive(change.before, Date.now())
         ? `${change.key} snoozed until ${wakeTimeLabel(Date.parse(snoozed_until!))}`
