@@ -134,7 +134,7 @@ struct JsonRpcError {
     message: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct JsonRpcCallbackRequest {
     pub(crate) id: Value,
     pub(crate) method: String,
@@ -417,15 +417,25 @@ pub(crate) enum StdoutFrame {
     Route(String, Value),
     /// A `host.*` notification nothing here handles, as one from a newer host's contract.
     Drop(String),
-    /// Anything else, for the request path.
-    Queue,
+    /// A request from the sidecar, or why it is malformed.
+    Callback(Result<JsonRpcCallbackRequest, String>),
+    /// Anything else, for the request path as the response to its request.
+    Response,
 }
 
 pub(crate) fn classify_stdout_frame(frame: &str, routes: impl Fn(&str) -> bool) -> StdoutFrame {
-    match host_notification(frame) {
-        Some((method, params)) if routes(&method) => StdoutFrame::Route(method, params),
-        Some((method, _)) => StdoutFrame::Drop(method),
-        None => StdoutFrame::Queue,
+    if let Some((method, params)) = host_notification(frame) {
+        return if routes(&method) {
+            StdoutFrame::Route(method, params)
+        } else {
+            StdoutFrame::Drop(method)
+        };
+    }
+    match serde_json::from_str::<Value>(frame.trim_end()) {
+        Ok(value) if value.get("method").is_some() => {
+            StdoutFrame::Callback(parse_json_rpc_callback_request(value))
+        }
+        _ => StdoutFrame::Response,
     }
 }
 
@@ -585,16 +595,26 @@ mod tests {
             classify_stdout_frame(future, routes),
             StdoutFrame::Drop("host.future.ping".into())
         );
-        for queued in [
-            r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
-            r#"{"jsonrpc":"2.0","id":2,"method":"host.settings.get"}"#,
-            r#"{"jsonrpc":"2.0","method":"jira.ping"}"#,
-            "not json",
-        ] {
+        assert_eq!(
+            classify_stdout_frame(
+                r#"{"jsonrpc":"2.0","id":2,"method":"host.settings.get"}"#,
+                routes
+            ),
+            StdoutFrame::Callback(Ok(JsonRpcCallbackRequest {
+                id: serde_json::json!(2),
+                method: "host.settings.get".into(),
+                params: Value::Null,
+            }))
+        );
+        assert!(matches!(
+            classify_stdout_frame(r#"{"jsonrpc":"2.0","method":"jira.ping"}"#, routes),
+            StdoutFrame::Callback(Err(error)) if error.contains("id must be")
+        ));
+        for response in [r#"{"jsonrpc":"2.0","id":1,"result":{}}"#, "not json"] {
             assert_eq!(
-                classify_stdout_frame(queued, routes),
-                StdoutFrame::Queue,
-                "{queued}"
+                classify_stdout_frame(response, routes),
+                StdoutFrame::Response,
+                "{response}"
             );
         }
     }

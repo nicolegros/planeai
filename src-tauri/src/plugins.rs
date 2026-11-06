@@ -12,8 +12,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::process::{ChildStderr, Command};
 use tokio::sync::{mpsc, Mutex as AsyncMutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
@@ -22,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 use crate::commands;
 use crate::exit_gate::{ExitGate, ExitRequest, FailedUpdate, FinishedUpdate};
 use crate::plugin_children::{wait_for_exit, PluginChildren, SharedChild};
+use crate::plugin_connection::PluginConnection;
 use crate::plugin_rpc::*;
 use crate::task_lifecycle::TaskLifecycleBatch;
 use crate::task_start::{PendingTaskStart, RequestedStart, SessionStart, StartOptions};
@@ -37,10 +37,15 @@ const JIRA_LIFECYCLE_RPC_TIMEOUT: Duration = Duration::from_secs(90);
 // Synchronization can legitimately fetch up to 100 Jira pages before its first
 // nested host task request. Keep a finite watchdog, but allow that bounded fetch.
 const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(40 * 60);
+// Background runs work unattended through several network calls and host callbacks, so the
+// interactive five seconds would cut them off.
+const BACKGROUND_SERVICE_RPC_TIMEOUT: Duration = Duration::from_secs(60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+// A runtime retired for a broken request restarts at most once per this long, so one that
+// keeps breaking stays stopped with its error instead of restarting in a loop.
+const BROKEN_RUNTIME_RESTART_COOLDOWN: Duration = Duration::from_secs(10 * 60);
 const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_PLUGIN_SESSION_PROMPT_CHARS: usize = 100_000;
-const FRAME_QUEUE_CAPACITY: usize = 256;
 const JIRA_PLUGIN_ID: &str = "jira";
 const GITHUB_PLUGIN_ID: &str = "github";
 const JIRA_BACKEND_ENTRYPOINT: &str = "planeai-plugin-jira";
@@ -210,6 +215,19 @@ pub struct PluginBackgroundService {
     pub method: String,
     pub interval_setting: String,
     pub default_interval_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+impl PluginBackgroundService {
+    /// The declared `timeout_ms`, else whichever is longer of the background default and the
+    /// method's interactive timeout.
+    fn request_timeout(&self) -> Duration {
+        match self.timeout_ms {
+            Some(timeout_ms) => Duration::from_millis(timeout_ms),
+            None => request_timeout(&self.method).max(BACKGROUND_SERVICE_RPC_TIMEOUT),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -369,6 +387,15 @@ fn validate_background_service(service: Option<&PluginBackgroundService>) -> Res
     }
     if service.default_interval_ms == 0 {
         return Err("background service default_interval_ms must be positive".to_string());
+    }
+    let max_timeout_ms = planeai_plugin_contract::MAX_BACKGROUND_SERVICE_TIMEOUT_MS;
+    if service
+        .timeout_ms
+        .is_some_and(|timeout_ms| !(1..=max_timeout_ms).contains(&timeout_ms))
+    {
+        return Err(format!(
+            "background service timeout_ms must be an integer from 1 to {max_timeout_ms}"
+        ));
     }
     Ok(())
 }
@@ -1301,6 +1328,7 @@ impl PluginRuntimeHandle {
             exit_gate: Default::default(),
             provider_sessions: Arc::new(crate::plugin_providers::ProviderSessions::default()),
             children: Default::default(),
+            broken_runtime_restarts: Default::default(),
         }))
     }
 }
@@ -1331,6 +1359,29 @@ pub struct PluginRuntimeSupervisor {
     exit_gate: ExitGate,
     provider_sessions: Arc<crate::plugin_providers::ProviderSessions>,
     children: PluginChildren,
+    broken_runtime_restarts: BrokenRuntimeRestarts,
+}
+
+/// When each plugin last restarted after a broken request.
+#[derive(Default)]
+struct BrokenRuntimeRestarts(Mutex<HashMap<String, Instant>>);
+
+impl BrokenRuntimeRestarts {
+    /// Records a restart unless the plugin had one within the cooldown.
+    fn try_begin(&self, plugin_id: &str, now: Instant) -> bool {
+        let mut restarts = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if restarts
+            .get(plugin_id)
+            .is_some_and(|last| now.duration_since(*last) < BROKEN_RUNTIME_RESTART_COOLDOWN)
+        {
+            return false;
+        }
+        restarts.insert(plugin_id.to_string(), now);
+        true
+    }
 }
 
 struct BackgroundWorker {
@@ -1347,11 +1398,7 @@ struct RuntimeProcess {
     /// Distinguishes sidecar restarts of the same plugin.
     instance: u64,
     child: SharedChild,
-    stdin: AsyncMutex<ChildStdin>,
-    /// Frames from the stdout reader task, minus the host notifications it handles itself.
-    frames: AsyncMutex<mpsc::Receiver<Result<String, String>>>,
-    requests: crate::plugin_rpc::RequestLane,
-    next_request_id: AtomicU64,
+    connection: PluginConnection,
     plugin_id: String,
     data_dir: PathBuf,
     capabilities: HashSet<PluginHostCapability>,
@@ -1359,8 +1406,6 @@ struct RuntimeProcess {
     session_actions: AsyncMutex<Vec<PluginSessionAction>>,
     /// Set for provider plugins: the sessions this instance may drive.
     provider_sessions: Option<Arc<crate::plugin_providers::ProviderSessions>>,
-    /// Why the stdout reader stopped, once it has: nothing the sidecar sends is read anymore.
-    stdout_failure: Arc<std::sync::OnceLock<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1536,138 +1581,9 @@ fn request_timeout(method: &str) -> Duration {
 
 impl RuntimeProcess {
     async fn request(&self, method: &str, params: Value) -> Result<Value, PluginRpcError> {
-        self.request_with_timeout(method, params, request_timeout(method))
+        self.connection
+            .request(method, params, request_timeout(method))
             .await
-    }
-
-    async fn request_with_timeout(
-        &self,
-        method: &str,
-        params: Value,
-        request_timeout: Duration,
-    ) -> Result<Value, PluginRpcError> {
-        let deadline = Instant::now() + request_timeout;
-        // JSON-RPC responses share one stdout stream. Serialize normal host
-        // requests while stdin remains independently writable for cancellation.
-        self.requests
-            .run(method, request_timeout, || async {
-                let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1;
-                let frame = encode_request(request_id, method, params)?;
-                self.write_request_frame(&frame, deadline)
-                    .await
-                    .map_err(PluginRpcError::Broken)?;
-
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                match timeout(remaining, self.read_matching_response()).await {
-                    Ok(Ok(frame)) => decode_json_rpc_frame(&frame, request_id),
-                    Ok(Err(error)) => Err(PluginRpcError::Broken(error)),
-                    Err(_) => Err(self.cancel_timed_out_request(method, request_id).await),
-                }
-            })
-            .await
-    }
-
-    /// How a request that timed out ends, once cancelled.
-    async fn cancel_timed_out_request(&self, method: &str, request_id: u64) -> PluginRpcError {
-        let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
-        let frame = match encode_json_rpc_cancel_request_line(request_id) {
-            Ok(frame) => frame,
-            Err(error) => return PluginRpcError::Broken(error),
-        };
-        if self
-            .write_cancellation_frame(&frame, deadline)
-            .await
-            .is_err()
-        {
-            return cancellation_acknowledgement_error(method, request_id, None);
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match timeout(remaining, self.read_matching_response()).await {
-            Ok(Ok(frame)) => cancellation_acknowledgement_error(method, request_id, Some(&frame)),
-            // The original timeout remains the externally meaningful error when
-            // the plugin cannot acknowledge cancellation correctly or in time.
-            Ok(Err(_)) | Err(_) => cancellation_acknowledgement_error(method, request_id, None),
-        }
-    }
-
-    async fn write_request_frame(&self, frame: &str, deadline: Instant) -> Result<(), String> {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let mut stdin = timeout(remaining, self.stdin.lock())
-            .await
-            .map_err(|_| "plugin RPC request timed out".to_string())?;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        timeout(remaining, async {
-            stdin
-                .write_all(frame.as_bytes())
-                .await
-                .map_err(|error| format!("failed to write plugin JSON-RPC request: {error}"))?;
-            stdin
-                .flush()
-                .await
-                .map_err(|error| format!("failed to flush plugin JSON-RPC request: {error}"))
-        })
-        .await
-        .map_err(|_| "plugin RPC request timed out".to_string())?
-    }
-
-    async fn write_shutdown_frame(&self, frame: &str, deadline: Instant) -> Result<(), String> {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let mut stdin = timeout(remaining, self.stdin.lock())
-            .await
-            .map_err(|_| "plugin shutdown request timed out".to_string())?;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        timeout(remaining, async {
-            stdin
-                .write_all(frame.as_bytes())
-                .await
-                .map_err(|error| format!("failed to write plugin shutdown request: {error}"))?;
-            stdin
-                .flush()
-                .await
-                .map_err(|error| format!("failed to flush plugin shutdown request: {error}"))
-        })
-        .await
-        .map_err(|_| "plugin shutdown request timed out".to_string())?
-    }
-
-    async fn write_cancellation_frame(&self, frame: &str, deadline: Instant) -> Result<(), String> {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let mut stdin = timeout(remaining, self.stdin.lock())
-            .await
-            .map_err(|_| "plugin cancellation notification timed out".to_string())?;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        timeout(remaining, async {
-            stdin.write_all(frame.as_bytes()).await.map_err(|error| {
-                format!("failed to write plugin cancellation notification: {error}")
-            })?;
-            stdin.flush().await.map_err(|error| {
-                format!("failed to flush plugin cancellation notification: {error}")
-            })
-        })
-        .await
-        .map_err(|_| "plugin cancellation notification timed out".to_string())?
-    }
-
-    /// The next response frame, serving the sidecar's callbacks until it arrives. Fails only
-    /// when stdout or the protocol can no longer be trusted.
-    async fn read_matching_response(&self) -> Result<String, String> {
-        loop {
-            let frame = self
-                .frames
-                .lock()
-                .await
-                .recv()
-                .await
-                .unwrap_or_else(|| Err(STDOUT_CLOSED_ERROR.to_string()))?;
-            let value: Value = serde_json::from_str(frame.trim_end())
-                .map_err(|e| format!("malformed plugin JSON-RPC frame: {e}"))?;
-            if value.get("method").is_some() {
-                self.handle_plugin_request(parse_json_rpc_callback_request(value)?)
-                    .await?;
-                continue;
-            }
-            return Ok(frame);
-        }
     }
 
     async fn serve_callback(&self, method: &str, params: Value) -> Result<Value, CallbackError> {
@@ -1807,25 +1723,6 @@ impl RuntimeProcess {
         }
     }
 
-    async fn handle_plugin_request(&self, request: JsonRpcCallbackRequest) -> Result<(), String> {
-        let JsonRpcCallbackRequest { id, method, params } = request;
-        let result = self.serve_callback(&method, params).await;
-        let frame = encode_host_callback_response(id, result)?;
-        let mut stdin = self.stdin.lock().await;
-        stdin
-            .write_all(frame.as_bytes())
-            .await
-            .map_err(|error| format!("failed to write host callback response: {error}"))?;
-        stdin
-            .write_all(b"\n")
-            .await
-            .map_err(|error| format!("failed to frame host callback response: {error}"))?;
-        stdin
-            .flush()
-            .await
-            .map_err(|error| format!("failed to flush host callback response: {error}"))
-    }
-
     /// Why the runtime ended: `Ok` when its process exited, `Err` when it must be stopped.
     async fn exited(&self) -> Result<Option<String>, String> {
         let exited = self
@@ -1836,27 +1733,10 @@ impl RuntimeProcess {
             .map_err(|e| format!("failed to check plugin process: {e}"))?
             .map(|value| format!("plugin process exited unexpectedly ({value})"));
         // A live process whose stdout can no longer be read would never answer or report again.
-        match (exited, self.stdout_failure.get()) {
+        match (exited, self.connection.stdout_failure()) {
             (None, Some(failure)) => Err(failure.clone()),
             (exited, _) => Ok(exited),
         }
-    }
-
-    async fn request_shutdown(&self, deadline: Instant) -> Result<Value, String> {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let _turn = self
-            .requests
-            .shutdown_turn(remaining)
-            .await
-            .ok_or_else(|| "plugin shutdown request timed out".to_string())?;
-        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let frame = encode_json_rpc_line(request_id, "plugin.shutdown", Value::Null)?;
-        self.write_shutdown_frame(&frame, deadline).await?;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let frame = timeout(remaining, self.read_matching_response())
-            .await
-            .map_err(|_| "plugin shutdown request timed out".to_string())??;
-        decode_json_rpc_frame(&frame, request_id).map_err(String::from)
     }
 
     /// This instance no longer drives sessions; see `plugin_providers::runtime_stopped`.
@@ -1874,7 +1754,7 @@ impl RuntimeProcess {
     async fn stop(&self) -> Result<(), String> {
         self.release_provider_sessions();
         let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
-        let _ = self.request_shutdown(deadline).await;
+        let _ = self.connection.request_shutdown(deadline).await;
         if wait_for_exit(&self.child, deadline)
             .await
             .map_err(|e| format!("failed waiting for plugin shutdown: {e}"))?
@@ -3384,7 +3264,7 @@ impl PluginRuntimeSupervisor {
         let process = process.ok_or_else(|| {
             PluginRpcError::NotRunning(format!("plugin runtime was not available: {plugin_id}"))
         })?;
-        let result = process.request_with_timeout(method, params, timeout).await;
+        let result = process.connection.request(method, params, timeout).await;
         if let Err(error) = &result {
             if error.is_fatal() {
                 self.retire_broken_process(plugin_id, process, error).await;
@@ -3394,7 +3274,8 @@ impl PluginRuntimeSupervisor {
     }
 
     /// Stops a runtime whose stdout can no longer be trusted, such as one holding the
-    /// answer to a timed-out request, before another request reads that answer.
+    /// answer to a timed-out request, before another request reads that answer; then
+    /// restarts it, at most once per `BROKEN_RUNTIME_RESTART_COOLDOWN`.
     async fn retire_broken_process(
         &self,
         plugin_id: &str,
@@ -3422,7 +3303,43 @@ impl PluginRuntimeSupervisor {
             .await
         {
             tracing::warn!(plugin_id, %state_error, "failed to record broken plugin runtime");
+            return;
         }
+        if !self
+            .broken_runtime_restarts
+            .try_begin(plugin_id, Instant::now())
+        {
+            tracing::warn!(
+                plugin_id,
+                "plugin runtime broke again soon after restarting; leaving it stopped"
+            );
+            return;
+        }
+        if let Some(supervisor) = self.this.upgrade() {
+            let plugin_id = plugin_id.to_string();
+            // Spawned: starting replaces the plugin's background worker, which may be the caller.
+            tokio::spawn(supervisor.restart_broken_runtime(plugin_id));
+        }
+    }
+
+    /// Starts a runtime retired for a broken request again, unless it was disabled or
+    /// restarted meanwhile. Boxed: the runtime it starts may retire itself through here.
+    fn restart_broken_runtime(
+        self: Arc<Self>,
+        plugin_id: String,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(async move {
+            let _lifecycle = self.lifecycle.lock().await;
+            match self.inventory(&plugin_id).await {
+                Ok(Some(inventory))
+                    if inventory.enabled && inventory.state == PluginRuntimeState::Error => {}
+                _ => return,
+            }
+            tracing::info!(%plugin_id, "restarting plugin runtime after a broken request");
+            if let Err(error) = self.enable_inner(&plugin_id).await {
+                tracing::warn!(%plugin_id, %error, "failed to restart broken plugin runtime");
+            }
+        })
     }
 
     /// Deliver a committed lifecycle batch in the background. Delivery failures
@@ -4018,7 +3935,7 @@ impl PluginRuntimeSupervisor {
         )
         .await
         {
-            Ok(process) => Arc::new(process),
+            Ok(process) => process,
             Err(error) => return self.fail_startup(&id, error).await,
         };
         if let Err(error) = self.initialize_runtime(&inventory, &process).await {
@@ -4261,7 +4178,7 @@ impl PluginRuntimeSupervisor {
             loop {
                 tokio::select! {
                     _ = worker_cancel.cancelled() => return,
-                    outcome = process.request(&service.method, Value::Null) => match outcome {
+                    outcome = process.connection.request(&service.method, Value::Null, service.request_timeout()) => match outcome {
                         Ok(totals) => {
                             tracing::info!(plugin_id = %plugin_id, generation, method = %service.method, totals = ?totals, "plugin background service complete");
                             let changed_data = background_run_changed_data(&totals);
@@ -4287,7 +4204,7 @@ impl PluginRuntimeSupervisor {
                             tracing::warn!(plugin_id = %plugin_id, generation, method = %service.method, %error, "plugin background service failed");
                             // A broken lane is retired by the request that broke it; disabling
                             // the plugin waits for this worker while holding the lifecycle lock.
-                            if process.requests.is_broken() {
+                            if process.connection.requests.is_broken() {
                                 if error.is_fatal() {
                                     if let Some(supervisor) = supervisor.upgrade() {
                                         tokio::select! {
@@ -4475,7 +4392,7 @@ async fn spawn_runtime(
     state_root: Option<&Path>,
     plugin_id: &str,
     capabilities: HashSet<PluginHostCapability>,
-) -> Result<RuntimeProcess, String> {
+) -> Result<Arc<RuntimeProcess>, String> {
     let app = supervisor.app.clone();
     let path_env = plugin_runtime_path(&configured_extra_path_dirs(&app));
     let mut command = build_runtime_command(binary, state_root, &path_env);
@@ -4492,7 +4409,6 @@ async fn spawn_runtime(
         .stdout
         .take()
         .ok_or_else(|| "plugin runtime did not provide stdout".to_string())?;
-    let (frame_sender, frames) = mpsc::channel(FRAME_QUEUE_CAPACITY);
     let instance = NEXT_RUNTIME_INSTANCE.fetch_add(1, Ordering::Relaxed);
     let provider_sessions = capabilities
         .contains(&PluginHostCapability::Providers)
@@ -4500,14 +4416,8 @@ async fn spawn_runtime(
     let notification_sink = provider_sessions.clone().map(|sessions| {
         crate::plugin_providers::NotificationSink::new(app.clone(), plugin_id, instance, sessions)
     });
-    let stdout_failure = Arc::new(std::sync::OnceLock::new());
-    tokio::spawn(read_stdout_frames(
-        BufReader::new(stdout),
-        frame_sender,
-        plugin_id.to_string(),
-        notification_sink,
-        stdout_failure.clone(),
-    ));
+    let (connection, callbacks) =
+        PluginConnection::open(stdin, stdout, plugin_id, notification_sink);
     if let Some(stderr) = pipes.stderr.take() {
         drain_stderr(stderr, log_path.to_path_buf());
     }
@@ -4515,82 +4425,40 @@ async fn spawn_runtime(
     let data_dir = state_root
         .map(|root| root.join("data"))
         .ok_or("plugin runtime state root was not provided")?;
-    Ok(RuntimeProcess {
+    let process = Arc::new(RuntimeProcess {
         app,
         instance,
         child,
-        stdin: AsyncMutex::new(stdin),
-        frames: AsyncMutex::new(frames),
-        requests: Default::default(),
-        next_request_id: AtomicU64::new(0),
+        connection,
         plugin_id: plugin_id.to_string(),
         data_dir,
         capabilities,
         lifecycle_event_subscriptions: AsyncMutex::new(HashSet::new()),
         session_actions: AsyncMutex::new(Vec::new()),
         provider_sessions,
-        stdout_failure,
-    })
+    });
+    answer_callbacks(Arc::downgrade(&process), callbacks);
+    Ok(process)
 }
 
-/// Owns sidecar stdout for the process lifetime so notifications are handled as they
-/// arrive, not only while a host request is in flight: provider notifications are routed,
-/// and any other `host.*` notification, as one from a newer host's contract, is dropped.
-/// Every other frame is queued for the request path in arrival order; the first transport
-/// error ends the stream and is recorded in `failure`, so the runtime is retired without
-/// waiting for a request to see it.
-async fn read_stdout_frames(
-    mut stdout: BufReader<ChildStdout>,
-    frames: mpsc::Sender<Result<String, String>>,
-    plugin_id: String,
-    notifications: Option<crate::plugin_providers::NotificationSink>,
-    failure: Arc<std::sync::OnceLock<String>>,
+/// Answers the sidecar's callbacks in order for as long as its runtime lives. Holds the runtime
+/// weakly: a strong reference would keep its stdin open, and with it the sidecar.
+fn answer_callbacks(
+    process: std::sync::Weak<RuntimeProcess>,
+    mut callbacks: mpsc::Receiver<JsonRpcCallbackRequest>,
 ) {
-    loop {
-        let frame = read_stdout_frame(&mut stdout).await;
-        let handles = |method: &str| {
-            notifications
-                .as_ref()
-                .is_some_and(|sink| sink.handles(method))
-        };
-        match frame.as_deref().map_or(StdoutFrame::Queue, |frame| {
-            classify_stdout_frame(frame, handles)
-        }) {
-            StdoutFrame::Route(method, params) => {
-                if let Some(sink) = &notifications {
-                    sink.route(&method, params);
-                }
-                continue;
+    tokio::spawn(async move {
+        while let Some(JsonRpcCallbackRequest { id, method, params }) = callbacks.recv().await {
+            let Some(process) = process.upgrade() else {
+                return;
+            };
+            let result = process.serve_callback(&method, params).await;
+            if let Err(error) = process.connection.answer_callback(id, result).await {
+                tracing::warn!(plugin_id = %process.plugin_id, %error, "failed to answer plugin callback");
+                return;
             }
-            StdoutFrame::Drop(method) => {
-                tracing::warn!(%plugin_id, %method, "ignored a host notification this host does not know");
-                continue;
-            }
-            StdoutFrame::Queue => {}
         }
-        if let Err(error) = &frame {
-            let _ = failure.set(error.clone());
-        }
-        let failed = frame.is_err();
-        if frames.send(frame).await.is_err() || failed {
-            return;
-        }
-    }
-}
-
-async fn read_stdout_frame(stdout: &mut BufReader<ChildStdout>) -> Result<String, String> {
-    let mut bytes = Vec::new();
-    let bytes_read = stdout
-        .take(MAX_RPC_FRAME_BYTES + 1)
-        .read_until(b'\n', &mut bytes)
-        .await
-        .map_err(|e| format!("failed to read plugin JSON-RPC response: {e}"))?;
-    if bytes_read == 0 {
-        return Err(STDOUT_CLOSED_ERROR.to_string());
-    }
-    validate_plugin_response_frame(&bytes)?;
-    String::from_utf8(bytes)
-        .map_err(|e| format!("plugin JSON-RPC response was not valid UTF-8: {e}"))
+    });
 }
 
 fn drain_stderr(mut stderr: ChildStderr, log_path: PathBuf) {
@@ -5742,6 +5610,51 @@ mod tests {
             jira.validate(),
             Err("bundled plugins cannot declare tools".into())
         );
+    }
+
+    #[test]
+    fn a_broken_runtime_restarts_at_most_once_per_cooldown() {
+        let restarts = BrokenRuntimeRestarts::default();
+        let start = Instant::now();
+
+        assert!(restarts.try_begin("github", start));
+        assert!(!restarts.try_begin("github", start + Duration::from_secs(60)));
+        assert!(restarts.try_begin("jira", start + Duration::from_secs(60)));
+        assert!(restarts.try_begin("github", start + BROKEN_RUNTIME_RESTART_COOLDOWN));
+    }
+
+    #[test]
+    fn background_runs_outlast_interactive_calls_unless_they_declare_a_timeout() {
+        let service = |method: &str, timeout_ms| PluginBackgroundService {
+            method: method.into(),
+            interval_setting: "interval_ms".into(),
+            default_interval_ms: 120_000,
+            timeout_ms,
+        };
+        assert_eq!(request_timeout("github.reconcile"), RPC_TIMEOUT);
+        assert_eq!(
+            service("github.reconcile", None).request_timeout(),
+            BACKGROUND_SERVICE_RPC_TIMEOUT
+        );
+        assert_eq!(
+            service("jira.syncNow", None).request_timeout(),
+            JIRA_SYNC_RPC_TIMEOUT
+        );
+        assert_eq!(
+            service("github.reconcile", Some(90_000)).request_timeout(),
+            Duration::from_secs(90)
+        );
+        for timeout_ms in [
+            0,
+            planeai_plugin_contract::MAX_BACKGROUND_SERVICE_TIMEOUT_MS + 1,
+        ] {
+            assert!(
+                validate_background_service(Some(&service("github.reconcile", Some(timeout_ms))))
+                    .unwrap_err()
+                    .contains("timeout_ms must be an integer"),
+                "{timeout_ms}"
+            );
+        }
     }
 
     #[test]
