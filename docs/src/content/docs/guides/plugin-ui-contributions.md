@@ -192,7 +192,8 @@ A failed callback answers with a JSON-RPC error code: `-32601` for an unknown ho
 Handshake and ordinary RPC calls have a five-second deadline; provider methods have [their own](#providers).
 On deadline expiry, PlaneAI sends the JSON-RPC `$/cancelRequest` notification with `{ "id": <original request ID> }`.
 Keep reading stdin while work is active; cancel cooperatively and return the original request's JSON-RPC error `{ "code": -32800, "message": "request cancelled" }` within three seconds.
-PlaneAI treats any other response or no cancellation response as a failed runtime and stops it, then starts it again, at most once every ten minutes.
+PlaneAI treats any other response or no cancellation response as a failed runtime and stops it.
+A runtime that never answered the cancellation is started again, at most once every ten minutes, unless its process exited or its stdout failed.
 `plugin.shutdown` also has a three-second grace period before the process is killed.
 PlaneAI attempts it on every app quit and restart within that same budget, so a plugin must tolerate being killed without it.
 Do not define a competing cancellation wire format in v1.
