@@ -207,6 +207,7 @@ export interface PluginInventory {
     method: string;
     interval_setting: string;
     default_interval_ms: number;
+    timeout_ms?: number;
   } | null;
   ui_contributions: PluginUiContribution[];
   providers: PluginProvider[];

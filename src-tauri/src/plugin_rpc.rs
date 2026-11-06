@@ -138,7 +138,7 @@ struct JsonRpcError {
     message: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct JsonRpcCallbackRequest {
     pub(crate) id: Value,
     pub(crate) method: String,
@@ -277,56 +277,6 @@ pub(crate) fn request_queue_timeout_error(method: &str) -> PluginRpcError {
     PluginRpcError::NotSent(format!("plugin RPC {method} request queue timed out"))
 }
 
-/// Runs a sidecar's requests one at a time over its shared stdout. Once one leaves stdout
-/// untrustworthy, such as holding the late answer of a timed-out request, every request
-/// queued behind it fails without writing, so none reads that answer before the runtime is
-/// retired.
-#[derive(Default)]
-pub(crate) struct RequestLane {
-    turn: tokio::sync::Mutex<()>,
-    broken: std::sync::atomic::AtomicBool,
-}
-
-impl RequestLane {
-    pub(crate) async fn run<F>(
-        &self,
-        method: &str,
-        wait: std::time::Duration,
-        request: impl FnOnce() -> F,
-    ) -> Result<Value, PluginRpcError>
-    where
-        F: std::future::Future<Output = Result<Value, PluginRpcError>>,
-    {
-        use std::sync::atomic::Ordering;
-        let _turn = tokio::time::timeout(wait, self.turn.lock())
-            .await
-            .map_err(|_| request_queue_timeout_error(method))?;
-        if self.is_broken() {
-            return Err(PluginRpcError::NotRunning(format!(
-                "plugin RPC {method} not sent: the plugin is being stopped after a broken request"
-            )));
-        }
-        let result = request().await;
-        if result.as_ref().is_err_and(PluginRpcError::is_fatal) {
-            self.broken.store(true, Ordering::SeqCst);
-        }
-        result
-    }
-
-    /// Waits for the turn even on a broken lane: a shutdown request is safe there, since its
-    /// answer is never trusted.
-    pub(crate) async fn shutdown_turn(
-        &self,
-        wait: std::time::Duration,
-    ) -> Option<tokio::sync::MutexGuard<'_, ()>> {
-        tokio::time::timeout(wait, self.turn.lock()).await.ok()
-    }
-
-    pub(crate) fn is_broken(&self) -> bool {
-        self.broken.load(std::sync::atomic::Ordering::SeqCst)
-    }
-}
-
 pub(crate) fn host_callback_response_fits(frame: &str) -> bool {
     frame.len() < MAX_RPC_FRAME_BYTES as usize
 }
@@ -374,9 +324,7 @@ pub(crate) fn validate_plugin_response_frame(frame: &[u8]) -> Result<(), String>
     Ok(())
 }
 
-pub(crate) fn parse_json_rpc_callback_request(
-    value: Value,
-) -> Result<JsonRpcCallbackRequest, String> {
+fn parse_json_rpc_callback_request(value: Value) -> Result<JsonRpcCallbackRequest, String> {
     let object = value
         .as_object()
         .ok_or_else(|| "malformed plugin JSON-RPC callback: expected an object".to_string())?;
@@ -421,106 +369,43 @@ pub(crate) enum StdoutFrame {
     Route(String, Value),
     /// A `host.*` notification nothing here handles, as one from a newer host's contract.
     Drop(String),
-    /// Anything else, for the request path.
-    Queue,
+    /// A request from the sidecar, or why it is malformed.
+    Callback(Result<JsonRpcCallbackRequest, String>),
+    /// Anything else, for the request path as the response to its request.
+    Response,
 }
 
 pub(crate) fn classify_stdout_frame(frame: &str, routes: impl Fn(&str) -> bool) -> StdoutFrame {
-    match host_notification(frame) {
-        Some((method, params)) if routes(&method) => StdoutFrame::Route(method, params),
-        Some((method, _)) => StdoutFrame::Drop(method),
-        None => StdoutFrame::Queue,
-    }
-}
-
-/// A notification to a host method: no `id`, JSON-RPC 2.0, and a `host.*` method.
-/// Anything else with a method is a callback, which must carry an id.
-pub(crate) fn host_notification(frame: &str) -> Option<(String, Value)> {
-    let Value::Object(mut object) = serde_json::from_str::<Value>(frame.trim_end()).ok()? else {
-        return None;
+    let Ok(Value::Object(mut object)) = serde_json::from_str::<Value>(frame.trim_end()) else {
+        return StdoutFrame::Response;
     };
-    if object.contains_key("id") || object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-        return None;
+    let Some(method) = object
+        .get("method")
+        .map(|method| method.as_str().map(str::to_owned))
+    else {
+        return StdoutFrame::Response;
+    };
+    // A notification to a host method: no `id`, JSON-RPC 2.0, and a `host.*` method.
+    // Anything else with a method is a callback, which must carry an id.
+    match method {
+        Some(method)
+            if method.starts_with("host.")
+                && !object.contains_key("id")
+                && object.get("jsonrpc").and_then(Value::as_str) == Some("2.0") =>
+        {
+            if routes(&method) {
+                StdoutFrame::Route(method, object.remove("params").unwrap_or(Value::Null))
+            } else {
+                StdoutFrame::Drop(method)
+            }
+        }
+        _ => StdoutFrame::Callback(parse_json_rpc_callback_request(Value::Object(object))),
     }
-    let method = object
-        .get("method")?
-        .as_str()
-        .filter(|method| method.starts_with("host."))?
-        .to_string();
-    Some((method, object.remove("params").unwrap_or(Value::Null)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn a_broken_request_stops_the_requests_queued_behind_it() {
-        use std::sync::Arc;
-        use std::time::Duration;
-        let lane = Arc::new(RequestLane::default());
-        let (release, released) = tokio::sync::oneshot::channel::<()>();
-        let first = tokio::spawn({
-            let lane = lane.clone();
-            async move {
-                lane.run("github.reconcile", Duration::from_secs(5), || async {
-                    released.await.unwrap();
-                    Err(timed_out_request_error("github.reconcile"))
-                })
-                .await
-            }
-        });
-        tokio::task::yield_now().await;
-        let sent = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let queued = tokio::spawn({
-            let (lane, sent) = (lane.clone(), sent.clone());
-            async move {
-                lane.run("tool.call", Duration::from_secs(5), || async move {
-                    sent.store(true, std::sync::atomic::Ordering::SeqCst);
-                    Ok(Value::Null)
-                })
-                .await
-            }
-        });
-        tokio::task::yield_now().await;
-        release.send(()).unwrap();
-
-        assert!(first.await.unwrap().unwrap_err().is_fatal());
-        assert!(matches!(
-            queued.await.unwrap(),
-            Err(PluginRpcError::NotRunning(_))
-        ));
-        assert!(
-            !sent.load(std::sync::atomic::Ordering::SeqCst),
-            "nothing was written"
-        );
-        assert!(lane.is_broken());
-        assert!(
-            lane.shutdown_turn(Duration::from_secs(1)).await.is_some(),
-            "a broken runtime is still asked to shut down"
-        );
-    }
-
-    #[tokio::test]
-    async fn an_answered_or_rejected_request_keeps_the_lane_open() {
-        let lane = RequestLane::default();
-        let wait = std::time::Duration::from_secs(1);
-        let rejected = lane
-            .run("github.link", wait, || async {
-                Err(PluginRpcError::Rpc {
-                    code: -32000,
-                    message: "no".into(),
-                })
-            })
-            .await;
-        assert!(rejected.is_err());
-        assert_eq!(
-            lane.run("github.status", wait, || async { Ok(Value::Bool(true)) })
-                .await,
-            Ok(Value::Bool(true))
-        );
-        assert!(!lane.is_broken());
-    }
 
     #[test]
     fn only_rpc_errors_and_unsent_requests_leave_the_runtime_running() {
@@ -590,33 +475,97 @@ mod tests {
             classify_stdout_frame(future, routes),
             StdoutFrame::Drop("host.future.ping".into())
         );
-        for queued in [
-            r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
-            r#"{"jsonrpc":"2.0","id":2,"method":"host.settings.get"}"#,
-            r#"{"jsonrpc":"2.0","method":"jira.ping"}"#,
-            "not json",
-        ] {
+        assert_eq!(
+            classify_stdout_frame(
+                r#"{"jsonrpc":"2.0","id":2,"method":"host.settings.get"}"#,
+                routes
+            ),
+            StdoutFrame::Callback(Ok(JsonRpcCallbackRequest {
+                id: serde_json::json!(2),
+                method: "host.settings.get".into(),
+                params: Value::Null,
+            }))
+        );
+        assert!(matches!(
+            classify_stdout_frame(r#"{"jsonrpc":"2.0","method":"jira.ping"}"#, routes),
+            StdoutFrame::Callback(Err(error)) if error.contains("id must be")
+        ));
+        for response in [r#"{"jsonrpc":"2.0","id":1,"result":{}}"#, "not json"] {
             assert_eq!(
-                classify_stdout_frame(queued, routes),
-                StdoutFrame::Queue,
-                "{queued}"
+                classify_stdout_frame(response, routes),
+                StdoutFrame::Response,
+                "{response}"
             );
         }
     }
 
     #[test]
-    fn only_host_notifications_are_host_notifications() {
-        let notification = r#"{"jsonrpc":"2.0","method":"host.future.ping","params":{"a":1}}"#;
+    fn callback_response_frame_limit_includes_its_newline_terminator() {
+        assert!(host_callback_response_fits(
+            &"x".repeat(MAX_RPC_FRAME_BYTES as usize - 1)
+        ));
+        assert!(!host_callback_response_fits(
+            &"x".repeat(MAX_RPC_FRAME_BYTES as usize)
+        ));
+    }
+
+    #[test]
+    fn oversized_callback_id_is_rejected_before_an_oversized_fallback_is_written() {
+        let id = Value::String("x".repeat(MAX_RPC_FRAME_BYTES as usize - 100));
+        assert!(encode_host_callback_response(
+            id,
+            Ok(serde_json::json!({ "large": "x".repeat(MAX_RPC_FRAME_BYTES as usize) }))
+        )
+        .unwrap_err()
+        .contains("leaves no room"));
+    }
+
+    #[test]
+    fn callback_requests_require_json_rpc_version_scalar_ids_and_valid_request_shape() {
+        let callback = parse_json_rpc_callback_request(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "settings",
+            "method": "host.settings.get",
+            "params": null,
+        }))
+        .unwrap();
+        assert_eq!(callback.id, "settings");
+        assert_eq!(callback.method, "host.settings.get");
+        assert_eq!(callback.params, Value::Null);
+
+        for callback in [
+            serde_json::json!({ "id": 1, "method": "host.settings.get" }),
+            serde_json::json!({ "jsonrpc": "2.0", "method": "host.settings.get" }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": null, "method": "host.settings.get" }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "", "params": null }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "host.settings.get", "result": {} }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "host.settings.get", "params": true }),
+        ] {
+            assert!(parse_json_rpc_callback_request(callback).is_err());
+        }
+    }
+
+    #[test]
+    fn only_host_notifications_are_routed() {
+        let routes = |_: &str| true;
         assert_eq!(
-            host_notification(notification),
-            Some(("host.future.ping".into(), serde_json::json!({ "a": 1 })))
+            classify_stdout_frame(
+                r#"{"jsonrpc":"2.0","method":"host.future.ping","params":{"a":1}}"#,
+                routes
+            ),
+            StdoutFrame::Route("host.future.ping".into(), serde_json::json!({ "a": 1 }))
         );
-        let callback = r#"{"jsonrpc":"2.0","id":1,"method":"host.future.ping"}"#;
-        assert_eq!(host_notification(callback), None);
-        let not_host = r#"{"jsonrpc":"2.0","method":"jira.ping"}"#;
-        assert_eq!(host_notification(not_host), None);
-        let response = r#"{"jsonrpc":"2.0","id":1,"result":{}}"#;
-        assert_eq!(host_notification(response), None);
+        assert!(matches!(
+            classify_stdout_frame(
+                r#"{"jsonrpc":"2.0","id":1,"method":"host.future.ping"}"#,
+                routes
+            ),
+            StdoutFrame::Callback(Ok(_))
+        ));
+        assert!(matches!(
+            classify_stdout_frame(r#"{"method":"host.future.ping"}"#, routes),
+            StdoutFrame::Callback(Err(_))
+        ));
     }
 
     #[test]

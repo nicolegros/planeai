@@ -250,7 +250,24 @@ const LOCAL_CAPABILITIES: &[&str] = &[
     "providers",
     "tools",
 ];
-const BACKGROUND_SERVICE_FIELDS: &[&str] = &["method", "interval_setting", "default_interval_ms"];
+const BACKGROUND_SERVICE_FIELDS: &[&str] = &[
+    "method",
+    "interval_setting",
+    "default_interval_ms",
+    "timeout_ms",
+];
+/// The longest a background service run may take, in milliseconds.
+pub const MAX_BACKGROUND_SERVICE_TIMEOUT_MS: u64 = 60 * 60 * 1000;
+
+pub fn check_background_service_timeout_ms(timeout_ms: u64) -> std::result::Result<(), String> {
+    if (1..=MAX_BACKGROUND_SERVICE_TIMEOUT_MS).contains(&timeout_ms) {
+        Ok(())
+    } else {
+        Err(format!(
+            "background service timeout_ms must be an integer from 1 to {MAX_BACKGROUND_SERVICE_TIMEOUT_MS}"
+        ))
+    }
+}
 const UI_PLACEMENTS: &[&str] = &[
     "sidebar.header",
     "sidebar.navigation",
@@ -488,8 +505,14 @@ fn validate_background_service(object: &Map<String, Value>) -> Result<()> {
     required_string(service, "method")?;
     required_string(service, "interval_setting")?;
     match service.get("default_interval_ms") {
-        Some(Value::Number(value)) if value.as_u64().is_some_and(|value| value > 0) => Ok(()),
+        Some(Value::Number(value)) if value.as_u64().is_some_and(|value| value > 0) => {}
         _ => bail!("background service default_interval_ms must be a positive integer"),
+    }
+    match service.get("timeout_ms") {
+        None => Ok(()),
+        // 0 fails the range check, and so gives the same message as a non-integer.
+        Some(value) => check_background_service_timeout_ms(value.as_u64().unwrap_or(0))
+            .map_err(|error| anyhow!(error)),
     }
 }
 
@@ -717,6 +740,31 @@ mod tests {
                 "entrypoint": "ui/entry.js"
             }]
         })
+    }
+
+    #[test]
+    fn a_background_service_may_declare_a_bounded_timeout() {
+        let mut manifest = manifest();
+        manifest["background_service"] = json!({
+            "method": "integration.refresh",
+            "interval_setting": "refresh_interval_ms",
+            "default_interval_ms": 120000,
+            "timeout_ms": 90000
+        });
+        assert!(validate_local_manifest(&manifest, "macos-arm64").is_ok());
+
+        for timeout_ms in [
+            json!(0),
+            json!(MAX_BACKGROUND_SERVICE_TIMEOUT_MS + 1),
+            json!("60s"),
+        ] {
+            manifest["background_service"]["timeout_ms"] = timeout_ms.clone();
+            let error = validate_local_manifest(&manifest, "macos-arm64").unwrap_err();
+            assert!(
+                error.to_string().contains("timeout_ms must be an integer"),
+                "{timeout_ms}: {error}"
+            );
+        }
     }
 
     #[test]

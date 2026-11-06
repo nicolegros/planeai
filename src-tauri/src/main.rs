@@ -19,6 +19,7 @@ mod notify;
 mod output_observer;
 mod paths;
 mod plugin_children;
+mod plugin_connection;
 mod plugin_packages;
 mod plugin_providers;
 mod plugin_remote;
