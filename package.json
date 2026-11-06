@@ -12,7 +12,8 @@
     "lint": "oxlint",
     "fmt": "oxfmt --ignore-path .oxfmtignore",
     "fmt:check": "oxfmt --check --ignore-path .oxfmtignore",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.4",
