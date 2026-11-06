@@ -1953,6 +1953,30 @@ mod sync_tests {
     }
 
     #[tokio::test]
+    async fn handshake_subscribes_to_task_lifecycle_for_writeback() {
+        let data_dir =
+            std::env::temp_dir().join(format!("planeai-jira-handshake-{}", generate_state()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let mut plugin = plugin_for_test(data_dir);
+        let request: Request = serde_json::from_value(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "plugin.handshake",
+            "params": { "host_api_version": HOST_API_VERSION },
+        }))
+        .unwrap();
+        let mut input = BufReader::new(&b""[..]);
+        let mut output = Vec::new();
+
+        let response = dispatch(&mut plugin, request, &mut input, &mut output).await;
+
+        assert_eq!(
+            response.result.unwrap()["lifecycle_event_subscriptions"],
+            json!(["task.lifecycle"])
+        );
+    }
+
+    #[tokio::test]
     async fn host_callback_uses_a_correlated_nested_json_rpc_request() {
         let (plugin_stream, host_stream) = tokio::io::duplex(4096);
         let (plugin_read, plugin_write) = tokio::io::split(plugin_stream);
@@ -2211,7 +2235,7 @@ where
                 "plugin_name": PLUGIN_NAME,
                 "plugin_version": PLUGIN_VERSION,
                 "host_api_version": HOST_API_VERSION,
-                "lifecycle_event_subscriptions": [],
+                "lifecycle_event_subscriptions": ["task.lifecycle"],
             })),
             _ => Err("unsupported plugin host API version".to_string()),
         },

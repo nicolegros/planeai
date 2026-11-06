@@ -6,7 +6,14 @@
   "host_api_version": "planeai.plugin-host.v1",
   "source_kind": "builtin",
   "backend_entrypoint": "planeai-plugin-jira",
-  "capabilities": ["tasks.read", "tasks.create", "tasks.update", "storage", "sidebar.navigation"],
+  "capabilities": [
+    "tasks.read",
+    "tasks.create",
+    "tasks.update",
+    "task-events",
+    "storage",
+    "sidebar.navigation"
+  ],
   "background_service": {
     "method": "jira.syncNow",
     "interval_setting": "sync_interval_ms",
