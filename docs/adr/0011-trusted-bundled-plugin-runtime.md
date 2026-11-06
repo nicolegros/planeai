@@ -20,7 +20,17 @@ PlaneAI runs bundled and user-selected local plugins as separately compiled subp
 - Users install a local directory through Plugins. PlaneAI validates the current platform executable, copies the directory into a hash-addressed immutable package snapshot, and records inventory/lifecycle state separately from sessions and integration state. Reload restarts that snapshot; a duplicate ID fails; removal is destructive and deletes package and plugin state.
 - A local plugin is trusted native code. It receives its own data and secrets directories and can technically access the user's account according to OS permissions. Host capabilities are compatibility and lifecycle grants only. The sidecar owns its data/SQLite and secret files; PlaneAI owns the public JSON settings document and captured stderr logs. Plugins never access PlaneAI's database directly.
 - Runtime states are `disabled`, `starting`, `running`, `stopping`, and `error`. Each record includes the latest diagnostic and stderr log location. State transitions are emitted as `plugin-runtime-changed` events.
-- The host starts sidecars with `tokio::process::Command`, direct argv rather than a shell, and `no_window_tokio()` on Windows. It speaks UTF-8, newline-framed JSON-RPC 2.0 on stdin/stdout. Startup requires a versioned `plugin.handshake`. Handshake and ordinary calls have a five-second deadline. The host may send `$/cancelRequest`; a cancellable call must complete with `-32800` within three seconds. Shutdown gives the sidecar three seconds before kill fallback.
+- The host starts sidecars with `tokio::process::Command`, direct argv rather than a shell, and `no_window_tokio()` on Windows.
+  It speaks UTF-8, newline-framed JSON-RPC 2.0 on stdin/stdout.
+  Startup requires a versioned `plugin.handshake`.
+  Handshake and ordinary calls have a five-second deadline.
+  A background service method has 40 minutes, or the manifest's `timeout_ms` (host API v8), whether its interval or a UI call runs it.
+  The host may send `$/cancelRequest`; a cancellable call must complete with `-32800` within three seconds.
+  The host answers sidecar callbacks as they arrive, not only while a request waits, so a timed-out request never strands one.
+  A runtime stopped for ignoring a cancellation restarts at most once every ten minutes, unless its process exited or its stdout failed; any other broken runtime stays stopped.
+  Shutdown gives the sidecar three seconds before kill fallback.
+  On every normal app exit, including macOS Quit and restarts, the host runs that shutdown within the same three seconds and then kills any sidecar still alive.
+  A quit during an update install takes effect when the install ends, instead of the restart or the plugin restore.
 - v1 local capabilities are `settings`, `tasks.read`, and `task-events`; task write APIs are not public.
   Amended: later host APIs add the capabilities the plugin guide lists.
   Host API v7 makes keyed task writes public through `tasks.sync`, for a plugin mirroring an external tracker as the bundled Jira plugin does.
