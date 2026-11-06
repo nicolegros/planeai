@@ -93,13 +93,11 @@ pub async fn install_update(
         .download(|_, _| {}, || {})
         .await
         .map_err(|e| e.to_string())?;
-    if !runtime.0.begin_update() {
-        return Err("plugin runtime is already shutting down".to_string());
-    }
-    let enabled_plugin_ids = match runtime.0.shutdown_for_update().await {
-        Ok(plugin_ids) => plugin_ids,
-        Err(error) => return Err(error),
-    };
+    let hold = runtime
+        .0
+        .begin_update()
+        .ok_or_else(|| "plugin runtime is already shutting down".to_string())?;
+    let enabled_plugin_ids = runtime.0.shutdown_for_update().await?;
     let install_result =
         crate::commands::blocking(move || update.install(bytes).map_err(|e| e.to_string())).await;
     if let Err(error) = install_result {
@@ -109,7 +107,7 @@ pub async fn install_update(
             .await;
         return Err(error);
     }
-    if runtime.0.finish_update() {
+    if !runtime.0.finish_update(hold) {
         return Ok(());
     }
     // `restart` never returns and would park this worker; `request_restart` lets RunEvent::Exit stop the plugins.

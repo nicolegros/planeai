@@ -11,6 +11,8 @@ enum State {
     UpdateHold {
         quit_requested: bool,
     },
+    /// The update installed; the requested restart is the exit.
+    Restarting,
     ShuttingDown,
     ExitPermitted,
 }
@@ -25,13 +27,22 @@ pub(crate) enum ExitRequest {
     StartShutdown,
 }
 
-/// How an update install hands back its hold on the plugins.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum UpdateEnd {
-    /// Restore the plugins (failure) or restart into the update (success).
-    Continue,
+pub(crate) enum FailedUpdate {
+    Restore,
     /// A quit arrived during the install: stop the plugins and exit instead.
     Quit,
+    /// The hold already ended, or the app is exiting.
+    NotHeld,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FinishedUpdate {
+    Restart,
+    /// A quit arrived during the install: stop the plugins and exit instead.
+    Quit,
+    /// The hold already ended, or the app is exiting.
+    NotHeld,
 }
 
 #[derive(Default)]
@@ -55,7 +66,7 @@ impl ExitGate {
                 };
                 ExitRequest::Prevent
             }
-            State::ShuttingDown => ExitRequest::Prevent,
+            State::Restarting | State::ShuttingDown => ExitRequest::Prevent,
             State::ExitPermitted => ExitRequest::Allow,
         }
     }
@@ -81,22 +92,30 @@ impl ExitGate {
         true
     }
 
-    /// Ends an update hold. `restore` is whether the update failed and plugins come back.
-    pub(crate) fn end_update(&self, restore: bool) -> UpdateEnd {
+    pub(crate) fn fail_update(&self) -> FailedUpdate {
         let mut state = self.lock();
-        match *state {
-            State::UpdateHold {
-                quit_requested: true,
-            } => {
-                *state = State::ShuttingDown;
-                UpdateEnd::Quit
-            }
-            State::UpdateHold { .. } if restore => {
-                *state = State::Running;
-                UpdateEnd::Continue
-            }
-            _ => UpdateEnd::Continue,
+        let State::UpdateHold { quit_requested } = *state else {
+            return FailedUpdate::NotHeld;
+        };
+        if quit_requested {
+            *state = State::ShuttingDown;
+            return FailedUpdate::Quit;
         }
+        *state = State::Running;
+        FailedUpdate::Restore
+    }
+
+    pub(crate) fn finish_update(&self) -> FinishedUpdate {
+        let mut state = self.lock();
+        let State::UpdateHold { quit_requested } = *state else {
+            return FinishedUpdate::NotHeld;
+        };
+        if quit_requested {
+            *state = State::ShuttingDown;
+            return FinishedUpdate::Quit;
+        }
+        *state = State::Restarting;
+        FinishedUpdate::Restart
     }
 
     pub(crate) fn permit_exit(&self) {
@@ -121,6 +140,7 @@ mod tests {
         assert_eq!(gate.request_exit(), ExitRequest::StartShutdown);
         assert_eq!(gate.request_exit(), ExitRequest::Prevent);
         assert!(!gate.is_running());
+        assert!(!gate.begin_update(), "no update may start during a quit");
         gate.permit_exit();
         assert_eq!(gate.request_exit(), ExitRequest::Allow);
         assert!(!gate.begin_final_exit());
@@ -132,7 +152,7 @@ mod tests {
         assert!(gate.begin_update());
 
         assert_eq!(gate.request_exit(), ExitRequest::Prevent);
-        assert_eq!(gate.end_update(true), UpdateEnd::Quit);
+        assert_eq!(gate.fail_update(), FailedUpdate::Quit);
         assert!(!gate.is_running());
     }
 
@@ -142,7 +162,7 @@ mod tests {
         assert!(gate.begin_update());
 
         assert_eq!(gate.request_exit(), ExitRequest::Prevent);
-        assert_eq!(gate.end_update(false), UpdateEnd::Quit);
+        assert_eq!(gate.finish_update(), FinishedUpdate::Quit);
     }
 
     #[test]
@@ -151,17 +171,20 @@ mod tests {
         assert!(gate.begin_update());
         assert!(!gate.begin_update());
 
-        assert_eq!(gate.end_update(true), UpdateEnd::Continue);
+        assert_eq!(gate.fail_update(), FailedUpdate::Restore);
         assert!(gate.is_running());
+        assert_eq!(gate.fail_update(), FailedUpdate::NotHeld);
     }
 
     #[test]
-    fn a_successful_update_keeps_the_plugins_stopped_for_the_restart() {
+    fn a_successful_update_turns_a_later_quit_into_the_restart() {
         let gate = ExitGate::default();
         assert!(gate.begin_update());
 
-        assert_eq!(gate.end_update(false), UpdateEnd::Continue);
+        assert_eq!(gate.finish_update(), FinishedUpdate::Restart);
         assert!(!gate.is_running());
+        assert_eq!(gate.request_exit(), ExitRequest::Prevent);
+        assert_eq!(gate.fail_update(), FailedUpdate::NotHeld);
         assert!(gate.begin_final_exit());
     }
 
@@ -171,8 +194,8 @@ mod tests {
         assert!(gate.begin_update());
 
         assert!(gate.begin_final_exit());
-        assert_eq!(gate.end_update(true), UpdateEnd::Continue);
-        assert!(!gate.is_running());
+        assert_eq!(gate.fail_update(), FailedUpdate::NotHeld);
+        assert_eq!(gate.finish_update(), FinishedUpdate::NotHeld);
         assert!(!gate.begin_update());
     }
 }
