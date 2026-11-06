@@ -501,6 +501,21 @@ describe("dragging a task row to a lane", () => {
     expect(taskMove).not.toHaveBeenCalled();
   });
 
+  it("lifts the dragged row above its siblings and puts it back on release", async () => {
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const root = mounted.target;
+    const lifted = () =>
+      [...root.querySelectorAll<HTMLElement>(".task-drag-lifted")].map((row) =>
+        row.querySelector("[data-nav-index]")!.textContent!.trim(),
+      );
+
+    dragRow(root, "Title A-2", () => null);
+    expect(lifted()).toEqual(["Alpha A-2 Title A-2"]);
+    release();
+
+    expect(lifted()).toEqual([]);
+  });
+
   it("does not drag session rows", async () => {
     mounted = await mountSidebar({ sidebar_group_by: "status" });
     const root = mounted.target;

@@ -9,7 +9,10 @@
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
   import { everyLane, LANES, navKey, PROJECT_GROUP_LANES, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, STATUS_SECTION_LANES, taskHeaderNavKeys, type SidebarLaneGroup, type SidebarNavItem, type SidebarProjectSection, type SidebarRow, type SidebarSection, type SidebarSessionRow, type SidebarTaskRow, type TaskLane } from "../lib/sidebar-model";
-  import { laneHover, pressTaskRow, taskDrag, taskDragPayload, type TaskDragPayload, type TaskDropTarget } from "../lib/task-drag.svelte";
+  import { flip } from "svelte/animate";
+  import { cubicOut } from "svelte/easing";
+  import { fade } from "svelte/transition";
+  import { laneHover, liftWhileDragged, pressTaskRow, taskDrag, taskDragPayload, type TaskDragPayload, type TaskDropTarget } from "../lib/task-drag.svelte";
   import { laneVerdict } from "../lib/task-drop";
   import LaneDropBadge from "./sidebar/LaneDropBadge.svelte";
   import { rowActivity, rowSession, WOKE_TITLE, type RowAction, type RowActivity } from "../lib/sidebar-cards";
@@ -291,6 +294,8 @@
 
   const laneClass = (verdict: ReturnType<typeof laneHover>) =>
     verdict === null ? "" : verdict.accepts ? "rounded-lg bg-accent-bg ring-1 ring-inset ring-accent/40" : "rounded-lg ring-1 ring-inset ring-status-exited/40";
+  // Rows settle into their new order after a move; a row that left its group fades out.
+  const motionMs = () => (window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 150);
   const emptyGroup = (key: string, lane: TaskLane): SidebarLaneGroup => ({ key, lane, rows: [], defaultCollapsed: true });
   // While a task is dragged, its project shows every lane group, and the status layout every status section.
   function projectGroups(section: SidebarProjectSection): SidebarLaneGroup[] {
@@ -672,8 +677,8 @@
       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
       {@const isPreviewing = (linked?.id === previewSessionId) || (previewTaskWorkspace?.projectId === project.id && previewTaskWorkspace.taskKey === task.key)}
       {@const hint = jumpHintFor(navKey.task(project.id, task.key))}
-      <li class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
-        <div class="session-row relative flex items-center gap-1.5">
+      <li animate:flip={{ duration: motionMs, easing: cubicOut }} out:fade={{ duration: motionMs(), easing: cubicOut }} class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
+        <div class="session-row relative flex items-center gap-1.5" {@attach liftWhileDragged({ projectId: project.id, key: task.key })}>
           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
           <button
             data-nav-index={taskNavIdx}

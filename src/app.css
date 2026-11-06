@@ -409,6 +409,14 @@ body.task-dragging [data-task-drag-list] li {
   pointer-events: none;
 }
 
+/* The dragged row, lifted above its siblings while it follows the pointer. */
+.task-drag-lifted {
+  @apply relative z-10 rounded-md shadow-lg;
+  /* The active row tint over an opaque base, so the rows it passes over never show through. */
+  background-color: color-mix(in oklab, var(--color-t1) 9%, var(--color-sidebar));
+  will-change: transform;
+}
+
 /* The pane in front refuses the dragged task (a shell, a chat, an agent without MCP). */
 .pane-drop-preview.pane-drop-refused {
   background: color-mix(in oklab, var(--color-status-exited) 8%, transparent);
