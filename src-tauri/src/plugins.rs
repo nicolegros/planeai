@@ -1585,23 +1585,7 @@ impl CallbackServer for RuntimeProcess {
         &self.connection
     }
 
-    fn serve(
-        &self,
-        method: &str,
-        params: Value,
-    ) -> impl std::future::Future<Output = Result<Value, CallbackError>> + Send {
-        self.serve_callback(method, params)
-    }
-}
-
-impl RuntimeProcess {
-    async fn request(&self, method: &str, params: Value) -> Result<Value, PluginRpcError> {
-        self.connection
-            .request(method, params, request_timeout(method))
-            .await
-    }
-
-    async fn serve_callback(&self, method: &str, params: Value) -> Result<Value, CallbackError> {
+    async fn serve(&self, method: &str, params: Value) -> Result<Value, CallbackError> {
         match method {
             "host.sessions.actions" => {
                 if !self
@@ -1736,6 +1720,14 @@ impl RuntimeProcess {
                 })
             }
         }
+    }
+}
+
+impl RuntimeProcess {
+    async fn request(&self, method: &str, params: Value) -> Result<Value, PluginRpcError> {
+        self.connection
+            .request(method, params, request_timeout(method))
+            .await
     }
 
     /// Why the runtime ended: `Ok` when its process exited, `Err` when it must be stopped.
@@ -3305,9 +3297,17 @@ impl PluginRuntimeSupervisor {
         if !owns_process {
             return;
         }
-        if let Err(stop_error) = stop_process(process).await {
-            tracing::warn!(plugin_id, %stop_error, "failed to stop broken plugin runtime");
-        }
+        // A crash is not restarted, as the process monitor would not have restarted it either.
+        let crashed = matches!(error, PluginRpcError::Broken(message) if message == STDOUT_CLOSED_ERROR)
+            || matches!(process.exited().await, Ok(Some(_)));
+        // A sidecar that may still be running must not get a second instance beside it.
+        let stopped = match stop_process(process).await {
+            Ok(()) => true,
+            Err(stop_error) => {
+                tracing::warn!(plugin_id, %stop_error, "failed to stop broken plugin runtime");
+                false
+            }
+        };
         if let Err(state_error) = self
             .update_state(
                 plugin_id,
@@ -3320,6 +3320,9 @@ impl PluginRuntimeSupervisor {
             tracing::warn!(plugin_id, %state_error, "failed to record broken plugin runtime");
             return;
         }
+        if crashed || !stopped {
+            return;
+        }
         if let Some(supervisor) = self.this.upgrade() {
             let plugin_id = plugin_id.to_string();
             // Spawned: starting replaces the plugin's background worker, which may be the caller.
@@ -3327,9 +3330,9 @@ impl PluginRuntimeSupervisor {
         }
     }
 
-    /// Starts a runtime retired for a broken request again, unless it was disabled, restarted
-    /// or already restarted within the cooldown. Boxed: the runtime it starts may retire itself
-    /// through here.
+    /// Starts a runtime retired for a broken request again, unless it was disabled or started
+    /// again meanwhile, or this already restarted it within the cooldown. Boxed: the runtime it
+    /// starts may retire itself through here.
     fn restart_broken_runtime(
         self: Arc<Self>,
         plugin_id: String,
@@ -6895,52 +6898,6 @@ mod tests {
                 ["state"],
             "open"
         );
-    }
-
-    #[test]
-    fn callback_response_frame_limit_includes_its_newline_terminator() {
-        assert!(host_callback_response_fits(
-            &"x".repeat(MAX_RPC_FRAME_BYTES as usize - 1)
-        ));
-        assert!(!host_callback_response_fits(
-            &"x".repeat(MAX_RPC_FRAME_BYTES as usize)
-        ));
-    }
-
-    #[test]
-    fn oversized_callback_id_is_rejected_before_an_oversized_fallback_is_written() {
-        let id = Value::String("x".repeat(MAX_RPC_FRAME_BYTES as usize - 100));
-        assert!(encode_host_callback_response(
-            id,
-            Ok(serde_json::json!({ "large": "x".repeat(MAX_RPC_FRAME_BYTES as usize) }))
-        )
-        .unwrap_err()
-        .contains("leaves no room"));
-    }
-
-    #[test]
-    fn callback_requests_require_json_rpc_version_scalar_ids_and_valid_request_shape() {
-        let callback = parse_json_rpc_callback_request(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": "settings",
-            "method": "host.settings.get",
-            "params": null,
-        }))
-        .unwrap();
-        assert_eq!(callback.id, "settings");
-        assert_eq!(callback.method, "host.settings.get");
-        assert_eq!(callback.params, Value::Null);
-
-        for callback in [
-            serde_json::json!({ "id": 1, "method": "host.settings.get" }),
-            serde_json::json!({ "jsonrpc": "2.0", "method": "host.settings.get" }),
-            serde_json::json!({ "jsonrpc": "2.0", "id": null, "method": "host.settings.get" }),
-            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "", "params": null }),
-            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "host.settings.get", "result": {} }),
-            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "host.settings.get", "params": true }),
-        ] {
-            assert!(parse_json_rpc_callback_request(callback).is_err());
-        }
     }
 
     #[test]

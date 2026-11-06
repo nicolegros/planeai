@@ -30,7 +30,8 @@ Every backend and UI path must be a package-relative file path: no absolute path
 An optional `background_service` object makes PlaneAI call one sidecar method on a timer: `{ "method": "my-plugin.refresh", "interval_setting": "my_refresh_interval_ms", "default_interval_ms": 120000 }`.
 PlaneAI calls `method` with no params, waits for it to answer, then waits the interval before the next call.
 A run may take 60 seconds, or the optional `timeout_ms`, from 1 to 3600000, before PlaneAI cancels it.
-PlaneAI sends a plugin one request at a time, so its other requests wait for a run in flight, each keeping its full timeout once sent.
+PlaneAI sends a plugin one request at a time, so a request made during a run waits for its turn up to its own timeout, then fails without being sent.
+A request that gets its turn has its full timeout from then on.
 The interval is the positive integer stored under `interval_setting` in the plugin's settings, or `default_interval_ms` when that key is missing.
 After each successful call, PlaneAI tells the plugin's UI its data changed, unless the method's JSON-RPC result is an object with `"changed": false`.
 

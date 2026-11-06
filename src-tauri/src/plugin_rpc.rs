@@ -320,9 +320,7 @@ pub(crate) fn validate_plugin_response_frame(frame: &[u8]) -> Result<(), String>
     Ok(())
 }
 
-pub(crate) fn parse_json_rpc_callback_request(
-    value: Value,
-) -> Result<JsonRpcCallbackRequest, String> {
+fn parse_json_rpc_callback_request(value: Value) -> Result<JsonRpcCallbackRequest, String> {
     let object = value
         .as_object()
         .ok_or_else(|| "malformed plugin JSON-RPC callback: expected an object".to_string())?;
@@ -493,6 +491,52 @@ mod tests {
                 StdoutFrame::Response,
                 "{response}"
             );
+        }
+    }
+
+    #[test]
+    fn callback_response_frame_limit_includes_its_newline_terminator() {
+        assert!(host_callback_response_fits(
+            &"x".repeat(MAX_RPC_FRAME_BYTES as usize - 1)
+        ));
+        assert!(!host_callback_response_fits(
+            &"x".repeat(MAX_RPC_FRAME_BYTES as usize)
+        ));
+    }
+
+    #[test]
+    fn oversized_callback_id_is_rejected_before_an_oversized_fallback_is_written() {
+        let id = Value::String("x".repeat(MAX_RPC_FRAME_BYTES as usize - 100));
+        assert!(encode_host_callback_response(
+            id,
+            Ok(serde_json::json!({ "large": "x".repeat(MAX_RPC_FRAME_BYTES as usize) }))
+        )
+        .unwrap_err()
+        .contains("leaves no room"));
+    }
+
+    #[test]
+    fn callback_requests_require_json_rpc_version_scalar_ids_and_valid_request_shape() {
+        let callback = parse_json_rpc_callback_request(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "settings",
+            "method": "host.settings.get",
+            "params": null,
+        }))
+        .unwrap();
+        assert_eq!(callback.id, "settings");
+        assert_eq!(callback.method, "host.settings.get");
+        assert_eq!(callback.params, Value::Null);
+
+        for callback in [
+            serde_json::json!({ "id": 1, "method": "host.settings.get" }),
+            serde_json::json!({ "jsonrpc": "2.0", "method": "host.settings.get" }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": null, "method": "host.settings.get" }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "", "params": null }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "host.settings.get", "result": {} }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "host.settings.get", "params": true }),
+        ] {
+            assert!(parse_json_rpc_callback_request(callback).is_err());
         }
     }
 
