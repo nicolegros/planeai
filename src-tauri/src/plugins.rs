@@ -2585,7 +2585,7 @@ fn write_owned_task(
                 .map_err(internal)?
                 .inserted;
             if !inserted && holder(&transaction, &key)?.as_deref() != Some(prefix.as_str()) {
-                return Err(CallbackError::InvalidParams(format!(
+                return Err(CallbackError::KeyTaken(format!(
                     "task {key} already exists"
                 )));
             }
@@ -6263,12 +6263,10 @@ mod tests {
                 Err(CallbackError::NotGranted),
                 Err(CallbackError::NotGranted),
                 Err(CallbackError::NotGranted),
-                Err(CallbackError::InvalidParams(format!(
+                Err(CallbackError::KeyTaken(format!(
                     "task {local_key} already exists"
                 ))),
-                Err(CallbackError::InvalidParams(
-                    "task ENG-1 already exists".into()
-                )),
+                Err(CallbackError::KeyTaken("task ENG-1 already exists".into())),
             ]
         );
         let titles = conn
