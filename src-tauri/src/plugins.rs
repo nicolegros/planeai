@@ -2608,8 +2608,14 @@ fn write_owned_task(
             }
         }
         TaskWrite::Update(key, update) => {
-            if holder(&conn, &key)?.as_deref() != Some(prefix.as_str()) {
-                return Err(CallbackError::NotGranted);
+            match holder(&conn, &key)? {
+                Some(held) if held == prefix => {}
+                Some(_) => {
+                    return Err(CallbackError::KeyTaken(format!(
+                        "task {key} belongs to another owner"
+                    )))
+                }
+                None => return Err(CallbackError::NotGranted),
             }
             SqliteRepository::on_migrated(conn, &prefix).update(&key, update)
         }
@@ -6260,8 +6266,12 @@ mod tests {
         assert_eq!(
             refusals,
             [
-                Err(CallbackError::NotGranted),
-                Err(CallbackError::NotGranted),
+                Err(CallbackError::KeyTaken(format!(
+                    "task {local_key} belongs to another owner"
+                ))),
+                Err(CallbackError::KeyTaken(
+                    "task ENG-1 belongs to another owner".into()
+                )),
                 Err(CallbackError::NotGranted),
                 Err(CallbackError::KeyTaken(format!(
                     "task {local_key} already exists"
@@ -6475,7 +6485,9 @@ mod tests {
                 "host.task.update",
                 serde_json::json!({ "key": key, "title": "Taken over" }),
             ),
-            Err(CallbackError::NotGranted)
+            Err(CallbackError::KeyTaken(format!(
+                "task {key} belongs to another owner"
+            )))
         );
     }
 
