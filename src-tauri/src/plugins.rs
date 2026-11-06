@@ -3299,8 +3299,7 @@ impl PluginRuntimeSupervisor {
         }
         // Only a sidecar that is alive and readable restarts: a crash or a stdout protocol
         // failure stays stopped, as the process monitor leaves it when it notices first.
-        let crashed = process.connection.stdout_failure().is_some()
-            || matches!(process.exited().await, Ok(Some(_)));
+        let crashed = !matches!(process.exited().await, Ok(None));
         // A sidecar that may still be running must not get a second instance beside it.
         let stopped = match stop_process(process).await {
             Ok(()) => true,
