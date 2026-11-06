@@ -113,7 +113,8 @@ export function showToast(input: string | ToastOptions, kind: ToastKind = "error
     return toast.id;
   }
 
-  if (isPlain(toast)) {
+  // A toast with an id is one its caller replaces or dismisses by that id, so it never merges.
+  if (isPlain(toast) && !options.id) {
     const duplicate = toasts.find(
       (candidate) =>
         isPlain(candidate) && candidate.kind === toast.kind && candidate.message === toast.message,

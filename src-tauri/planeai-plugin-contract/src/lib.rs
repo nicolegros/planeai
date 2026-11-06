@@ -526,6 +526,9 @@ fn validate_ui_contributions(object: &Map<String, Value>, plugin_id: &str) -> Re
                 TASK_SESSION_HOST_API_VERSION,
             )?;
         }
+        if placement == "interaction" {
+            require_host_api(object, "the interaction placement", SYNC_HOST_API_VERSION)?;
+        }
         let has_order = match contribution.get("order") {
             None | Some(Value::Null) => false,
             Some(Value::Number(value))
@@ -1174,6 +1177,25 @@ mod tests {
         assert_eq!(
             sync("planeai.plugin-host.v6"),
             Err("the tasks.sync capability requires host API planeai.plugin-host.v7".into())
+        );
+    }
+
+    #[test]
+    fn the_interaction_placement_requires_host_api_v7() {
+        let interaction = |host_api_version: &str| {
+            let mut manifest = manifest();
+            manifest["host_api_version"] = json!(host_api_version);
+            manifest["ui_contributions"][0]["placement"] = json!("interaction");
+            validate_local_manifest(&manifest, "macos-arm64").map_err(|error| error.to_string())
+        };
+
+        assert_eq!(
+            interaction("planeai.plugin-host.v7"),
+            Ok("bin/plugin".into())
+        );
+        assert_eq!(
+            interaction("planeai.plugin-host.v6"),
+            Err("the interaction placement requires host API planeai.plugin-host.v7".into())
         );
     }
 }

@@ -1074,7 +1074,7 @@ describe("PluginContributionHost", () => {
       actions: first.actions!.map(({ key, label }) => ({ key, label })),
       dismiss: typeof first.dismiss,
     }).toEqual({
-      id: "plugin:local-fixture:departed",
+      id: "plugin:local-fixture:fixture:departed",
       kind: "warning",
       message: "ENG-1 left your Linear view",
       detail: "Fix login",
@@ -1082,6 +1082,9 @@ describe("PluginContributionHost", () => {
       dismiss: "function",
     });
     await vi.waitFor(() => expect(ran).toEqual(["done ENG-1", "dismissed ENG-2"]));
+    unmount(component!);
+    component = undefined;
+    expect(dismissToast).not.toHaveBeenCalled();
   });
 
   it("maps a local frame's dismiss setting and dismisses its toasts when asked and when it goes away", async () => {
@@ -1109,10 +1112,10 @@ describe("PluginContributionHost", () => {
       "default",
       "info",
     ]);
-    expect(dismissedByFrame).toEqual(["plugin:local-fixture:resolving"]);
+    expect(dismissedByFrame).toEqual(["plugin:local-fixture:fixture:resolving"]);
     expect(dismissToast.mock.calls.map(([toastId]) => toastId)).toEqual([
-      "plugin:local-fixture:resolving",
-      "plugin:local-fixture:plain",
+      "plugin:local-fixture:fixture:resolving",
+      "plugin:local-fixture:fixture:plain",
     ]);
   });
 
@@ -1183,14 +1186,6 @@ describe("PluginContributionHost", () => {
     });
     const changes: string[] = [];
     synced.host.data.onTaskDataChanged!(() => changes.push("tasks.sync"));
-    const other = mount(PluginContributionHostLocalHarness, {
-      target: document.body.appendChild(document.createElement("div")),
-      props: {
-        placement: "sidebar.section",
-        hostApiVersion: SYNC_HOST_API,
-        capabilities: ["tasks.read"],
-      },
-    });
     listAll.mockResolvedValue([
       {
         key: "PLA-1",
@@ -1205,8 +1200,17 @@ describe("PluginContributionHost", () => {
     await taskStore.loadTasks(["/repo"]);
 
     await vi.waitFor(() => expect(changes).toEqual(["tasks.sync"]));
-    unmount(other);
     await taskStore.loadTasks([]);
+  });
+
+  it("offers task data changes only to a frame whose plugin holds tasks.sync", async () => {
+    const { host } = await bootLocalFrame({
+      placement: "sidebar.section",
+      hostApiVersion: SYNC_HOST_API,
+      capabilities: ["tasks.read"],
+    });
+
+    expect(host.data.onTaskDataChanged).toBeUndefined();
   });
 
   it("keeps a local interaction frame invisible and out of the way of pointer input", async () => {

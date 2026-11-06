@@ -438,11 +438,13 @@
             notify: (message, kind = "error") => send({ type: "notify", message, kind }),
           },
         };
-        if (${syncApi}) {
+        if (${syncApi && mirrorsTasks(plugin)}) {
           host.data.onTaskDataChanged = (listener) => {
             taskDataChangeListeners.add(listener);
             return () => taskDataChangeListeners.delete(listener);
           };
+        }
+        if (${syncApi}) {
           // Toast callbacks stay here; the host names them back by toast id and action key.
           host.interaction = {
             showToast: (toast) => {
@@ -590,7 +592,7 @@
         ),
       );
     };
-    const toasts = syncApi ? createFrameToasts(plugin.id, (event) => frame.contentWindow?.postMessage(event, "*")) : null;
+    const toasts = syncApi ? createFrameToasts(`${plugin.id}:${contribution.id}`, (event) => frame.contentWindow?.postMessage(event, "*")) : null;
     const respond = (requestId: number | undefined, ok: boolean, value?: unknown): void => {
       if (requestId === undefined) return;
       frame.contentWindow?.postMessage(
@@ -984,7 +986,7 @@
             : "w-full"
   }
   tabindex="-1"
-  role={inSessionRow(contribution.placement) ? undefined : "region"}
+  role={inSessionRow(contribution.placement) || contribution.placement === "interaction" ? undefined : "region"}
   aria-label={`${plugin.name} · ${contribution.label}`}
   data-plugin-ui-contribution={`${plugin.id}:${contribution.id}`}
   data-plugin-sidebar-contribution={contribution.placement.startsWith("sidebar.") ? "" : undefined}

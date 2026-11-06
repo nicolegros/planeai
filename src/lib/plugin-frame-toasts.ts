@@ -6,7 +6,7 @@ const TOAST_KINDS: readonly ToastKind[] = ["error", "warning", "info", "success"
  * A toast as a local plugin frame posts it (host API v7). Its callbacks stay in the frame:
  * actions are named by key, and `notify` asks the host to report a user dismissal back.
  */
-export interface FrameToast {
+interface FrameToast {
   id: string;
   kind: ToastKind;
   message: string;
@@ -28,7 +28,7 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
-export function parseFrameToast(value: unknown): FrameToast {
+function parseFrameToast(value: unknown): FrameToast {
   if (!isRecord(value)) throw new Error("toast must be an object");
   const { id, kind = "info", message, detail, actions = [], dismiss = "enabled" } = value;
   if (!nonEmptyString(id)) throw new Error("toast id must be a nonempty string");
@@ -61,19 +61,23 @@ export function parseFrameToast(value: unknown): FrameToast {
 }
 
 /**
- * The host's toasts for one local frame. Ids are namespaced by plugin so plugins never collide,
- * and the frame's toasts go away with it, since their callbacks die with the frame.
+ * The host's toasts for one local frame. Ids are namespaced by frame, since each frame holds its
+ * own toasts' callbacks, and the frame's toasts go away with it.
  */
-export function createFrameToasts(pluginId: string, post: (event: FrameToastEvent) => void) {
+export function createFrameToasts(frameId: string, post: (event: FrameToastEvent) => void) {
   const shown = new Set<string>();
-  const hostId = (id: string) => `plugin:${pluginId}:${id}`;
+  const hostId = (id: string) => `plugin:${frameId}:${id}`;
   return {
     show(value: unknown): string {
       const toast = parseFrameToast(value);
       const id = hostId(toast.id);
+      const report = (event: FrameToastEvent) => {
+        shown.delete(id);
+        post(event);
+      };
       const dismiss: ToastDismiss =
         toast.dismiss === "notify"
-          ? () => post({ type: "toast-event", id: toast.id, dismiss: true })
+          ? () => report({ type: "toast-event", id: toast.id, dismiss: true })
           : toast.dismiss === "disabled"
             ? "disabled"
             : "default";
@@ -85,7 +89,7 @@ export function createFrameToasts(pluginId: string, post: (event: FrameToastEven
         actions: toast.actions.map(({ key, label }) => ({
           key,
           label,
-          run: () => post({ type: "toast-event", id: toast.id, action: key }),
+          run: () => report({ type: "toast-event", id: toast.id, action: key }),
         })),
         dismiss,
       });
