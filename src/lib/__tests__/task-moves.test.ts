@@ -535,6 +535,23 @@ describe("task moves", () => {
         expect(snoozeOf("PLA-1")).toEqual(snoozed);
       });
 
+      it("keeps a wake-and-move undoable when reverting its move fails", async () => {
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        await moves.snoozeTask(current("PLA-1"), project, tomorrow);
+        const snoozed = snoozeOf("PLA-1");
+        await moves.wakeAndChangeTaskStatus(current("PLA-1"), project, "in_review", onMoved);
+        move.mockRejectedValueOnce(new Error("database unavailable"));
+
+        await moves.undoLastTaskChange(onMoved);
+        expect(snoozeOf("PLA-1")).toEqual(AWAKE);
+        expect(statusOf("PLA-1")).toBe("in_review");
+        expect(moves.canUndoTaskChange()).toBe(true);
+
+        await moves.undoLastTaskChange(onMoved);
+        expect(snoozeOf("PLA-1")).toEqual(snoozed);
+        expect(statusOf("PLA-1")).toBe("in_progress");
+      });
+
       it("does not revert a wake-and-move once the task moved on", async () => {
         await moves.snoozeTask(current("PLA-1"), project, tomorrow);
         await moves.wakeAndChangeTaskStatus(current("PLA-1"), project, "in_review", onMoved);

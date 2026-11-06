@@ -306,10 +306,11 @@ async function applyRevert(change: TaskChange, onMoved: () => void): Promise<boo
     case "wake_status": {
       const id = taskStore.taskRef(change.repoPath, change.key);
       if (pendingDone.get(id)?.move === change) return cancelDone(id);
-      // A snoozed task is never Done, so `from` is a status the task can take back at once.
-      if (!(await restoreSnooze(change))) return false;
+      // A snoozed task is never Done, so `from` is a status the task can take back at once. The
+      // move goes first: a failure then leaves the change whole, so it can be undone again.
       if (!(await apply(change.key, change.from, change.repoPath))) return false;
       onMoved();
+      if (!(await restoreSnooze(change))) return false;
       showMovedBack(change);
       return true;
     }
