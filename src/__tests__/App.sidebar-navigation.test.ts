@@ -131,9 +131,6 @@ describe("App sidebar navigation in the Cards layout", () => {
 
   beforeAll(async () => {
     HTMLElement.prototype.scrollIntoView = vi.fn();
-    Element.prototype.getAnimations = () => [];
-    Element.prototype.animate = () =>
-      ({ cancel() {}, finished: Promise.resolve(), onfinish: null }) as unknown as Animation;
     Object.defineProperty(document, "fonts", {
       value: { load: () => Promise.resolve([]), ready: Promise.resolve() },
     });
