@@ -68,27 +68,45 @@ describe("createFormKeyboardController", () => {
     expect(fk.mode).toBe("insert");
   });
 
+  it("treats keys typed in a text field as insert even without a focusin, as WebKit date inputs do", () => {
+    const fk = createFormKeyboardController(() => [{ key: "d", toggle: toggleDraft }], {
+      wrapper: () => wrapper,
+      onDismiss,
+    });
+    fk.handleKeydown(makeKey("d", { target: titleInput }));
+    expect(toggleDraft).not.toHaveBeenCalled();
+    expect(fk.mode).toBe("insert");
+  });
+
   it("escape in insert mode returns to normal", () => {
     const fk = createFormKeyboardController(() => [{ key: "t", ref: () => titleInput }], {
       wrapper: () => wrapper,
       onDismiss,
     });
-    // Enter insert mode
     fk.handleFocusin({ target: titleInput } as unknown as FocusEvent);
     expect(fk.mode).toBe("insert");
-    // Escape → normal
-    fk.handleKeydown(makeKey("Escape"));
+    fk.handleKeydown(makeKey("Escape", { target: titleInput }));
     expect(fk.mode).toBe("normal");
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
-  it("escape in normal mode calls onDismiss", () => {
+  it("escape on the wrapper calls onDismiss", () => {
     const fk = createFormKeyboardController(() => [{ key: "t", ref: () => titleInput }], {
       wrapper: () => wrapper,
       onDismiss,
     });
-    fk.handleKeydown(makeKey("Escape"));
+    fk.handleKeydown(makeKey("Escape", { target: wrapper }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("escape on a focused button returns focus to the wrapper instead of dismissing", () => {
+    const button = document.createElement("button");
+    wrapper.appendChild(button);
+    const fk = createFormKeyboardController(() => [], { wrapper: () => wrapper, onDismiss });
+    button.focus();
+    fk.handleKeydown(makeKey("Escape", { target: button }));
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(wrapper);
   });
 
   it("does not intercept Cmd+Enter (lets it bubble for submit)", () => {

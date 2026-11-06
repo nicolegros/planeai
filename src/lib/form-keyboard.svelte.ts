@@ -3,8 +3,8 @@
  *
  * Normal mode: mnemonic keys focus fields; toggle keys flip switches.
  * Insert mode: entered when a text field is focused; typing edits text.
- * Esc in insert → normal (blurs active field, returns focus to wrapper).
- * Esc in normal → calls onDismiss (close form).
+ * Esc on any focused control → normal (blurs it, returns focus to wrapper).
+ * Esc on the wrapper itself → calls onDismiss (close form).
  * Tab/Shift-Tab cycles fields naturally; focusin auto-detects insert.
  */
 
@@ -53,14 +53,19 @@ export function createFormKeyboardController(
     // ⌘Enter — let it bubble for submit
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) return;
 
+    // The target, not document.activeElement, so forms inside a shadow root see the focused control.
+    const target = e.target instanceof Element ? e.target : null;
+    // WebKit fires no focusin for date and time inputs, so focus alone cannot be trusted to enter insert.
+    if (isTextField(target)) enterInsert();
+
     // Esc
     if (e.key === "Escape") {
       // If inside an open combobox, let it close its dropdown first
-      const el = document.activeElement as HTMLElement | null;
-      if (el?.getAttribute("aria-expanded") === "true") return;
+      if (target?.getAttribute("aria-expanded") === "true") return;
       e.preventDefault();
       e.stopPropagation();
-      if (mode === "insert") {
+      const wrapper = opts.wrapper();
+      if (target && target !== wrapper && wrapper?.contains(target)) {
         enterNormal();
       } else {
         opts.onDismiss?.();
