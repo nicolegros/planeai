@@ -3297,8 +3297,9 @@ impl PluginRuntimeSupervisor {
         if !owns_process {
             return;
         }
-        // A crash is not restarted, as the process monitor would not have restarted it either.
-        let crashed = matches!(error, PluginRpcError::Broken(message) if message == STDOUT_CLOSED_ERROR)
+        // Only a sidecar that is alive and readable restarts: a crash or a stdout protocol
+        // failure stays stopped, as the process monitor leaves it when it notices first.
+        let crashed = process.connection.stdout_failure().is_some()
             || matches!(process.exited().await, Ok(Some(_)));
         // A sidecar that may still be running must not get a second instance beside it.
         let stopped = match stop_process(process).await {

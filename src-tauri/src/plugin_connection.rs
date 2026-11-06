@@ -160,15 +160,12 @@ impl PluginConnection {
     ) -> Result<(), String> {
         let mut frame = encode_host_callback_response(id, result)?;
         frame.push('\n');
-        let mut stdin = self.stdin.lock().await;
-        stdin
-            .write_all(frame.as_bytes())
-            .await
-            .map_err(|error| format!("failed to write host callback response: {error}"))?;
-        stdin
-            .flush()
-            .await
-            .map_err(|error| format!("failed to flush host callback response: {error}"))
+        write_line(
+            &mut *self.stdin.lock().await,
+            &frame,
+            "host callback response",
+        )
+        .await
     }
 
     fn next_request_id(&self) -> u64 {
@@ -181,18 +178,9 @@ impl PluginConnection {
             .await
             .map_err(|_| format!("{kind} timed out"))?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        timeout(remaining, async {
-            stdin
-                .write_all(frame.as_bytes())
-                .await
-                .map_err(|error| format!("failed to write {kind}: {error}"))?;
-            stdin
-                .flush()
-                .await
-                .map_err(|error| format!("failed to flush {kind}: {error}"))
-        })
-        .await
-        .map_err(|_| format!("{kind} timed out"))?
+        timeout(remaining, write_line(&mut stdin, frame, kind))
+            .await
+            .map_err(|_| format!("{kind} timed out"))?
     }
 
     /// The next response frame. Fails only when stdout can no longer be read.
@@ -206,9 +194,20 @@ impl PluginConnection {
     }
 }
 
+async fn write_line(stdin: &mut ChildStdin, frame: &str, kind: &str) -> Result<(), String> {
+    stdin
+        .write_all(frame.as_bytes())
+        .await
+        .map_err(|error| format!("failed to write {kind}: {error}"))?;
+    stdin
+        .flush()
+        .await
+        .map_err(|error| format!("failed to flush {kind}: {error}"))
+}
+
 /// Answers the sidecar's callbacks in order for as long as their server lives. Holds it weakly:
 /// a strong reference would keep the sidecar's stdin open, and with it the sidecar. Stops at
-/// the first answer it cannot write, after which the stdout reader fails the connection.
+/// the first answer it cannot write, and the stdout reader then fails the connection.
 pub(crate) fn answer_callbacks<S: CallbackServer>(
     server: Weak<S>,
     mut callbacks: mpsc::Receiver<JsonRpcCallbackRequest>,
@@ -248,9 +247,13 @@ async fn read_stdout_frames(
             .is_some_and(|sink| sink.handles(method))
     };
     let error = loop {
-        let frame = match read_stdout_frame(&mut stdout).await {
-            Ok(frame) => frame,
-            Err(error) => break error,
+        let frame = tokio::select! {
+            frame = read_stdout_frame(&mut stdout) => match frame {
+                Ok(frame) => frame,
+                Err(error) => break error,
+            },
+            // The sidecar may be waiting on a callback no one will answer.
+            () = callbacks.closed() => break CALLBACKS_UNANSWERED_ERROR.to_string(),
         };
         match classify_stdout_frame(&frame, handles) {
             StdoutFrame::Route(method, params) => {
@@ -548,8 +551,6 @@ mod tests {
             r#"
             id=$(head -c 65460 /dev/zero | tr '\0' x)
             printf '{"jsonrpc":"2.0","id":"%s","method":"h"}\n' "$id"
-            sleep 0.2
-            printf '%s\n' '{"jsonrpc":"2.0","id":"c2","method":"host.state.get"}'
             read -r line
         "#,
             Duration::ZERO,
