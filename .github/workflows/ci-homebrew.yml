@@ -33,11 +33,11 @@ jobs:
         run: |
           brew update
           brew tap-new --no-git "${CASK%/*}"
+          brew trust "${CASK%/*}"
           TAP_DIR="$(brew --repository "${CASK%/*}")"
           mkdir -p "$TAP_DIR/Casks"
           packaging/homebrew/render-cask.sh "$VERSION" \
-            "dmgs/planeai_${VERSION}_aarch64.dmg" \
-            "dmgs/planeai_${VERSION}_x64.dmg" > "$TAP_DIR/Casks/planeai.rb"
+            "dmgs/planeai_${VERSION}_aarch64.dmg" > "$TAP_DIR/Casks/planeai.rb"
           cat "$TAP_DIR/Casks/planeai.rb"
 
       - run: brew style "$CASK"
