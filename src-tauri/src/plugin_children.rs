@@ -171,7 +171,7 @@ mod tests {
         let child = children.spawn(&mut wedged_sidecar()).unwrap();
         let holder = child.clone().try_lock_owned().unwrap();
         let release = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(20));
+            std::thread::sleep(Duration::from_millis(5));
             drop(holder);
         });
 
@@ -196,8 +196,8 @@ mod tests {
         assert_eq!(children.kill_all(), 1);
     }
 
-    #[tokio::test]
-    async fn refuses_to_spawn_once_killed() {
+    #[test]
+    fn refuses_to_spawn_once_killed() {
         let children = PluginChildren::default();
         children.kill_all();
 

@@ -538,21 +538,13 @@ fn main() {
         .run(|app, event| match event {
             tauri::RunEvent::ExitRequested { code, api, .. } => {
                 // A restart cannot be prevented; RunEvent::Exit stops the plugins instead.
-                if code == Some(tauri::RESTART_EXIT_CODE) {
-                    return;
-                }
-                let runtime = app.state::<plugins::PluginRuntimeHandle>().0.clone();
-                if runtime.exit_is_permitted() {
-                    return;
-                }
-                api.prevent_exit();
-                if runtime.begin_shutdown() {
-                    let app_handle = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        runtime.shutdown_all().await;
-                        runtime.permit_exit();
-                        app_handle.exit(0);
-                    });
+                if code != Some(tauri::RESTART_EXIT_CODE)
+                    && app
+                        .state::<plugins::PluginRuntimeHandle>()
+                        .0
+                        .defer_exit_for_shutdown()
+                {
+                    api.prevent_exit();
                 }
             }
             tauri::RunEvent::Exit => {
