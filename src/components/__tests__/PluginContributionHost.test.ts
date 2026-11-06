@@ -881,10 +881,23 @@ describe("PluginContributionHost", () => {
   });
 
   it.each([
-    ["an Escape the sidebar leaves reaches the app's router", "Escape", false, true, ["Escape"]],
-    ["a key the sidebar handles stays with the sidebar", "j", true, true, []],
-    ["a frame without the keyboard replays nothing", "Escape", false, false, []],
-  ] as const)("%s", async (_name, key, handled, focused, replayed) => {
+    [
+      "an Escape the sidebar leaves reaches the app's router",
+      { key: "Escape" },
+      false,
+      true,
+      ["Escape"],
+    ],
+    [
+      "a chord pressed on a row reaches the app once",
+      { key: "Tab", ctrlKey: true },
+      false,
+      true,
+      ["ctrl+Tab"],
+    ],
+    ["a key the sidebar handles stays with the sidebar", { key: "j" }, true, true, []],
+    ["a frame without the keyboard replays nothing", { key: "Escape" }, false, false, []],
+  ] as const)("%s", async (_name, pressed, handled, focused, replayed) => {
     target = document.createElement("div");
     document.body.append(target);
     component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
@@ -900,13 +913,14 @@ describe("PluginContributionHost", () => {
     };
     host.addEventListener("plugin-sidebar-keydown", handleSidebarKeydown);
     const keys: string[] = [];
-    const recordKey = (event: KeyboardEvent) => keys.push(event.key);
+    const recordKey = (event: KeyboardEvent) =>
+      keys.push(`${event.ctrlKey ? "ctrl+" : ""}${event.key}`);
     window.addEventListener("keydown", recordKey);
 
     window.dispatchEvent(
       new MessageEvent("message", {
         source: frame.contentWindow,
-        data: { type: "sidebar-keydown", key },
+        data: { type: "sidebar-keydown", ...pressed },
       }),
     );
 
