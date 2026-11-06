@@ -2063,12 +2063,7 @@ async fn execute_host_task(
     if creates || method == "host.task.update" {
         let writer = KeyedTaskWriter::granted(plugin_id, capabilities, creates)
             .ok_or(CallbackError::NotGranted)?;
-        let write = if creates {
-            TaskWrite::Create(task_create_params(&params)?)
-        } else {
-            let (key, update) = task_update_params(&params)?;
-            TaskWrite::Update(key, update)
-        };
+        let write = TaskWrite::parse(creates, &params)?;
         return match writer {
             KeyedTaskWriter::BundledJira => {
                 let data_dir = data_dir.to_path_buf();
@@ -2493,6 +2488,16 @@ enum TaskWrite {
     Update(String, UpdateParams),
 }
 
+impl TaskWrite {
+    fn parse(creates: bool, params: &Value) -> Result<Self, CallbackError> {
+        if creates {
+            return Ok(Self::Create(task_create_params(params)?));
+        }
+        let (key, update) = task_update_params(params)?;
+        Ok(Self::Update(key, update))
+    }
+}
+
 fn write_bundled_jira_task(data_dir: &Path, write: TaskWrite) -> Result<Value, String> {
     let settings: Value =
         serde_json::from_reader(std::fs::File::open(data_dir.join("settings.json")).map_err(
@@ -2548,7 +2553,8 @@ fn is_synced_task_key(key: &str) -> bool {
 }
 
 /// A `tasks.sync` write, which reaches only tasks in its plugin's namespace. A create under a key
-/// that namespace already holds updates that task, so a reinstalled plugin resumes its tasks.
+/// that namespace already holds rewrites that task's fields, keeping its status unless given, so a
+/// reinstalled plugin resumes its tasks.
 fn write_owned_task(
     db_path: &Path,
     plugin_id: &str,
@@ -6134,13 +6140,7 @@ mod tests {
         method: &str,
         params: Value,
     ) -> Result<Value, CallbackError> {
-        let write = match method {
-            "host.task.create" => TaskWrite::Create(task_create_params(&params)?),
-            _ => {
-                let (key, update) = task_update_params(&params)?;
-                TaskWrite::Update(key, update)
-            }
-        };
+        let write = TaskWrite::parse(method == "host.task.create", &params)?;
         write_owned_task(db, plugin_id, write)
     }
 
@@ -6385,7 +6385,14 @@ mod tests {
             &db,
             "linear",
             "host.task.create",
-            serde_json::json!({ "key": "ENG-1", "title": "Linear issue", "status": "in_progress" }),
+            serde_json::json!({
+                "key": "ENG-1",
+                "title": "Linear issue",
+                "description": "Old",
+                "status": "in_progress",
+                "priority": 1,
+                "tags": ["old"],
+            }),
         )
         .unwrap();
 
@@ -6394,15 +6401,24 @@ mod tests {
             &db,
             "linear",
             "host.task.create",
-            serde_json::json!({ "key": "ENG-1", "title": "Renamed in Linear" }),
+            serde_json::json!({ "key": "ENG-1", "title": "Renamed in Linear", "priority": 2 }),
         )
         .unwrap();
 
         assert_eq!(
-            (&recreated["title"], &recreated["status"]),
+            (
+                &recreated["title"],
+                &recreated["description"],
+                &recreated["status"],
+                &recreated["priority"],
+                &recreated["tags"],
+            ),
             (
                 &Value::from("Renamed in Linear"),
-                &Value::from("in_progress")
+                &Value::from(""),
+                &Value::from("in_progress"),
+                &Value::from(2),
+                &serde_json::json!([]),
             )
         );
         assert_eq!(

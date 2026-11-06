@@ -152,7 +152,7 @@ Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may re
   `key` is required and must look like `PREFIX-N`: an uppercase letter, then uppercase letters or digits, a dash, and a number without leading zeros, as in `ENG-123`.
   `status` is `todo`, `in_progress`, `in_review`, or `done` (default `todo`), and `priority` an integer (default `0`).
   The task lives in a namespace of the calling plugin's own, which makes the plugin its owner.
-  A key one of the plugin's own tasks already holds updates that task with the fields given, so a reinstalled plugin resumes the tasks it created; a key any other task holds answers `-32602`.
+  A key one of the plugin's own tasks already holds rewrites that task as the create describes it, keeping its status unless `status` is given, so a reinstalled plugin resumes the tasks it created; a key any other task holds answers `-32602`.
   `host.task.update` takes `{ "key", "title"?, "description"?, "status"?, "priority"?, "tags"? }`, changes only the fields given, and succeeds only on a task the calling plugin owns; any other key, including one no task holds, answers not granted (`-32003`).
   Both return the task.
   Children go under a synced task with `host.tasks.createChild`, from any project, since the task belongs to none.
