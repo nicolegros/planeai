@@ -320,7 +320,8 @@
               document.body.scrollHeight,
               ...Array.from(document.body.children).map((child) => child.scrollHeight),
             );
-            if (height > 0) send({ type: "content-height", height });
+            // An empty section closes up, while a dialog keeps its size until its content arrives.
+            if (height > 0 || ${JSON.stringify(contribution.placement === "sidebar.section")}) send({ type: "content-height", height });
           });
         };
         // Events inside the frame never reach the host page, so a dialog that holds its position once the user acts needs this.
@@ -332,7 +333,7 @@
         addEventListener("pointerdown", reportInteraction, true);
         addEventListener("keydown", reportInteraction, true);
         // A content-sized sidebar frame never scrolls itself, so the host scrolls the sidebar to the focused row.
-        addEventListener("focusin", (event) => {
+        if (${JSON.stringify(contribution.placement === "sidebar.section")}) addEventListener("focusin", (event) => {
           const bounds = event.target?.getBoundingClientRect?.();
           if (bounds) send({ type: "reveal", top: bounds.top, bottom: bounds.bottom });
         });
@@ -692,8 +693,9 @@
           .then((value) => respond(message.requestId, true, value))
           .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "content-height" && contentSizedPlacements.includes(contribution.placement) && typeof message.height === "number" && Number.isFinite(message.height)) {
-        frame.style.height = lastContentHeight = `${Math.min(Math.max(Math.ceil(message.height), 1), 10_000)}px`;
-      } else if (message.type === "reveal" && contribution.placement === "sidebar.section" && typeof message.top === "number" && typeof message.bottom === "number" && Number.isFinite(message.top) && Number.isFinite(message.bottom)) {
+        const minimum = contribution.placement === "sidebar.section" ? 0 : 1;
+        frame.style.height = lastContentHeight = `${Math.min(Math.max(Math.ceil(message.height), minimum), 10_000)}px`;
+      } else if (message.type === "reveal" && contribution.placement === "sidebar.section" && root.activeElement === frame && typeof message.top === "number" && typeof message.bottom === "number" && Number.isFinite(message.top) && Number.isFinite(message.bottom)) {
         revealInScroller(frame, message.top, message.bottom);
       } else if (message.type === "content-width" && inSessionRow(contribution.placement) && typeof message.width === "number" && Number.isFinite(message.width)) {
         container?.setAttribute("data-plugin-indicator-visible", message.width > 0 ? "true" : "false");

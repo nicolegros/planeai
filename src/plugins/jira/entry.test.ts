@@ -526,6 +526,20 @@ describe("jiraSidebarSectionEntrypoint", () => {
     expect(stylesheet).toContain(".section-header:focus,.issue:focus { outline:none; }");
   });
 
+  it("labels the section header with its count and flips the chevron as it collapses", async () => {
+    const sidebar = mountSidebar();
+    await vi.waitFor(() => expect(sidebar.root.querySelector(".issue")).toBeTruthy());
+    const header = () => sidebar.root.querySelector<HTMLButtonElement>(".section-header")!;
+    const chevron = () => header().querySelector(".chevron path")?.getAttribute("d");
+
+    expect(header().textContent).toBe("Jira 1");
+    expect(chevron()).toBe("m6 9 6 6 6-6");
+    header().click();
+    expect(header().getAttribute("aria-expanded")).toBe("false");
+    expect(chevron()).toBe("m9 18 6-6-6-6");
+    expect(sidebar.root.querySelector(".issue")).toBeNull();
+  });
+
   it("unfocuses a focused button on Escape inside the shadow root, then closes on the next", async () => {
     const sidebar = mountSidebar();
     const dialog = await openAndLoad(sidebar);

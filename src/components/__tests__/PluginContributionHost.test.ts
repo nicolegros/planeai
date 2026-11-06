@@ -350,6 +350,32 @@ describe("PluginContributionHost", () => {
     expect(remounted.style.height).toBe("48px");
   });
 
+  it("closes up a local sidebar section whose content is empty", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    const report = (height: number) =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          data: { type: "content-height", height },
+        }),
+      );
+
+    report(48);
+    report(0);
+
+    expect(frame.style.height).toBe("0px");
+    expect(frame.srcdoc).toContain("if (height > 0 || true)");
+  });
+
   it("scrolls the sidebar to the row a local section focuses", async () => {
     target = document.createElement("div");
     target.style.overflowY = "auto";
@@ -377,6 +403,9 @@ describe("PluginContributionHost", () => {
         }),
       );
 
+    reveal(80, 110);
+    expect(scrollTop).toBe(0);
+    frame.focus();
     reveal(80, 110);
     expect(scrollTop).toBe(60);
     reveal(-70, -40);
