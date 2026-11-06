@@ -17,6 +17,7 @@ mod lsp;
 mod notify;
 mod output_observer;
 mod paths;
+mod plugin_children;
 mod plugin_packages;
 mod plugin_providers;
 mod plugin_remote;
@@ -534,12 +535,10 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+        .run(|app, event| match event {
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
+                // A restart cannot be prevented; RunEvent::Exit stops the plugins instead.
                 if code == Some(tauri::RESTART_EXIT_CODE) {
-                    tracing::warn!(
-                        "restart requested; plugin runtimes cannot be gracefully stopped"
-                    );
                     return;
                 }
                 let runtime = app.state::<plugins::PluginRuntimeHandle>().0.clone();
@@ -556,5 +555,11 @@ fn main() {
                     });
                 }
             }
+            tauri::RunEvent::Exit => {
+                app.state::<plugins::PluginRuntimeHandle>()
+                    .0
+                    .stop_all_before_process_exit();
+            }
+            _ => {}
         });
 }
