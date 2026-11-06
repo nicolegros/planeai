@@ -1,0 +1,113 @@
+/**
+ * Pointer drag: the press-and-move mechanics every drag in the app shares.
+ *
+ * HTML5 drag-and-drop cannot be used: Tauri's native drag-drop handler, which
+ * file drops from the OS need for real paths, swallows the webview's drag
+ * events. A drag kind names what it carries and how a viewport point maps to a
+ * target; this module turns a press into a drag past a small threshold, tracks
+ * the target under the pointer, and ends it on release, Escape, a cancelled
+ * pointer, a lost window focus or a new press of any kind. One press is live at
+ * a time across every kind.
+ */
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface PointerDrag<P, T> {
+  payload: P;
+  /** What is under the pointer, or null over nothing that takes this kind. */
+  target: T | null;
+  point: Point;
+  /** Where the press started. */
+  origin: Point;
+}
+
+export interface PointerDragKind<P, T> {
+  /** The drag of this kind in progress, once its press moved past the threshold. */
+  readonly current: PointerDrag<P, T> | null;
+  /** Track a press; `onDrop` runs if the drag is released over a target. */
+  press(payload: P, down: PointerEvent, onDrop: (payload: P, target: T) => void): void;
+}
+
+/** A press moves this far before it becomes a drag, so clicks still select. */
+const DRAG_THRESHOLD_PX = 4;
+
+interface ActiveDrag {
+  kind: object;
+  payload: unknown;
+  origin: Point;
+}
+
+let active = $state.raw<ActiveDrag | null>(null);
+let target = $state.raw<unknown>(null);
+let point = $state.raw<Point>({ x: 0, y: 0 });
+/** Ends the press in progress; a new press must never inherit a stale one. */
+let endActivePress: (() => void) | null = null;
+
+export function definePointerDrag<P, T>(options: {
+  hitTest: (x: number, y: number) => T | null;
+  /** Put on `<body>` while a drag of this kind lasts, for cursor and hover rules. */
+  bodyClass: string;
+}): PointerDragKind<P, T> {
+  const kind: PointerDragKind<P, T> = {
+    get current() {
+      if (active?.kind !== kind) return null;
+      return {
+        payload: active.payload as P,
+        target: target as T | null,
+        point,
+        origin: active.origin,
+      };
+    },
+    press(payload, down, onDrop) {
+      if (down.button !== 0) return;
+      endActivePress?.();
+      const origin = { x: down.clientX, y: down.clientY };
+
+      const move = (event: PointerEvent) => {
+        if (!active) {
+          if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) < DRAG_THRESHOLD_PX) {
+            return;
+          }
+          active = { kind, payload, origin };
+          document.body.classList.add(options.bodyClass);
+        }
+        point = { x: event.clientX, y: event.clientY };
+        target = options.hitTest(event.clientX, event.clientY);
+      };
+      const up = () => {
+        const drop = active ? (target as T | null) : null;
+        finish();
+        if (drop) onDrop(payload, drop);
+      };
+      const key = (event: KeyboardEvent) => {
+        if (event.key !== "Escape" || !active) return;
+        event.preventDefault();
+        event.stopPropagation();
+        finish();
+      };
+      const finish = () => {
+        endActivePress = null;
+        active = null;
+        target = null;
+        document.body.classList.remove(options.bodyClass);
+        window.removeEventListener("pointermove", move, true);
+        window.removeEventListener("pointerup", up, true);
+        window.removeEventListener("pointercancel", finish, true);
+        window.removeEventListener("keydown", key, true);
+        window.removeEventListener("blur", finish);
+      };
+      endActivePress = finish;
+
+      // Capture phase: a terminal under the pointer must not swallow the events.
+      window.addEventListener("pointermove", move, true);
+      window.addEventListener("pointerup", up, true);
+      window.addEventListener("pointercancel", finish, true);
+      window.addEventListener("keydown", key, true);
+      window.addEventListener("blur", finish);
+    },
+  };
+  return kind;
+}
