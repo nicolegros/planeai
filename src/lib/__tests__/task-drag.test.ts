@@ -136,11 +136,17 @@ describe("pressTaskRow", () => {
     layoutDom();
     press();
     pointer("pointermove", 50, 140);
-    expect(taskDrag.verdict).toEqual({ accepts: false, reason: "PLA-1 belongs to Alpha." });
+    expect(taskDrag.hoveredLaneVerdict).toEqual({
+      accepts: false,
+      reason: "PLA-1 belongs to Alpha.",
+    });
     pointer("pointermove", 300, 140);
-    expect([taskDrag.target, taskDrag.verdict]).toEqual([{ kind: "pane", paneId: "p2" }, null]);
+    expect([taskDrag.target, taskDrag.hoveredLaneVerdict]).toEqual([
+      { kind: "pane", paneId: "p2" },
+      null,
+    ]);
     pointer("pointermove", 90, 140);
-    expect([taskDrag.target, taskDrag.verdict]).toEqual([null, null]);
+    expect([taskDrag.target, taskDrag.hoveredLaneVerdict]).toEqual([null, null]);
   });
 
   it("drops the payload on the lane or pane under the pointer", () => {

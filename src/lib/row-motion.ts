@@ -7,6 +7,10 @@ export const reducedMotion = (): boolean =>
 
 const motionMs = () => (reducedMotion() ? 0 : 150);
 
+/** For a row's inline `transition` as it glides home; cubic-bezier(0.33, 1, 0.68, 1) is cubicOut. */
+export const rowGlide = (): string =>
+  reducedMotion() ? "" : "transform 150ms cubic-bezier(0.33, 1, 0.68, 1)";
+
 /** For `animate:flip` on a row. */
 export const rowFlip = { duration: motionMs, easing: cubicOut };
 

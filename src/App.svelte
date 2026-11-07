@@ -418,7 +418,7 @@
 
   // The cursor says no over a lane or pane that refuses the dragged task.
   $effect(() => {
-    const refused = taskDrag.verdict?.accepts === false || paneDrop?.verdict.accepts === false;
+    const refused = taskDrag.hoveredLaneVerdict?.accepts === false || paneDrop?.verdict.accepts === false;
     document.body.classList.toggle("task-drop-refused", refused);
     return () => document.body.classList.remove("task-drop-refused");
   });
@@ -431,7 +431,8 @@
       showToast(verdict.reason, "error");
       return;
     }
-    await typeIntoTerminal(pane.entry!, taskReferenceText(task, verdict.outcome.sessionTaskProjectId), "task reference");
+    if (!pane.entry) return;
+    await typeIntoTerminal(pane.entry, taskReferenceText(task, verdict.outcome.sessionTaskProjectId), "task reference");
   }
 
   function paneTabs(leaf: LeafNode): PaneTab[] {

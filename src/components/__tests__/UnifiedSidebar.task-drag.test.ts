@@ -550,7 +550,7 @@ describe("dragging a task row to a lane", () => {
     moveTo(500, 180);
     expect([row().style.transform, row().style.transition]).toEqual([
       "translateY(0)",
-      "transform 150ms ease-out",
+      "transform 150ms cubic-bezier(0.33, 1, 0.68, 1)",
     ]);
     release();
     expect([row().style.transform, row().className.includes("task-drag-lifted")]).toEqual([

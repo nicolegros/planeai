@@ -1,7 +1,7 @@
 /** Task drag: a sidebar task row dragged onto a `data-task-lane` section or a `data-pane-drop` pane. */
 import type { Attachment } from "svelte/attachments";
 import { definePointerDrag, type PointerDrag } from "./pointer-drag.svelte";
-import { reducedMotion } from "./row-motion";
+import { rowGlide } from "./row-motion";
 import type { Project, TaskItem } from "./types";
 import { normalizeTaskStatus, taskLane, type TaskLane } from "./sidebar-model";
 import {
@@ -54,7 +54,7 @@ export const taskDrag = {
     return current.point.x < listBounds.left || current.point.x > listBounds.right;
   },
   /** What dropping on the lane under the pointer would do; a pane is the app's to judge. */
-  get verdict(): DropVerdict<LaneOutcome> | null {
+  get hoveredLaneVerdict(): DropVerdict<LaneOutcome> | null {
     const target = drag.target;
     const payload = drag.payload;
     if (!payload || target?.kind !== "lane") return null;
@@ -158,7 +158,7 @@ function measure(node: HTMLElement, payload: TaskDragPayload): void {
 function place(node: HTMLElement, pointerY: number): void {
   if (!lift) return;
   if (taskDrag.outside) {
-    node.style.transition = reducedMotion() ? "" : "transform 150ms ease-out";
+    node.style.transition = rowGlide();
     node.style.transform = "translateY(0)";
     return;
   }
