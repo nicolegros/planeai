@@ -1,14 +1,9 @@
-/**
- * Task drag: a sidebar task row dragged onto a lane, to change its status, or onto a session pane,
- * to tell that agent about it. Targets are found by hit-testing marked elements:
- * `data-task-lane="<lane>"` sections (with `data-task-lane-project` when the lane belongs to one
- * project) and `data-pane-drop="<paneId>"` pane bodies. The sidebar's scroll container carries
- * `data-task-drag-list`: inside its width the row follows the pointer, outside it a ghost does.
- */
+/** Task drag: a sidebar task row dragged onto a `data-task-lane` section or a `data-pane-drop` pane. */
 import type { Attachment } from "svelte/attachments";
 import { definePointerDrag, type PointerDrag } from "./pointer-drag.svelte";
 import { reducedMotion } from "./row-motion";
-import { normalizeTaskStatus, taskLane, type SidebarTaskRow, type TaskLane } from "./sidebar-model";
+import type { Project, TaskItem } from "./types";
+import { normalizeTaskStatus, taskLane, type TaskLane } from "./sidebar-model";
 import {
   laneVerdict,
   type DropVerdict,
@@ -86,8 +81,7 @@ export function laneHover(
   return verdict.accepts && verdict.outcome.kind === "stay" ? null : verdict;
 }
 
-export function taskDragPayload(row: SidebarTaskRow, now: number): TaskDragPayload {
-  const { task, project } = row;
+export function taskDragPayload(task: TaskItem, project: Project, now: number): TaskDragPayload {
   return {
     projectId: project.id,
     projectName: project.name,

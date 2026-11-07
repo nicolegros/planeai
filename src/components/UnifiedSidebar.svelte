@@ -267,7 +267,7 @@
 
   // Dragging a task row: to a lane for a status change, or to a session pane for a reference.
   function pressRow(e: PointerEvent, row: SidebarRow) {
-    if (row.kind === "task") pressTaskRow(taskDragPayload(row, now), e, dropTask);
+    if (row.kind === "task") pressTaskRow(taskDragPayload(row.task, row.project, now), e, dropTask);
   }
 
   function dropTask(dragged: TaskDragPayload, target: TaskDropTarget) {
@@ -276,7 +276,7 @@
     const task = taskStore.findTask(dragged.repoPath, dragged.key);
     const project = projects.find((candidate) => candidate.id === dragged.projectId);
     if (!task || !project) return;
-    const verdict = laneVerdict(taskDragPayload({ kind: "task", task, project, linkedSession: undefined }, now), target);
+    const verdict = laneVerdict(taskDragPayload(task, project, now), target);
     if (!verdict.accepts) { showToast({ kind: "info", message: verdict.reason, autoDismissMs: 3000 }); return; }
     const { outcome } = verdict;
     if (outcome.kind === "status") moveTask(task, project, outcome.status);
@@ -289,15 +289,16 @@
   // While a task is dragged, its project shows every lane group, and the status layout every status section.
   function projectGroups(section: SidebarProjectSection): SidebarLaneGroup[] {
     if (taskDrag.payload?.projectId !== section.project.id) return section.groups;
-    return everyLane(section.groups, PROJECT_GROUP_LANES, (lane) => emptyGroup(`project-status:${section.project.id}:${lane}`, lane));
+    return everyLane(section.groups, PROJECT_GROUP_LANES, (group) => group.lane, (lane) => emptyGroup(`project-status:${section.project.id}:${lane}`, lane));
   }
   const classicSections = $derived.by((): SidebarSection[] => {
     if (!taskDrag.payload || groupBy !== "status") return sections;
-    const status = sections.filter((section): section is Extract<SidebarSection, { kind: "status" }> => section.kind === "status");
+    type StatusSection = Extract<SidebarSection, { kind: "status" }>;
+    const status = sections.filter((section): section is StatusSection => section.kind === "status");
+    const emptySection = (lane: TaskLane): StatusSection => ({ kind: "status", key: `status:${lane}`, group: emptyGroup(`status:${lane}`, lane), defaultCollapsed: true });
     return [
       ...sections.filter((section) => section.kind === "sessions"),
-      ...everyLane(status.map((section) => section.group), STATUS_SECTION_LANES, (lane) => emptyGroup(`status:${lane}`, lane))
-        .map((group) => status.find((section) => section.group === group) ?? { kind: "status" as const, key: group.key, group, defaultCollapsed: true }),
+      ...everyLane(status, STATUS_SECTION_LANES, (section) => section.group.lane, emptySection),
     ];
   });
 

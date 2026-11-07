@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hitTest, liftOffset, pressTaskRow, taskDrag, taskDragPayload } from "../task-drag.svelte";
-import type { SidebarTaskRow } from "../sidebar-model";
 import type { Project, TaskItem } from "../types";
 
 const rect = (left: number, top: number, width: number, height: number) =>
@@ -18,31 +17,26 @@ const project: Project = {
   path_missing: false,
 };
 
-function row(overrides: Partial<TaskItem> = {}): SidebarTaskRow {
+function task(overrides: Partial<TaskItem> = {}): TaskItem {
   return {
-    kind: "task",
-    project,
-    linkedSession: undefined,
-    task: {
-      key: "PLA-1",
-      title: "Fix login",
-      status: "in_progress",
-      description: "",
-      priority: 0,
-      blocked_by: [],
-      tags: [],
-      parent_key: null,
-      url: null,
-      base_branch: "main",
-      last_visited_at: null,
-      last_activity_at: null,
-      snoozed_until: null,
-      snoozed_at: null,
-      woke_at: null,
-      snooze_rev: 0,
-      created_at: "2026-11-01T09:00:00.000Z",
-      ...overrides,
-    },
+    key: "PLA-1",
+    title: "Fix login",
+    status: "in_progress",
+    description: "",
+    priority: 0,
+    blocked_by: [],
+    tags: [],
+    parent_key: null,
+    url: null,
+    base_branch: "main",
+    last_visited_at: null,
+    last_activity_at: null,
+    snoozed_until: null,
+    snoozed_at: null,
+    woke_at: null,
+    snooze_rev: 0,
+    created_at: "2026-11-01T09:00:00.000Z",
+    ...overrides,
   };
 }
 
@@ -91,7 +85,7 @@ describe("hitTest", () => {
 
 describe("taskDragPayload", () => {
   it("carries what verdicts and the reference text need, with the task's lane", () => {
-    expect(taskDragPayload(row(), NOW)).toEqual({
+    expect(taskDragPayload(task(), project, NOW)).toEqual({
       projectId: "alpha",
       projectName: "Alpha",
       repoPath: "/repos/alpha",
@@ -103,8 +97,11 @@ describe("taskDragPayload", () => {
   });
 
   it("puts a snoozed task in the snoozed lane while keeping its status", () => {
-    const snoozed = row({ snoozed_until: "2026-11-07T09:00:00.000Z", snoozed_at: "2026-11-06" });
-    expect(taskDragPayload(snoozed, NOW)).toMatchObject({ status: "in_progress", lane: "snoozed" });
+    const snoozed = task({ snoozed_until: "2026-11-07T09:00:00.000Z", snoozed_at: "2026-11-06" });
+    expect(taskDragPayload(snoozed, project, NOW)).toMatchObject({
+      status: "in_progress",
+      lane: "snoozed",
+    });
   });
 });
 
@@ -113,7 +110,7 @@ describe("pressTaskRow", () => {
     const drop = vi.fn();
     const down = new PointerEvent("pointerdown", { button: 0, clientX: x, clientY: y });
     Object.defineProperty(down, "target", { value: document.getElementById("shelf-row") });
-    pressTaskRow(taskDragPayload(row(), NOW), down, drop);
+    pressTaskRow(taskDragPayload(task(), project, NOW), down, drop);
     return drop;
   }
 

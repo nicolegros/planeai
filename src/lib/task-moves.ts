@@ -140,10 +140,7 @@ async function commitDone(id: string, keepIfFailed = false): Promise<void> {
   else void taskStore.refresh([move.repoPath]);
 }
 
-/**
- * Drops a pending Done. The hold hid backend changes meanwhile, so the task is re-read. A Done
- * that woke the task first puts its snooze back only when undone; a replacing move keeps it awake.
- */
+/** Drops a pending Done and re-reads the task its hold hid; only an undo puts back the snooze a wake-and-Done cleared. */
 function cancelDone(id: string, announce = true): boolean {
   const pending = takePendingDone(id);
   if (!pending) return false;
@@ -193,10 +190,7 @@ export async function changeTaskStatus(
   return true;
 }
 
-/**
- * Wakes a snoozed task and changes its status as one change, which Mod+Z reverts whole. A move to
- * Done waits out its undo window, with the wake. If only the move fails, the wake stays undoable.
- */
+/** Wakes a snoozed task and changes its status as one change, which Mod+Z reverts whole; a failed move leaves the wake undoable. */
 export async function wakeAndChangeTaskStatus(
   task: TaskItem,
   project: Project,
@@ -231,7 +225,7 @@ export async function wakeAndChangeTaskStatus(
     return true;
   }
   if (!(await apply(key, status, repoPath))) {
-    lastChange = { ...change, kind: "snooze" };
+    lastChange = { kind: "snooze", key, repoPath, projectId: project.id, before, after };
     return false;
   }
   lastChange = change;

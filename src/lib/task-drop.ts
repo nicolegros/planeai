@@ -1,7 +1,4 @@
-/**
- * Task drops: what dropping a dragged task on a lane or a session pane does. The verdicts are pure
- * so the sidebar can show the outcome while the pointer hovers, and the drop handlers can trust it.
- */
+/** Task drops: pure verdicts on dropping a dragged task on a lane or a session pane, shown while it hovers and trusted on release. */
 import { LANES, type TaskLane, type TaskStatus } from "./sidebar-model";
 import { DONE_CANNOT_SNOOZE } from "./task-snooze";
 import type { TabType } from "./layout-tree";
@@ -87,10 +84,7 @@ export interface PaneFacts {
 /** The reference goes to the session in front; the project it works on shapes the text. */
 export type PaneOutcome = { kind: "reference"; sessionTaskProjectId: string };
 
-/**
- * Whether a session of `provider` runs with PlaneAI's MCP tools, as the backend decides at launch:
- * the server is on and the provider has arguments for it.
- */
+/** Whether a session of `provider` runs with PlaneAI's MCP tools, as the backend decides at launch: the server is on and the provider has arguments for it. */
 export function providerConnectsMcp(
   config: {
     mcp_enabled?: boolean | null;

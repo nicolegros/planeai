@@ -1,7 +1,4 @@
-/**
- * How sidebar rows move: a moved row glides to its new list, and a row without a counterpart fades
- * and slides in or out. Nothing moves when the user asked for reduced motion.
- */
+/** How sidebar rows move: a moved row glides to its new list, a row without a counterpart fades and slides in or out, and nothing moves under reduced motion. */
 import { cubicOut } from "svelte/easing";
 import { crossfade } from "svelte/transition";
 

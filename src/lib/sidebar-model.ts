@@ -95,16 +95,14 @@ export const STATUS_SECTION_LANES: readonly TaskLane[] = [
   "done",
 ];
 
-/**
- * `present` with a section made for every lane of `order` it lacks, in that order. The sidebar
- * shows no section for an empty lane, but a dragged task needs each lane it could land in.
- */
-export function everyLane<L extends TaskLane, S extends { lane: L }>(
+/** `present` with a section made for every lane of `order` it lacks, in that order, so a dragged task finds each lane it could land in. */
+export function everyLane<L extends TaskLane, S>(
   present: S[],
   order: readonly L[],
+  laneOf: (section: S) => L,
   make: (lane: L) => S,
 ): S[] {
-  return order.map((lane) => present.find((section) => section.lane === lane) ?? make(lane));
+  return order.map((lane) => present.find((section) => laneOf(section) === lane) ?? make(lane));
 }
 
 /** Where a task sits in the sidebar at `now`. */

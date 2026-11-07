@@ -96,12 +96,12 @@
   // A dragged task can land in an empty lane, so every shelf shows while the drag lasts.
   const shelvesShown = $derived(
     taskDrag.payload
-      ? everyLane(shelves, Object.keys(SHELVES) as ShelfLane[], (lane): SidebarShelfSection => ({ kind: "shelf", key: `shelf:${lane}`, lane, rows: [], defaultCollapsed: true }))
+      ? everyLane(shelves, Object.keys(SHELVES) as ShelfLane[], (shelf) => shelf.lane, (lane): SidebarShelfSection => ({ kind: "shelf", key: `shelf:${lane}`, lane, rows: [], defaultCollapsed: true }))
       : shelves,
   );
   const topDrop = $derived(laneHover("in_review", null));
-  // Session rows never lift: an id no drag carries.
-  const rowId = (row: SidebarRow) => row.kind === "task" ? { projectId: row.project.id, key: row.task.key } : { projectId: "", key: "" };
+  // Session rows do not drag, so only task rows lift.
+  const lift = (row: SidebarRow) => row.kind === "task" && liftWhileDragged({ projectId: row.project.id, key: row.task.key });
   const agentStates = $derived(orchestrator.getAgentStates());
   const unreadSessions = $derived(orchestrator.getUnreadSessions());
 
@@ -197,7 +197,7 @@
     {@const labelId = `sidebar-card-${sidebarRowNavKey(row)}`}
     <!-- The row button lies behind its content so a meta slot can be a button of its own; content clicks bubble here, the slot's do not. -->
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="group relative" {@attach liftWhileDragged(rowId(row))} onclick={() => onSelectRow(row)} onpointerdown={(e) => onRowPress(e, row)} oncontextmenu={(e) => onRowContextMenu(e, row)}>
+    <div class="group relative" {@attach lift(row)} onclick={() => onSelectRow(row)} onpointerdown={(e) => onRowPress(e, row)} oncontextmenu={(e) => onRowContextMenu(e, row)}>
       <button
         data-nav-index={navIdx}
         data-snooze-anchor={row.kind === "task" ? snoozeAnchor(row.project.id, row.task.key) : undefined}
@@ -248,7 +248,7 @@
   {@const selected = isSelected(navIdx)}
   {@const active = isActive(row)}
   {@const receded = (shelf === "done" || isQuiet(activity)) && !active && !selected}
-  <div class="group relative" {@attach liftWhileDragged(rowId(row))}>
+  <div class="group relative" {@attach lift(row)}>
     <button
       data-nav-index={navIdx}
       data-snooze-anchor={row.kind === "task" ? snoozeAnchor(row.project.id, row.task.key) : undefined}
