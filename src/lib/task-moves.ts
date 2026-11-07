@@ -63,18 +63,21 @@ let lastChange: TaskChange | null = null;
 
 const doneToastId = (id: string) => `task-done:${id}`;
 
-const markedDoneListeners = new Set<(task: TaskRef) => void>();
+/** A UI Done shown on a task, or one undone in its undo window from its toast or Mod+Z. */
+export type DoneChange = { kind: "done" | "undone"; key: string; repoPath: string };
 
-/** Hears each task the user marks Done in the UI, as soon as it shows as Done. */
-export function onTaskMarkedDone(listener: (task: TaskRef) => void): () => void {
-  markedDoneListeners.add(listener);
+const doneChangeListeners = new Set<(change: DoneChange) => void>();
+
+/** Hears each task the user marks Done in the UI as soon as it shows, and each undo of a pending one. */
+export function onTaskDoneChange(listener: (change: DoneChange) => void): () => void {
+  doneChangeListeners.add(listener);
   return () => {
-    markedDoneListeners.delete(listener);
+    doneChangeListeners.delete(listener);
   };
 }
 
-function notifyMarkedDone(key: string, repoPath: string): void {
-  for (const listener of markedDoneListeners) listener({ key, repoPath });
+function notifyDoneChange(kind: DoneChange["kind"], key: string, repoPath: string): void {
+  for (const listener of doneChangeListeners) listener({ kind, key, repoPath });
 }
 
 function statusLabel(status: string): string {
@@ -130,7 +133,7 @@ function startPendingDone(move: StatusChange, onMoved: () => void): void {
       onExpire: () => commitDone(id),
     },
   });
-  notifyMarkedDone(move.key, move.repoPath);
+  notifyDoneChange("done", move.key, move.repoPath);
 }
 
 function takePendingDone(id: string): PendingDone | undefined {
@@ -168,7 +171,10 @@ function cancelDone(id: string, announce = true): boolean {
   if (announce && move.kind === "wake_status") {
     void restoreSnooze(move).then(() => taskStore.refresh([move.repoPath]));
   } else void taskStore.refresh([move.repoPath]);
-  if (announce) showMovedBack(move);
+  if (announce) {
+    showMovedBack(move);
+    notifyDoneChange("undone", move.key, move.repoPath);
+  }
   return true;
 }
 
@@ -279,7 +285,7 @@ export async function completeTask(
 export async function applyDoneNow(key: string, repoPath: string): Promise<void> {
   cancelDone(taskStore.taskRef(repoPath, key), false);
   await taskStore.moveTask(key, "done", repoPath);
-  notifyMarkedDone(key, repoPath);
+  notifyDoneChange("done", key, repoPath);
 }
 
 /** The task still shows the change, so reverting it undoes what the user did. */

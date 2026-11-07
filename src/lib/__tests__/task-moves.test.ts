@@ -303,21 +303,26 @@ describe("task moves", () => {
     expect(moves.canUndoTaskChange()).toBe(false);
   });
 
-  it("tells listeners which task the user marked Done, until they unsubscribe", async () => {
+  it("tells listeners each Done the user makes and each one they undo, until they unsubscribe", async () => {
     Object.assign(statuses, { "PLA-3": "in_review" });
     await taskStore.loadTasks(["/repo"]);
-    const heard: { key: string; repoPath: string }[] = [];
-    const unsubscribe = moves.onTaskMarkedDone((task) => heard.push(task));
+    const heard: { kind: string; key: string; repoPath: string }[] = [];
+    const unsubscribe = moves.onTaskDoneChange((change) => heard.push(change));
 
     await moves.changeTaskStatus("PLA-2", "in_review", "/repo", onMoved);
     await moves.changeTaskStatus("PLA-1", "done", "/repo", onMoved);
+    await moves.undoLastTaskChange(onMoved);
+    await moves.changeTaskStatus("PLA-1", "done", "/repo", onMoved);
+    await moves.changeTaskStatus("PLA-1", "in_review", "/repo", onMoved);
     await moves.applyDoneNow("PLA-2", "/repo");
     unsubscribe();
     await moves.applyDoneNow("PLA-3", "/repo");
 
     expect(heard).toEqual([
-      { key: "PLA-1", repoPath: "/repo" },
-      { key: "PLA-2", repoPath: "/repo" },
+      { kind: "done", key: "PLA-1", repoPath: "/repo" },
+      { kind: "undone", key: "PLA-1", repoPath: "/repo" },
+      { kind: "done", key: "PLA-1", repoPath: "/repo" },
+      { kind: "done", key: "PLA-2", repoPath: "/repo" },
     ]);
   });
 

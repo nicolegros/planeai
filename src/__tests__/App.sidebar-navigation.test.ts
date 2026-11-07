@@ -139,6 +139,13 @@ function markDoneFromCard(title: string): void {
   flushSync();
 }
 
+function clickToastUndo(): void {
+  [...document.querySelectorAll<HTMLButtonElement>("[data-toast-host] button")]
+    .find((button) => button.textContent === "Undo")
+    ?.click();
+  flushSync();
+}
+
 function releaseModifier(): void {
   window.dispatchEvent(new KeyboardEvent("keyup", { key: modifierKey, bubbles: true }));
   flushSync();
@@ -209,7 +216,7 @@ describe("App sidebar navigation in the Cards layout", () => {
   });
 
   describe("marking a task Done", () => {
-    // Undoes the pending Done, so the next test starts from the same sidebar.
+    // Undoes any pending Done, so the next test starts from the same sidebar.
     afterEach(async () => {
       chord("z");
       await settle();
@@ -222,6 +229,41 @@ describe("App sidebar navigation in the Cards layout", () => {
       await settle();
 
       expect([viewed, getActiveSessionId()]).toEqual(["progress-1", "scratch"]);
+    });
+
+    it("returns to the task it left when Mod+Z undoes its Done", async () => {
+      chord("3");
+      completeTaskChord();
+      await settle();
+      const left = getActiveSessionId();
+      chord("z");
+      await settle();
+
+      expect([left, getActiveSessionId()]).toEqual(["scratch", "progress-1"]);
+    });
+
+    it("returns to the task it left when the toast's Undo is clicked", async () => {
+      chord("3");
+      completeTaskChord();
+      await settle();
+      const left = getActiveSessionId();
+      clickToastUndo();
+      await settle();
+
+      expect([left, getActiveSessionId()]).toEqual(["scratch", "progress-1"]);
+    });
+
+    it("stays put when Mod+Z undoes the Done of a task it did not leave", async () => {
+      chord("1");
+      markDoneFromCard("Title R-1");
+      await settle();
+      chord("z");
+      await settle();
+
+      expect([
+        getActiveSessionId(),
+        document.body.textContent?.includes("R-1 moved back to Needs review"),
+      ]).toEqual(["scratch", true]);
     });
 
     it("stays on the viewed task when another task is marked Done", async () => {

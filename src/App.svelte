@@ -16,7 +16,7 @@
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { sidebarNavigationOrder } from "./lib/sidebar-model";
-  import { applyDoneNow, applyInterruptedDone, canUndoTaskChange, commitPendingDone, completeTask, onTaskMarkedDone, undoLastTaskChange } from "./lib/task-moves";
+  import { applyDoneNow, applyInterruptedDone, canUndoTaskChange, commitPendingDone, completeTask, onTaskDoneChange, undoLastTaskChange, type DoneChange } from "./lib/task-moves";
   import { closeCustomSnooze, closeSnoozeMenu, getCustomSnooze, getSnoozeMenu, snoozeCustom, snoozeMenuItems, snoozeOrWake } from "./lib/snooze-picker.svelte";
   import SnoozeCustomDialog from "./components/SnoozeCustomDialog.svelte";
   import ChoiceDialog from "./components/ChoiceDialog.svelte";
@@ -916,13 +916,24 @@
     routeNavTarget(target);
   }
 
-  /** Marking the viewed task Done moves on to the Mod+1 row, as the user is finished with it. */
-  function leaveTaskMarkedDone(task: { key: string; repoPath: string }): void {
-    const project = projects.find((candidate) => candidate.path === task.repoPath);
+  /** Tasks a Done moved the user off, so only an undo of that Done brings them back. */
+  const leftDoneTaskIds = new Set<string>();
+
+  /** Marking the viewed task Done moves on to the Mod+1 row, as the user is finished with it; undoing it comes back. */
+  function followTaskDoneChange(change: DoneChange): void {
+    const project = projects.find((candidate) => candidate.path === change.repoPath);
     if (!project) return;
-    const doneId = toTaskWorkspaceId(project.id, task.key);
-    if (doneId !== viewedTaskId) return;
-    const next = getVisibleNavigationOrder().find((id) => id !== doneId);
+    const id = toTaskWorkspaceId(project.id, change.key);
+    if (change.kind === "undone") {
+      if (leftDoneTaskIds.delete(id)) routeNavTarget(id);
+      return;
+    }
+    if (id !== viewedTaskId) {
+      leftDoneTaskIds.delete(id);
+      return;
+    }
+    leftDoneTaskIds.add(id);
+    const next = getVisibleNavigationOrder().find((candidate) => candidate !== id);
     if (next) routeNavTarget(next);
   }
 
@@ -987,7 +998,7 @@
     const cleanupTaskListener = taskStore.startTaskEventListener(() => projectStore.getProjects().map((p) => p.path));
     const cleanupTaskActivity = taskStore.startTaskActivityListener(isViewingTask);
     const stopSnoozeClock = startSnoozeClock();
-    const stopLeavingDoneTasks = onTaskMarkedDone(leaveTaskMarkedDone);
+    const stopFollowingDoneTasks = onTaskDoneChange(followTaskDoneChange);
     const cleanupLeaveWindow = appWindow.onBlurred(returnVisit.left);
     const cleanupReturnToWindow = appWindow.onFocused(returnVisit.returned);
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
@@ -1192,7 +1203,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); unlistenFileDrop.then((fn) => fn()); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupProjectFocus(); cleanupTaskListener(); cleanupTaskActivity(); stopSnoozeClock(); stopLeavingDoneTasks(); cleanupLeaveWindow(); cleanupReturnToWindow(); unlistenSettings.then((fn) => fn()); unlistenAppError.then((fn) => fn()); unlistenTabEnded.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { pluginListenersDisposed = true; window.removeEventListener("keydown", onPluginShortcut, true); unlistenFileDrop.then((fn) => fn()); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupProjectFocus(); cleanupTaskListener(); cleanupTaskActivity(); stopSnoozeClock(); stopFollowingDoneTasks(); cleanupLeaveWindow(); cleanupReturnToWindow(); unlistenSettings.then((fn) => fn()); unlistenAppError.then((fn) => fn()); unlistenTabEnded.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
