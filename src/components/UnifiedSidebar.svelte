@@ -293,7 +293,7 @@
   });
 
   const laneClass = (verdict: ReturnType<typeof laneHover>) =>
-    verdict === null ? "" : verdict.accepts ? "rounded-lg bg-accent-bg ring-1 ring-inset ring-accent/40" : "rounded-lg ring-1 ring-inset ring-status-exited/40";
+    verdict === null ? "" : verdict.accepts ? "task-lane-hovered rounded-lg bg-accent-bg ring-1 ring-inset ring-accent/40" : "task-lane-hovered rounded-lg ring-1 ring-inset ring-status-exited/40";
   // Rows settle into their new order after a move; a moved row glides to its new group, and a row
   // without a counterpart fades and slides in or out.
   const motionMs = () => (window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 150);

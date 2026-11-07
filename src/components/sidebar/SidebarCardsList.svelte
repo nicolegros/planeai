@@ -103,7 +103,7 @@
   // Session rows never lift: an id no drag carries.
   const rowId = (row: SidebarRow) => row.kind === "task" ? { projectId: row.project.id, key: row.task.key } : { projectId: "", key: "" };
   const laneClass = (verdict: ReturnType<typeof laneHover>) =>
-    verdict === null ? "" : verdict.accepts ? "rounded-md bg-accent-bg ring-1 ring-inset ring-accent/40" : "rounded-md ring-1 ring-inset ring-status-exited/40";
+    verdict === null ? "" : verdict.accepts ? "task-lane-hovered rounded-md bg-accent-bg ring-1 ring-inset ring-accent/40" : "task-lane-hovered rounded-md ring-1 ring-inset ring-status-exited/40";
   const agentStates = $derived(orchestrator.getAgentStates());
   const unreadSessions = $derived(orchestrator.getUnreadSessions());
 
