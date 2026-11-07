@@ -8,6 +8,7 @@ import type { StoredSnooze, TaskItem, TaskSnooze } from "./types";
 type SnoozeFields = Pick<TaskItem, "status" | "snoozed_until" | "woke_at">;
 type WokeFields = SnoozeFields & Pick<TaskItem, "snoozed_at" | "last_visited_at">;
 
+export const DONE_CANNOT_SNOOZE = "Done tasks cannot be snoozed.";
 export const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;

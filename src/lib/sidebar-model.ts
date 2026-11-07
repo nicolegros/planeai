@@ -80,10 +80,33 @@ export const LANES: Record<TaskLane, Lane> = {
 };
 
 /** Classic group order: per project the snoozed group follows every status group; across projects it precedes Done. */
-const PROJECT_GROUP_LANES: TaskLane[] = ["in_progress", "in_review", "todo", "done", "snoozed"];
-const STATUS_SECTION_LANES: TaskLane[] = ["in_progress", "in_review", "todo", "snoozed", "done"];
+export const PROJECT_GROUP_LANES: readonly TaskLane[] = [
+  "in_progress",
+  "in_review",
+  "todo",
+  "done",
+  "snoozed",
+];
+export const STATUS_SECTION_LANES: readonly TaskLane[] = [
+  "in_progress",
+  "in_review",
+  "todo",
+  "snoozed",
+  "done",
+];
 
-function taskLane(task: TaskItem, now: number): TaskLane {
+/** `present` with a section made for every lane of `order` it lacks, in that order, so a dragged task finds each lane it could land in. */
+export function everyLane<L extends TaskLane, S>(
+  present: S[],
+  order: readonly L[],
+  laneOf: (section: S) => L,
+  make: (lane: L) => S,
+): S[] {
+  return order.map((lane) => present.find((section) => laneOf(section) === lane) ?? make(lane));
+}
+
+/** Where a task sits in the sidebar at `now`. */
+export function taskLane(task: TaskItem, now: number): TaskLane {
   return isTaskSnoozed(task, now) ? "snoozed" : normalizeTaskStatus(task.status);
 }
 
@@ -184,7 +207,7 @@ export interface SidebarModelInput {
   now: number;
 }
 
-function normalizeTaskStatus(status: string): TaskStatus {
+export function normalizeTaskStatus(status: string): TaskStatus {
   return (TASK_STATUSES as readonly string[]).includes(status) ? (status as TaskStatus) : "todo";
 }
 
@@ -216,7 +239,7 @@ function rowsInLane(
 
 function groupRows(
   rows: SidebarTaskRow[],
-  lanes: TaskLane[],
+  lanes: readonly TaskLane[],
   projectOrder: Map<string, number>,
   hideDoneTasks: boolean,
   now: number,

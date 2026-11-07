@@ -389,11 +389,56 @@
   transition: inset 80ms ease-out;
 }
 
-/* While a tab is dragged, nothing under the pointer reacts or gets selected. */
+/* While a tab or a task is dragged, nothing under the pointer reacts or gets selected. */
 body.tab-dragging,
-body.tab-dragging * {
+body.tab-dragging *,
+body.task-dragging,
+body.task-dragging * {
   cursor: grabbing !important;
   user-select: none;
+}
+
+/* A dragged task over a lane or pane that refuses it. */
+body.task-drop-refused,
+body.task-drop-refused * {
+  cursor: not-allowed !important;
+}
+
+/* Rows neither hover nor catch the pointer while a task is dragged: the lane under it is the target. */
+body.task-dragging [data-task-drag-list] li {
+  pointer-events: none;
+}
+
+/* The dragged row, lifted above its siblings while it follows the pointer. */
+.task-drag-lifted {
+  @apply relative z-10 rounded-md shadow-lg;
+  background-color: color-mix(in oklab, var(--color-t1) 9%, var(--color-sidebar));
+  /* See-through so the lane header and drop badge under it stay readable. */
+  opacity: 0.55;
+  will-change: transform;
+}
+
+/* The lane a dragged task hovers: tinted when it takes the task, outlined in the exited color when it refuses. */
+[data-lane-hover] {
+  @apply ring-1 ring-inset;
+}
+[data-lane-hover="accepts"] {
+  @apply bg-accent-bg ring-accent/40;
+}
+[data-lane-hover="refuses"] {
+  @apply ring-status-exited/40;
+}
+
+/* The hovered lane's header draws over the see-through lifted row, so its label and drop badge stay legible. */
+[data-lane-hover] [data-lane-header] {
+  position: relative;
+  z-index: 20;
+}
+
+/* The pane in front refuses the dragged task (a shell, a chat, an agent without MCP). */
+.pane-drop-preview.pane-drop-refused {
+  background: color-mix(in oklab, var(--color-status-exited) 8%, transparent);
+  border-color: var(--color-status-exited);
 }
 
 .pane-drop-preview[data-zone="left"] {

@@ -8,7 +8,12 @@
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard, activatesItselfOnEnter, focusedSidebarControl } from "../lib/sidebar-nav.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
-  import { LANES, navKey, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, taskHeaderNavKeys, type SidebarNavItem, type SidebarRow, type SidebarSessionRow, type SidebarTaskRow } from "../lib/sidebar-model";
+  import { everyLane, LANES, navKey, PROJECT_GROUP_LANES, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, STATUS_SECTION_LANES, taskHeaderNavKeys, type SidebarLaneGroup, type SidebarNavItem, type SidebarProjectSection, type SidebarRow, type SidebarSection, type SidebarSessionRow, type SidebarTaskRow, type TaskLane } from "../lib/sidebar-model";
+  import { flip } from "svelte/animate";
+  import { receiveRow, rowFlip, sendRow } from "../lib/row-motion";
+  import { laneHover, liftWhileDragged, pressTaskRow, taskDrag, taskDragPayload } from "../lib/task-drag.svelte";
+  import { dropState, laneVerdict, type TaskDragPayload, type TaskDropTarget } from "../lib/task-drop";
+  import LaneDropBadge from "./sidebar/LaneDropBadge.svelte";
   import { rowActivity, rowSession, WOKE_TITLE, type RowAction, type RowActivity } from "../lib/sidebar-cards";
   import { getSidebarModel, isCollapsed, isOpenRow, setCollapsed, shownPages, showMore } from "../lib/sidebar-model-store.svelte";
   import { sidebarViewMenuItems } from "../lib/sidebar-view-menu";
@@ -28,7 +33,7 @@
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
-  import { changeTaskStatus, wakeTask } from "../lib/task-moves";
+  import { changeTaskStatus, wakeAndChangeTaskStatus, wakeTask } from "../lib/task-moves";
   import { getLaneNow } from "../lib/snooze-clock.svelte";
   import SnoozeCountdown from "./sidebar/SnoozeCountdown.svelte";
   import { snoozeAnchor, snoozeMenuEntry, snoozeOrWake } from "../lib/snooze-picker.svelte";
@@ -51,6 +56,8 @@
     onEditTask: (task: TaskItem, project: Project) => void;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectTask?: (task: TaskItem, repoPath: string) => void;
+    /** A task row dropped on a session pane, to tell that agent about it. */
+    onReferenceTask?: (task: TaskDragPayload, paneId: string) => void;
     onCreateTask?: () => void;
     onSessionsChanged?: () => void;
     onToggleDiff?: () => void;
@@ -66,7 +73,7 @@
     onOpenPluginSessionPanel?: (sessionId: string, pluginId: string, contributionId: string) => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onCreateTask, onSessionsChanged, onToggleDiff, pluginContributions = [], sessionIndicatorContributions = [], sessionMetaContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose, onOpenPluginSessionPanel }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onEditTask, onPickTask, onSelectTask = () => {}, onReferenceTask, onCreateTask, onSessionsChanged, onToggleDiff, pluginContributions = [], sessionIndicatorContributions = [], sessionMetaContributions = [], pluginSessionActions = [], onPluginSessionAction, onPluginNavigate, onPluginClose, onOpenPluginSessionPanel }: Props = $props();
   let failedSidebarContributions = $state<Set<string>>(new Set());
 
   function pluginContributionKey(item: PluginSlot): string {
@@ -233,10 +240,10 @@
     const session = rowSession(row);
     if (action === "review" && session) { onSelectSession(session.id); onToggleDiff?.(); }
     else if (action === "restart" && session) onRestartSession(session);
-    else if (action === "done" && row.kind === "task") moveTask(row, "done");
+    else if (action === "done" && row.kind === "task") moveTask(row.task, row.project, "done");
     else if (action === "archive" && row.kind === "session") fadeOutThenAct(row.session.id, () => onArchiveSession(row.session));
     else if (action === "start" && row.kind === "task") onPickTask(row.task, row.project.path);
-    else if (action === "reopen" && row.kind === "task") moveTask(row, "todo");
+    else if (action === "reopen" && row.kind === "task") moveTask(row.task, row.project, "todo");
     else if (action === "wake" && row.kind === "task") void wakeTask(row.task, row.project);
     else if (action === "seen" && row.kind === "task") void taskStore.markTaskVisited(row.project.id, row.task.key).catch(reportUnreadFailure);
   }
@@ -251,13 +258,49 @@
     }, 200);
   }
 
-  async function moveTask(row: SidebarTaskRow, status: string, followSelection = false) {
-    const { task, project } = row;
+  async function moveTask(task: TaskItem, project: Project, status: string, followSelection = false) {
     const selectedBefore = getSelectedIndex();
     if (!(await changeTaskStatus(task.key, status, project.path, () => onSessionsChanged?.()))) return;
     // Only follow when the user has not moved the selection while the move was in flight.
     if (followSelection && getSelectedIndex() === selectedBefore) selectTaskOrItsGroup(project.id, task.key);
   }
+
+  // Dragging a task row: to a lane for a status change, or to a session pane for a reference.
+  function pressRow(e: PointerEvent, row: SidebarRow) {
+    if (row.kind === "task") pressTaskRow(taskDragPayload(row.task, row.project, now), e, dropTask);
+  }
+
+  function dropTask(dragged: TaskDragPayload, target: TaskDropTarget) {
+    if (target.kind === "pane") { onReferenceTask?.(dragged, target.paneId); return; }
+    // The task as the store has it now decides: the payload is a snapshot from the press.
+    const task = taskStore.findTask(dragged.repoPath, dragged.key);
+    const project = projects.find((candidate) => candidate.id === dragged.projectId);
+    if (!task || !project) return;
+    const verdict = laneVerdict(taskDragPayload(task, project, now), target);
+    if (!verdict.accepts) { showToast({ kind: "info", message: verdict.reason, autoDismissMs: 3000 }); return; }
+    const { outcome } = verdict;
+    if (outcome.kind === "status") moveTask(task, project, outcome.status);
+    else if (outcome.kind === "wake") void wakeTask(task, project);
+    else if (outcome.kind === "wake_status") void wakeAndChangeTaskStatus(task, project, outcome.status, () => onSessionsChanged?.());
+    else if (outcome.kind === "snooze") snoozeOrWake({ task, project });
+  }
+
+  const emptyGroup = (key: string, lane: TaskLane): SidebarLaneGroup => ({ key, lane, rows: [], defaultCollapsed: true });
+  // While a task is dragged, its project shows every lane group, and the status layout every status section.
+  function projectGroups(section: SidebarProjectSection): SidebarLaneGroup[] {
+    if (taskDrag.payload?.projectId !== section.project.id) return section.groups;
+    return everyLane(section.groups, PROJECT_GROUP_LANES, (group) => group.lane, (lane) => emptyGroup(`project-status:${section.project.id}:${lane}`, lane));
+  }
+  const classicSections = $derived.by((): SidebarSection[] => {
+    if (!taskDrag.payload || groupBy !== "status") return sections;
+    type StatusSection = Extract<SidebarSection, { kind: "status" }>;
+    const status = sections.filter((section): section is StatusSection => section.kind === "status");
+    const emptySection = (lane: TaskLane): StatusSection => ({ kind: "status", key: `status:${lane}`, group: emptyGroup(`status:${lane}`, lane), defaultCollapsed: true });
+    return [
+      ...sections.filter((section) => section.kind === "sessions"),
+      ...everyLane(status, STATUS_SECTION_LANES, (section) => section.group.lane, emptySection),
+    ];
+  });
 
   /** Read and unread only mean something once an agent has done something on the task. */
   function unreadToggle(row: SidebarTaskRow): { label: string; onSelect: () => void } | null {
@@ -479,7 +522,7 @@
       if (action.type === "select") handleTaskClick(task, project);
       else if (action.type === "start_session") onPickTask(task, project.path);
       else if (action.type === "edit") onEditTask(task, project);
-      else if (action.type === "status") moveTask(current.row, action.status, true);
+      else if (action.type === "status") moveTask(task, project, action.status, true);
       else if (action.type === "review") { if (linked) { onSelectSession(linked.id); onToggleDiff?.(); } }
       else if (action.type === "archive") { if (linked) fadeOutThenAct(linked.id, () => onArchiveSession(linked)); }
       else if (action.type === "delete") { if (linked) onDeleteSession(linked); }
@@ -509,9 +552,10 @@
   {#if showProjectLabels}<span class="shrink-0 max-w-[40%] truncate text-[10px] text-t3" title={project.path}>{project.name}</span>{/if}
 {/snippet}
 
-{#snippet sectionHeader(navIdx: number, collapsed: boolean, onToggle: () => void, label: string, count: number, extras: { dotClass?: string | null; title?: string; oncontextmenu?: (e: MouseEvent) => void; autoDispatch?: boolean; leadingSpace?: boolean })}
+{#snippet sectionHeader(navIdx: number, collapsed: boolean, onToggle: () => void, label: string, count: number, extras: { dotClass?: string | null; title?: string; oncontextmenu?: (e: MouseEvent) => void; autoDispatch?: boolean; leadingSpace?: boolean; lane?: boolean; drop?: ReturnType<typeof laneHover> })}
   <button
     data-nav-index={navIdx}
+    data-lane-header={extras.lane ? "" : undefined}
     class="w-full {extras.leadingSpace ? 'pl-6 pr-2' : 'px-2'} mb-1 text-[11px] font-semibold text-t2 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-panel-hi {zone === 'sidebar' && navIdx === getSelectedIndex() ? 'ring-2 ring-accent' : ''}"
     title={extras.title}
     aria-expanded={!collapsed}
@@ -520,20 +564,22 @@
   >
     {#if extras.dotClass}<span class="size-1.5 shrink-0 rounded-full {extras.dotClass}"></span>{/if}
     {label}
+    {#if extras.drop}<LaneDropBadge verdict={extras.drop} />{/if}
     <span class="ml-auto font-normal text-t3">{count}</span>
     {#if extras.autoDispatch}<Zap class="size-2.5 text-status-running" />{/if}
     {#if collapsed}<ChevronRight class="size-3 shrink-0 text-t3" />{:else}<ChevronDown class="size-3 shrink-0 text-t3" />{/if}
   </button>
 {/snippet}
 
-{#snippet groupHeader(key: string, defaultCollapsed: boolean, label: string, count: number, dotClass: string | null, level: "top" | "sub")}
+{#snippet groupHeader(key: string, defaultCollapsed: boolean, label: string, count: number, dotClass: string | null, level: "top" | "sub", drop: ReturnType<typeof laneHover> = null)}
   {@const navIdx = flatNavIndex.get(navKey.group(key)) ?? -1}
   {@const collapsed = isCollapsed(key, defaultCollapsed)}
   {#if level === "top"}
-    {@render sectionHeader(navIdx, collapsed, () => toggleSection(key, defaultCollapsed), label, count, { dotClass })}
+    {@render sectionHeader(navIdx, collapsed, () => toggleSection(key, defaultCollapsed), label, count, { dotClass, lane: true, drop })}
   {:else}
     <button
       data-nav-index={navIdx}
+      data-lane-header=""
       class="w-full flex items-center gap-1.5 pl-2 pr-2 py-1 text-[9.5px] font-semibold text-t2 uppercase tracking-[.05em] hover:opacity-80 rounded-lg {zone === 'sidebar' && navIdx === getSelectedIndex() ? 'ring-2 ring-accent' : ''}"
       aria-expanded={!collapsed}
       onclick={() => toggleSection(key, defaultCollapsed)}
@@ -541,9 +587,19 @@
       {#if dotClass}<span class="size-1.5 rounded-full {dotClass}"></span>{/if}
       {label}
       <span class="font-normal text-t3 ml-0.5">{count}</span>
+      {#if drop}<LaneDropBadge verdict={drop} />{/if}
       {#if collapsed}<ChevronRight class="size-3 ml-auto text-t3" />{:else}<ChevronDown class="size-3 ml-auto text-t3" />{/if}
     </button>
   {/if}
+{/snippet}
+
+<!-- A lane group of the Classic layout, which takes a dragged task of its project (every project when `projectId` is null). -->
+{#snippet laneGroup(group: SidebarLaneGroup, projectId: string | null, level: "top" | "sub")}
+  {@const drop = laneHover(group.lane, projectId)}
+  <div class="rounded-lg" data-lane-hover={dropState(drop)} data-task-lane={group.lane} data-task-lane-project={projectId ?? undefined}>
+    {@render groupHeader(group.key, group.defaultCollapsed, LANES[group.lane].label, group.rows.length, LANES[group.lane].dotClass, level, drop)}
+    {#if !isCollapsed(group.key, group.defaultCollapsed)}{@render taskList(group.rows)}{/if}
+  </div>
 {/snippet}
 
 {#snippet activityIndicator(activity: RowActivity | null, row: SidebarRow)}
@@ -613,8 +669,9 @@
       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
       {@const isPreviewing = (linked?.id === previewSessionId) || (previewTaskWorkspace?.projectId === project.id && previewTaskWorkspace.taskKey === task.key)}
       {@const hint = jumpHintFor(navKey.task(project.id, task.key))}
-      <li class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
-        <div class="session-row relative flex items-center gap-1.5">
+      {@const key = navKey.task(project.id, task.key)}
+      <li animate:flip={rowFlip} in:receiveRow={{ key }} out:sendRow={{ key }} class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
+        <div class="session-row relative flex items-center gap-1.5" {@attach liftWhileDragged({ projectId: project.id, key: task.key })}>
           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
           <button
             data-nav-index={taskNavIdx}
@@ -624,6 +681,7 @@
               {isPreviewing ? 'ring-2 ring-accent' : isSelected ? 'ring-2 ring-accent' : ''}"
             title={showTaskKeys ? undefined : task.key}
             onclick={() => handleTaskClick(task, project)}
+            onpointerdown={(e) => pressRow(e, row)}
             oncontextmenu={(e) => onTaskContextMenu(e, row)}
           >
           {@render projectLabel(project)}
@@ -692,7 +750,7 @@
   {/each}
 
   <!-- Main content -->
-  <nav bind:this={navRef} class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide select-none {layout === 'cards' ? 'flex flex-col' : ''}" oncontextmenu={onNavContextMenu}>
+  <nav bind:this={navRef} data-task-drag-list class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide select-none {layout === 'cards' ? 'flex flex-col' : ''}" oncontextmenu={onNavContextMenu}>
     {#if projects.length === 0}
       <div class="mt-12 text-center px-4 space-y-3">
         <p class="text-xs text-t3">No projects yet</p>
@@ -720,6 +778,7 @@
         }}
         {projectAutoMode}
         onSelectRow={selectRow}
+        onRowPress={pressRow}
         onRowAction={runRowAction}
         {onRowContextMenu}
         {onProjectContextMenu}
@@ -733,7 +792,7 @@
         }}
       />
     {:else}
-      {#each sections as section (section.key)}
+      {#each classicSections as section (section.key)}
         {#if section.kind === "project"}
           {@const project = section.project}
           {@const projectCollapsed = isCollapsed(section.key, section.defaultCollapsed)}
@@ -758,11 +817,8 @@
 
             {#if !projectCollapsed}
               {@render orphanList(section.orphans)}
-              {#each section.groups as group (group.key)}
-                <div>
-                  {@render groupHeader(group.key, group.defaultCollapsed, LANES[group.lane].label, group.rows.length, LANES[group.lane].dotClass, "sub")}
-                  {#if !isCollapsed(group.key, group.defaultCollapsed)}{@render taskList(group.rows)}{/if}
-                </div>
+              {#each projectGroups(section) as group (group.key)}
+                {@render laneGroup(group, project.id, "sub")}
               {/each}
               {#if section.orphans.length === 0 && section.taskCount === 0}
                 <p class="px-3 py-1 text-xs text-t3 italic">No sessions or tasks</p>
@@ -777,10 +833,7 @@
             {/if}
           </div>
         {:else if section.kind === "status"}
-          <div>
-            {@render groupHeader(section.key, section.defaultCollapsed, LANES[section.group.lane].label, section.group.rows.length, LANES[section.group.lane].dotClass, "top")}
-            {#if !isCollapsed(section.key, section.defaultCollapsed)}{@render taskList(section.group.rows)}{/if}
-          </div>
+          {@render laneGroup(section.group, null, "top")}
         {/if}
       {:else}
         {#if groupBy === "status"}
@@ -884,7 +937,7 @@
   {@const linkedSession = menuRow.linkedSession}
   {@const statusChildren = STATUS_OPTIONS
     .filter(s => s.value !== menuTask.status)
-    .map(s => ({ label: s.label, onSelect: () => moveTask(menuRow, s.value) }))}
+    .map(s => ({ label: s.label, onSelect: () => moveTask(menuTask, menuRow.project, s.value) }))}
   {@const readToggle = unreadToggle(menuRow)}
   {@const snoozeEntry = snoozeMenuEntry({ task: menuTask, project: menuRow.project })}
   <ContextMenu

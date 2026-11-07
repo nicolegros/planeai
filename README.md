@@ -24,7 +24,7 @@ A desktop app that lets you run multiple AI coding agents in parallel — each i
 - **Persistent sessions** — agents keep running when you quit the app (tmux backend, or the experimental daemon and rmux backends)
 - **Provider-agnostic** — works with Kiro, Claude, Copilot, Codex, or any CLI agent
 - **Keyboard-first** — command menu (Cmd+K / Ctrl+K), shortcuts for every action
-- **Task management** — built-in task tracker with lifecycle hooks and auto-dispatch
+- **Task management** — built-in task tracker with lifecycle hooks and auto-dispatch; drag a task between sidebar lanes to change its status, or onto an agent to hand it the task
 - **Jira connection** — bundled Jira plugin with PKCE OAuth, plugin-scoped source settings, immediate periodic source sync, a dedicated sidebar section, departed-issue review prompts, and assignment to PlaneAI projects; Jira writeback is supported for configured lifecycle actions.
 - **Git worktree isolation** — parallel agents work on separate branches without conflicts
 - **Cross-platform** — macOS, Linux, and Windows
