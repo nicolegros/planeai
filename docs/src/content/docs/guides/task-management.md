@@ -188,8 +188,10 @@ Once installed, agents that support skills (like Kiro or Claude) can use them au
 ## Changing status from the keyboard
 
 Press **⌘⌥S** (macOS) or **Ctrl+Alt+S** (Linux/Windows) to move the open task to done.
+Moving the task you are viewing to done, from the shortcut, the sidebar or a drag, opens the first other sidebar row right away, as **⌘1** / **Ctrl+1** would.
 Moving a task to done archives its sessions and stops their agents, so it waits 5 seconds first.
 The toast counts down, and its **Undo** during that time leaves everything as it was.
+If that moved you off the task, the undo brings you back to it.
 Dismissing the toast applies the move right away.
 Quitting during the countdown applies it too, at the latest when PlaneAI next starts.
 Press **⌘Z** / **Ctrl+Z** to undo the last status change, snooze or wake you made, once, from the shortcut, the sidebar, or a menu.

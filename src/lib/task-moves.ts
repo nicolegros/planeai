@@ -17,6 +17,8 @@ export const DONE_UNDO_SECONDS = 5;
 /** Pending Done moves, so a quit that skips the close handlers (macOS Cmd+Q) or a crash still applies them. */
 const PENDING_DONE_STORAGE_KEY = "planeai.pending-done";
 
+type TaskRef = { key: string; repoPath: string };
+
 interface TaskMove {
   kind: "status";
   key: string;
@@ -55,11 +57,28 @@ interface PendingDone {
 
 const pendingDone = new Map<string, PendingDone>();
 /** Done moves not yet confirmed applied, including ones being applied or left by an earlier run. */
-const savedDone = new Map<string, { key: string; repoPath: string }>();
+const savedDone = new Map<string, TaskRef>();
 /** What Mod+Z reverts: a Done still in `pendingDone`, or the last change that applied. */
 let lastChange: TaskChange | null = null;
 
 const doneToastId = (id: string) => `task-done:${id}`;
+
+/** A UI Done shown on a task, or one undone in its undo window from its toast or Mod+Z. */
+export type DoneChange = TaskRef & { kind: "done" | "undone" };
+
+const doneChangeListeners = new Set<(change: DoneChange) => void>();
+
+/** Hears each task the user marks Done in the UI as soon as it shows, and each undo of a pending one. */
+export function onTaskDoneChange(listener: (change: DoneChange) => void): () => void {
+  doneChangeListeners.add(listener);
+  return () => {
+    doneChangeListeners.delete(listener);
+  };
+}
+
+function notifyDoneChange(kind: DoneChange["kind"], key: string, repoPath: string): void {
+  for (const listener of doneChangeListeners) listener({ kind, key, repoPath });
+}
 
 function statusLabel(status: string): string {
   return TASK_STATUS_LABELS[status as TaskStatus] ?? status;
@@ -114,6 +133,7 @@ function startPendingDone(move: StatusChange, onMoved: () => void): void {
       onExpire: () => commitDone(id),
     },
   });
+  notifyDoneChange("done", move.key, move.repoPath);
 }
 
 function takePendingDone(id: string): PendingDone | undefined {
@@ -151,7 +171,10 @@ function cancelDone(id: string, announce = true): boolean {
   if (announce && move.kind === "wake_status") {
     void restoreSnooze(move).then(() => taskStore.refresh([move.repoPath]));
   } else void taskStore.refresh([move.repoPath]);
-  if (announce) showMovedBack(move);
+  if (announce) {
+    showMovedBack(move);
+    notifyDoneChange("undone", move.key, move.repoPath);
+  }
   return true;
 }
 
@@ -262,6 +285,7 @@ export async function completeTask(
 export async function applyDoneNow(key: string, repoPath: string): Promise<void> {
   cancelDone(taskStore.taskRef(repoPath, key), false);
   await taskStore.moveTask(key, "done", repoPath);
+  notifyDoneChange("done", key, repoPath);
 }
 
 /** The task still shows the change, so reverting it undoes what the user did. */
