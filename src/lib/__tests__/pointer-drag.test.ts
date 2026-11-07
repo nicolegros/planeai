@@ -9,9 +9,13 @@ const down = (x: number, y: number, button = 0) =>
   new PointerEvent("pointerdown", { button, clientX: x, clientY: y });
 
 type Target = { id: string };
+/** How far the targets scrolled to the left of their place. */
+let scrolled = 0;
 /** Targets by x: "a" left of 100, "b" past 200, nothing between. */
-const hitTest = (x: number): Target | null =>
-  x < 100 ? { id: "a" } : x > 200 ? { id: "b" } : null;
+const hitTest = (x: number): Target | null => {
+  const at = x + scrolled;
+  return at < 100 ? { id: "a" } : at > 200 ? { id: "b" } : null;
+};
 
 const rows = definePointerDrag<string, Target>({ hitTest, bodyClass: "rows-dragging" });
 const cards = definePointerDrag<number, Target>({ hitTest, bodyClass: "cards-dragging" });
@@ -19,6 +23,7 @@ const cards = definePointerDrag<number, Target>({ hitTest, bodyClass: "cards-dra
 afterEach(() => {
   pointer("pointerup", 150, 0);
   document.body.className = "";
+  scrolled = 0;
 });
 
 describe("definePointerDrag", () => {
@@ -44,6 +49,23 @@ describe("definePointerDrag", () => {
     expect(document.body.classList.contains("rows-dragging")).toBe(true);
     pointer("pointermove", 150, 40);
     expect(rows.current?.target).toBeNull();
+  });
+
+  it("re-reads the target under a still pointer when something scrolls", () => {
+    const drop = vi.fn();
+    rows.press("r1", down(10, 5), drop);
+    pointer("pointermove", 150, 40);
+    expect(rows.current?.target).toBeNull();
+    scrolled = 100;
+    document.body.dispatchEvent(new Event("scroll"));
+    expect(rows.current).toEqual({
+      payload: "r1",
+      target: { id: "b" },
+      point: { x: 150, y: 40 },
+      origin: { x: 10, y: 5 },
+    });
+    pointer("pointerup", 150, 40);
+    expect(drop).toHaveBeenCalledWith("r1", { id: "b" });
   });
 
   it("drops on the target under the pointer and clears the drag", () => {

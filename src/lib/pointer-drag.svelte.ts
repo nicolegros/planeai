@@ -81,6 +81,10 @@ export function definePointerDrag<P, T>(options: {
       endActivePress?.();
       const origin = { x: down.clientX, y: down.clientY };
 
+      const hit = (x: number, y: number) => {
+        point = { x, y };
+        target = options.hitTest(x, y);
+      };
       const move = (event: PointerEvent) => {
         if (!active) {
           if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) < DRAG_THRESHOLD_PX) {
@@ -89,8 +93,11 @@ export function definePointerDrag<P, T>(options: {
           active = { kind, payload, origin };
           document.body.classList.add(options.bodyClass);
         }
-        point = { x: event.clientX, y: event.clientY };
-        target = options.hitTest(event.clientX, event.clientY);
+        hit(event.clientX, event.clientY);
+      };
+      // A scroll moves what is under a still pointer, so the drag re-reads its point and target.
+      const scroll = () => {
+        if (active) hit(point.x, point.y);
       };
       const up = () => {
         const drop = active ? (target as T | null) : null;
@@ -114,15 +121,17 @@ export function definePointerDrag<P, T>(options: {
         window.removeEventListener("pointerup", up, true);
         window.removeEventListener("pointercancel", finish, true);
         window.removeEventListener("keydown", key, true);
+        window.removeEventListener("scroll", scroll, true);
         window.removeEventListener("blur", finish);
       };
       endActivePress = finish;
 
-      // Capture phase: a terminal under the pointer must not swallow the events.
+      // Capture phase: a terminal under the pointer must not swallow the events, and scrolls do not bubble.
       window.addEventListener("pointermove", move, true);
       window.addEventListener("pointerup", up, true);
       window.addEventListener("pointercancel", finish, true);
       window.addEventListener("keydown", key, true);
+      window.addEventListener("scroll", scroll, true);
       window.addEventListener("blur", finish);
     },
   };

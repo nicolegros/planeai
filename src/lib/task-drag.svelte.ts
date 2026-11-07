@@ -135,47 +135,73 @@ const isDragged = (id: { projectId: string; key: string }) => {
 
 const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-/**
- * Lifts a row while it is the one dragged: it follows the pointer inside the list and glides home
- * when the pointer leaves sideways. The row is measured once the drag starts, after the sidebar
- * has shown every lane it can land in (which may have moved the row), with the pointer as of then.
- */
+/** The lifted row's slot and the list, as measured when its drag started. */
+interface Lift {
+  payload: TaskDragPayload;
+  row: Span;
+  list: Span;
+  pointerY: number;
+  scrollTop: number;
+}
+
+let lift: Lift | null = null;
+/** The drag whose row is being measured. */
+let measuring: TaskDragPayload | null = null;
+
+function listOf(node: HTMLElement): HTMLElement | null {
+  return node.closest<HTMLElement>("[data-task-drag-list]");
+}
+
+/** Measures `node`'s slot once the sidebar has shown every lane, which may have moved it. */
+function measure(node: HTMLElement, payload: TaskDragPayload): void {
+  if (measuring === payload) return;
+  measuring = payload;
+  requestAnimationFrame(() => {
+    if (measuring === payload) measuring = null;
+    const current = drag.current;
+    const list = listOf(node);
+    if (current?.payload !== payload || !list || !node.isConnected) return;
+    node.style.transform = "";
+    lift = {
+      payload,
+      row: node.getBoundingClientRect(),
+      list: list.getBoundingClientRect(),
+      pointerY: current.point.y,
+      scrollTop: list.scrollTop,
+    };
+    place(node, current.point.y);
+  });
+}
+
+function place(node: HTMLElement, pointerY: number): void {
+  if (!lift) return;
+  if (taskDrag.outside) {
+    node.style.transition = reducedMotion() ? "" : "transform 150ms ease-out";
+    node.style.transform = "translateY(0)";
+    return;
+  }
+  // The slot moves with the list's scroll; the row stays under the pointer.
+  const scrolled = (listOf(node)?.scrollTop ?? lift.scrollTop) - lift.scrollTop;
+  const dy = scrolled + liftOffset(pointerY, lift.pointerY, lift.row, lift.list);
+  node.style.transition = "none";
+  node.style.transform = `translateY(${dy}px)`;
+}
+
+function dropLift(node: HTMLElement): void {
+  node.classList.remove("task-drag-lifted");
+  node.style.transform = "";
+  node.style.transition = "";
+}
+
+/** Lifts a row while it is the one dragged: it follows the pointer inside the list and glides home when the pointer leaves sideways. */
 export function liftWhileDragged(id: { projectId: string; key: string }): Attachment<HTMLElement> {
-  let home: { row: Span; list: Span; pointerY: number } | null = null;
-  let measuring = false;
   return (node) => {
-    // Rows not dragged depend on the payload alone, so only the lifted one follows every move.
-    if (!isDragged(id)) {
-      home = null;
-      measuring = false;
-      node.classList.remove("task-drag-lifted");
-      node.style.transform = "";
-      node.style.transition = "";
-      return;
-    }
+    if (!isDragged(id)) return;
     const current = drag.current;
     if (!current) return;
-    if (!home) {
-      if (measuring) return;
-      measuring = true;
-      node.classList.add("task-drag-lifted");
-      // The next pointer move applies what is measured here; the row has not moved yet.
-      requestAnimationFrame(() => {
-        const measured = drag.current;
-        if (!measuring || !measured) return;
-        measuring = false;
-        const list = node.closest("[data-task-drag-list]")?.getBoundingClientRect();
-        if (list) home = { row: node.getBoundingClientRect(), list, pointerY: measured.point.y };
-      });
-      return;
-    }
-    if (taskDrag.outside) {
-      node.style.transition = reducedMotion() ? "" : "transform 150ms ease-out";
-      node.style.transform = "translateY(0)";
-      return;
-    }
-    const dy = liftOffset(current.point.y, home.pointerY, home.row, home.list);
-    node.style.transition = "none";
-    node.style.transform = `translateY(${dy}px)`;
+    node.classList.add("task-drag-lifted");
+    if (lift?.payload === current.payload) place(node, current.point.y);
+    else measure(node, current.payload);
+    return () => dropLift(node);
   };
 }

@@ -496,34 +496,89 @@ describe("dragging a task row to a lane", () => {
     expect(lifted()).toEqual([]);
   });
 
-  it("follows the pointer inside the list, stops at its edges, and glides home outside it", async () => {
-    mounted = await mountSidebar({ sidebar_group_by: "status" });
-    const root = mounted.target;
+  /** A list 600px tall at the top of the viewport, scrollable, with the row's slot 300px down. */
+  function layOut(root: HTMLElement, title: string) {
     const rect = (top: number, height: number) =>
       ({ left: 0, top, width: 200, height, right: 200, bottom: top + height }) as DOMRect;
-    root.querySelector("nav")!.getBoundingClientRect = () => rect(0, 600);
-    const row = rowButton(root, "Title A-2").closest<HTMLElement>(".group")!;
-    row.getBoundingClientRect = () => rect(300, 32);
-
-    // The press is at y 100, the drag's second move at y 140, where the row is measured.
-    dragRow(root, "Title A-2", () => null);
-    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const list = root.querySelector<HTMLElement>("nav")!;
+    list.getBoundingClientRect = () => rect(0, 600);
+    let scrollTop = 0;
+    Object.defineProperty(list, "scrollTop", {
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+    const row = () => rowButton(root, title).closest<HTMLElement>(".group")!;
+    // The rect includes the row's transform, as a browser's does.
+    row().getBoundingClientRect = function (this: HTMLElement) {
+      const lifted = /translateY\((-?\d+)px\)/.exec(this.style.transform);
+      return rect(300 + (lifted ? Number(lifted[1]) : 0) - scrollTop, 32);
+    };
     const moveTo = (x: number, y: number) => {
       window.dispatchEvent(new MouseEvent("pointermove", { clientX: x, clientY: y }));
       flushSync();
     };
+    const scrollTo = (top: number) => {
+      list.scrollTop = top;
+      list.dispatchEvent(new Event("scroll"));
+      flushSync();
+    };
+    return { row, moveTo, scrollTo };
+  }
+
+  it("follows the pointer inside the list, stops at its edges, and glides home outside it", async () => {
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const root = mounted.target;
+    const { row, moveTo } = layOut(root, "Title A-2");
+
+    // The press is at y 100, the drag's second move at y 140, where the row is measured.
+    dragRow(root, "Title A-2", () => null);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
 
     moveTo(50, 180);
-    expect([row.style.transform, row.style.transition]).toEqual(["translateY(40px)", "none"]);
+    expect([row().style.transform, row().style.transition]).toEqual(["translateY(40px)", "none"]);
     moveTo(50, 900);
-    expect(row.style.transform).toBe("translateY(268px)");
+    expect(row().style.transform).toBe("translateY(268px)");
     moveTo(500, 180);
-    expect([row.style.transform, row.style.transition]).toEqual([
+    expect([row().style.transform, row().style.transition]).toEqual([
       "translateY(0)",
       "transform 150ms ease-out",
     ]);
     release();
-    expect([row.style.transform, row.className.includes("task-drag-lifted")]).toEqual(["", false]);
+    expect([row().style.transform, row().className.includes("task-drag-lifted")]).toEqual([
+      "",
+      false,
+    ]);
+  });
+
+  it("keeps the lifted row under the pointer across a store refresh and a scroll of the list", async () => {
+    mounted = await mountSidebar({ sidebar_group_by: "status" });
+    const root = mounted.target;
+    const { row, moveTo, scrollTo } = layOut(root, "Title A-2");
+
+    dragRow(root, "Title A-2", () => null);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    moveTo(50, 180);
+    expect(row().style.transform).toBe("translateY(40px)");
+
+    // The rows are rebuilt from the store; the lifted one is measured no second time.
+    tasksByPath[beta.path] = [task("B-1", "in_review"), task("B-2", "todo")];
+    await loadTasks([alpha.path, beta.path]);
+    flushSync();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect([row().style.transform, row().className.includes("task-drag-lifted")]).toEqual([
+      "translateY(40px)",
+      true,
+    ]);
+    moveTo(50, 190);
+    expect(row().style.transform).toBe("translateY(50px)");
+
+    // The list scrolls 20px under the still pointer: the slot moves up, the row stays put.
+    scrollTo(20);
+    expect(row().style.transform).toBe("translateY(70px)");
+    moveTo(50, 200);
+    expect(row().style.transform).toBe("translateY(80px)");
   });
 
   it("decides a drop from the task as the store has it, not the snapshot the press took", async () => {
