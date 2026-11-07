@@ -80,6 +80,21 @@ export interface PaneFacts {
 
 export type PaneOutcome = { kind: "reference" };
 
+/**
+ * Whether a session of `provider` runs with PlaneAI's MCP tools, as the backend decides at launch:
+ * the server is on and the provider has arguments for it.
+ */
+export function providerConnectsMcp(
+  config: {
+    mcp_enabled?: boolean | null;
+    providers: Record<string, { mcp_args?: string | null } | undefined>;
+  },
+  provider: string | null,
+): boolean {
+  if (config.mcp_enabled === false || provider === null) return false;
+  return !!config.providers[provider]?.mcp_args?.trim();
+}
+
 const TAB_NAMES: Record<Exclude<TabType, "agent">, string> = {
   shell: "a shell",
   diff: "a diff",

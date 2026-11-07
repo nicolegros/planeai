@@ -66,7 +66,7 @@
   import { activeTabOf, findLeaf, tabsOf, type LeafNode, type NavDirection, type SplitDirection, type TabEntry } from "./lib/layout-tree";
   import { pressTab as pressTabForDrag, tabDrag, type TabDropTarget } from "./lib/tab-drag.svelte";
   import { resolvePaneDrops, taskDrag, type TaskDragPayload } from "./lib/task-drag.svelte";
-  import { paneVerdict, taskReferenceText, type PaneFacts } from "./lib/task-drop";
+  import { paneVerdict, providerConnectsMcp, taskReferenceText, type PaneFacts } from "./lib/task-drop";
   import { ClipboardList } from "@lucide/svelte";
   import { dropPositionToViewport, droppedPathsText } from "./lib/dropped-paths";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -395,13 +395,12 @@
     if (!tab) return { tab: null, session: null };
     const session = sessions.find((candidate) => candidate.id === ptyKeySessionId(tab.ptyKey));
     if (!session) return { tab: tab.type, session: null };
-    const provider = session.provider ? getSettings().providers[session.provider] : undefined;
     return {
       tab: tab.type,
       session: {
         plugin: isPluginSession(session),
         provider: session.provider,
-        providerHasMcp: !!provider?.mcp_args,
+        providerHasMcp: providerConnectsMcp(getSettings(), session.provider),
         taskProjectId: sessionTaskProjectId(session),
         taskKey: session.task_key,
       },

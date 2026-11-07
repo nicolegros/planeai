@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   laneVerdict,
   paneVerdict,
+  providerConnectsMcp,
   taskReferenceText,
   type DropVerdict,
   type LaneOutcome,
@@ -184,6 +185,33 @@ describe("paneVerdict", () => {
 
   it.each(cases)("%s", (_name, facts, verdict) => {
     expect(paneVerdict(dragged(), facts)).toEqual(verdict);
+  });
+});
+
+describe("providerConnectsMcp", () => {
+  const providers = {
+    claude: { mcp_args: "--mcp-config {mcp_url}" },
+    kiro: { mcp_args: "" },
+    custom: { mcp_args: "  " },
+    legacy: {},
+  };
+
+  it("holds for a provider with MCP arguments while the server is on, which unset means", () => {
+    expect(providerConnectsMcp({ providers }, "claude")).toBe(true);
+    expect(providerConnectsMcp({ mcp_enabled: true, providers }, "claude")).toBe(true);
+    expect(providerConnectsMcp({ mcp_enabled: null, providers }, "claude")).toBe(true);
+  });
+
+  it("fails once the MCP server is turned off, whatever the provider's arguments", () => {
+    expect(providerConnectsMcp({ mcp_enabled: false, providers }, "claude")).toBe(false);
+  });
+
+  it("fails for a provider whose arguments are empty, blank or missing, and for no provider", () => {
+    expect(providerConnectsMcp({ providers }, "kiro")).toBe(false);
+    expect(providerConnectsMcp({ providers }, "custom")).toBe(false);
+    expect(providerConnectsMcp({ providers }, "legacy")).toBe(false);
+    expect(providerConnectsMcp({ providers }, "unknown")).toBe(false);
+    expect(providerConnectsMcp({ providers }, null)).toBe(false);
   });
 });
 
