@@ -64,7 +64,7 @@ let lastChange: TaskChange | null = null;
 const doneToastId = (id: string) => `task-done:${id}`;
 
 /** A UI Done shown on a task, or one undone in its undo window from its toast or Mod+Z. */
-export type DoneChange = { kind: "done" | "undone"; key: string; repoPath: string };
+export type DoneChange = TaskRef & { kind: "done" | "undone" };
 
 const doneChangeListeners = new Set<(change: DoneChange) => void>();
 
