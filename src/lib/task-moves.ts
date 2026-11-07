@@ -17,6 +17,8 @@ export const DONE_UNDO_SECONDS = 5;
 /** Pending Done moves, so a quit that skips the close handlers (macOS Cmd+Q) or a crash still applies them. */
 const PENDING_DONE_STORAGE_KEY = "planeai.pending-done";
 
+type TaskRef = { key: string; repoPath: string };
+
 interface TaskMove {
   kind: "status";
   key: string;
@@ -55,11 +57,25 @@ interface PendingDone {
 
 const pendingDone = new Map<string, PendingDone>();
 /** Done moves not yet confirmed applied, including ones being applied or left by an earlier run. */
-const savedDone = new Map<string, { key: string; repoPath: string }>();
+const savedDone = new Map<string, TaskRef>();
 /** What Mod+Z reverts: a Done still in `pendingDone`, or the last change that applied. */
 let lastChange: TaskChange | null = null;
 
 const doneToastId = (id: string) => `task-done:${id}`;
+
+const markedDoneListeners = new Set<(task: TaskRef) => void>();
+
+/** Hears each task the user marks Done in the UI, as soon as it shows as Done. */
+export function onTaskMarkedDone(listener: (task: TaskRef) => void): () => void {
+  markedDoneListeners.add(listener);
+  return () => {
+    markedDoneListeners.delete(listener);
+  };
+}
+
+function notifyMarkedDone(key: string, repoPath: string): void {
+  for (const listener of markedDoneListeners) listener({ key, repoPath });
+}
 
 function statusLabel(status: string): string {
   return TASK_STATUS_LABELS[status as TaskStatus] ?? status;
@@ -114,6 +130,7 @@ function startPendingDone(move: StatusChange, onMoved: () => void): void {
       onExpire: () => commitDone(id),
     },
   });
+  notifyMarkedDone(move.key, move.repoPath);
 }
 
 function takePendingDone(id: string): PendingDone | undefined {
@@ -262,6 +279,7 @@ export async function completeTask(
 export async function applyDoneNow(key: string, repoPath: string): Promise<void> {
   cancelDone(taskStore.taskRef(repoPath, key), false);
   await taskStore.moveTask(key, "done", repoPath);
+  notifyMarkedDone(key, repoPath);
 }
 
 /** The task still shows the change, so reverting it undoes what the user did. */

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, tick, unmount } from "svelte";
 import type { Project, Session, TaskItem } from "../lib/types";
 
@@ -114,6 +114,31 @@ function chord(key: string, shiftKey = false): void {
   flushSync();
 }
 
+function completeTaskChord(): void {
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "ß",
+      code: "KeyS",
+      altKey: true,
+      ...modifier,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  flushSync();
+}
+
+function markDoneFromCard(title: string): void {
+  const card = [...document.querySelectorAll<HTMLElement>("[id^='sidebar-card-']")].find(
+    (element) => element.textContent?.includes(title),
+  );
+  card
+    ?.closest(".group")
+    ?.querySelector<HTMLButtonElement>("button[aria-label='Mark done']")
+    ?.click();
+  flushSync();
+}
+
 function releaseModifier(): void {
   window.dispatchEvent(new KeyboardEvent("keyup", { key: modifierKey, bubbles: true }));
   flushSync();
@@ -181,5 +206,33 @@ describe("App sidebar navigation in the Cards layout", () => {
     releaseModifier();
 
     expect([previous, getActiveSessionId()]).toEqual(["progress-1", "scratch"]);
+  });
+
+  describe("marking a task Done", () => {
+    // Undoes the pending Done, so the next test starts from the same sidebar.
+    afterEach(async () => {
+      chord("z");
+      await settle();
+    });
+
+    it("opens the Mod+1 row when the viewed task is marked Done", async () => {
+      chord("3");
+      const viewed = getActiveSessionId();
+      completeTaskChord();
+      await settle();
+
+      expect([viewed, getActiveSessionId()]).toEqual(["progress-1", "scratch"]);
+    });
+
+    it("stays on the viewed task when another task is marked Done", async () => {
+      chord("3");
+      markDoneFromCard("Title R-1");
+      await settle();
+
+      expect([
+        getActiveSessionId(),
+        document.body.textContent?.includes("R-1 moved to Done"),
+      ]).toEqual(["progress-1", true]);
+    });
   });
 });
