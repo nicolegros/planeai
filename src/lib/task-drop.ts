@@ -28,6 +28,12 @@ export type DropVerdict<Outcome> =
   | { accepts: true; outcome: Outcome; label: string }
   | { accepts: false; reason: string };
 
+/** A verdict as a data attribute value, for the lane and badge styles. */
+export function dropState(verdict: DropVerdict<unknown> | null): "accepts" | "refuses" | undefined {
+  if (verdict === null) return undefined;
+  return verdict.accepts ? "accepts" : "refuses";
+}
+
 export type LaneOutcome =
   /** The task's own lane: nothing changes. */
   | { kind: "stay" }

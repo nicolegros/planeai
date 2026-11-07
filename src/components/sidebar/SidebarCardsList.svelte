@@ -1,8 +1,6 @@
 <script lang="ts">
   import { Tooltip } from "bits-ui";
   import { flip } from "svelte/animate";
-  import { cubicOut } from "svelte/easing";
-  import { crossfade } from "svelte/transition";
   import { AlarmClock, AlarmClockOff, Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, GitBranch, GitCompare, Play, RotateCcw, TriangleAlert, Undo2, Zap, type LucideIcon } from "@lucide/svelte";
   import PluginContributionHost from "../PluginContributionHost.svelte";
   import JumpHintBadge from "./JumpHintBadge.svelte";
@@ -17,7 +15,9 @@
   import { folderUrgency, isQuiet, rowActions, rowActivity, rowSession, splitBranch, WOKE_TITLE, type FolderUrgency, type RowAction, type RowActivity } from "../../lib/sidebar-cards";
   import { snoozeAnchor } from "../../lib/snooze-picker.svelte";
   import { getLaneNow } from "../../lib/snooze-clock.svelte";
+  import { receiveRow, rowFlip, sendRow } from "../../lib/row-motion";
   import { laneHover, liftWhileDragged, taskDrag } from "../../lib/task-drag.svelte";
+  import { dropState } from "../../lib/task-drop";
   import LaneDropBadge from "./LaneDropBadge.svelte";
   import SnoozeCountdown from "./SnoozeCountdown.svelte";
   import type { PluginSessionContext } from "../../lib/plugin-sdk";
@@ -102,8 +102,6 @@
   const topDrop = $derived(laneHover("in_review", null));
   // Session rows never lift: an id no drag carries.
   const rowId = (row: SidebarRow) => row.kind === "task" ? { projectId: row.project.id, key: row.task.key } : { projectId: "", key: "" };
-  const laneClass = (verdict: ReturnType<typeof laneHover>) =>
-    verdict === null ? "" : verdict.accepts ? "task-lane-hovered rounded-md bg-accent-bg ring-1 ring-inset ring-accent/40" : "task-lane-hovered rounded-md ring-1 ring-inset ring-status-exited/40";
   const agentStates = $derived(orchestrator.getAgentStates());
   const unreadSessions = $derived(orchestrator.getUnreadSessions());
 
@@ -119,14 +117,6 @@
     return lines.length > 0 ? lines.join("\n") : undefined;
   }
   const isSelected = (navIdx: number) => getActiveZone() === "sidebar" && navIdx === getSelectedIndex();
-
-  const motionMs = () => (window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 150);
-  // A row moving between lists glides from its old place; a row without a counterpart fades and slides in or out.
-  const [send, receive] = crossfade({
-    duration: motionMs,
-    easing: cubicOut,
-    fallback: () => ({ duration: motionMs(), easing: cubicOut, css: (t) => `opacity: ${t}; transform: translateY(${(t - 1) * 8}px)` }),
-  });
 
   const rowItemClass = (row: SidebarRow) => `transition-opacity duration-200 ${isFading(row) ? "opacity-0" : "opacity-100"}`;
 
@@ -285,10 +275,11 @@
   {@const collapsed = isCollapsed(section.key, section.defaultCollapsed)}
   {@const urgency = collapsed ? folderUrgency(section.rows, activityOf) : null}
   {@const drop = laneHover("in_review", project.id)}
-  <div class="mt-2 first:mt-0 {laneClass(drop)}" data-task-lane="in_review" data-task-lane-project={project.id}>
+  <div class="mt-2 rounded-md first:mt-0" data-lane-hover={dropState(drop)} data-task-lane="in_review" data-task-lane-project={project.id}>
     <div class="relative">
       <button
         data-nav-index={navIdx}
+        data-lane-header=""
         class="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left hover:bg-sidebar-row-hover {isSelected(navIdx) ? 'ring-2 ring-inset ring-accent' : ''}"
         title={project.path}
         aria-expanded={!collapsed}
@@ -318,7 +309,7 @@
       <ul class="flex flex-col gap-0.5">
         {#each section.rows as row (sidebarRowNavKey(row))}
           {@const key = sidebarRowNavKey(row)}
-          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key }} out:send={{ key }} class={rowItemClass(row)}>{@render card(row, true)}</li>
+          <li animate:flip={rowFlip} in:receiveRow={{ key }} out:sendRow={{ key }} class={rowItemClass(row)}>{@render card(row, true)}</li>
         {/each}
       </ul>
     {/if}
@@ -331,9 +322,10 @@
   {@const page = shelfPage(section, shownPages(section.key), collapsed, isActive)}
   {@const moreIdx = navIndex(navKey.more(section.key))}
   {@const drop = laneHover(section.lane, null)}
-  <section class={laneClass(drop)} data-task-lane={section.lane}>
+  <section class="rounded-md" data-lane-hover={dropState(drop)} data-task-lane={section.lane}>
     <button
       data-nav-index={navIdx}
+      data-lane-header=""
       class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs font-medium text-t2 {isSelected(navIdx) ? 'ring-2 ring-inset ring-accent' : ''}"
       aria-expanded={!collapsed}
       onclick={() => onToggle(section.key, section.defaultCollapsed)}
@@ -348,7 +340,7 @@
       <ul class="flex flex-col gap-0.5">
         {#each page.rows as row (sidebarRowNavKey(row))}
           {@const key = sidebarRowNavKey(row)}
-          <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key }} out:send={{ key }} class={rowItemClass(row)}>
+          <li animate:flip={rowFlip} in:receiveRow={{ key }} out:sendRow={{ key }} class={rowItemClass(row)}>
             {#if SHELVES[section.lane].variant === "card"}{@render card(row, false)}{:else}{@render slim(row, section.lane)}{/if}
           </li>
         {/each}
@@ -370,7 +362,7 @@
 <Tooltip.Provider delayDuration={300}>
 <div class="flex flex-1 flex-col">
   <!-- The top rows and the space under them take a dragged task for review; a folder takes its own project's. -->
-  <div class="relative flex flex-1 flex-col {laneClass(topDrop)}" data-task-lane="in_review">
+  <div class="relative flex flex-1 flex-col rounded-md" data-lane-hover={dropState(topDrop)} data-task-lane="in_review">
     {#if topDrop}<div class="pointer-events-none absolute top-1 right-1 z-10 flex"><LaneDropBadge verdict={topDrop} /></div>{/if}
     {#each top as section (section.key)}
       {#if section.kind === "folder"}
@@ -379,7 +371,7 @@
         <ul class="flex flex-col gap-0.5">
           {#each section.rows as row (sidebarRowNavKey(row))}
             {@const key = sidebarRowNavKey(row)}
-            <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key }} out:send={{ key }} class={rowItemClass(row)}>{@render card(row, false)}</li>
+            <li animate:flip={rowFlip} in:receiveRow={{ key }} out:sendRow={{ key }} class={rowItemClass(row)}>{@render card(row, false)}</li>
           {/each}
         </ul>
       {/if}

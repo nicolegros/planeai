@@ -211,6 +211,12 @@ function release(): void {
   flushSync();
 }
 
+/** The lanes styled as hovered, with their verdict. */
+const hovered = (root: HTMLElement) =>
+  [...root.querySelectorAll<HTMLElement>("[data-lane-hover]")].map(
+    (lane) => `${lane.dataset.taskLane}: ${lane.dataset.laneHover}`,
+  );
+
 const badges = (root: HTMLElement) =>
   [...root.querySelectorAll<HTMLElement>("[data-lane-drop]")].map(
     (badge) => `${badge.dataset.laneDrop}: ${badge.textContent!.trim()}`,
@@ -267,7 +273,10 @@ describe("dragging a task row to a lane", () => {
 
     dragRow(root, "Title A-2", () => laneOf(root, "in_progress"));
     expect(badges(root)).toEqual(["accepts: Running"]);
+    expect(hovered(root)).toEqual(["in_progress: accepts"]);
     release();
+
+    expect(hovered(root)).toEqual([]);
 
     await vi.waitFor(() =>
       expect(taskMove).toHaveBeenCalledWith("A-2", "in_progress", "/repos/alpha"),
@@ -327,6 +336,7 @@ describe("dragging a task row to a lane", () => {
 
     dragRow(root, "Title A-1", () => laneOf(root, "in_review", "beta"));
     expect(badges(root)).toEqual(["refuses: A-1 belongs to Alpha."]);
+    expect(hovered(root)).toEqual(["in_review: refuses"]);
     release();
 
     expect(taskMove).not.toHaveBeenCalled();

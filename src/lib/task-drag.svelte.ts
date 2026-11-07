@@ -7,6 +7,7 @@
  */
 import type { Attachment } from "svelte/attachments";
 import { definePointerDrag, type PointerDrag } from "./pointer-drag.svelte";
+import { reducedMotion } from "./row-motion";
 import { normalizeTaskStatus, taskLane, type SidebarTaskRow, type TaskLane } from "./sidebar-model";
 import {
   laneVerdict,
@@ -121,8 +122,6 @@ const isDragged = (id: { projectId: string; key: string }) => {
   const payload = drag.payload;
   return payload?.projectId === id.projectId && payload.key === id.key;
 };
-
-const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /** The lifted row's slot and the list, as measured when its drag started. */
 interface Lift {

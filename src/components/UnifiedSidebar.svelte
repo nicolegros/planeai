@@ -10,10 +10,9 @@
   import { isTaskWorkspaceId, parseTaskWorkspaceId } from "../lib/sidebar-session-order";
   import { everyLane, LANES, navKey, PROJECT_GROUP_LANES, projectLabelsApply, resolveSidebarGroupBy, resolveSidebarLayout, sidebarNavItemKey, sidebarNavItems, STATUS_SECTION_LANES, taskHeaderNavKeys, type SidebarLaneGroup, type SidebarNavItem, type SidebarProjectSection, type SidebarRow, type SidebarSection, type SidebarSessionRow, type SidebarTaskRow, type TaskLane } from "../lib/sidebar-model";
   import { flip } from "svelte/animate";
-  import { cubicOut } from "svelte/easing";
-  import { crossfade } from "svelte/transition";
+  import { receiveRow, rowFlip, sendRow } from "../lib/row-motion";
   import { laneHover, liftWhileDragged, pressTaskRow, taskDrag, taskDragPayload } from "../lib/task-drag.svelte";
-  import { laneVerdict, type TaskDragPayload, type TaskDropTarget } from "../lib/task-drop";
+  import { dropState, laneVerdict, type TaskDragPayload, type TaskDropTarget } from "../lib/task-drop";
   import LaneDropBadge from "./sidebar/LaneDropBadge.svelte";
   import { rowActivity, rowSession, WOKE_TITLE, type RowAction, type RowActivity } from "../lib/sidebar-cards";
   import { getSidebarModel, isCollapsed, isOpenRow, setCollapsed, shownPages, showMore } from "../lib/sidebar-model-store.svelte";
@@ -286,16 +285,6 @@
     else if (outcome.kind === "snooze") snoozeOrWake({ task, project });
   }
 
-  const laneClass = (verdict: ReturnType<typeof laneHover>) =>
-    verdict === null ? "" : verdict.accepts ? "task-lane-hovered rounded-lg bg-accent-bg ring-1 ring-inset ring-accent/40" : "task-lane-hovered rounded-lg ring-1 ring-inset ring-status-exited/40";
-  // Rows settle into their new order after a move; a moved row glides to its new group, and a row
-  // without a counterpart fades and slides in or out.
-  const motionMs = () => (window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 150);
-  const [send, receive] = crossfade({
-    duration: motionMs,
-    easing: cubicOut,
-    fallback: () => ({ duration: motionMs(), easing: cubicOut, css: (t) => `opacity: ${t}; transform: translateY(${(t - 1) * 8}px)` }),
-  });
   const emptyGroup = (key: string, lane: TaskLane): SidebarLaneGroup => ({ key, lane, rows: [], defaultCollapsed: true });
   // While a task is dragged, its project shows every lane group, and the status layout every status section.
   function projectGroups(section: SidebarProjectSection): SidebarLaneGroup[] {
@@ -562,9 +551,10 @@
   {#if showProjectLabels}<span class="shrink-0 max-w-[40%] truncate text-[10px] text-t3" title={project.path}>{project.name}</span>{/if}
 {/snippet}
 
-{#snippet sectionHeader(navIdx: number, collapsed: boolean, onToggle: () => void, label: string, count: number, extras: { dotClass?: string | null; title?: string; oncontextmenu?: (e: MouseEvent) => void; autoDispatch?: boolean; leadingSpace?: boolean; drop?: ReturnType<typeof laneHover> })}
+{#snippet sectionHeader(navIdx: number, collapsed: boolean, onToggle: () => void, label: string, count: number, extras: { dotClass?: string | null; title?: string; oncontextmenu?: (e: MouseEvent) => void; autoDispatch?: boolean; leadingSpace?: boolean; lane?: boolean; drop?: ReturnType<typeof laneHover> })}
   <button
     data-nav-index={navIdx}
+    data-lane-header={extras.lane ? "" : undefined}
     class="w-full {extras.leadingSpace ? 'pl-6 pr-2' : 'px-2'} mb-1 text-[11px] font-semibold text-t2 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-panel-hi {zone === 'sidebar' && navIdx === getSelectedIndex() ? 'ring-2 ring-accent' : ''}"
     title={extras.title}
     aria-expanded={!collapsed}
@@ -584,10 +574,11 @@
   {@const navIdx = flatNavIndex.get(navKey.group(key)) ?? -1}
   {@const collapsed = isCollapsed(key, defaultCollapsed)}
   {#if level === "top"}
-    {@render sectionHeader(navIdx, collapsed, () => toggleSection(key, defaultCollapsed), label, count, { dotClass, drop })}
+    {@render sectionHeader(navIdx, collapsed, () => toggleSection(key, defaultCollapsed), label, count, { dotClass, lane: true, drop })}
   {:else}
     <button
       data-nav-index={navIdx}
+      data-lane-header=""
       class="w-full flex items-center gap-1.5 pl-2 pr-2 py-1 text-[9.5px] font-semibold text-t2 uppercase tracking-[.05em] hover:opacity-80 rounded-lg {zone === 'sidebar' && navIdx === getSelectedIndex() ? 'ring-2 ring-accent' : ''}"
       aria-expanded={!collapsed}
       onclick={() => toggleSection(key, defaultCollapsed)}
@@ -604,7 +595,7 @@
 <!-- A lane group of the Classic layout, which takes a dragged task of its project (every project when `projectId` is null). -->
 {#snippet laneGroup(group: SidebarLaneGroup, projectId: string | null, level: "top" | "sub")}
   {@const drop = laneHover(group.lane, projectId)}
-  <div class={laneClass(drop)} data-task-lane={group.lane} data-task-lane-project={projectId ?? undefined}>
+  <div class="rounded-lg" data-lane-hover={dropState(drop)} data-task-lane={group.lane} data-task-lane-project={projectId ?? undefined}>
     {@render groupHeader(group.key, group.defaultCollapsed, LANES[group.lane].label, group.rows.length, LANES[group.lane].dotClass, level, drop)}
     {#if !isCollapsed(group.key, group.defaultCollapsed)}{@render taskList(group.rows)}{/if}
   </div>
@@ -678,7 +669,7 @@
       {@const isPreviewing = (linked?.id === previewSessionId) || (previewTaskWorkspace?.projectId === project.id && previewTaskWorkspace.taskKey === task.key)}
       {@const hint = jumpHintFor(navKey.task(project.id, task.key))}
       {@const key = navKey.task(project.id, task.key)}
-      <li animate:flip={{ duration: motionMs, easing: cubicOut }} in:receive={{ key }} out:send={{ key }} class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
+      <li animate:flip={rowFlip} in:receiveRow={{ key }} out:sendRow={{ key }} class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
         <div class="session-row relative flex items-center gap-1.5" {@attach liftWhileDragged({ projectId: project.id, key: task.key })}>
           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
           <button

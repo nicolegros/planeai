@@ -418,8 +418,19 @@ body.task-dragging [data-task-drag-list] li {
   will-change: transform;
 }
 
+/* The lane a dragged task hovers: tinted when it takes the task, outlined in the exited color when it refuses. */
+[data-lane-hover] {
+  @apply ring-1 ring-inset;
+}
+[data-lane-hover="accepts"] {
+  @apply bg-accent-bg ring-accent/40;
+}
+[data-lane-hover="refuses"] {
+  @apply ring-status-exited/40;
+}
+
 /* The hovered lane's header draws over the see-through lifted row, so its label and drop badge stay legible. */
-.task-lane-hovered button[aria-expanded] {
+[data-lane-hover] [data-lane-header] {
   position: relative;
   z-index: 20;
 }
