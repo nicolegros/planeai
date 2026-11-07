@@ -61,23 +61,27 @@
   </div>
 {/snippet}
 
-<Dialog open={true} onOpenChange={(open) => { if (!open) onClose(); }} {title} class="w-[30rem] p-5">
-  <form class="space-y-4" onsubmit={submit}>
-    <h2 class="text-[15px] font-semibold text-t1">{title}</h2>
-    {#if !editing}
-      {@render field("agent-name", "Name", "Shown in session pickers.", name, (v) => (name = v), "e.g. goose")}
-    {/if}
-    {@render field("agent-command", "Command", null, command, (v) => (command = v), "e.g. goose session")}
-    {@render field("agent-yolo", "Skip-permissions flag (optional)", "Appended when a session runs without approval prompts.", yoloFlag, (v) => (yoloFlag = v), "e.g. --yes")}
-    {#if editing}
-      {@render field("agent-resume", "Resume command (optional)", "Run when restarting an exited session on focus. Falls back to the command when empty.", resumeCommand, (v) => (resumeCommand = v), "e.g. claude --resume")}
-      {@render field("agent-prompt", "Prompt arguments (optional)", "{prompt} is replaced with the rendered task prompt.", promptCommand, (v) => (promptCommand = v), "{prompt} or -p {prompt}")}
-      {@render field("agent-mcp", "PlaneAI tools arguments (optional)", "Connects the agent to PlaneAI's MCP server. {mcp_url} is replaced with its URL, {mcp_allowed_tools} with Claude Code's pre-approved tools and {mcp_codex_approved_tools} with Codex's approving overrides; the token arrives in PLANEAI_MCP_TOKEN. Empty leaves the agent unconnected.", mcpArgs, (v) => (mcpArgs = v), "--mcp-config {mcp_url}")}
-    {/if}
-    {#if error}<p class="text-[12px] text-status-exited" role="alert">{error}</p>{/if}
-    <div class="flex justify-end gap-2 pt-1">
-      <Button type="button" onclick={onClose}>Cancel</Button>
-      <Button type="submit" variant="primary">{editing ? "Save" : "Add agent"}</Button>
+<Dialog open={true} onOpenChange={(open) => { if (!open) onClose(); }} {title} class="w-[30rem]">
+  <form class="flex min-h-0 flex-col" onsubmit={submit}>
+    <h2 class="shrink-0 px-5 pb-4 pt-5 text-[15px] font-semibold text-t1">{title}</h2>
+    <div class="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5">
+      {#if !editing}
+        {@render field("agent-name", "Name", "Shown in session pickers.", name, (v) => (name = v), "e.g. goose")}
+      {/if}
+      {@render field("agent-command", "Command", null, command, (v) => (command = v), "e.g. goose session")}
+      {@render field("agent-yolo", "Skip-permissions flag (optional)", "Appended when a session runs without approval prompts.", yoloFlag, (v) => (yoloFlag = v), "e.g. --yes")}
+      {#if editing}
+        {@render field("agent-resume", "Resume command (optional)", "Run when restarting an exited session on focus. Falls back to the command when empty.", resumeCommand, (v) => (resumeCommand = v), "e.g. claude --resume")}
+        {@render field("agent-prompt", "Prompt arguments (optional)", "{prompt} is replaced with the rendered task prompt.", promptCommand, (v) => (promptCommand = v), "{prompt} or -p {prompt}")}
+        {@render field("agent-mcp", "PlaneAI tools arguments (optional)", "Connects the agent to PlaneAI's MCP server. {mcp_url} is replaced with its URL, {mcp_allowed_tools} with Claude Code's pre-approved tools and {mcp_codex_approved_tools} with Codex's approving overrides; the token arrives in PLANEAI_MCP_TOKEN. Empty leaves the agent unconnected.", mcpArgs, (v) => (mcpArgs = v), "--mcp-config {mcp_url}")}
+      {/if}
+    </div>
+    <div class="shrink-0 space-y-4 px-5 pb-5 pt-5">
+      {#if error}<p class="text-[12px] text-status-exited" role="alert">{error}</p>{/if}
+      <div class="flex justify-end gap-2">
+        <Button type="button" onclick={onClose}>Cancel</Button>
+        <Button type="submit" variant="primary">{editing ? "Save" : "Add agent"}</Button>
+      </div>
     </div>
   </form>
 </Dialog>

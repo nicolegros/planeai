@@ -159,45 +159,49 @@
   open={profileDialogOpen}
   onOpenChange={(open) => (profileDialogOpen = open)}
   title={editingProfileId ? "Edit language-server profile" : "Add language-server profile"}
-  class="w-[34rem] p-5"
+  class="w-[34rem]"
 >
-  <form class="space-y-4" onsubmit={(event) => { event.preventDefault(); saveProfile(); }}>
-    <div>
+  <form class="flex min-h-0 flex-col" onsubmit={(event) => { event.preventDefault(); saveProfile(); }}>
+    <div class="shrink-0 px-5 pb-4 pt-5">
       <h2 class="text-[15px] font-semibold text-t1">{editingProfileId ? "Edit language-server profile" : "Add language-server profile"}</h2>
       <p class="mt-1 text-[12px] text-t3">Commands are trusted and run only from your PlaneAI configuration, never from a repository.</p>
     </div>
-    <div class="grid grid-cols-2 gap-3">
-      <div class="space-y-1">
-        <label class="text-[12px] text-t2" for="lsp-profile-id">Profile ID</label>
-        <TextField id="lsp-profile-id" mono width="w-full" bind:value={profileDraft.id} placeholder="local-rust-analyzer" />
+    <div class="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5">
+      <div class="grid grid-cols-2 gap-3">
+        <div class="space-y-1">
+          <label class="text-[12px] text-t2" for="lsp-profile-id">Profile ID</label>
+          <TextField id="lsp-profile-id" mono width="w-full" bind:value={profileDraft.id} placeholder="local-rust-analyzer" />
+        </div>
+        <div class="space-y-1">
+          <label class="text-[12px] text-t2" for="lsp-profile-language">Language ID</label>
+          <TextField id="lsp-profile-language" mono width="w-full" bind:value={profileDraft.languageId} placeholder="rust" />
+        </div>
       </div>
       <div class="space-y-1">
-        <label class="text-[12px] text-t2" for="lsp-profile-language">Language ID</label>
-        <TextField id="lsp-profile-language" mono width="w-full" bind:value={profileDraft.languageId} placeholder="rust" />
+        <label class="text-[12px] text-t2" for="lsp-profile-extensions">File extensions</label>
+        <TextField id="lsp-profile-extensions" mono width="w-full" bind:value={profileDraft.extensions} placeholder="rs, rsi" />
+        <p class="text-[11px] text-t3">Comma-separated, without the leading dot.</p>
       </div>
+      <div class="space-y-1">
+        <label class="text-[12px] text-t2" for="lsp-profile-command">Command</label>
+        <TextField id="lsp-profile-command" mono width="w-full" bind:value={profileDraft.command} placeholder="rust-analyzer" />
+      </div>
+      <div class="space-y-1">
+        <label class="text-[12px] text-t2" for="lsp-profile-args">Arguments</label>
+        <textarea id="lsp-profile-args" bind:value={profileDraft.args} class="min-h-20 w-full resize-y rounded-md border border-border-s bg-panel px-2 py-1.5 font-mono text-[12px] text-t1 placeholder:text-t3 focus:outline-none focus:ring-1 focus:ring-accent" placeholder="--stdio"></textarea>
+        <p class="text-[11px] text-t3">One argument per line, so arguments containing spaces are preserved.</p>
+      </div>
+      <label class="flex items-center gap-2 text-[13px] text-t1">
+        <input type="checkbox" bind:checked={profileDraft.enabled} class="rounded border-border text-accent focus:ring-accent" />
+        Enable this profile
+      </label>
     </div>
-    <div class="space-y-1">
-      <label class="text-[12px] text-t2" for="lsp-profile-extensions">File extensions</label>
-      <TextField id="lsp-profile-extensions" mono width="w-full" bind:value={profileDraft.extensions} placeholder="rs, rsi" />
-      <p class="text-[11px] text-t3">Comma-separated, without the leading dot.</p>
-    </div>
-    <div class="space-y-1">
-      <label class="text-[12px] text-t2" for="lsp-profile-command">Command</label>
-      <TextField id="lsp-profile-command" mono width="w-full" bind:value={profileDraft.command} placeholder="rust-analyzer" />
-    </div>
-    <div class="space-y-1">
-      <label class="text-[12px] text-t2" for="lsp-profile-args">Arguments</label>
-      <textarea id="lsp-profile-args" bind:value={profileDraft.args} class="min-h-20 w-full resize-y rounded-md border border-border-s bg-panel px-2 py-1.5 font-mono text-[12px] text-t1 placeholder:text-t3 focus:outline-none focus:ring-1 focus:ring-accent" placeholder="--stdio"></textarea>
-      <p class="text-[11px] text-t3">One argument per line, so arguments containing spaces are preserved.</p>
-    </div>
-    <label class="flex items-center gap-2 text-[13px] text-t1">
-      <input type="checkbox" bind:checked={profileDraft.enabled} class="rounded border-border text-accent focus:ring-accent" />
-      Enable this profile
-    </label>
-    {#if profileError}<p class="text-[12px] text-status-exited" role="alert">{profileError}</p>{/if}
-    <div class="flex justify-end gap-2 pt-1">
-      <Button type="button" onclick={() => (profileDialogOpen = false)}>Cancel</Button>
-      <Button type="submit" variant="primary">Save profile</Button>
+    <div class="shrink-0 space-y-4 px-5 pb-5 pt-5">
+      {#if profileError}<p class="text-[12px] text-status-exited" role="alert">{profileError}</p>{/if}
+      <div class="flex justify-end gap-2">
+        <Button type="button" onclick={() => (profileDialogOpen = false)}>Cancel</Button>
+        <Button type="submit" variant="primary">Save profile</Button>
+      </div>
     </div>
   </form>
 </Dialog>
