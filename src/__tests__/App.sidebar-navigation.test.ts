@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, tick, unmount } from "svelte";
-import type { Project, Session, TaskItem } from "../lib/types";
+import type { PluginInventory, Project, Session, TaskItem } from "../lib/types";
 
 const alpha: Project = {
   id: "alpha",
@@ -57,6 +57,36 @@ const sessions = [
   session("review-1", "R-1"),
   session("scratch", null),
 ];
+// A running plugin whose page opens with Mod+Shift+Y.
+const notesPlugin: PluginInventory = {
+  id: "notes",
+  name: "Notes",
+  version: "1.0.0",
+  host_api_version: "1",
+  source_kind: "local",
+  backend_entrypoint: "index.js",
+  capabilities: [],
+  ui_contributions: [
+    {
+      id: "page",
+      label: "Page",
+      placement: "main-pane",
+      entrypoint: "page.html",
+      order: null,
+      shortcut: "Mod+Shift+Y",
+    },
+  ],
+  providers: [],
+  tools: [],
+  installed_hash: null,
+  installed_path: null,
+  original_display_path: null,
+  remote_origin: null,
+  enabled: true,
+  state: "running",
+  last_error: null,
+  log_path: null,
+};
 const tasks = [task("D-1", "done"), task("P-1", "in_progress"), task("R-1", "in_review")];
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -73,6 +103,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (command === "list_projects") return [alpha];
     if (command === "list_sessions") return sessions;
     if (command === "list_all_task_items") return tasks;
+    if (command === "list_plugins") return [notesPlugin];
     if (command === "mark_task_visited")
       return { last_visited_at: "2026-11-03T12:00:00Z", last_activity_at: null };
     if (command.startsWith("list_")) return [];
@@ -145,6 +176,28 @@ function clickToastUndo(): void {
     ?.click();
   flushSync();
 }
+
+function openPluginPage(): void {
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "Y",
+      code: "KeyY",
+      shiftKey: true,
+      ...modifier,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  flushSync();
+}
+
+const pluginPageOpen = () =>
+  [...document.querySelectorAll("button")].some((button) =>
+    button.textContent?.includes("Back to workspace"),
+  );
+
+const showsTaskWorkspace = (title: string) =>
+  [...document.querySelectorAll("h2")].some((heading) => heading.textContent?.trim() === title);
 
 function releaseModifier(): void {
   window.dispatchEvent(new KeyboardEvent("keyup", { key: modifierKey, bubbles: true }));
@@ -251,6 +304,33 @@ describe("App sidebar navigation in the Cards layout", () => {
       await settle();
 
       expect([left, getActiveSessionId()]).toEqual(["scratch", "progress-1"]);
+    });
+
+    it("leaves a plugin page opened meanwhile to return to a task without sessions", async () => {
+      // W-1 has no session, so returning to it cannot go through session selection.
+      tasks.push(task("W-1", "in_progress"));
+      chord("r");
+      await settle();
+      try {
+        chord("4");
+        completeTaskChord();
+        await settle();
+        openPluginPage();
+        await settle();
+        const onPluginPage = pluginPageOpen();
+        clickToastUndo();
+        await settle();
+
+        expect([onPluginPage, pluginPageOpen(), showsTaskWorkspace("Title W-1")]).toEqual([
+          true,
+          false,
+          true,
+        ]);
+      } finally {
+        tasks.pop();
+        chord("r");
+        await settle();
+      }
     });
 
     it("stays put when Mod+Z undoes the Done of a task it did not leave", async () => {

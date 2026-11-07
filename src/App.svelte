@@ -925,7 +925,9 @@
     if (!project) return;
     const id = toTaskWorkspaceId(project.id, change.key);
     if (change.kind === "undone") {
-      if (leftDoneTaskIds.delete(id)) routeNavTarget(id);
+      if (!leftDoneTaskIds.delete(id)) return;
+      leavePluginWorkspace();
+      routeNavTarget(id);
       return;
     }
     if (id !== viewedTaskId) {
