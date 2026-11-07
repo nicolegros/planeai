@@ -12,8 +12,8 @@
   import { flip } from "svelte/animate";
   import { cubicOut } from "svelte/easing";
   import { crossfade } from "svelte/transition";
-  import { laneHover, liftWhileDragged, pressTaskRow, taskDrag, taskDragPayload, type TaskDragPayload, type TaskDropTarget } from "../lib/task-drag.svelte";
-  import { laneVerdict } from "../lib/task-drop";
+  import { laneHover, liftWhileDragged, pressTaskRow, taskDrag, taskDragPayload } from "../lib/task-drag.svelte";
+  import { laneVerdict, type TaskDragPayload, type TaskDropTarget } from "../lib/task-drop";
   import LaneDropBadge from "./sidebar/LaneDropBadge.svelte";
   import { rowActivity, rowSession, WOKE_TITLE, type RowAction, type RowActivity } from "../lib/sidebar-cards";
   import { getSidebarModel, isCollapsed, isOpenRow, setCollapsed, shownPages, showMore } from "../lib/sidebar-model-store.svelte";
@@ -285,12 +285,6 @@
     else if (outcome.kind === "wake_status") void wakeAndChangeTaskStatus(task, project, outcome.status, () => onSessionsChanged?.());
     else if (outcome.kind === "snooze") snoozeOrWake({ task, project });
   }
-
-  // The cursor says no over a lane or pane that refuses the dragged task.
-  $effect(() => {
-    document.body.classList.toggle("task-drop-refused", taskDrag.verdict?.accepts === false);
-    return () => document.body.classList.remove("task-drop-refused");
-  });
 
   const laneClass = (verdict: ReturnType<typeof laneHover>) =>
     verdict === null ? "" : verdict.accepts ? "task-lane-hovered rounded-lg bg-accent-bg ring-1 ring-inset ring-accent/40" : "task-lane-hovered rounded-lg ring-1 ring-inset ring-status-exited/40";

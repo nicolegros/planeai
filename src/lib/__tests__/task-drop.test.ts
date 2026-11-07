@@ -7,6 +7,7 @@ import {
   type DropVerdict,
   type LaneOutcome,
   type PaneFacts,
+  type PaneOutcome,
   type TaskDragPayload,
 } from "../task-drop";
 import type { TaskLane } from "../sidebar-model";
@@ -119,11 +120,15 @@ describe("paneVerdict", () => {
     },
   });
 
-  const cases: [string, PaneFacts, DropVerdict<{ kind: "reference" }>][] = [
+  const cases: [string, PaneFacts, DropVerdict<PaneOutcome>][] = [
     [
       "accepts an agent terminal whose provider has MCP",
       agent(),
-      { accepts: true, outcome: { kind: "reference" }, label: "Tell the agent about PLA-123" },
+      {
+        accepts: true,
+        outcome: { kind: "reference", sessionTaskProjectId: "alpha" },
+        label: "Tell the agent about PLA-123",
+      },
     ],
     [
       "refuses an empty pane",
@@ -174,7 +179,11 @@ describe("paneVerdict", () => {
     [
       "accepts a session on a same-key task of another project",
       agent({ taskProjectId: "beta", taskKey: "PLA-123" }),
-      { accepts: true, outcome: { kind: "reference" }, label: "Tell the agent about PLA-123" },
+      {
+        accepts: true,
+        outcome: { kind: "reference", sessionTaskProjectId: "beta" },
+        label: "Tell the agent about PLA-123",
+      },
     ],
     [
       "refuses a tab whose session is gone",

@@ -68,6 +68,17 @@ describe("definePointerDrag", () => {
     expect(drop).toHaveBeenCalledWith("r1", { id: "b" });
   });
 
+  it("keeps the same target while the pointer moves within it, for readers that do not follow the pointer", () => {
+    rows.press("r1", down(10, 5), vi.fn());
+    pointer("pointermove", 250, 40);
+    const first = rows.target;
+    pointer("pointermove", 260, 50);
+    expect([rows.target, rows.current?.point]).toEqual([{ id: "b" }, { x: 260, y: 50 }]);
+    expect(rows.target).toBe(first);
+    pointer("pointermove", 50, 50);
+    expect(rows.target).toEqual({ id: "a" });
+  });
+
   it("drops on the target under the pointer and clears the drag", () => {
     const drop = vi.fn();
     rows.press("r1", down(10, 5), drop);

@@ -1,12 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  hitTest,
-  liftOffset,
-  pressTaskRow,
-  resolvePaneDrops,
-  taskDrag,
-  taskDragPayload,
-} from "../task-drag.svelte";
+import { hitTest, liftOffset, pressTaskRow, taskDrag, taskDragPayload } from "../task-drag.svelte";
 import type { SidebarTaskRow } from "../sidebar-model";
 import type { Project, TaskItem } from "../types";
 
@@ -142,19 +135,15 @@ describe("pressTaskRow", () => {
     expect(taskDrag.outside).toBe(false);
   });
 
-  it("judges the target under the pointer: lanes itself, panes through the app", () => {
+  it("judges the lane under the pointer, and leaves a pane to the app", () => {
     layoutDom();
-    resolvePaneDrops((task, paneId) => ({
-      accepts: false,
-      reason: `${paneId} will not take ${task.key}`,
-    }));
     press();
     pointer("pointermove", 50, 140);
     expect(taskDrag.verdict).toEqual({ accepts: false, reason: "PLA-1 belongs to Alpha." });
     pointer("pointermove", 300, 140);
-    expect(taskDrag.verdict).toEqual({ accepts: false, reason: "p2 will not take PLA-1" });
+    expect([taskDrag.target, taskDrag.verdict]).toEqual([{ kind: "pane", paneId: "p2" }, null]);
     pointer("pointermove", 90, 140);
-    expect(taskDrag.verdict).toBeNull();
+    expect([taskDrag.target, taskDrag.verdict]).toEqual([null, null]);
   });
 
   it("drops the payload on the lane or pane under the pointer", () => {

@@ -267,7 +267,6 @@ describe("dragging a task row to a lane", () => {
 
     dragRow(root, "Title A-2", () => laneOf(root, "in_progress"));
     expect(badges(root)).toEqual(["accepts: Running"]);
-    expect(document.body.classList.contains("task-drop-refused")).toBe(false);
     release();
 
     await vi.waitFor(() =>
@@ -322,16 +321,14 @@ describe("dragging a task row to a lane", () => {
     expect(showToast).not.toHaveBeenCalled();
   });
 
-  it("refuses another project's folder, with the cursor and a toast", async () => {
+  it("refuses another project's folder, with a badge and a toast", async () => {
     mounted = await mountSidebar({ sidebar_group_by: "project" });
     const root = mounted.target;
 
     dragRow(root, "Title A-1", () => laneOf(root, "in_review", "beta"));
     expect(badges(root)).toEqual(["refuses: A-1 belongs to Alpha."]);
-    expect(document.body.classList.contains("task-drop-refused")).toBe(true);
     release();
 
-    expect(document.body.classList.contains("task-drop-refused")).toBe(false);
     expect(taskMove).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith({
       kind: "info",

@@ -12,12 +12,9 @@ import {
   laneVerdict,
   type DropVerdict,
   type LaneOutcome,
-  type PaneOutcome,
   type TaskDragPayload,
   type TaskDropTarget,
 } from "./task-drop";
-
-export type { TaskDragPayload, TaskDropTarget } from "./task-drop";
 
 /** The drop target under a viewport point, if any. */
 export function hitTest(x: number, y: number): TaskDropTarget | null {
@@ -43,21 +40,16 @@ const drag = definePointerDrag<TaskDragPayload, TaskDropTarget>({
 /** Horizontal bounds of the list the press started in. */
 let listBounds: { left: number; right: number } | null = null;
 
-type PaneVerdicts = (task: TaskDragPayload, paneId: string) => DropVerdict<PaneOutcome>;
-/** Pane verdicts need the layout and the sessions, which the app provides. */
-let paneVerdicts: PaneVerdicts | null = null;
-
-export function resolvePaneDrops(resolve: PaneVerdicts): void {
-  paneVerdicts = resolve;
-}
-
+/** Readers of `current` follow every pointer move; the other getters only change with their value. */
 export const taskDrag = {
   get current(): PointerDrag<TaskDragPayload, TaskDropTarget> | null {
     return drag.current;
   },
-  /** The task being dragged, for readers that need not follow the pointer. */
   get payload(): TaskDragPayload | null {
     return drag.payload;
+  },
+  get target(): TaskDropTarget | null {
+    return drag.target;
   },
   /** The pointer left the sidebar sideways: the row goes home and a ghost follows the pointer. */
   get outside(): boolean {
@@ -65,34 +57,31 @@ export const taskDrag = {
     if (!current || !listBounds) return false;
     return current.point.x < listBounds.left || current.point.x > listBounds.right;
   },
-  /** What dropping now would do, for the target under the pointer. */
-  get verdict(): DropVerdict<LaneOutcome> | DropVerdict<PaneOutcome> | null {
-    const current = drag.current;
-    if (!current?.target) return null;
-    if (current.target.kind === "lane") return laneVerdict(current.payload, current.target);
-    return paneVerdicts?.(current.payload, current.target.paneId) ?? null;
+  /** What dropping on the lane under the pointer would do; a pane is the app's to judge. */
+  get verdict(): DropVerdict<LaneOutcome> | null {
+    const target = drag.target;
+    const payload = drag.payload;
+    if (!payload || target?.kind !== "lane") return null;
+    return laneVerdict(payload, target);
   },
 };
 
-/**
- * The verdict a lane section shows while the dragged task hovers it; null when the pointer is
- * elsewhere, or the task is dropped back where it came from.
- */
+/** The verdict a lane shows while the dragged task hovers it; null elsewhere, or when the drop would change nothing. */
 export function laneHover(
   lane: TaskLane,
   projectId: string | null,
 ): DropVerdict<LaneOutcome> | null {
-  const current = drag.current;
-  const target = current?.target;
+  const target = drag.target;
+  const payload = drag.payload;
   if (
-    !current ||
+    !payload ||
     target?.kind !== "lane" ||
     target.lane !== lane ||
     target.projectId !== projectId
   ) {
     return null;
   }
-  const verdict = laneVerdict(current.payload, target);
+  const verdict = laneVerdict(payload, target);
   return verdict.accepts && verdict.outcome.kind === "stay" ? null : verdict;
 }
 

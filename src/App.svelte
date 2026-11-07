@@ -65,8 +65,8 @@
   import { providerHandoff, taskWorkspaceLayout as workspaceLayout, toPaneTabs, workspaceOf, type PaneTab, type WorkspaceAgent, type WorkspaceIdentity } from "./lib/task-workspace-layout.svelte";
   import { activeTabOf, findLeaf, tabsOf, type LeafNode, type NavDirection, type SplitDirection, type TabEntry } from "./lib/layout-tree";
   import { pressTab as pressTabForDrag, tabDrag, type TabDropTarget } from "./lib/tab-drag.svelte";
-  import { resolvePaneDrops, taskDrag, type TaskDragPayload } from "./lib/task-drag.svelte";
-  import { paneVerdict, providerConnectsMcp, taskReferenceText, type PaneFacts } from "./lib/task-drop";
+  import { taskDrag } from "./lib/task-drag.svelte";
+  import { paneVerdict, providerConnectsMcp, taskReferenceText, type PaneFacts, type TaskDragPayload } from "./lib/task-drop";
   import { ClipboardList } from "@lucide/svelte";
   import { dropPositionToViewport, droppedPathsText } from "./lib/dropped-paths";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -390,13 +390,14 @@
   }
 
   /** What a dragged task finds in a pane: its front tab and that tab's session. */
-  function paneFacts(paneId: string): PaneFacts {
-    const tab = frontTab(paneId);
-    if (!tab) return { tab: null, session: null };
-    const session = sessions.find((candidate) => candidate.id === ptyKeySessionId(tab.ptyKey));
-    if (!session) return { tab: tab.type, session: null };
+  function paneFacts(paneId: string): PaneFacts & { entry: TabEntry | null } {
+    const entry = frontTab(paneId);
+    if (!entry) return { entry, tab: null, session: null };
+    const session = sessions.find((candidate) => candidate.id === ptyKeySessionId(entry.ptyKey));
+    if (!session) return { entry, tab: entry.type, session: null };
     return {
-      tab: tab.type,
+      entry,
+      tab: entry.type,
       session: {
         plugin: isPluginSession(session),
         provider: session.provider,
@@ -406,19 +407,31 @@
       },
     };
   }
-  resolvePaneDrops((task, paneId) => paneVerdict(task, paneFacts(paneId)));
+
+  /** The pane the dragged task hovers and whether it takes it, for the preview and the cursor. */
+  const paneDrop = $derived.by(() => {
+    const target = taskDrag.target;
+    const task = taskDrag.payload;
+    if (!task || target?.kind !== "pane") return null;
+    return { paneId: target.paneId, verdict: paneVerdict(task, paneFacts(target.paneId)) };
+  });
+
+  // The cursor says no over a lane or pane that refuses the dragged task.
+  $effect(() => {
+    const refused = taskDrag.verdict?.accepts === false || paneDrop?.verdict.accepts === false;
+    document.body.classList.toggle("task-drop-refused", refused);
+    return () => document.body.classList.remove("task-drop-refused");
+  });
 
   /** Types a reference to a task dropped on a pane into the agent in front of it, for its `task_show` tool. */
   async function referenceTaskInPane(task: TaskDragPayload, paneId: string): Promise<void> {
-    const facts = paneFacts(paneId);
-    const verdict = paneVerdict(task, facts);
+    const pane = paneFacts(paneId);
+    const verdict = paneVerdict(task, pane);
     if (!verdict.accepts) {
       showToast(verdict.reason, "error");
       return;
     }
-    const tab = frontTab(paneId);
-    if (!tab || !facts.session) return;
-    await typeIntoTerminal(tab, taskReferenceText(task, facts.session.taskProjectId), "task reference");
+    await typeIntoTerminal(pane.entry!, taskReferenceText(task, verdict.outcome.sessionTaskProjectId), "task reference");
   }
 
   function paneTabs(leaf: LeafNode): PaneTab[] {
@@ -1362,8 +1375,8 @@
         <div class="split-leaf-content" data-pane-drop={leaf.id}>
           {#if tabDrag.target?.kind === "pane" && tabDrag.target.paneId === leaf.id}
             <div class="pane-drop-preview" data-zone={tabDrag.target.zone}></div>
-          {:else if taskDrag.current?.target?.kind === "pane" && taskDrag.current.target.paneId === leaf.id}
-            <div class="pane-drop-preview" class:pane-drop-refused={taskDrag.verdict?.accepts === false} data-zone="center"></div>
+          {:else if paneDrop?.paneId === leaf.id}
+            <div class="pane-drop-preview" class:pane-drop-refused={!paneDrop.verdict.accepts} data-zone="center"></div>
           {:else if fileDropPane === leaf.id && activeEntry && isTerminalTab(activeEntry)}
             <div class="pane-drop-preview" data-zone="center"></div>
           {/if}

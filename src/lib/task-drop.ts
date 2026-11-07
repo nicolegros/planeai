@@ -22,7 +22,7 @@ export type TaskDropTarget =
   /** A lane section; `projectId` is null for a lane shared by every project. */
   { kind: "lane"; lane: TaskLane; projectId: string | null } | { kind: "pane"; paneId: string };
 
-export type LaneDropTarget = Extract<TaskDropTarget, { kind: "lane" }>;
+type LaneDropTarget = Extract<TaskDropTarget, { kind: "lane" }>;
 
 export type DropVerdict<Outcome> =
   | { accepts: true; outcome: Outcome; label: string }
@@ -78,7 +78,8 @@ export interface PaneFacts {
   } | null;
 }
 
-export type PaneOutcome = { kind: "reference" };
+/** The reference goes to the session in front; the project it works on shapes the text. */
+export type PaneOutcome = { kind: "reference"; sessionTaskProjectId: string };
 
 /**
  * Whether a session of `provider` runs with PlaneAI's MCP tools, as the backend decides at launch:
@@ -129,7 +130,7 @@ export function paneVerdict(task: TaskDragPayload, pane: PaneFacts): DropVerdict
   }
   return {
     accepts: true,
-    outcome: { kind: "reference" },
+    outcome: { kind: "reference", sessionTaskProjectId: session.taskProjectId },
     label: `Tell the agent about ${task.key}`,
   };
 }

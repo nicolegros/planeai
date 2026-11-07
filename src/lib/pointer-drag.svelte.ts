@@ -10,7 +10,7 @@
  * a time across every kind.
  */
 
-export interface Point {
+interface Point {
   x: number;
   y: number;
 }
@@ -29,6 +29,8 @@ export interface PointerDragKind<P, T> {
   readonly current: PointerDrag<P, T> | null;
   /** Its payload alone, for readers that need not follow the pointer. */
   readonly payload: P | null;
+  /** What is under the pointer; it changes only when a different target is found. */
+  readonly target: T | null;
   /** Track a press; `onDrop` runs if the drag is released over a target. */
   press(payload: P, down: PointerEvent, onDrop: (payload: P, target: T) => void): void;
 }
@@ -45,6 +47,19 @@ interface ActiveDrag {
 let active = $state.raw<ActiveDrag | null>(null);
 let target = $state.raw<unknown>(null);
 let point = $state.raw<Point>({ x: 0, y: 0 });
+
+/** Targets are flat records, so two with the same fields are the same target. */
+function sameTarget(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((key) =>
+      Object.is((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
+    )
+  );
+}
 /** Ends the press in progress; a new press must never inherit a stale one. */
 let endActivePress: (() => void) | null = null;
 
@@ -76,6 +91,9 @@ export function definePointerDrag<P, T>(options: {
     get payload() {
       return active?.kind === kind ? (active.payload as P) : null;
     },
+    get target() {
+      return active?.kind === kind ? (target as T | null) : null;
+    },
     press(payload, down, onDrop) {
       if (down.button !== 0) return;
       endActivePress?.();
@@ -83,7 +101,8 @@ export function definePointerDrag<P, T>(options: {
 
       const hit = (x: number, y: number) => {
         point = { x, y };
-        target = options.hitTest(x, y);
+        const found = options.hitTest(x, y);
+        if (!sameTarget(target, found)) target = found;
       };
       const move = (event: PointerEvent) => {
         if (!active) {
