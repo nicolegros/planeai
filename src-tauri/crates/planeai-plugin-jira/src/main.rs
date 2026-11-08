@@ -1792,6 +1792,68 @@ mod sync_tests {
         std::fs::remove_dir_all(data_dir).unwrap();
     }
 
+    #[tokio::test]
+    async fn a_dismissed_departure_stays_dismissed_until_the_issue_departs_again() {
+        let data_dir =
+            std::env::temp_dir().join(format!("planeai-jira-dismiss-{}", generate_state()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let plugin = plugin_for_test(data_dir.clone());
+        let conn = plugin.database().unwrap();
+        upsert_issue(&conn, &issue("ONE-1", "Open"), "source", "todo").unwrap();
+        sync_issue_source(&conn, "ONE-1", "source").unwrap();
+        mark_departed(&conn, "ONE-1", "source").unwrap();
+
+        let (plugin_stream, host_stream) = tokio::io::duplex(4096);
+        let (plugin_read, mut output) = tokio::io::split(plugin_stream);
+        let (host_read, mut host_write) = tokio::io::split(host_stream);
+        let mut input = BufReader::new(plugin_read);
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(host_read).lines();
+            while let Some(line) = lines.next_line().await.unwrap() {
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let response = json!({ "jsonrpc": "2.0", "id": request["id"], "result": { "task": { "status": "todo" } } });
+                host_write
+                    .write_all(format!("{response}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        let queued_keys = |plugin: &JiraPlugin| -> Vec<String> {
+            plugin.departed_queue().unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["key"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let mut next_id = 0;
+        let mut totals = SyncTotals::default();
+
+        rebuild_departure_queue(&conn, &mut input, &mut output, &mut next_id, &mut totals)
+            .await
+            .unwrap();
+        assert_eq!(queued_keys(&plugin), vec!["ONE-1"]);
+
+        plugin
+            .dequeue_departure(&json!({ "key": "ONE-1" }))
+            .unwrap();
+        rebuild_departure_queue(&conn, &mut input, &mut output, &mut next_id, &mut totals)
+            .await
+            .unwrap();
+        assert_eq!(queued_keys(&plugin), Vec::<String>::new());
+
+        sync_issue_source(&conn, "ONE-1", "source").unwrap();
+        mark_departed(&conn, "ONE-1", "source").unwrap();
+        rebuild_departure_queue(&conn, &mut input, &mut output, &mut next_id, &mut totals)
+            .await
+            .unwrap();
+        assert_eq!(queued_keys(&plugin), vec!["ONE-1"]);
+
+        drop(conn);
+        drop(plugin);
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
     #[test]
     fn malformed_settings_are_rejected_instead_of_defaulting() {
         assert!(settings_from_value(&json!({ "sources": [] })).is_err());
