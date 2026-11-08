@@ -1188,8 +1188,8 @@ fn rename_source_memberships(conn: &mut Connection, from: &str, to: &str) -> Res
         .map_err(|error| format!("failed to rename legacy Jira source ownership: {error}"))?;
     transaction
         .execute(
-            "INSERT INTO jira_issue_sources (issue_key, source_name, sync_status)
-             SELECT issue_key, ?1, sync_status FROM jira_issue_sources WHERE source_name = ?2
+            "INSERT INTO jira_issue_sources (issue_key, source_name, sync_status, departure_prompt_eligible)
+             SELECT issue_key, ?1, sync_status, departure_prompt_eligible FROM jira_issue_sources WHERE source_name = ?2
              ON CONFLICT(issue_key, source_name) DO UPDATE SET sync_status =
                  CASE WHEN jira_issue_sources.sync_status = 'synced' OR excluded.sync_status = 'synced'
                  THEN 'synced' ELSE 'departed' END",
