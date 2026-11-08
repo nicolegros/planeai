@@ -1193,9 +1193,7 @@ fn rename_source_memberships(conn: &mut Connection, from: &str, to: &str) -> Res
              ON CONFLICT(issue_key, source_name) DO UPDATE SET sync_status =
                  CASE WHEN jira_issue_sources.sync_status = 'synced' OR excluded.sync_status = 'synced'
                  THEN 'synced' ELSE 'departed' END,
-                 departure_prompt_eligible =
-                 CASE WHEN jira_issue_sources.sync_status = 'synced' OR excluded.sync_status = 'synced'
-                 THEN 0 ELSE MAX(jira_issue_sources.departure_prompt_eligible, excluded.departure_prompt_eligible) END",
+                 departure_prompt_eligible = MAX(jira_issue_sources.departure_prompt_eligible, excluded.departure_prompt_eligible)",
             params![to, from],
         )
         .map_err(|error| format!("failed to rename Jira source memberships: {error}"))?;
@@ -1888,7 +1886,7 @@ mod sync_tests {
     }
 
     #[test]
-    fn source_rename_keeps_a_pending_departure_prompt() {
+    fn source_rename_onto_a_removed_source_keeps_a_pending_departure_prompt() {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate_database(&conn).unwrap();
         upsert_issue(&conn, &issue("ONE-1", "Open"), "old", "todo").unwrap();
