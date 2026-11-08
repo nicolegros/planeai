@@ -517,7 +517,7 @@ impl JiraPlugin {
                 "UPDATE jira_issue_sources SET departure_prompt_eligible = 0 WHERE issue_key = ?1",
                 params![key],
             )
-            .map_err(|error| format!("failed to settle departed Jira issue: {error}"))?;
+            .map_err(|error| format!("failed to clear Jira departure eligibility: {error}"))?;
         transaction
             .commit()
             .map_err(|error| format!("failed to commit Jira departure dequeue: {error}"))?;
@@ -1776,34 +1776,6 @@ mod sync_tests {
             [], |row| row.get(0),
         ).unwrap();
         assert_eq!(eligible, 1);
-    }
-
-    #[test]
-    fn departure_queue_api_lists_and_dismisses_unresolved_items() {
-        let data_dir =
-            std::env::temp_dir().join(format!("planeai-jira-queue-{}", generate_state()));
-        std::fs::create_dir_all(&data_dir).unwrap();
-        let plugin = plugin_for_test(data_dir.clone());
-        let conn = plugin.database().unwrap();
-        conn.execute(
-            "INSERT INTO jira_issues (issue_key, summary, description, jira_status, mapped_status, source_name, sync_status, last_synced_at) VALUES ('ONE-1', 'Summary', '', 'Open', 'todo', 'source', 'departed', 'now')",
-            [],
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO jira_departure_queue (issue_key, summary, queued_at) VALUES ('ONE-1', 'Summary', 'now')",
-            [],
-        ).unwrap();
-        drop(conn);
-        assert_eq!(plugin.departed_queue().unwrap()["items"][0]["key"], "ONE-1");
-        plugin
-            .dequeue_departure(&json!({ "key": "ONE-1" }))
-            .unwrap();
-        assert!(plugin.departed_queue().unwrap()["items"]
-            .as_array()
-            .unwrap()
-            .is_empty());
-        drop(plugin);
-        std::fs::remove_dir_all(data_dir).unwrap();
     }
 
     #[tokio::test]

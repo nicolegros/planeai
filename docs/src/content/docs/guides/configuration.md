@@ -330,3 +330,6 @@ If PlaneAI is interrupted or validation/enablement fails, Jira remains safely fe
 Connect via **Preferences → Jira → Connect**. Building from source requires `JIRA_CLIENT_ID` and `JIRA_CLIENT_SECRET`; without them, the build succeeds but OAuth cannot work at runtime.
 
 Jira source synchronization includes departed-issue handling: when an issue no longer matches a configured source, its membership for that source is marked departed. An issue remains in the Jira sidebar while it matches any configured source.
+When an issue has left every configured source and its task is not done, PlaneAI shows a "left your Jira query" toast.
+**Done** marks the task done; dismissing leaves the task alone.
+Either way the issue prompts again only if it re-enters a source and later leaves it.
