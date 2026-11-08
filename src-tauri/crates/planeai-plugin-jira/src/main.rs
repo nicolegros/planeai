@@ -1913,6 +1913,22 @@ mod sync_tests {
     }
 
     #[test]
+    fn source_rename_keeps_a_pending_departure_prompt() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_database(&conn).unwrap();
+        upsert_issue(&conn, &issue("ONE-1", "Open"), "old", "todo").unwrap();
+        sync_issue_source(&conn, "ONE-1", "old").unwrap();
+        mark_departed(&conn, "ONE-1", "old").unwrap();
+
+        rename_source_memberships(&mut conn, "old", "new").unwrap();
+        let eligible: i64 = conn.query_row(
+            "SELECT departure_prompt_eligible FROM jira_issue_sources WHERE issue_key = 'ONE-1' AND source_name = 'new'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(eligible, 1);
+    }
+
+    #[test]
     fn settings_detect_a_pure_source_rename() {
         let source = JiraSource {
             jql: "project = PLA".to_string(),
