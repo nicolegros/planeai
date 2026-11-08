@@ -1192,7 +1192,10 @@ fn rename_source_memberships(conn: &mut Connection, from: &str, to: &str) -> Res
              SELECT issue_key, ?1, sync_status, departure_prompt_eligible FROM jira_issue_sources WHERE source_name = ?2
              ON CONFLICT(issue_key, source_name) DO UPDATE SET sync_status =
                  CASE WHEN jira_issue_sources.sync_status = 'synced' OR excluded.sync_status = 'synced'
-                 THEN 'synced' ELSE 'departed' END",
+                 THEN 'synced' ELSE 'departed' END,
+                 departure_prompt_eligible =
+                 CASE WHEN jira_issue_sources.sync_status = 'synced' OR excluded.sync_status = 'synced'
+                 THEN 0 ELSE MAX(jira_issue_sources.departure_prompt_eligible, excluded.departure_prompt_eligible) END",
             params![to, from],
         )
         .map_err(|error| format!("failed to rename Jira source memberships: {error}"))?;
