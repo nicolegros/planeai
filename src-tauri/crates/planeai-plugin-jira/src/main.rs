@@ -501,12 +501,26 @@ impl JiraPlugin {
             .and_then(Value::as_str)
             .filter(|key| !key.is_empty())
             .ok_or("jira departed dequeue requires key")?;
-        let conn = self.database()?;
-        conn.execute(
-            "DELETE FROM jira_departure_queue WHERE issue_key = ?1",
-            params![key],
-        )
-        .map_err(|error| format!("failed to dequeue departed Jira issue: {error}"))?;
+        let mut conn = self.database()?;
+        let transaction = conn
+            .transaction()
+            .map_err(|error| format!("failed to start Jira departure dequeue: {error}"))?;
+        transaction
+            .execute(
+                "DELETE FROM jira_departure_queue WHERE issue_key = ?1",
+                params![key],
+            )
+            .map_err(|error| format!("failed to dequeue departed Jira issue: {error}"))?;
+        // The next sync rebuilds the queue from eligibility, so only a fresh departure may prompt again.
+        transaction
+            .execute(
+                "UPDATE jira_issue_sources SET departure_prompt_eligible = 0 WHERE issue_key = ?1",
+                params![key],
+            )
+            .map_err(|error| format!("failed to clear Jira departure eligibility: {error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("failed to commit Jira departure dequeue: {error}"))?;
         Ok(json!({ "dequeued": true }))
     }
 
@@ -1174,11 +1188,12 @@ fn rename_source_memberships(conn: &mut Connection, from: &str, to: &str) -> Res
         .map_err(|error| format!("failed to rename legacy Jira source ownership: {error}"))?;
     transaction
         .execute(
-            "INSERT INTO jira_issue_sources (issue_key, source_name, sync_status)
-             SELECT issue_key, ?1, sync_status FROM jira_issue_sources WHERE source_name = ?2
+            "INSERT INTO jira_issue_sources (issue_key, source_name, sync_status, departure_prompt_eligible)
+             SELECT issue_key, ?1, sync_status, departure_prompt_eligible FROM jira_issue_sources WHERE source_name = ?2
              ON CONFLICT(issue_key, source_name) DO UPDATE SET sync_status =
                  CASE WHEN jira_issue_sources.sync_status = 'synced' OR excluded.sync_status = 'synced'
-                 THEN 'synced' ELSE 'departed' END",
+                 THEN 'synced' ELSE 'departed' END,
+                 departure_prompt_eligible = MAX(jira_issue_sources.departure_prompt_eligible, excluded.departure_prompt_eligible)",
             params![to, from],
         )
         .map_err(|error| format!("failed to rename Jira source memberships: {error}"))?;
@@ -1764,30 +1779,64 @@ mod sync_tests {
         assert_eq!(eligible, 1);
     }
 
-    #[test]
-    fn departure_queue_api_lists_and_dismisses_unresolved_items() {
+    #[tokio::test]
+    async fn a_dismissed_departure_stays_dismissed_until_the_issue_departs_again() {
         let data_dir =
-            std::env::temp_dir().join(format!("planeai-jira-queue-{}", generate_state()));
+            std::env::temp_dir().join(format!("planeai-jira-dismiss-{}", generate_state()));
         std::fs::create_dir_all(&data_dir).unwrap();
         let plugin = plugin_for_test(data_dir.clone());
         let conn = plugin.database().unwrap();
-        conn.execute(
-            "INSERT INTO jira_issues (issue_key, summary, description, jira_status, mapped_status, source_name, sync_status, last_synced_at) VALUES ('ONE-1', 'Summary', '', 'Open', 'todo', 'source', 'departed', 'now')",
-            [],
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO jira_departure_queue (issue_key, summary, queued_at) VALUES ('ONE-1', 'Summary', 'now')",
-            [],
-        ).unwrap();
-        drop(conn);
-        assert_eq!(plugin.departed_queue().unwrap()["items"][0]["key"], "ONE-1");
+        upsert_issue(&conn, &issue("ONE-1", "Open"), "source", "todo").unwrap();
+        sync_issue_source(&conn, "ONE-1", "source").unwrap();
+        mark_departed(&conn, "ONE-1", "source").unwrap();
+
+        let (plugin_stream, host_stream) = tokio::io::duplex(4096);
+        let (plugin_read, mut output) = tokio::io::split(plugin_stream);
+        let (host_read, mut host_write) = tokio::io::split(host_stream);
+        let mut input = BufReader::new(plugin_read);
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(host_read).lines();
+            while let Some(line) = lines.next_line().await.unwrap() {
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let response = json!({ "jsonrpc": "2.0", "id": request["id"], "result": { "task": { "status": "todo" } } });
+                host_write
+                    .write_all(format!("{response}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        let queued_keys = |plugin: &JiraPlugin| -> Vec<String> {
+            plugin.departed_queue().unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["key"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let mut next_id = 0;
+        let mut totals = SyncTotals::default();
+
+        rebuild_departure_queue(&conn, &mut input, &mut output, &mut next_id, &mut totals)
+            .await
+            .unwrap();
+        assert_eq!(queued_keys(&plugin), vec!["ONE-1"]);
+
         plugin
             .dequeue_departure(&json!({ "key": "ONE-1" }))
             .unwrap();
-        assert!(plugin.departed_queue().unwrap()["items"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        rebuild_departure_queue(&conn, &mut input, &mut output, &mut next_id, &mut totals)
+            .await
+            .unwrap();
+        assert_eq!(queued_keys(&plugin), Vec::<String>::new());
+
+        sync_issue_source(&conn, "ONE-1", "source").unwrap();
+        mark_departed(&conn, "ONE-1", "source").unwrap();
+        rebuild_departure_queue(&conn, &mut input, &mut output, &mut next_id, &mut totals)
+            .await
+            .unwrap();
+        assert_eq!(queued_keys(&plugin), vec!["ONE-1"]);
+
+        drop(conn);
         drop(plugin);
         std::fs::remove_dir_all(data_dir).unwrap();
     }
@@ -1834,6 +1883,24 @@ mod sync_tests {
             )
             .unwrap();
         assert_eq!(status, "synced");
+    }
+
+    #[test]
+    fn source_rename_onto_a_removed_source_keeps_a_pending_departure_prompt() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_database(&conn).unwrap();
+        upsert_issue(&conn, &issue("ONE-1", "Open"), "old", "todo").unwrap();
+        sync_issue_source(&conn, "ONE-1", "new").unwrap();
+        depart_source(&conn, "new").unwrap();
+        sync_issue_source(&conn, "ONE-1", "old").unwrap();
+        mark_departed(&conn, "ONE-1", "old").unwrap();
+
+        rename_source_memberships(&mut conn, "old", "new").unwrap();
+        let eligible: i64 = conn.query_row(
+            "SELECT departure_prompt_eligible FROM jira_issue_sources WHERE issue_key = 'ONE-1' AND source_name = 'new'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(eligible, 1);
     }
 
     #[test]
