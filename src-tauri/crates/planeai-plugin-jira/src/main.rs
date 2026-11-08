@@ -1889,6 +1889,8 @@ mod sync_tests {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate_database(&conn).unwrap();
         upsert_issue(&conn, &issue("ONE-1", "Open"), "old", "todo").unwrap();
+        sync_issue_source(&conn, "ONE-1", "new").unwrap();
+        depart_source(&conn, "new").unwrap();
         sync_issue_source(&conn, "ONE-1", "old").unwrap();
         mark_departed(&conn, "ONE-1", "old").unwrap();
 
