@@ -501,12 +501,26 @@ impl JiraPlugin {
             .and_then(Value::as_str)
             .filter(|key| !key.is_empty())
             .ok_or("jira departed dequeue requires key")?;
-        let conn = self.database()?;
-        conn.execute(
-            "DELETE FROM jira_departure_queue WHERE issue_key = ?1",
-            params![key],
-        )
-        .map_err(|error| format!("failed to dequeue departed Jira issue: {error}"))?;
+        let mut conn = self.database()?;
+        let transaction = conn
+            .transaction()
+            .map_err(|error| format!("failed to start Jira departure dequeue: {error}"))?;
+        transaction
+            .execute(
+                "DELETE FROM jira_departure_queue WHERE issue_key = ?1",
+                params![key],
+            )
+            .map_err(|error| format!("failed to dequeue departed Jira issue: {error}"))?;
+        // The next sync rebuilds the queue from eligibility, so only a fresh departure may prompt again.
+        transaction
+            .execute(
+                "UPDATE jira_issue_sources SET departure_prompt_eligible = 0 WHERE issue_key = ?1",
+                params![key],
+            )
+            .map_err(|error| format!("failed to settle departed Jira issue: {error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("failed to commit Jira departure dequeue: {error}"))?;
         Ok(json!({ "dequeued": true }))
     }
 
