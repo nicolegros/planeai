@@ -221,7 +221,9 @@ The Gleam and Gleam Classic themes were created by [trag1c](https://github.com/t
 
 The Grok Day and Grok Night themes come from [promptegrity/grok-themes](https://github.com/promptegrity/grok-themes). The palettes are adapted from [xai-org/grok-build](https://github.com/xai-org/grok-build). [zasdaym](https://github.com/zasdaym) added these themes.
 
-The Gruber Darker theme was inspired by [Alexey Kutepov](https://github.com/rexim)
+The Gruber Darker theme was created for Emacs by [Jason Blevins](https://jblevins.org/projects/emacs-color-themes/) as a darker variant of [John Gruber's Gruber Dark theme for BBEdit](https://daringfireball.net/projects/bbcolors/schemes/), then adapted and extended by [Alexey Kutepov](https://github.com/rexim/gruber-darker-theme). Abi contributed the terminal port in [#447](https://github.com/mbadolato/iTerm2-Color-Schemes/pull/447).
+
+The Gruber Darker Legacy theme preserves that terminal port's original iTerm2 source and existing generated colors before the color-space and palette corrections in [#899](https://github.com/mbadolato/iTerm2-Color-Schemes/pull/899). It retains the P3 color-space tags and the differing green and foreground values; no colors have been redesigned.
 
 The Gruvbox Dark theme was created by [morhetz](https://github.com/morhetz) and added by [saccarosium](https://github.com/mcchrish)
 
@@ -499,6 +501,8 @@ The Sublette theme was created by [sublee](https://github.com/sublee).
 The theme Subliminal was created by [gdsrosa](https://github.com/gdsrosa/subliminal-itermcolors)
 
 The theme Sugarplum was created by [lemonlime0x3C33](https://github.com/lemonlime0x3C33/iTerm2-Color-Schemes-Sugarplum)
+
+The Sumi Ink theme was created by [EldinBegano](https://github.com/EldinBegano); it also ships ports for yazi, fzf, delta and oh-my-posh in [sumi-ink](https://github.com/EldinBegano/sumi-ink).
 
 The Sunset Drive theme was created by [tahayvr](https://github.com/tahayvr)
 
@@ -965,3 +969,27 @@ The Paper Crane: Midnight Ink theme was created by [Mark Badolato](https://termi
 The Sonoran Afterglow theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
 
 The Sonoran Blue Hour theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The KIZZ theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Vaughn theme was created by [Mark Badolato](https://github.com/mbadolato).
+
+The All-Nighter theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Numix Dark theme was created by [Tom Hardy](https://terminalthemes.com/users/01M6G8VVMHJBGX9E7F7NM54JF8).
+
+The Numix Light theme was created by [Tom Hardy](https://terminalthemes.com/users/01M6G8VVMHJBGX9E7F7NM54JF8).
+
+The Tideglass theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Wasteland Terminal theme was created by [chlp](https://github.com/chlp/ghostty-fallout-theme).
+
+The Nudisia theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Deep In Purple theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Don't Panic theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Stone theme was created by [Kyle Purdon](https://github.com/kpurdon) with OpenAI Codex assistance. Inspired by the macOS Stone solid desktop color, it pairs a slightly darker neutral gray background with an original, muted mineral palette.
+
+The mistpine theme was created by [Luan Utimura](https://github.com/mistpine/mistpine).
