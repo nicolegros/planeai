@@ -40,9 +40,9 @@ jobs:
 
       - run: cargo fmt --check
 
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      - run: cargo test
+      - run: cargo test --locked
 
       - name: Test shipped local plugin fixture scenarios
         run: make -C .. test-plugin-fixture
@@ -75,8 +75,8 @@ jobs:
       - name: Ensure sidecar placeholders
         shell: bash
         run: ./scripts/ensure-sidecars.sh --placeholders-only
-      - run: cargo check
-      - run: cargo test
+      - run: cargo check --locked
+      - run: cargo test --locked
       - name: Test shipped local plugin fixture scenarios
         shell: bash
         run: make -C .. test-plugin-fixture
