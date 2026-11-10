@@ -626,7 +626,7 @@
       return;
     }
     const [search, hash] = location ? settingsLocationQuery(location) : ["?page=preferences", ""];
-    new WebviewWindow("preferences", { url: `index.html${search}${hash}`, title: "Preferences", width: 920, height: 680, minWidth: 760, minHeight: 520, parent: getCurrentWindow(), resizable: true, minimizable: false, maximizable: false });
+    new WebviewWindow("preferences", { url: `index.html${search}${hash}`, title: "Preferences", width: 920, height: 680, minWidth: 760, minHeight: 520, resizable: true, minimizable: false, maximizable: false });
   }
 
   async function doRename(id: string, name: string) {
