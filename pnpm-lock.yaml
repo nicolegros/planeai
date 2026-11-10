@@ -59,8 +59,8 @@ importers:
         specifier: ^1.2.5
         version: 1.2.5
       '@lucide/svelte':
-        specifier: ^1.61.0
-        version: 1.61.0(svelte@5.57.2)
+        specifier: ^1.66.0
+        version: 1.66.0(svelte@5.57.2)
       '@pierre/trees':
         specifier: 1.0.0-beta.6
         version: 1.0.0-beta.6(@shikijs/themes@3.23.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(shiki@3.23.0)
@@ -618,8 +618,8 @@ packages:
   '@lezer/yaml@1.0.4':
     resolution: {integrity: sha512-2lrrHqxalACEbxIbsjhqGpSW8kWpUKuY6RHgnSAFZa6qK62wvnPxA8hGOwOoDbwHcOFs5M4o27mjGu+P7TvBmw==}
 
-  '@lucide/svelte@1.61.0':
-    resolution: {integrity: sha512-Vwj4ADoKgVogLFpEbXv2PS2hh2fj+aAqPuiNydI88Zkyb1l7veL4fXgRrOX3tgpESHhIGneNkSSYhHupvCBshg==}
+  '@lucide/svelte@1.66.0':
+    resolution: {integrity: sha512-G2qFyutQpgk9TY0QYgqXk9rQtUt8p509mFpQzmTpyc894hfRSFhGNcGAVAUgB8znAyVsp5WTF/2vmCwprnNQ/w==}
     peerDependencies:
       svelte: ^5
 
@@ -4471,7 +4471,7 @@ snapshots:
       '@lezer/highlight': 1.2.5
       '@lezer/lr': 1.4.10
 
-  '@lucide/svelte@1.61.0(svelte@5.57.2)':
+  '@lucide/svelte@1.66.0(svelte@5.57.2)':
     dependencies:
       svelte: 5.57.2
 
