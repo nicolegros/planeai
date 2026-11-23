@@ -16,7 +16,7 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
-rusqlite = { version = "0.41", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
 planeai-tasks = { path = "../planeai-tasks" }
 base64 = "=0.23.1"
