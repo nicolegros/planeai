@@ -221,7 +221,9 @@ The Gleam and Gleam Classic themes were created by [trag1c](https://github.com/t
 
 The Grok Day and Grok Night themes come from [promptegrity/grok-themes](https://github.com/promptegrity/grok-themes). The palettes are adapted from [xai-org/grok-build](https://github.com/xai-org/grok-build). [zasdaym](https://github.com/zasdaym) added these themes.
 
-The Gruber Darker theme was inspired by [Alexey Kutepov](https://github.com/rexim)
+The Gruber Darker theme was created for Emacs by [Jason Blevins](https://jblevins.org/projects/emacs-color-themes/) as a darker variant of [John Gruber's Gruber Dark theme for BBEdit](https://daringfireball.net/projects/bbcolors/schemes/), then adapted and extended by [Alexey Kutepov](https://github.com/rexim/gruber-darker-theme). Abi contributed the terminal port in [#447](https://github.com/mbadolato/iTerm2-Color-Schemes/pull/447).
+
+The Gruber Darker Legacy theme preserves that terminal port's original iTerm2 source and existing generated colors before the color-space and palette corrections in [#899](https://github.com/mbadolato/iTerm2-Color-Schemes/pull/899). It retains the P3 color-space tags and the differing green and foreground values; no colors have been redesigned.
 
 The Gruvbox Dark theme was created by [morhetz](https://github.com/morhetz) and added by [saccarosium](https://github.com/mcchrish)
 
@@ -500,6 +502,8 @@ The theme Subliminal was created by [gdsrosa](https://github.com/gdsrosa/sublimi
 
 The theme Sugarplum was created by [lemonlime0x3C33](https://github.com/lemonlime0x3C33/iTerm2-Color-Schemes-Sugarplum)
 
+The Sumi Ink theme was created by [EldinBegano](https://github.com/EldinBegano); it also ships ports for yazi, fzf, delta and oh-my-posh in [sumi-ink](https://github.com/EldinBegano/sumi-ink).
+
 The Sunset Drive theme was created by [tahayvr](https://github.com/tahayvr)
 
 The scheme Symfonic was inspired by the color scheme used in the [documentation](http://symfony.com/doc/current/book/index.html) for the [Symfony](http://www.symfony.com) PHP Framework.
@@ -521,6 +525,8 @@ The Synthwave Everything theme was created by [smithbm2316](https://github.com/s
 The Tango Adapted theme and its slightly less bright counterpart Tango Half Adapted were created by [crowsonkb](https://github.com/crowsonkb), based on iTerm2's Tango Light theme.
 
 The Teerb theme was created by [Teerb](https://gist.github.com/teerb/1360453)
+
+The Termius Dark and Termius Light themes are the default color schemes of the [Termius](https://termius.com) SSH client and were ported by [KubesDavid](https://github.com/KubesDavid).
 
 The Thayer Bright theme was found [here](https://github.com/t3chnoboy/thayer-bright-iTerm)
 
@@ -572,7 +578,7 @@ The scheme Zenburn was inspired by the [Zenburn](http://sunaku.github.io/zenburn
 
 The Xcode dark, Xcode dark (High Contrast), Xcode light, Xcode light (High Contrast), and Xcode WWDC themes were all created by [lunacookies](https://github.com/lunacookies/vim-colors-xcode).
 
-The Zenbones schemes ( duckbones, kanagawabones, neobones_dark, neobones_light, seoulbones_dark, seoulbones_light, vimbones, zenbones, zenbones_dark, zenbones_light, zenburned, zenwritten_dark, zenwritten_light) were taken from [mcchrish/zenbones.nvim](https://github.com/mcchrish/zenbones.nvim)
+The Zenbones schemes ( duckbones, kanagawabones, neobones_dark, neobones_light, seoulbones_dark, seoulbones_light, vimbones, zenbones, zenbones_dark, zenburned, zenwritten_dark, zenwritten_light) were taken from [mcchrish/zenbones.nvim](https://github.com/mcchrish/zenbones.nvim). The former `zenbones_light` / **Zenbones Light** identity was removed because its palette was identical to canonical **Zenbones** (the upstream light theme); use **Zenbones** instead. **Zenbones Dark** is unchanged.
 
 The Breadog theme was created by [Ruby Klover](https://gitlab.com/warningnonpotablewater/breadog)
 
@@ -920,7 +926,7 @@ The Yngwie's Strat theme was created by [Mark Badolato](https://terminalthemes.c
 
 The iglass Dark and iglass Light themes were created by [Vuk Topalovic](https://github.com/vukkt) for [iglass](https://github.com/vukkt/iglass).
 
-The Zacess Light, Zacess Dark, Zacess Yellow on Black, Zacess Cream, Zacess High Contrast Dark, Zacess High Contrast Light, Zacess Deep Contrast Dark and Zacess Deep Contrast Light themes were created by [Zacess](https://zacess.com). Source: [zacesshq/themes](https://github.com/zacesshq/themes), released under the [MIT License](https://github.com/zacesshq/themes/blob/main/LICENSE).
+The Zacess Light, Zacess Dark, Zacess Yellow on Black, Zacess Cream, Zacess High Contrast Dark, Zacess High Contrast Light, Zacess Deep Contrast Dark, Zacess Deep Contrast Light, Zacess Warm Dark and Zacess Warm Light themes were created by [Zacess](https://zacess.com). Source: [zacesshq/themes](https://github.com/zacesshq/themes), released under the [MIT License](https://github.com/zacesshq/themes/blob/main/LICENSE).
 
 The Analyzed Dark theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
 
@@ -965,3 +971,197 @@ The Paper Crane: Midnight Ink theme was created by [Mark Badolato](https://termi
 The Sonoran Afterglow theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
 
 The Sonoran Blue Hour theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The KIZZ theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Vaughn theme was created by [Mark Badolato](https://github.com/mbadolato).
+
+The All-Nighter theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Numix Dark theme was created by [Tom Hardy](https://terminalthemes.com/users/01M6G8VVMHJBGX9E7F7NM54JF8).
+
+The Numix Light theme was created by [Tom Hardy](https://terminalthemes.com/users/01M6G8VVMHJBGX9E7F7NM54JF8).
+
+The Tideglass theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Wasteland Terminal theme was created by [chlp](https://github.com/chlp/ghostty-fallout-theme).
+
+The Nudisia theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Deep In Purple theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Don't Panic theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Stone theme was created by [Kyle Purdon](https://github.com/kpurdon) with OpenAI Codex assistance. Inspired by the macOS Stone solid desktop color, it pairs a slightly darker neutral gray background with an original, muted mineral palette.
+
+The mistpine theme was created by [Luan Utimura](https://github.com/mistpine/mistpine).
+
+The Stranger Theme Dimension X, Stranger Theme Hawkins, Stranger Theme Starcourt, Stranger Theme The Lab, Stranger Theme Tigers and Stranger Theme Upside Down themes were created by [Stranger Theme](https://github.com/stranger-theme/stranger-theme).
+
+The 🇺🇸 U.S. Air Force theme was created by Mark Badolato.
+
+The 🇺🇸 U.S. Army theme was created by Mark Badolato.
+
+The 🇺🇸 U.S. Coast Guard theme was created by Mark Badolato.
+
+The 🇺🇸 U.S. Marine Corps theme was created by Mark Badolato.
+
+The 🇺🇸 U.S. Navy theme was created by Mark Badolato.
+
+The 🇺🇸 U.S. Space Force theme was created by Mark Badolato.
+
+The Apple Pie theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Autumn Quilt theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Black Friday theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Blue Ribbon Turkey theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Butternut Squash theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Candlelit Table theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Cider Press theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Cornucopia theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Cranberry Sauce theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Fireside Feast theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The First Frost theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Gravy theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Green Bean Casserole theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Harvest Time Moon theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Leftover Sandwich theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Maple Glaze theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Mashed Potatoes theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Mayflower theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The November Night theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Pecan Pie theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Pilgrim Hat theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Pilgrim Linen theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Pumpkin Pie theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Roast Turkey theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Sage Stuffing theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Sweet Potato Casserole theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Thankful Twilight theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Turkey Trot theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Wishbone theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Heritage Themes schemes (Ainu, Aizome, Bengal, Danqing, Edo, Gujarat, Hmong, Holi, Kalaallisuut, Kalamkari, Kashubia, Kerala, Łowicz, Maramureș, Maya, Morocco, Mudhif, Mughal, Ndebele, Peru, Podhale, Punjab, Rajasthan, Sardinia, Shaker, Shuimo, Tamil, Wixárika, Wuxing, Yolŋu, Zalipie and Złotnica) were created by [Heritage Themes](https://github.com/heritage-themes/heritage-themes).
+
+The Wild Charm themes (Wild Charm Dark, Wild Charm Light) were created by [Maxim Kim](https://github.com/habamax) to be a vibrant and playful colorscheme for [Vim](https://github.com/vim/colorschemes/blob/master/colors/wildcharm.vim). They were added by [ran8km](https://github.com/ran8km).
+
+The 1K Confetti theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Comma Club theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Grand Terminal theme was created by [Mark Badolato](https://terminalthemes.com/users/01M38A2BPFG85ZT6EQ6PFA2WTM).
+
+The Arabian Knights theme was created by Mark Badolato.
+
+The Atom Ant theme was created by Mark Badolato.
+
+The Banana Buggies theme was created by Mark Badolato.
+
+The Banana Vac theme was created by Mark Badolato.
+
+The Bingo theme was created by Mark Badolato.
+
+The Danger Island theme was created by Mark Badolato.
+
+The Drooper theme was created by Mark Badolato.
+
+The Fleegle theme was created by Mark Badolato.
+
+The Micro Ventures theme was created by Mark Badolato.
+
+The Precious Pupp theme was created by Mark Badolato.
+
+The Secret Squirrel theme was created by Mark Badolato.
+
+The Snorky theme was created by Mark Badolato.
+
+The Sour Grapes theme was created by Mark Badolato.
+
+The Splits Clubhouse theme was created by Mark Badolato.
+
+The The Adventures of Gulliver theme was created by Mark Badolato.
+
+The The Hillbilly Bears theme was created by Mark Badolato.
+
+The The New Adventures of Huckleberry Finn theme was created by Mark Badolato.
+
+The The Three Musketeers theme was created by Mark Badolato.
+
+The Tra La La theme was created by Mark Badolato.
+
+The Blue Hour Desk theme was created by Mark Badolato.
+
+The Campfire theme was created by Mark Badolato.
+
+The Deep Orchard theme was created by Mark Badolato.
+
+The Dogbody theme was created by Mark Badolato.
+
+The Duskwater theme was created by Mark Badolato.
+
+The Great Hall theme was created by Mark Badolato.
+
+The Inkstone theme was created by Mark Badolato.
+
+The Inside the Cabins theme was created by Mark Badolato.
+
+The Laughing Loon theme was created by Mark Badolato.
+
+The Lilac Paper theme was created by Mark Badolato.
+
+The Nightjar theme was created by Mark Badolato.
+
+The North Woods theme was created by Mark Badolato.
+
+The Oatmilk theme was created by Mark Badolato.
+
+The Open Sky theme was created by Mark Badolato.
+
+The Porcelain Field theme was created by Mark Badolato.
+
+The Quiet Sage theme was created by Mark Badolato.
+
+The Rosewood Ink theme was created by Mark Badolato.
+
+The Shirley's Shop theme was created by Mark Badolato.
+
+The Snipe theme was created by Mark Badolato.
+
+The The Great Road theme was created by Mark Badolato.
+
+The The Waterfront theme was created by Mark Badolato.
+
+The Towering Pines theme was created by Mark Badolato.
+
+The Velvet Slate theme was created by Mark Badolato.
+
+The Wake Up Bell theme was created by Mark Badolato.
+
+The Oxocarbon Grey theme was created by [Viraj](https://github.com/viraj-s15/oxocarbon-grey).
